@@ -1,8 +1,9 @@
 //! Serializing a laid-out diagram as a standalone SVG document.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::{Diagram, Layout, Placed, Relation, Style};
+use crate::{Diagram, Edge, Layout, Placed, Relation, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
 /// UI text, so a diagram looks native wherever it is embedded.
@@ -51,7 +52,8 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     .unwrap();
 
     // edges first, so the boxes paint over the line ends
-    for edge in &diagram.edges {
+    let lanes = lanes(diagram);
+    for (edge, lane) in diagram.edges.iter().zip(&lanes) {
         let from = &layout.placed[edge.from];
         let to = &layout.placed[edge.to];
         match edge.relation {
@@ -66,17 +68,41 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 to.x + to.width / 2.0,
                 to.y + to.height,
             ),
-            // composition ignores the layering and can point anywhere, so
-            // the line runs centre to centre clipped to both borders, with
-            // the filled diamond on the side of the whole
-            Relation::Composition => {
-                let (x1, y1) = border_point(from, centre_of(to));
-                let (x2, y2) = border_point(to, centre_of(from));
+            // neither of these follows the layering, so the line runs
+            // centre to centre clipped to both borders. Composition puts a
+            // filled diamond on the side of the whole; a connection is
+            // undirected and gets no marker at all.
+            Relation::Composition | Relation::Connection => {
+                let (mut x1, mut y1) = border_point(from, centre_of(to));
+                let (mut x2, mut y2) = border_point(to, centre_of(from));
+                // shift edges sharing a pair of boxes along the normal, so
+                // two connections do not collapse into one line
+                let (dx, dy) = (x2 - x1, y2 - y1);
+                let length = dx.hypot(dy);
+                if length > 0.0 {
+                    let shift = lane * style.line_height;
+                    let (nx, ny) = (-dy / length * shift, dx / length * shift);
+                    x1 += nx;
+                    y1 += ny;
+                    x2 += nx;
+                    y2 += ny;
+                }
+                let marker = match edge.relation {
+                    Relation::Composition => " marker-start=\"url(#composition)\"",
+                    _ => "",
+                };
                 writeln!(
                     out,
                     "<line class=\"edge\" x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" \
-                     y2=\"{y2:.1}\" marker-start=\"url(#composition)\"/>"
+                     y2=\"{y2:.1}\"{marker}/>"
                 )
+                .unwrap();
+                // name the feature each end attaches to, near its own box
+                if let Some((first, second)) = &edge.ends {
+                    end_label(&mut out, (x1, y1), (x2, y2), 0.18, first);
+                    end_label(&mut out, (x1, y1), (x2, y2), 0.82, second);
+                }
+                Ok(())
             }
         }
         .unwrap();
@@ -138,6 +164,39 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     out
 }
 
+/// Perpendicular offset factor for each edge: edges sharing a pair of boxes
+/// are spread symmetrically about the straight line between them.
+fn lanes(diagram: &Diagram) -> Vec<f64> {
+    let pair = |edge: &Edge| (edge.from.min(edge.to), edge.from.max(edge.to));
+    let mut total: HashMap<(usize, usize), usize> = HashMap::new();
+    for edge in &diagram.edges {
+        *total.entry(pair(edge)).or_default() += 1;
+    }
+    let mut taken: HashMap<(usize, usize), usize> = HashMap::new();
+    diagram
+        .edges
+        .iter()
+        .map(|edge| {
+            let slot = taken.entry(pair(edge)).or_default();
+            let index = *slot;
+            *slot += 1;
+            index as f64 - (total[&pair(edge)] as f64 - 1.0) / 2.0
+        })
+        .collect()
+}
+
+/// Write one end's feature name at `fraction` along the edge.
+fn end_label(out: &mut String, start: (f64, f64), end: (f64, f64), fraction: f64, name: &str) {
+    let x = start.0 + (end.0 - start.0) * fraction;
+    let y = start.1 + (end.1 - start.1) * fraction;
+    writeln!(
+        out,
+        "<text class=\"feature\" x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"middle\">{}</text>",
+        escape(name)
+    )
+    .unwrap();
+}
+
 fn centre_of(rect: &Placed) -> (f64, f64) {
     (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
 }
@@ -179,7 +238,7 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::tests::resolved;
-    use crate::{definition_diagram, layout, render, Node};
+    use crate::{definition_diagram, interconnection_diagram, layout, render, Node};
     use sysml_model::{ElementKind, Model, Value};
 
     fn svg_of(source: &str) -> String {
@@ -237,7 +296,7 @@ mod tests {
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
         let placed = layout(&diagram, &style);
-        let edge = diagram.edges[0];
+        let edge = &diagram.edges[0];
         let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
 
         let (x1, y1) = border_point(whole, centre_of(part));
@@ -258,6 +317,63 @@ mod tests {
             height: 10.0,
         };
         assert_eq!(border_point(&rect, centre_of(&rect)), (5.0, 5.0));
+    }
+
+    #[test]
+    fn a_connection_is_drawn_as_a_plain_line() {
+        let ws = resolved(
+            "part def Wheel { port hub; }\n\
+             part def Axle { port mount; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(&interconnection_diagram(ws.model(), car), &Style::default());
+
+        // a connection is undirected, so neither end carries a marker
+        assert_eq!(svg.matches("<line class=\"edge\"").count(), 1);
+        assert!(!svg.contains("marker-start"));
+        assert!(!svg.contains("marker-end"));
+        assert!(svg.contains(">w : Wheel</text>"));
+    }
+
+    #[test]
+    fn parallel_connections_are_separated_and_labelled() {
+        let ws = resolved(
+            "part def Wheel { port hub; port rim; }\n\
+             part def Axle { port mount; port brace; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             \tconnect w.rim to a.brace;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(&interconnection_diagram(ws.model(), car), &Style::default());
+
+        let lines: Vec<&str> = svg
+            .lines()
+            .filter(|line| line.starts_with("<line class=\"edge\""))
+            .collect();
+        assert_eq!(lines.len(), 2);
+        // the pair shares both boxes, so only the lane offset keeps them apart
+        assert_ne!(lines[0], lines[1]);
+
+        for port in ["hub", "mount", "rim", "brace"] {
+            assert!(svg.contains(&format!(">{port}</text>")), "{svg}");
+        }
     }
 
     #[test]

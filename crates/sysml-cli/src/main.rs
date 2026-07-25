@@ -79,6 +79,11 @@ enum Command {
         /// them, without drawing their definitions (e.g. sysml.library)
         #[arg(long)]
         library: Vec<PathBuf>,
+        /// Draw the internal structure of this definition -- the parts it is
+        /// assembled from and the connections between them -- instead of the
+        /// definitions themselves
+        #[arg(long, value_name = "NAME")]
+        internal: Option<String>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -113,8 +118,9 @@ fn main() -> ExitCode {
         Command::Diagram {
             paths,
             library,
+            internal,
             output,
-        } => diagram(&paths, &library, output.as_deref()),
+        } => diagram(&paths, &library, internal.as_deref(), output.as_deref()),
         Command::Corpus {
             dir,
             worst,
@@ -242,7 +248,12 @@ fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> bool {
     true
 }
 
-fn diagram(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+fn diagram(
+    paths: &[PathBuf],
+    library: &[PathBuf],
+    internal: Option<&str>,
+    output: Option<&Path>,
+) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if !load_paths(&mut ws, paths) {
         return ExitCode::FAILURE;
@@ -254,12 +265,27 @@ fn diagram(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
         return ExitCode::FAILURE;
     }
     ws.resolve_all();
-    let roots: Vec<_> = (0..drawn)
-        .flat_map(|file| ws.file_roots(file).to_vec())
-        .collect();
-    let diagram = sysml_diagram::definition_diagram(ws.model(), &roots);
+    let diagram = match internal {
+        Some(name) => {
+            let Some(target) = ws
+                .named_elements()
+                .find(|(_, declared)| *declared == name)
+                .map(|(id, _)| id)
+            else {
+                eprintln!("error: no element named `{name}`");
+                return ExitCode::FAILURE;
+            };
+            sysml_diagram::interconnection_diagram(ws.model(), target)
+        }
+        None => {
+            let roots: Vec<_> = (0..drawn)
+                .flat_map(|file| ws.file_roots(file).to_vec())
+                .collect();
+            sysml_diagram::definition_diagram(ws.model(), &roots)
+        }
+    };
     if diagram.nodes.is_empty() {
-        eprintln!("error: no definitions to draw");
+        eprintln!("error: nothing to draw");
         return ExitCode::FAILURE;
     }
     let svg = sysml_diagram::render(&diagram, &sysml_diagram::Style::default());
@@ -269,16 +295,20 @@ fn diagram(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
                 eprintln!("error: cannot write {}: {err}", path.display());
                 return ExitCode::FAILURE;
             }
-            let specializations = diagram
-                .edges
-                .iter()
-                .filter(|edge| edge.relation == sysml_diagram::Relation::Specialization)
-                .count();
+            let count = |relation| {
+                diagram
+                    .edges
+                    .iter()
+                    .filter(|edge| edge.relation == relation)
+                    .count()
+            };
             eprintln!(
-                "wrote {} definition(s), {specializations} specialization(s) and {} \
-                 composition(s) to {}",
+                "wrote {} box(es), {} specialization(s), {} composition(s) and {} \
+                 connection(s) to {}",
                 diagram.nodes.len(),
-                diagram.edges.len() - specializations,
+                count(sysml_diagram::Relation::Specialization),
+                count(sysml_diagram::Relation::Composition),
+                count(sysml_diagram::Relation::Connection),
                 path.display()
             );
         }

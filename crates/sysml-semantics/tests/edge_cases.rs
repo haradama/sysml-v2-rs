@@ -281,3 +281,74 @@ fn degenerate_semantic_metadata_values() {
     // What matters is that both semantic_base edge branches executed.
     assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
 }
+
+#[test]
+fn connector_statements_become_elements_with_resolved_ends() {
+    let src = "part def Wheel { port hub; }\n\
+               part def Axle { port mount; }\n\
+               part def Car {\n\
+               \tpart w : Wheel;\n\
+               \tpart a : Axle;\n\
+               \tconnect w.hub to a.mount;\n\
+               \tallocate w to a;\n\
+               \tbind w = a;\n\
+               }\n";
+    let ws = ws(&[("c.sysml", src)]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let kinds: Vec<ElementKind> = model
+        .ids()
+        .map(|id| model.kind(id))
+        .filter(|k| {
+            matches!(
+                k,
+                ElementKind::ConnectionUsage
+                    | ElementKind::AllocationUsage
+                    | ElementKind::BindingConnectorAsUsage
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ElementKind::ConnectionUsage,
+            ElementKind::AllocationUsage,
+            ElementKind::BindingConnectorAsUsage,
+        ]
+    );
+
+    // each connector records what its operands resolved to
+    let connection = model
+        .ids()
+        .find(|id| model.kind(*id) == ElementKind::ConnectionUsage)
+        .unwrap();
+    let Some(sysml_model::Value::RefList(ends)) = model.get(connection, "relatedFeature") else {
+        panic!("no relatedFeature on the connection");
+    };
+    let names: Vec<&str> = ends.iter().filter_map(|e| model.name(*e)).collect();
+    assert_eq!(names, ["hub", "mount"]);
+}
+
+#[test]
+fn an_unresolvable_connector_end_is_reported() {
+    let ws = ws(&[(
+        "c.sysml",
+        "part def P {\n\tconnect nowhere to alsoNowhere;\n}\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["nowhere", "alsoNowhere"]);
+}
+
+#[test]
+fn a_performed_usage_answers_to_the_performed_name() {
+    let src = "action def GT;\n\
+               action pp { action gt : GT; }\n\
+               part def TG;\n\
+               part tg : TG { perform pp.gt; }\n\
+               part def Other;\n\
+               part o : Other;\n\
+               connect tg.gt to o;\n";
+    let ws = ws(&[("p.sysml", src)]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}

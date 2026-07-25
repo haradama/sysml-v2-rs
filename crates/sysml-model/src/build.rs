@@ -43,6 +43,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         PACKAGE => Some(package_kind(node)),
         DEFINITION => Some(definition_kind(node)),
         USAGE => Some(usage_kind(node)),
+        CONNECTOR_STMT => connector_kind(node),
         IMPORT | EXPOSE => Some(import_kind(node)),
         // an alias is a Membership whose memberElement is resolved later
         ALIAS => Some(ElementKind::Membership),
@@ -99,6 +100,21 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
             _ => {}
         }
     }
+}
+
+/// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
+///
+/// `flow` and `message` are parsed as usages and already become elements
+/// that way. The remaining connector statements the parser folds into this
+/// node -- `first x then y` among them -- keep their pre-existing treatment
+/// as plain statements with no element of their own.
+fn connector_kind(node: &SyntaxNode) -> Option<ElementKind> {
+    tokens(node).find_map(|token| match token {
+        SyntaxKind::CONNECT_KW => Some(ElementKind::ConnectionUsage),
+        SyntaxKind::BIND_KW => Some(ElementKind::BindingConnectorAsUsage),
+        SyntaxKind::ALLOCATE_KW => Some(ElementKind::AllocationUsage),
+        _ => None,
+    })
 }
 
 fn package_kind(node: &SyntaxNode) -> ElementKind {

@@ -505,6 +505,10 @@ impl Workspace {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
             };
+            if node.kind() == SyntaxKind::CONNECTOR_STMT {
+                self.resolve_connector_ends(id, &node, &mut stats);
+                continue;
+            }
             if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
                 continue;
             }
@@ -850,6 +854,12 @@ impl Workspace {
                 }
             }
         }
+        // `perform providePower.generateTorque;` subsets the performed
+        // feature, so the usage answers to `generateTorque` -- the same
+        // target `supertypes_of` already inherits members through.
+        if let Some(segments) = adapter_target_segments(node) {
+            return segments.last().cloned();
+        }
         let leads_with_return = node
             .children_with_tokens()
             .filter_map(|e| e.into_token())
@@ -878,9 +888,7 @@ impl Workspace {
             for (_, targets) in relationship_parts(&node) {
                 for t in targets {
                     if let Some(target) = self.resolve_from(elem, &t.segments) {
-                        if target != elem && !supers.contains(&target) {
-                            supers.push(target);
-                        }
+                        push_supertype(&mut supers, elem, target);
                     }
                 }
             }
@@ -888,9 +896,7 @@ impl Workspace {
             // performed/exhibited/included target contributes its members
             if let Some(segments) = adapter_target_segments(&node) {
                 if let Some(target) = self.resolve_from(elem, &segments) {
-                    if target != elem && !supers.contains(&target) {
-                        supers.push(target);
-                    }
+                    push_supertype(&mut supers, elem, target);
                 }
             }
             // `#cause 'battery old' { ... }` — a user-defined keyword makes
@@ -898,9 +904,7 @@ impl Workspace {
             for segments in prefix_metadata_segments(&node) {
                 if let Some(meta_def) = self.resolve_from(elem, &segments) {
                     if let Some(base) = self.semantic_base(meta_def) {
-                        if base != elem && !supers.contains(&base) {
-                            supers.push(base);
-                        }
+                        push_supertype(&mut supers, elem, base);
                     }
                 }
             }
@@ -1064,6 +1068,78 @@ impl Workspace {
         self.model.add_owned(elem, rel);
         self.try_set(rel, source_prop, Value::Ref(elem));
         self.try_set(rel, target_prop, Value::Ref(target));
+    }
+
+    /// Resolve the operands of a `connect`/`bind`/`allocate` statement and
+    /// record what they point at as the connector's `relatedFeature`s, so a
+    /// consumer can read the connected ends off the model.
+    fn resolve_connector_ends(
+        &mut self,
+        id: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let mut related = Vec::new();
+        for operand in node
+            .children()
+            .filter(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
+        {
+            // an operand with no identifiers resolves to nothing, which the
+            // `None` arm below reports like any other unresolved end
+            let segments = operand_segments(&operand);
+            let range = operand.text_range();
+            let name_range = operand
+                .descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+                .last()
+                .map(|t| t.text_range())
+                .unwrap_or(range);
+            match self.resolve_from(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.references.push(Reference {
+                        file,
+                        range,
+                        name_range,
+                        target,
+                    });
+                    related.push(target);
+                    self.reify_end(id, &segments);
+                }
+                None => {
+                    stats.unresolved += 1;
+                    self.unresolved.push(Unresolved {
+                        file,
+                        range,
+                        name: segments.join("::"),
+                    });
+                }
+            }
+        }
+        if !related.is_empty() {
+            self.try_set(id, "relatedFeature", Value::RefList(related));
+        }
+    }
+
+    /// Reify one connector end as a `Feature` whose `chainingFeature` holds
+    /// what each segment of the operand resolved to.
+    ///
+    /// The final target alone cannot say which part an end belongs to --
+    /// `w1.hub` and `w2.hub` resolve to the same port of the same type --
+    /// so the chain is what an interconnection view needs.
+    fn reify_end(&mut self, connector: ElementId, segments: &[String]) {
+        let mut chain = Vec::new();
+        // the full path already resolved, so every prefix normally does too
+        for depth in 1..=segments.len() {
+            if let Some(step) = self.resolve_from(connector, &segments[..depth]) {
+                chain.push(step);
+            }
+        }
+        let end = self.model.create(ElementKind::Feature);
+        self.model.add_owned(connector, end);
+        self.try_set(end, "chainingFeature", Value::RefList(chain));
     }
 
     fn try_set(&mut self, id: ElementId, prop: &str, value: Value) {
@@ -1241,6 +1317,14 @@ fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+/// Record `target` as a supertype of `elem`, ignoring a self-reference and
+/// a target another clause already contributed.
+fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementId) {
+    if target != elem && !supers.contains(&target) {
+        supers.push(target);
+    }
 }
 
 /// Segments of each `#keyword` prefix on a definition/usage node.

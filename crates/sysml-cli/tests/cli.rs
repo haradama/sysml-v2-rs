@@ -203,7 +203,7 @@ fn diagram_renders_definitions_as_svg() {
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("2 definition(s), 1 specialization(s) and 0 composition(s)"),
+        stderr.contains("2 box(es), 1 specialization(s), 0 composition(s) and 0 connection(s)"),
         "{stderr}"
     );
     assert!(std::fs::read_to_string(&svg)
@@ -257,12 +257,40 @@ fn diagram_resolves_against_a_library_without_drawing_it() {
 }
 
 #[test]
+fn diagram_draws_the_internal_structure_of_one_definition() {
+    let dir = temp_dir("diagram-internal");
+    let model = write(
+        &dir,
+        "car.sysml",
+        "part def Wheel { port hub; }\n\
+         part def Axle { port mount; }\n\
+         part def Car {\n\
+         \tpart w : Wheel;\n\
+         \tpart a : Axle;\n\
+         \tconnect w.hub to a.mount;\n\
+         }\n",
+    );
+
+    let out = sysml(&["diagram", model.to_str().unwrap(), "--internal", "Car"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // the parts of Car, not the definitions themselves
+    assert_eq!(stdout.matches("<rect class=\"box\"").count(), 2);
+    assert!(stdout.contains(">w : Wheel</text>"), "{stdout}");
+    assert_eq!(stdout.matches("<line class=\"edge\"").count(), 1);
+
+    let out = sysml(&["diagram", model.to_str().unwrap(), "--internal", "NoSuch"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no element named `NoSuch`"));
+}
+
+#[test]
 fn diagram_reports_empty_models_and_write_failures() {
     let dir = temp_dir("diagram-err");
     let empty = write(&dir, "empty.sysml", "package OnlyAPackage;\n");
     let out = sysml(&["diagram", empty.to_str().unwrap()]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("no definitions to draw"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing to draw"));
 
     let model = write(&dir, "model.sysml", "part def A;\n");
     let unwritable = dir.join("no-such-dir").join("out.svg");

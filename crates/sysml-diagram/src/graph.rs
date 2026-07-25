@@ -43,15 +43,21 @@ pub enum Relation {
     /// `from` declares a part typed by `to` (`part def Vehicle { part eng
     /// : Engine; }`), so `to` is one of the things `from` is made of.
     Composition,
+    /// `from` and `to` are wired together (`connect w.hub to a.mount`).
+    /// Undirected: which end is `from` only reflects declaration order.
+    Connection,
 }
 
 /// A relationship between two boxes. Both index fields index
 /// [`Diagram::nodes`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edge {
     pub from: usize,
     pub to: usize,
     pub relation: Relation,
+    /// For a connection, the feature each end attaches to (`hub`, `mount`),
+    /// which is what tells two connections between the same pair apart.
+    pub ends: Option<(String, String)>,
 }
 
 /// The definitions to draw and the specializations between them.
@@ -107,6 +113,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                     from,
                     to,
                     relation: Relation::Specialization,
+                    ends: None,
                 });
             }
         }
@@ -114,6 +121,88 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
     }
 
     Diagram { nodes, edges }
+}
+
+/// The internal structure of one definition: a box per part it is assembled
+/// from, and an edge per connection declared between two of them.
+///
+/// Connections whose ends leave the definition, and self-connections between
+/// two features of the same part, are left undrawn.
+pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram {
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut index: HashMap<ElementId, usize> = HashMap::new();
+
+    for &child in model.owned(definition) {
+        if !is_part_box(model.kind(child)) {
+            continue;
+        }
+        let Some(name) = model.name(child) else {
+            continue;
+        };
+        // a part is read as `role : Type`, unlike a definition's bare name
+        let label = match type_of(model, child) {
+            Some(ty) => format!("{name} : {ty}"),
+            None => name.to_string(),
+        };
+        index.insert(child, nodes.len());
+        nodes.push(Node {
+            id: child,
+            name: label,
+            keyword: keyword(model.kind(child)),
+            features: features_of(model, child),
+        });
+    }
+
+    let mut edges = Vec::new();
+    for &child in model.owned(definition) {
+        let Ok([first, second]) = <[_; 2]>::try_from(connector_ends(model, child)) else {
+            continue;
+        };
+        let (Some(&from), Some(&to)) = (index.get(&first.0), index.get(&second.0)) else {
+            continue;
+        };
+        if from != to {
+            edges.push(Edge {
+                from,
+                to,
+                relation: Relation::Connection,
+                ends: Some((first.1, second.1)),
+            });
+        }
+    }
+
+    Diagram { nodes, edges }
+}
+
+/// Whether a usage is one of the parts a definition is assembled from.
+///
+/// `ConnectionUsage` and `AllocationUsage` specialize `PartUsage` in the
+/// metamodel, but they are what the edges are drawn *from*: a named
+/// `connect c : Conn ...` must not also become a box.
+fn is_part_box(kind: ElementKind) -> bool {
+    kind.is_a(ElementKind::PartUsage) && !kind.is_a(ElementKind::ConnectorAsUsage)
+}
+
+/// Each end of a connector as `(part it starts at, feature it attaches to)`,
+/// read off the feature chains name resolution reified onto it. Anything
+/// that is not a connector simply has no such ends.
+///
+/// `connect w.hub to a.mount` chains to `[w, hub]`, so the first entry
+/// picks the box and the last names the port on it. A bare `connect w to a`
+/// chains to `[w]`, where both are the same element.
+fn connector_ends(model: &Model, connector: ElementId) -> Vec<(ElementId, String)> {
+    model
+        .owned(connector)
+        .iter()
+        .filter_map(|&end| match model.get(end, "chainingFeature") {
+            Some(Value::RefList(chain)) => {
+                let part = *chain.first()?;
+                let feature = model.name(*chain.last()?).unwrap_or_default();
+                Some((part, feature.to_string()))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// One composition edge per distinct part type a definition declares.
@@ -130,7 +219,7 @@ fn compositions_of(
 ) {
     let mut linked: Vec<usize> = Vec::new();
     for &child in model.owned(definition) {
-        if !model.kind(child).is_a(ElementKind::PartUsage) {
+        if !is_part_box(model.kind(child)) {
             continue;
         }
         let Some(&to) = type_reference(model, child).and_then(|ty| index.get(&ty)) else {
@@ -144,6 +233,7 @@ fn compositions_of(
             from,
             to,
             relation: Relation::Composition,
+            ends: None,
         });
     }
 }
@@ -446,5 +536,133 @@ mod tests {
         let ws = resolved("");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         assert_eq!(diagram, Diagram::default());
+    }
+}
+
+#[cfg(test)]
+mod interconnection_tests {
+    use super::*;
+    use crate::tests::resolved;
+
+    const CAR: &str = "part def Wheel { port hub; }\n\
+                       part def Axle { port mount; }\n\
+                       part def Car {\n\
+                       \tpart w : Wheel;\n\
+                       \tpart a : Axle;\n\
+                       \tconnect w.hub to a.mount;\n\
+                       }\n";
+
+    fn definition(ws: &sysml_semantics::Workspace, name: &str) -> ElementId {
+        ws.named_elements()
+            .find(|(_, declared)| *declared == name)
+            .map(|(id, _)| id)
+            .unwrap()
+    }
+
+    #[test]
+    fn draws_parts_and_the_connections_between_them() {
+        let ws = resolved(CAR);
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+
+        let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["w : Wheel", "a : Axle"]);
+        assert!(diagram.nodes.iter().all(|n| n.keyword == "part"));
+        assert_eq!(
+            diagram.edges,
+            [Edge {
+                from: 0,
+                to: 1,
+                relation: Relation::Connection,
+                ends: Some(("hub".to_string(), "mount".to_string())),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_end_outside_the_definition_is_not_drawn() {
+        let ws = resolved(
+            "part def Wheel { port hub; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tconnect w.hub to Wheel;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        assert_eq!(diagram.nodes.len(), 1);
+        assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn a_connection_between_two_features_of_one_part_is_not_drawn() {
+        let ws = resolved(
+            "part def Wheel { port hub; port rim; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tconnect w.hub to w.rim;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        assert_eq!(diagram.nodes.len(), 1);
+        assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn an_untyped_part_keeps_its_bare_name() {
+        let ws = resolved("part def Car {\n\tpart w;\n}\n");
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        assert_eq!(diagram.nodes[0].name, "w");
+    }
+
+    #[test]
+    fn an_unnamed_part_is_skipped() {
+        let mut model = Model::new();
+        let definition = model.create(ElementKind::PartDefinition);
+        let anonymous = model.create(ElementKind::PartUsage);
+        model.add_owned(definition, anonymous);
+        let diagram = interconnection_diagram(&model, definition);
+        assert_eq!(diagram, Diagram::default());
+    }
+}
+
+#[cfg(test)]
+mod connector_box_tests {
+    use super::*;
+    use crate::tests::resolved;
+
+    /// `ConnectionUsage` specializes `PartUsage`, so a named connection
+    /// would become a box unless connectors are excluded.
+    #[test]
+    fn a_named_connection_is_an_edge_and_not_a_box() {
+        let ws = resolved(
+            "part def Wheel { port hub; }\n\
+             part def Axle { port mount; }\n\
+             connection def Link;\n\
+             part def Car {\n\
+             \tattribute mass;\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect wheelToAxle : Link connect w.hub to a.mount;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+
+        let inner = interconnection_diagram(ws.model(), car);
+        let names: Vec<&str> = inner.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["w : Wheel", "a : Axle"]);
+
+        // the same exclusion keeps it out of the definition diagram's
+        // composition edges, where it would otherwise link Car to Link
+        let outer = definition_diagram(ws.model(), &[ws.root()]);
+        let composed: Vec<&str> = outer
+            .edges
+            .iter()
+            .filter(|e| e.relation == Relation::Composition)
+            .map(|e| outer.nodes[e.to].name.as_str())
+            .collect();
+        assert_eq!(composed, ["Wheel", "Axle"]);
     }
 }
