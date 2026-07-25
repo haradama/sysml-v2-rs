@@ -1,6 +1,6 @@
 [package]
-name = "sysml-cli"
-description = "Command-line tools for SysML v2 models"
+name = "sysml-diagram"
+description = "Definition/specialization diagrams rendered to SVG from sysml-model"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,15 +10,8 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[[bin]]
-name = "sysml"
-path = "src/main.rs"
-
 [dependencies]
-clap.workspace = true
-sysml-syntax.workspace = true
 sysml-model.workspace = true
+
+[dev-dependencies]
 sysml-semantics.workspace = true
-sysml-interchange.workspace = true
-sysml-diagram.workspace = true
-serde_json = "1"

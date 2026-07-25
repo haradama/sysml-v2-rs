@@ -177,6 +177,68 @@ fn check_resolves_and_reports_unresolved() {
 }
 
 #[test]
+fn diagram_renders_definitions_as_svg() {
+    let dir = temp_dir("diagram");
+    let model = write(
+        &dir,
+        "model.sysml",
+        "part def PowerSource;\npart def Engine :> PowerSource { attribute power; }\n",
+    );
+
+    let out = sysml(&["diagram", model.to_str().unwrap()]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("<svg xmlns="), "{stdout}");
+    assert_eq!(stdout.matches("<rect class=\"box\"").count(), 2);
+    assert_eq!(stdout.matches("marker-end").count(), 1);
+    assert!(stdout.contains(">attribute power</text>"));
+
+    let svg = dir.join("out.svg");
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "-o",
+        svg.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("2 definition(s) and 1 specialization(s)"),
+        "{stderr}"
+    );
+    assert!(std::fs::read_to_string(&svg)
+        .unwrap()
+        .contains("PowerSource"));
+
+    // directories load the same way `check` loads them
+    assert!(sysml(&["diagram", dir.to_str().unwrap()]).status.success());
+}
+
+#[test]
+fn diagram_reports_empty_models_and_write_failures() {
+    let dir = temp_dir("diagram-err");
+    let empty = write(&dir, "empty.sysml", "package OnlyAPackage;\n");
+    let out = sysml(&["diagram", empty.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no definitions to draw"));
+
+    let model = write(&dir, "model.sysml", "part def A;\n");
+    let unwritable = dir.join("no-such-dir").join("out.svg");
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "-o",
+        unwritable.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot write"));
+
+    let out = sysml(&["diagram", dir.join("missing.sysml").to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+}
+
+#[test]
 fn corpus_measures_parse_rates() {
     let dir = temp_dir("corpus");
     write(&dir, "ok.sysml", OK_MODEL);

@@ -69,6 +69,16 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         show: usize,
     },
+    /// Load files (or directories), resolve names and render the definitions
+    /// and their specializations as an SVG diagram
+    Diagram {
+        /// Files or directories to load
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Parse every .sysml/.kerml file under a directory and report the
     /// success rate (used to track grammar coverage against the official
     /// SysML-v2-Release corpus)
@@ -96,6 +106,7 @@ fn main() -> ExitCode {
             check,
         } => fmt(&files, write, check),
         Command::Check { paths, show } => check(&paths, show),
+        Command::Diagram { paths, output } => diagram(&paths, output.as_deref()),
         Command::Corpus {
             dir,
             worst,
@@ -199,13 +210,15 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool) -> ExitCode {
     }
 }
 
-fn check(paths: &[PathBuf], show: usize) -> ExitCode {
+/// Load every path -- file or directory -- into one workspace. Returns
+/// `None` after reporting the first path that cannot be read.
+fn load_workspace(paths: &[PathBuf]) -> Option<sysml_semantics::Workspace> {
     let mut ws = sysml_semantics::Workspace::new();
     for path in paths {
         if path.is_dir() {
             if let Err(err) = ws.load_dir(path) {
                 eprintln!("error: cannot load {}: {err}", path.display());
-                return ExitCode::FAILURE;
+                return None;
             }
         } else {
             match std::fs::read_to_string(path) {
@@ -214,11 +227,48 @@ fn check(paths: &[PathBuf], show: usize) -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("error: cannot read {}: {err}", path.display());
-                    return ExitCode::FAILURE;
+                    return None;
                 }
             }
         }
     }
+    Some(ws)
+}
+
+fn diagram(paths: &[PathBuf], output: Option<&Path>) -> ExitCode {
+    let Some(mut ws) = load_workspace(paths) else {
+        return ExitCode::FAILURE;
+    };
+    ws.resolve_all();
+    let root = ws.root();
+    let diagram = sysml_diagram::definition_diagram(ws.model(), &[root]);
+    if diagram.nodes.is_empty() {
+        eprintln!("error: no definitions to draw");
+        return ExitCode::FAILURE;
+    }
+    let svg = sysml_diagram::render(&diagram, &sysml_diagram::Style::default());
+    match output {
+        Some(path) => {
+            if let Err(err) = std::fs::write(path, svg) {
+                eprintln!("error: cannot write {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+            eprintln!(
+                "wrote {} definition(s) and {} specialization(s) to {}",
+                diagram.nodes.len(),
+                diagram.edges.len(),
+                path.display()
+            );
+        }
+        None => print!("{svg}"),
+    }
+    ExitCode::SUCCESS
+}
+
+fn check(paths: &[PathBuf], show: usize) -> ExitCode {
+    let Some(mut ws) = load_workspace(paths) else {
+        return ExitCode::FAILURE;
+    };
     let stats = ws.resolve_all();
     let total = stats.resolved + stats.unresolved;
     let rate = if total == 0 {
