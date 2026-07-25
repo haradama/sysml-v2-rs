@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sysml-syntax",
+    "crates/sysml-model",
+    "crates/sysml-semantics",
+    "crates/sysml-interchange",
+    "crates/sysml-api-client",
+    "crates/sysml-lsp",
+    "crates/sysml-codegen",
+    "crates/sysml-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+repository = "https://github.com/haradama/sysml-v2-rs"
+readme = "README.md"
+keywords = ["sysml", "kerml", "mbse", "modeling", "parser"]
+categories = ["parser-implementations", "development-tools"]
+
+[workspace.dependencies]
+logos = "0.15"
+rowan = "0.15"
+clap = { version = "4", features = ["derive"] }
+
+sysml-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
+sysml-model = { path = "crates/sysml-model", version = "0.1.0" }
+sysml-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
+sysml-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
+sysml-api-client = { path = "crates/sysml-api-client", version = "0.1.0" }

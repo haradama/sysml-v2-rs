@@ -1,0 +1,15 @@
+[package]
+name = "sysml-syntax"
+description = "Lexer, parser and lossless syntax tree for the SysML v2 / KerML textual notation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+logos.workspace = true
+rowan.workspace = true

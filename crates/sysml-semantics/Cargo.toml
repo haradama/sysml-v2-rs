@@ -1,0 +1,15 @@
+[package]
+name = "sysml-semantics"
+description = "Name resolution and relationship reification for SysML v2 / KerML models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sysml-syntax.workspace = true
+sysml-model.workspace = true

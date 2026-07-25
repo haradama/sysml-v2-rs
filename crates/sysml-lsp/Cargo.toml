@@ -1,0 +1,24 @@
+[package]
+name = "sysml-lsp"
+description = "Language server for SysML v2 / KerML (diagnostics, go-to-definition, hover, symbols, formatting)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "sysml-lsp"
+path = "src/main.rs"
+
+[dependencies]
+sysml-syntax.workspace = true
+sysml-model.workspace = true
+sysml-semantics.workspace = true
+lsp-server = "0.7"
+lsp-types = "0.94"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

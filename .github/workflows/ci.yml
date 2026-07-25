@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DavidAnson/markdownlint-cli2-action@v20
+
+  test:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the official SysML-v2-Release corpus drives the parser,
+          # resolution, formatter and interchange regression tests
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: tests (incl. corpus regressions)
+        run: cargo test --release
+
+  coverage:
+    name: C0 coverage (every line executed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+      - name: measure
+        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 99
+      - name: no uncovered lines (C0 = 100%)
+        run: |
+          missing=$(cargo llvm-cov report --show-missing-lines | sed -n '/Uncovered Lines/,$p' | grep -c '\.rs: [0-9]' || true)
+          echo "files with uncovered lines: $missing"
+          test "$missing" -eq 0

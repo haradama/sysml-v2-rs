@@ -1,0 +1,7 @@
+config:
+  extends: ./.markdownlint.yaml
+globs:
+  - "**/*.md"
+ignores:
+  - vendor/sysml-v2-release/**
+  - target/**

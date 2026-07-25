@@ -1,0 +1,12 @@
+# markdownlint configuration (checked locally via `markdownlint-cli2` and in CI)
+default: true
+
+# prose lines are not wrapped at a fixed width
+MD013: false
+
+# fenced code blocks must declare a language
+MD040: true
+
+# tables use padded pipes: `| a | b |`
+MD060:
+  style: padded

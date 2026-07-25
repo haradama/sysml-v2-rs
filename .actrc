@@ -1,0 +1,6 @@
+# defaults for running the CI workflow locally with act (https://github.com/nektos/act)
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+--container-architecture linux/amd64
+# our jobs never need docker-in-docker; skipping the socket mount keeps act
+# working with non-standard docker sockets (Rancher Desktop, colima, ...)
+--container-daemon-socket -

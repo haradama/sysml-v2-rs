@@ -1,0 +1,20 @@
+[package]
+name = "sysml-interchange"
+description = "Standard JSON interchange (SysML v2 API & Services serialization) for sysml-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sysml-model.workspace = true
+serde_json = "1"
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+sysml-syntax.workspace = true
+sysml-model.workspace = true
