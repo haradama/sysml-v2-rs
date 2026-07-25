@@ -203,7 +203,9 @@ fn diagram_renders_definitions_as_svg() {
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("2 box(es), 1 specialization(s), 0 composition(s) and 0 connection(s)"),
+        stderr.contains(
+            "2 box(es), 1 specialization(s), 0 composition(s), 0 connection(s) and 0 transition(s)"
+        ),
         "{stderr}"
     );
     assert!(std::fs::read_to_string(&svg)

@@ -303,12 +303,13 @@ fn diagram(
                     .count()
             };
             eprintln!(
-                "wrote {} box(es), {} specialization(s), {} composition(s) and {} \
-                 connection(s) to {}",
+                "wrote {} box(es), {} specialization(s), {} composition(s), {} \
+                 connection(s) and {} transition(s) to {}",
                 diagram.nodes.len(),
                 count(sysml_diagram::Relation::Specialization),
                 count(sysml_diagram::Relation::Composition),
                 count(sysml_diagram::Relation::Connection),
+                count(sysml_diagram::Relation::Transition),
                 path.display()
             );
         }

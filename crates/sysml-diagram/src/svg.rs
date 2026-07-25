@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::{Diagram, Edge, Layout, Placed, Relation, Style};
+use crate::{Diagram, Edge, Layout, Placed, Relation, Shape, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
 /// UI text, so a diagram looks native wherever it is embedded.
@@ -21,6 +21,8 @@ const CSS: &str = "\
 .rule, .edge { stroke: var(--line); stroke-width: 1.2; fill: none; }\n\
 .arrow { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
 .diamond { fill: var(--line); stroke: var(--line); stroke-width: 1.2; }\n\
+.tip { fill: none; stroke: var(--line); stroke-width: 1.2; }\n\
+.initial { fill: var(--line); }\n\
 .name { fill: var(--text); font-weight: 600; }\n\
 .keyword, .feature { fill: var(--muted); }\n";
 
@@ -47,7 +49,10 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
          <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
          <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
          markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker></defs>"
+         <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
+         <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
+         markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
+         <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker></defs>"
     )
     .unwrap();
 
@@ -72,7 +77,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             // centre to centre clipped to both borders. Composition puts a
             // filled diamond on the side of the whole; a connection is
             // undirected and gets no marker at all.
-            Relation::Composition | Relation::Connection => {
+            Relation::Composition | Relation::Connection | Relation::Transition => {
                 let (mut x1, mut y1) = border_point(from, centre_of(to));
                 let (mut x2, mut y2) = border_point(to, centre_of(from));
                 // shift edges sharing a pair of boxes along the normal, so
@@ -89,6 +94,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 }
                 let marker = match edge.relation {
                     Relation::Composition => " marker-start=\"url(#composition)\"",
+                    Relation::Transition => " marker-end=\"url(#transition)\"",
                     _ => "",
                 };
                 writeln!(
@@ -112,6 +118,17 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         let node = &diagram.nodes[placed.node];
         let centre = placed.x + placed.width / 2.0;
         let header = placed.y + style.padding;
+
+        if node.shape == Shape::Initial {
+            writeln!(
+                out,
+                "<circle class=\"initial\" cx=\"{centre:.1}\" cy=\"{:.1}\" r=\"{:.1}\"/>",
+                placed.y + placed.height / 2.0,
+                placed.width / 2.0
+            )
+            .unwrap();
+            continue;
+        }
 
         writeln!(
             out,
@@ -342,6 +359,55 @@ mod tests {
         assert!(!svg.contains("marker-start"));
         assert!(!svg.contains("marker-end"));
         assert!(svg.contains(">w : Wheel</text>"));
+    }
+
+    #[test]
+    fn an_initial_node_is_drawn_as_a_filled_circle() {
+        let ws = resolved(
+            "state def Modes {\n\
+             \tentry; then off;\n\
+             \tstate off;\n\
+             }\n",
+        );
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(
+            &interconnection_diagram(ws.model(), modes),
+            &Style::default(),
+        );
+
+        assert_eq!(svg.matches("<circle class=\"initial\"").count(), 1);
+        // the circle carries no label of its own, only the state does
+        assert_eq!(svg.matches("<rect class=\"box\"").count(), 1);
+        assert!(svg.contains(">off</text>"));
+    }
+
+    #[test]
+    fn a_transition_is_drawn_with_an_open_arrowhead() {
+        let ws = resolved(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition first off then on;\n\
+             }\n",
+        );
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(
+            &interconnection_diagram(ws.model(), modes),
+            &Style::default(),
+        );
+
+        assert_eq!(svg.matches("marker-end=\"url(#transition)\"").count(), 1);
+        assert!(svg.contains("class=\"tip\""));
+        // a transition is directed, so nothing is drawn at its source
+        assert!(!svg.contains("marker-start"));
     }
 
     #[test]

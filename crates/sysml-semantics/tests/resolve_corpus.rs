@@ -30,19 +30,17 @@ fn standard_library_resolves_completely() {
     );
 }
 
-/// Connector ends (`connect`/`bind`/`allocate` operands) are resolved too,
-/// and 14 of them do not yet land. All are `bind` statements in three
-/// example files that walk four levels into a behaviour to reach a payload
-/// parameter the standard library contributes:
+/// Connector and transition ends are resolved too, and 28 of them do not
+/// yet land, all in example files and all about messages and events:
 ///
-/// - 12 `...::publish::sentMessage` / `...::accepter::acceptedMessage`,
-///   which need `action x send ... via p` to be classified as a
-///   `SendActionUsage` so `Actions::SendAction` is its implicit supertype
-/// - 2 `apsp::send_returnallitems1`/`2` in the Arrowhead example
+/// - `bind` operands walking four levels into a behaviour to reach a
+///   payload parameter the standard library contributes
+///   (`...::publish::sentMessage`, `...::accepter::acceptedMessage`)
+/// - `sourceEvent`/`targetEvent` and the message usages carrying them
 ///
-/// Everything else resolves, so the number is asserted exactly: it must
-/// fall as the resolver improves, and any new gap fails the test.
-const KNOWN_UNRESOLVED_ENDS: usize = 14;
+/// The number is asserted exactly: it must fall as the resolver improves,
+/// and any new gap fails the test.
+const KNOWN_UNRESOLVED_ENDS: usize = 28;
 
 #[test]
 fn examples_resolve_against_the_library() {

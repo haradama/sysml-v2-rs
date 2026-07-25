@@ -352,3 +352,36 @@ fn a_performed_usage_answers_to_the_performed_name() {
     let ws = ws(&[("p.sysml", src)]);
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }
+
+#[test]
+fn a_succession_chain_declares_the_nodes_it_names() {
+    // the shorthand `then <declaration>;` both sequences the flow and
+    // declares the node, which must belong to the enclosing behaviour
+    let src = "action def A {\n\
+               \taction seed;\n\
+               \tfirst seed;\n\
+               \tthen merge continue;\n\
+               \tthen action b;\n\
+               \tthen continue;\n\
+               }\n";
+    let ws = ws(&[("a.sysml", src)]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let action_def = model
+        .ids()
+        .find(|id| model.kind(*id) == ElementKind::ActionDefinition)
+        .unwrap();
+    let members: Vec<&str> = model
+        .owned(action_def)
+        .iter()
+        .filter_map(|&id| model.name(id))
+        .collect();
+    assert_eq!(members, ["seed", "continue", "b"]);
+    let merge = model
+        .owned(action_def)
+        .iter()
+        .find(|&&id| model.name(id) == Some("continue"))
+        .unwrap();
+    assert_eq!(model.kind(*merge), ElementKind::MergeNode);
+}

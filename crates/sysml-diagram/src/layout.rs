@@ -1,7 +1,7 @@
 //! Layered layout: every supertype sits above the subtypes that specialize
 //! it, and each layer is ordered to keep the edges between layers untangled.
 
-use crate::graph::{Node, Relation};
+use crate::graph::{Node, Relation, Shape};
 use crate::{Diagram, Edge, Style};
 
 /// How many times the crossing-reduction pass sweeps the layers. Four is the
@@ -72,6 +72,11 @@ fn wrap_layers(layers: &[Vec<usize>], sizes: &[(f64, f64)], style: &Style) -> Ve
 /// Width and height of one box: wide enough for its longest line, tall
 /// enough for the keyword, the name and one line per feature.
 fn box_size(node: &Node, style: &Style) -> (f64, f64) {
+    if node.shape == Shape::Initial {
+        // a filled circle, sized to read at the same weight as a box border
+        let diameter = style.line_height;
+        return (diameter, diameter);
+    }
     // the name is drawn bold, which the 0.6 em estimate does not account for
     let mut width = (style.text_width(&node.name) * 1.1)
         .max(style.text_width(&format!("\u{ab}{}\u{bb}", node.keyword)));

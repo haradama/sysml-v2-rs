@@ -505,7 +505,10 @@ impl Workspace {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
             };
-            if node.kind() == SyntaxKind::CONNECTOR_STMT {
+            if matches!(
+                node.kind(),
+                SyntaxKind::CONNECTOR_STMT | SyntaxKind::CONTROL_STMT
+            ) {
                 self.resolve_connector_ends(id, &node, &mut stats);
                 continue;
             }
@@ -1081,10 +1084,7 @@ impl Workspace {
     ) {
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         let mut related = Vec::new();
-        for operand in node
-            .children()
-            .filter(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
-        {
+        for operand in end_operands(node) {
             // an operand with no identifiers resolves to nothing, which the
             // `None` arm below reports like any other unresolved end
             let segments = operand_segments(&operand);
@@ -1325,6 +1325,37 @@ fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementI
     if target != elem && !supers.contains(&target) {
         supers.push(target);
     }
+}
+
+/// The operands naming a connector's or transition's ends.
+///
+/// A connector relates every reference it holds. A transition writes an
+/// optional name of its own first (`transition off_to_on first off then
+/// on`), so only the references introduced by `first`/`then` are ends.
+fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    let is_reference = |kind| matches!(kind, SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR);
+    if node.kind() != SyntaxKind::CONTROL_STMT {
+        return node.children().filter(|c| is_reference(c.kind())).collect();
+    }
+    let mut out = Vec::new();
+    let mut after_keyword = false;
+    for element in node.children_with_tokens() {
+        match element.as_token() {
+            Some(token) => {
+                if matches!(token.kind(), SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW) {
+                    after_keyword = true;
+                }
+            }
+            None => {
+                let child = element.into_node().expect("element is a node");
+                if after_keyword && is_reference(child.kind()) {
+                    out.push(child);
+                    after_keyword = false;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Segments of each `#keyword` prefix on a definition/usage node.

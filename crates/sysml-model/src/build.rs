@@ -44,6 +44,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         DEFINITION => Some(definition_kind(node)),
         USAGE => Some(usage_kind(node)),
         CONNECTOR_STMT => connector_kind(node),
+        CONTROL_STMT => control_kind(node),
         IMPORT | EXPOSE => Some(import_kind(node)),
         // an alias is a Membership whose memberElement is resolved later
         ALIAS => Some(ElementKind::Membership),
@@ -67,7 +68,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         None => built.roots.push(id),
     }
 
-    if let Some(name) = declared_name(node) {
+    if let Some(name) = declared_name(node).or_else(|| statement_declared_name(node)) {
         model.set(id, "declaredName", Value::String(name));
     }
     if let Some(short) = declared_short_name(node) {
@@ -96,7 +97,16 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
                     build_node(model, &member, Some(id), built);
                 }
             }
-            DEFINITION | USAGE => build_node(model, &child, Some(id), built),
+            // `then action b;` declares b for the enclosing behaviour; the
+            // succession only points at it, so it must not own it
+            DEFINITION | USAGE => {
+                let parent = if node.kind() == CONTROL_STMT {
+                    owner
+                } else {
+                    Some(id)
+                };
+                build_node(model, &child, parent, built);
+            }
             _ => {}
         }
     }
@@ -115,6 +125,85 @@ fn connector_kind(node: &SyntaxNode) -> Option<ElementKind> {
         SyntaxKind::ALLOCATE_KW => Some(ElementKind::AllocationUsage),
         _ => None,
     })
+}
+
+/// The `CONTROL_STMT` forms that carry structure of their own: the two that
+/// relate a source to a target (`transition [name] first x then y` and a
+/// bare `first x then y`), and the named control nodes a succession can
+/// point at (`merge continue;`, `join join1;`).
+///
+/// The node also covers `entry`/`exit`/`do`, loops and `then y` on its own,
+/// which keep their pre-existing treatment as plain statements.
+fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
+    // `then merge continue;` is written as one statement but declares the
+    // node; the declaration is what the rest of the flow refers to, so it
+    // wins over the succession the leading `then` would otherwise make.
+    let declaration = tokens(node).find_map(control_node_kind);
+    declaration.or_else(|| {
+        tokens(node).find_map(|token| match token {
+            SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
+            SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW => Some(ElementKind::SuccessionAsUsage),
+            _ => None,
+        })
+    })
+}
+
+/// The control node a keyword declares, if it declares one.
+fn control_node_kind(token: SyntaxKind) -> Option<ElementKind> {
+    match token {
+        SyntaxKind::MERGE_KW => Some(ElementKind::MergeNode),
+        SyntaxKind::DECIDE_KW => Some(ElementKind::DecisionNode),
+        SyntaxKind::FORK_KW => Some(ElementKind::ForkNode),
+        SyntaxKind::JOIN_KW => Some(ElementKind::JoinNode),
+        _ => None,
+    }
+}
+
+/// Some statements write their own name as a plain reference rather than
+/// the `NAME` node a declaration carries: `merge continue;`, `transition
+/// off_to_on first off then on`, `action engineStarted accept engineStart`.
+///
+/// The name is the reference before the keyword that introduces the
+/// statement's operands, so a bare `first x then y` stays unnamed. A usage
+/// only takes a name this way when such a keyword is present, leaving
+/// `perform pp.gt;` to the effective name resolution gives it.
+fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
+    let introduces_operands = |kind| {
+        matches!(
+            kind,
+            SyntaxKind::FIRST_KW
+                | SyntaxKind::THEN_KW
+                | SyntaxKind::ACCEPT_KW
+                | SyntaxKind::SEND_KW
+        )
+    };
+    match node.kind() {
+        SyntaxKind::CONTROL_STMT => {}
+        SyntaxKind::USAGE if tokens(node).any(introduces_operands) => {}
+        _ => return None,
+    }
+    // `then merge continue;` names the node it declares, so the leading
+    // `then` does not end the search -- the declaration keyword restarts it
+    let declares = tokens(node).any(|t| control_node_kind(t).is_some());
+    let mut reached_declaration = !declares;
+    for element in node.children_with_tokens() {
+        if let Some(token) = element.as_token() {
+            if control_node_kind(token.kind()).is_some() {
+                reached_declaration = true;
+                continue;
+            }
+            // past that keyword every reference is an operand, not a name
+            if reached_declaration && introduces_operands(token.kind()) {
+                return None;
+            }
+            continue;
+        }
+        let child = element.into_node().expect("checked for a token above");
+        if reached_declaration && child.kind() == SyntaxKind::NAME_REF {
+            return Some(unquote(child.first_token()?.text()));
+        }
+    }
+    None
 }
 
 fn package_kind(node: &SyntaxNode) -> ElementKind {
@@ -332,6 +421,21 @@ fn unquote(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn statements_name_themselves_with_a_plain_reference() {
+        // `action b accept x;` writes `b` as a reference, not a NAME node,
+        // while a bare `fork;` names nothing at all
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\tmerge m;\n\tfork;\n\taction b accept x;\n\tfirst m then b;\n}\n",
+        ));
+        let names: Vec<&str> = model
+            .owned(roots[0])
+            .iter()
+            .filter_map(|&id| model.name(id))
+            .collect();
+        assert_eq!(names, ["m", "b"]);
+    }
+
     use super::*;
 
     #[test]

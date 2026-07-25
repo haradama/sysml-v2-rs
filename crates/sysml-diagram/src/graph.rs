@@ -24,6 +24,17 @@ impl Feature {
     }
 }
 
+/// How a node is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Shape {
+    /// A labelled box: a definition, part, state or action.
+    #[default]
+    Box,
+    /// The filled circle a state machine or action flow starts from,
+    /// carrying no label of its own.
+    Initial,
+}
+
 /// One box: a named definition and the features it declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
@@ -32,6 +43,7 @@ pub struct Node {
     /// SysML keyword shown in guillemets, e.g. `part def`.
     pub keyword: String,
     pub features: Vec<Feature>,
+    pub shape: Shape,
 }
 
 /// What an edge between two boxes means.
@@ -46,6 +58,9 @@ pub enum Relation {
     /// `from` and `to` are wired together (`connect w.hub to a.mount`).
     /// Undirected: which end is `from` only reflects declaration order.
     Connection,
+    /// Control flows from `from` to `to` (`transition first off then on`,
+    /// `first a then b`). Directed, unlike a connection.
+    Transition,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -95,6 +110,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 name: name.to_string(),
                 keyword: keyword(model.kind(id)),
                 features: features_of(model, id),
+                shape: Shape::Box,
             });
         }
     }
@@ -123,17 +139,23 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
     Diagram { nodes, edges }
 }
 
-/// The internal structure of one definition: a box per part it is assembled
-/// from, and an edge per connection declared between two of them.
+/// The internal structure of one definition: a box per part, state or action
+/// it is composed of, and an edge per connection or transition declared
+/// between two of them.
 ///
-/// Connections whose ends leave the definition, and self-connections between
-/// two features of the same part, are left undrawn.
+/// The same shape serves a `part def` (parts wired by `connect`), a
+/// `state def` (states linked by `transition`) and an `action def` (actions
+/// sequenced by `first ... then`), because all three are children of the
+/// definition related by a two-ended statement.
+///
+/// Edges whose ends leave the definition, and self-edges between two
+/// features of one box, are left undrawn.
 pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram {
     let mut nodes: Vec<Node> = Vec::new();
     let mut index: HashMap<ElementId, usize> = HashMap::new();
 
     for &child in model.owned(definition) {
-        if !is_part_box(model.kind(child)) {
+        if !is_structure_box(model.kind(child)) {
             continue;
         }
         let Some(name) = model.name(child) else {
@@ -150,23 +172,55 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             name: label,
             keyword: keyword(model.kind(child)),
             features: features_of(model, child),
+            shape: Shape::Box,
         });
     }
 
     let mut edges = Vec::new();
     for &child in model.owned(definition) {
-        let Ok([first, second]) = <[_; 2]>::try_from(connector_ends(model, child)) else {
+        let ends = connector_ends(model, child);
+        // `entry; then off;` names only where the flow goes, so it starts
+        // from the filled circle every state machine begins at
+        if let [only] = &ends[..] {
+            if model.kind(child) == ElementKind::SuccessionAsUsage {
+                if let Some(&to) = index.get(&only.0) {
+                    edges.push(Edge {
+                        from: nodes.len(),
+                        to,
+                        relation: Relation::Transition,
+                        ends: None,
+                    });
+                    nodes.push(Node {
+                        id: child,
+                        name: String::new(),
+                        keyword: String::new(),
+                        features: Vec::new(),
+                        shape: Shape::Initial,
+                    });
+                }
+            }
+            continue;
+        }
+        let Ok([first, second]) = <[_; 2]>::try_from(ends) else {
             continue;
         };
         let (Some(&from), Some(&to)) = (index.get(&first.0), index.get(&second.0)) else {
             continue;
         };
         if from != to {
+            let directed = model.kind(child).is_a(ElementKind::TransitionUsage)
+                || model.kind(child) == ElementKind::SuccessionAsUsage;
             edges.push(Edge {
                 from,
                 to,
-                relation: Relation::Connection,
-                ends: Some((first.1, second.1)),
+                relation: if directed {
+                    Relation::Transition
+                } else {
+                    Relation::Connection
+                },
+                // a transition names its states twice over; only a
+                // connection's port labels add anything
+                ends: (!directed).then_some((first.1, second.1)),
             });
         }
     }
@@ -174,13 +228,21 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     Diagram { nodes, edges }
 }
 
-/// Whether a usage is one of the parts a definition is assembled from.
+/// Whether a usage is one of the things a definition is composed of, rather
+/// than a relationship between two of them.
 ///
-/// `ConnectionUsage` and `AllocationUsage` specialize `PartUsage` in the
-/// metamodel, but they are what the edges are drawn *from*: a named
-/// `connect c : Conn ...` must not also become a box.
-fn is_part_box(kind: ElementKind) -> bool {
-    kind.is_a(ElementKind::PartUsage) && !kind.is_a(ElementKind::ConnectorAsUsage)
+/// The exclusions matter because the metamodel makes every relationship a
+/// specialization of what it relates: `ConnectionUsage` is a `PartUsage`,
+/// and `TransitionUsage` and the control nodes are all `ActionUsage`. A
+/// named `connect c : Conn ...` or `transition t first a then b` must be an
+/// edge only, never also a box.
+fn is_structure_box(kind: ElementKind) -> bool {
+    let composed = kind.is_a(ElementKind::PartUsage)
+        || kind.is_a(ElementKind::StateUsage)
+        || kind.is_a(ElementKind::ActionUsage);
+    let relates =
+        kind.is_a(ElementKind::ConnectorAsUsage) || kind.is_a(ElementKind::TransitionUsage);
+    composed && !relates
 }
 
 /// Each end of a connector as `(part it starts at, feature it attaches to)`,
@@ -219,7 +281,9 @@ fn compositions_of(
 ) {
     let mut linked: Vec<usize> = Vec::new();
     for &child in model.owned(definition) {
-        if !is_part_box(model.kind(child)) {
+        // composition is about parts; a state or action a definition owns is
+        // its behaviour, not something it is assembled from
+        if !model.kind(child).is_a(ElementKind::PartUsage) || !is_structure_box(model.kind(child)) {
             continue;
         }
         let Some(&to) = type_reference(model, child).and_then(|ty| index.get(&ty)) else {
@@ -664,5 +728,160 @@ mod connector_box_tests {
             .map(|e| outer.nodes[e.to].name.as_str())
             .collect();
         assert_eq!(composed, ["Wheel", "Axle"]);
+    }
+}
+
+#[cfg(test)]
+mod behaviour_tests {
+    use super::*;
+    use crate::tests::resolved;
+
+    fn internal(source: &str, name: &str) -> Diagram {
+        let ws = resolved(source);
+        let owner = ws
+            .named_elements()
+            .find(|(_, declared)| *declared == name)
+            .map(|(id, _)| id)
+            .unwrap();
+        interconnection_diagram(ws.model(), owner)
+    }
+
+    #[test]
+    fn a_state_definition_draws_its_states_and_transitions() {
+        let diagram = internal(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition off_to_on first off then on;\n\
+             \ttransition on_to_off first on then off;\n\
+             }\n",
+            "Modes",
+        );
+
+        let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["off", "on"]);
+        assert_eq!(
+            diagram.edges,
+            [
+                Edge {
+                    from: 0,
+                    to: 1,
+                    relation: Relation::Transition,
+                    ends: None,
+                },
+                Edge {
+                    from: 1,
+                    to: 0,
+                    relation: Relation::Transition,
+                    ends: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_action_definition_draws_its_successions() {
+        let diagram = internal(
+            "action def Flow {\n\
+             \taction a;\n\
+             \tmerge m;\n\
+             \taction b;\n\
+             \tfirst a then m;\n\
+             \tfirst m then b;\n\
+             }\n",
+            "Flow",
+        );
+
+        // the merge node is one of the boxes the flow runs through
+        let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["a", "m", "b"]);
+        assert!(diagram
+            .edges
+            .iter()
+            .all(|e| e.relation == Relation::Transition));
+        assert_eq!(diagram.edges.len(), 2);
+    }
+
+    /// `TransitionUsage` is an `ActionUsage`, so a named transition would
+    /// become a box unless relationships are excluded.
+    #[test]
+    fn a_named_transition_is_an_edge_and_not_a_box() {
+        let diagram = internal(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition named first off then on;\n\
+             }\n",
+            "Modes",
+        );
+        assert_eq!(diagram.nodes.len(), 2);
+        assert_eq!(diagram.edges.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod initial_tests {
+    use super::*;
+    use crate::tests::resolved;
+
+    #[test]
+    fn an_entry_succession_starts_from_a_filled_circle() {
+        let ws = resolved(
+            "state def Modes {\n\
+             \tentry; then off;\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition first off then on;\n\
+             }\n",
+        );
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), modes);
+
+        // two states plus the circle the machine starts at
+        assert_eq!(diagram.nodes.len(), 3);
+        let initial = diagram
+            .nodes
+            .iter()
+            .position(|n| n.shape == Shape::Initial)
+            .unwrap();
+        assert!(diagram.nodes[initial].name.is_empty());
+        assert!(diagram
+            .edges
+            .iter()
+            .any(|e| e.from == initial && e.relation == Relation::Transition));
+        assert_eq!(diagram.edges.len(), 2);
+    }
+
+    #[test]
+    fn a_one_ended_connector_that_is_not_a_succession_is_skipped() {
+        // `bind w = 1;` resolves one operand, and a binding is not the
+        // entry point of anything
+        let ws = resolved("part def Car {\n\tpart w;\n\tbind w = 1;\n}\n");
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), car);
+        assert_eq!(diagram.nodes.len(), 1);
+        assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn an_entry_succession_into_nothing_drawable_is_skipped() {
+        let ws = resolved("state def Modes {\n\tentry; then elsewhere;\n}\n");
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        assert_eq!(
+            interconnection_diagram(ws.model(), modes),
+            Diagram::default()
+        );
     }
 }
