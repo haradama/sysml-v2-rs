@@ -44,6 +44,9 @@ pub struct Node {
     pub keyword: String,
     pub features: Vec<Feature>,
     pub shape: Shape,
+    /// The parts this box is itself assembled from, drawn inside it. Only
+    /// an interconnection view fills this, and only one level deep.
+    pub children: Vec<Node>,
 }
 
 /// What an edge between two boxes means.
@@ -114,6 +117,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 keyword: keyword(model.kind(id)),
                 features: features_of(model, id),
                 shape: Shape::Box,
+                children: Vec::new(),
             });
         }
     }
@@ -170,13 +174,18 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             Some(ty) => format!("{name} : {ty}"),
             None => name.to_string(),
         };
+        let children = nested_parts(model, child);
+        let mut features = features_with_type(model, child);
+        // whatever became a box inside is not also a compartment line
+        features.retain(|feature| children.is_empty() || feature.keyword != "part");
         index.insert(child, nodes.len());
         nodes.push(Node {
             id: child,
             name: label,
             keyword: keyword(model.kind(child)),
-            features: features_with_type(model, child),
+            features,
             shape: Shape::Box,
+            children,
         });
     }
 
@@ -201,6 +210,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                         keyword: String::new(),
                         features: Vec::new(),
                         shape: Shape::Initial,
+                        children: Vec::new(),
                     });
                 }
             }
@@ -226,15 +236,58 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 // a transition names its states twice over; only a
                 // connection's port labels add anything
                 ends: (!directed).then_some((first.1, second.1)),
-                // a named transition says what the step is for
-                label: directed
-                    .then(|| model.name(child).map(str::to_string))
-                    .flatten(),
+                // `off_to_on / send action`, after the UML convention of
+                // naming the step and then what it does
+                label: directed.then(|| transition_label(model, child)).flatten(),
             });
         }
     }
 
     Diagram { nodes, edges }
+}
+
+/// What to write beside a transition, after the UML reading of `trigger /
+/// effect`: its own name, the payload it waits for, and the action it
+/// performs on the way across, as far as it declares each.
+fn transition_label(model: &Model, transition: ElementId) -> Option<String> {
+    let mut head: Vec<String> = Vec::new();
+    if let Some(name) = model.name(transition) {
+        head.push(name.to_string());
+    }
+    if let Some(trigger) = first_reference(model, transition, "triggerAction") {
+        let payload = model.name(trigger).unwrap_or_default();
+        let typed = type_of(model, trigger)
+            .map(|ty| format!(" : {ty}"))
+            .unwrap_or_default();
+        head.push(format!("accept {payload}{typed}"));
+    }
+    if let Some(guard) = guard_text(model, transition) {
+        head.push(format!("[{guard}]"));
+    }
+    let effect = first_reference(model, transition, "effectAction").map(|a| keyword(model.kind(a)));
+    match (head.is_empty(), effect) {
+        (true, effect) => effect,
+        (false, Some(effect)) => Some(format!("{} / {effect}", head.join(" "))),
+        (false, None) => Some(head.join(" ")),
+    }
+}
+
+/// The condition a transition is guarded by, as it was written. The model
+/// keeps it as a textual representation of the guard expression, since the
+/// expression tree itself is not made of elements.
+fn guard_text(model: &Model, transition: ElementId) -> Option<String> {
+    let guard = first_reference(model, transition, "guardExpression")?;
+    // the representation is the only thing the reified guard owns
+    let written = *model.owned(guard).first()?;
+    model.get(written, "body")?.as_str().map(str::to_string)
+}
+
+/// The first element a `RefList` property points at.
+fn first_reference(model: &Model, element: ElementId, property: &str) -> Option<ElementId> {
+    match model.get(element, property) {
+        Some(Value::RefList(items)) => items.first().copied(),
+        _ => None,
+    }
 }
 
 /// Whether a usage is one of the things a definition is composed of, rather
@@ -342,6 +395,43 @@ fn keyword(kind: ElementKind) -> String {
         out.extend(ch.to_lowercase());
     }
     out.push_str(suffix);
+    out
+}
+
+/// The parts a box is assembled from, as boxes to draw inside it.
+///
+/// Taken from the usage and then its type, the same way its features are:
+/// `part w : Wheel;` declares nothing itself, so the sub-parts come from
+/// `Wheel`. Nesting stops here -- one level is what a box has room for.
+fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
+    let mut out: Vec<Node> = Vec::new();
+    let owners = [Some(usage), type_reference(model, usage)];
+    for owner in owners.into_iter().flatten() {
+        for &part in model.owned(owner) {
+            if !model.kind(part).is_a(ElementKind::PartUsage) || !is_structure_box(model.kind(part))
+            {
+                continue;
+            }
+            let Some(name) = model.name(part) else {
+                continue;
+            };
+            let label = match type_of(model, part) {
+                Some(ty) => format!("{name} : {ty}"),
+                None => name.to_string(),
+            };
+            if out.iter().any(|drawn| drawn.name == label) {
+                continue;
+            }
+            out.push(Node {
+                id: part,
+                name: label,
+                keyword: keyword(model.kind(part)),
+                features: Vec::new(),
+                shape: Shape::Box,
+                children: Vec::new(),
+            });
+        }
+    }
     out
 }
 
@@ -719,6 +809,62 @@ mod interconnection_tests {
     }
 
     #[test]
+    fn a_part_box_carries_its_sub_parts_as_boxes() {
+        let ws = resolved(
+            "part def Bolt;\n\
+             part def Wheel { port hub; part bolt : Bolt; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        let wheel = &diagram.nodes[0];
+
+        let nested: Vec<&str> = wheel.children.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(nested, ["bolt : Bolt"]);
+        // the sub-part is a box now, so it is not also a compartment line
+        let lines: Vec<String> = wheel.features.iter().map(Feature::label).collect();
+        assert_eq!(lines, ["port hub"]);
+        // nesting stops at one level
+        assert!(wheel.children[0].children.is_empty());
+    }
+
+    #[test]
+    fn nested_parts_skip_what_cannot_be_drawn() {
+        let ws = resolved(
+            "part def Bolt;\n\
+             part def Wheel { part bolt : Bolt; part loose; }\n\
+             part def Car {\n\
+             \tpart w : Wheel { part bolt : Bolt; }\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        let nested: Vec<&str> = diagram.nodes[0]
+            .children
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        // the usage writes `bolt` too, and the type's repeat is not drawn
+        // twice; an untyped sub-part keeps its bare name
+        assert_eq!(nested, ["bolt : Bolt", "loose"]);
+    }
+
+    #[test]
+    fn an_unnamed_sub_part_is_skipped() {
+        let mut model = Model::new();
+        let definition = model.create(ElementKind::PartDefinition);
+        let part = model.create(ElementKind::PartUsage);
+        model.set(part, "declaredName", Value::String("w".to_string()));
+        model.add_owned(definition, part);
+        let anonymous = model.create(ElementKind::PartUsage);
+        model.add_owned(part, anonymous);
+
+        let diagram = interconnection_diagram(&model, definition);
+        assert_eq!(diagram.nodes.len(), 1);
+        assert!(diagram.nodes[0].children.is_empty());
+    }
+
+    #[test]
     fn a_part_redefining_a_feature_keeps_its_own_entry() {
         let ws = resolved(
             "port def Fast;\n\
@@ -846,6 +992,67 @@ mod behaviour_tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_transition_label_names_the_step_and_what_it_does() {
+        let diagram = internal(
+            "part def B { port p; }\n\
+             state def S {\n\
+             \tstate a;\n\
+             \tstate b;\n\
+             \tpart sink : B;\n\
+             \ttransition t1 first a do send 1 to sink.p then b;\n\
+             \ttransition first b do send 2 to sink.p then a;\n\
+             }\n",
+            "S",
+        );
+        let labels: Vec<Option<&str>> = diagram.edges.iter().map(|e| e.label.as_deref()).collect();
+        // the unnamed one still says what it does on the way across
+        assert_eq!(labels, [Some("t1 / send action"), Some("send action")]);
+    }
+
+    #[test]
+    fn a_transition_label_carries_the_payload_it_waits_for() {
+        let diagram = internal(
+            "item def P;\n\
+             state def S {\n\
+             \tstate a;\n\
+             \tstate b;\n\
+             \ttransition t1 first a accept pub : P then b;\n\
+             }\n",
+            "S",
+        );
+        assert_eq!(diagram.edges[0].label.as_deref(), Some("t1 accept pub : P"));
+
+        // the whole UML reading: name, trigger, guard, effect
+        let full = internal(
+            "item def P;\n\
+             part def B { port pt; }\n\
+             state def S {\n\
+             \tstate a;\n\
+             \tstate b;\n\
+             \tpart sink : B;\n\
+             \ttransition t1 first a accept pub : P if pub != null \
+             do send 1 to sink.pt then b;\n\
+             }\n",
+            "S",
+        );
+        assert_eq!(
+            full.edges[0].label.as_deref(),
+            Some("t1 accept pub : P [pub != null] / send action")
+        );
+
+        // an untyped payload still names what the transition waits for
+        let untyped = internal(
+            "state def S {\n\
+             \tstate a;\n\
+             \tstate b;\n\
+             \ttransition first a accept pub then b;\n\
+             }\n",
+            "S",
+        );
+        assert_eq!(untyped.edges[0].label.as_deref(), Some("accept pub"));
     }
 
     #[test]

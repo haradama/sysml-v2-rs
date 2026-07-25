@@ -448,3 +448,17 @@ fn only_a_reference_right_after_then_is_a_succession_end() {
     )]);
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }
+
+#[test]
+fn an_unresolvable_trigger_payload_type_is_reported() {
+    let ws = ws(&[(
+        "t.sysml",
+        "state def S {\n\
+         \tstate a;\n\
+         \tstate b;\n\
+         \ttransition t1 first a accept pub : NoSuchSignal then b;\n\
+         }\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["NoSuchSignal"]);
+}

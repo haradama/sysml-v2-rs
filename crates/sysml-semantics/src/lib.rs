@@ -510,6 +510,7 @@ impl Workspace {
                 SyntaxKind::CONNECTOR_STMT | SyntaxKind::CONTROL_STMT
             ) {
                 self.resolve_connector_ends(id, &node, &mut stats);
+                self.resolve_trigger_type(id, &node, &mut stats);
                 continue;
             }
             if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
@@ -1140,6 +1141,54 @@ impl Workspace {
         let end = self.model.create(ElementKind::Feature);
         self.model.add_owned(connector, end);
         self.try_set(end, "chainingFeature", Value::RefList(chain));
+    }
+
+    /// A transition's `accept x : T` writes a typing that belongs to the
+    /// trigger it declares, not to the transition itself.
+    fn resolve_trigger_type(
+        &mut self,
+        transition: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let declared = match self.model.get(transition, "triggerAction") {
+            Some(Value::RefList(triggers)) => triggers.first().copied(),
+            _ => None,
+        };
+        let Some(trigger) = declared else {
+            return;
+        };
+        let file = self.elem_file.get(&transition).copied().unwrap_or(0);
+        let typings = relationship_parts(node)
+            .into_iter()
+            .filter(|(part, _)| *part == SyntaxKind::TYPING);
+        for (_, targets) in typings {
+            for t in targets {
+                match self.resolve_from(transition, &t.segments) {
+                    Some(target) => {
+                        stats.resolved += 1;
+                        self.references.push(Reference {
+                            file,
+                            range: t.range,
+                            name_range: t.name_range,
+                            target,
+                        });
+                        let typing = self.model.create(ElementKind::FeatureTyping);
+                        self.model.add_owned(trigger, typing);
+                        self.try_set(typing, "typedFeature", Value::Ref(trigger));
+                        self.try_set(typing, "type", Value::Ref(target));
+                    }
+                    None => {
+                        stats.unresolved += 1;
+                        self.unresolved.push(Unresolved {
+                            file,
+                            range: t.range,
+                            name: t.segments.join("::"),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn try_set(&mut self, id: ElementId, prop: &str, value: Value) {

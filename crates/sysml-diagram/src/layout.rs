@@ -30,6 +30,7 @@ pub struct Layout {
 
 /// Assign every node of `diagram` a position.
 pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
+    let style = &widened_for_labels(diagram, style);
     let sizes: Vec<(f64, f64)> = diagram
         .nodes
         .iter()
@@ -39,6 +40,29 @@ pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
     let layers = order_layers(diagram, &ranks);
     let rows = wrap_layers(&layers, &sizes, style);
     place(&sizes, &rows, style)
+}
+
+/// Widen the gap between boxes to fit the names drawn in it.
+///
+/// A connection names the port at each end and a transition names itself,
+/// and all of those sit between the boxes. At the default gap they pile up
+/// on each other as soon as two connections share a pair of boxes.
+fn widened_for_labels(diagram: &Diagram, style: &Style) -> Style {
+    let mut needed: f64 = 0.0;
+    for edge in &diagram.edges {
+        if let Some((first, second)) = &edge.ends {
+            // one name per end, each set clear of its own port
+            let widest = style.text_width(first).max(style.text_width(second));
+            needed = needed.max(2.0 * widest + style.line_height);
+        }
+        if let Some(label) = &edge.label {
+            needed = needed.max(style.text_width(label) + style.line_height);
+        }
+    }
+    Style {
+        h_gap: style.h_gap.max(needed),
+        ..*style
+    }
 }
 
 /// Split each layer into rows no wider than [`Style::max_row_width`].
@@ -87,7 +111,56 @@ fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     if !node.features.is_empty() {
         height += style.padding + node.features.len() as f64 * style.line_height;
     }
+    if !node.children.is_empty() {
+        let (nested_width, nested_height) = children_block(node, style);
+        width = width.max(nested_width);
+        height += style.padding + nested_height;
+    }
     (width + 2.0 * style.padding, height)
+}
+
+/// The block the nested parts occupy inside their parent: one row of boxes,
+/// held together by the padding rather than the gap that separates the
+/// top-level ones.
+pub(crate) fn children_block(node: &Node, style: &Style) -> (f64, f64) {
+    let sizes = child_sizes(node, style);
+    let width =
+        sizes.iter().map(|size| size.0).sum::<f64>() + style.padding * (sizes.len() as f64 - 1.0);
+    let height = sizes.iter().map(|size| size.1).fold(0.0f64, f64::max);
+    (width, height)
+}
+
+fn child_sizes(node: &Node, style: &Style) -> Vec<(f64, f64)> {
+    node.children
+        .iter()
+        .map(|child| box_size(child, style))
+        .collect()
+}
+
+/// Where each nested part sits inside the box at `parent`, centred along
+/// the bottom of it.
+pub(crate) fn child_boxes(
+    node: &Node,
+    parent: (f64, f64, f64, f64),
+    style: &Style,
+) -> Vec<(f64, f64, f64, f64)> {
+    let (x, y, width, height) = parent;
+    let (block_width, block_height) = children_block(node, style);
+    let mut next = x + (width - block_width) / 2.0;
+    let top = y + height - style.padding - block_height;
+    child_sizes(node, style)
+        .into_iter()
+        .map(|(child_width, child_height)| {
+            let placed = (
+                next,
+                top + (block_height - child_height) / 2.0,
+                child_width,
+                child_height,
+            );
+            next += child_width + style.padding;
+            placed
+        })
+        .collect()
 }
 
 /// Only specializations order the layers. Composition runs from a whole to
@@ -340,6 +413,61 @@ mod tests {
         let ranks = ranks(&diagram);
         assert_eq!(ranks.len(), 1);
         assert!(ranks[0] <= diagram.nodes.len());
+    }
+
+    #[test]
+    fn nested_parts_fit_inside_the_box_that_holds_them() {
+        let ws = resolved(
+            "part def Bolt;\n\
+             part def Rim;\n\
+             part def Wheel { part bolt : Bolt; part rim : Rim; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let car = diagram.nodes.iter().find(|n| n.name == "Car").unwrap().id;
+        let inner = crate::interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let placed = layout(&inner, &style);
+
+        let wheel = placed.placed[0];
+        let parent = (wheel.x, wheel.y, wheel.width, wheel.height);
+        let boxes = child_boxes(&inner.nodes[0], parent, &style);
+        assert_eq!(boxes.len(), 2);
+        for (x, y, width, height) in boxes {
+            assert!(x >= wheel.x && x + width <= wheel.x + wheel.width);
+            assert!(y >= wheel.y && y + height <= wheel.y + wheel.height);
+        }
+    }
+
+    #[test]
+    fn labels_widen_the_gap_they_are_drawn_in() {
+        let style = Style::default();
+        let mut diagram = Diagram::default();
+        assert_eq!(widened_for_labels(&diagram, &style).h_gap, style.h_gap);
+
+        // a connection sets two names down, one per end
+        diagram.edges = vec![Edge {
+            from: 0,
+            to: 1,
+            relation: Relation::Connection,
+            ends: Some(("aVeryLongPortName".to_string(), "short".to_string())),
+            label: None,
+        }];
+        let widened = widened_for_labels(&diagram, &style).h_gap;
+        // room for the longer name at both ends
+        assert!(widened > 2.0 * style.text_width("aVeryLongPortName"));
+
+        // a transition sets one down, in the middle
+        diagram.edges = vec![Edge {
+            from: 0,
+            to: 1,
+            relation: Relation::Transition,
+            ends: None,
+            label: Some("aVeryLongTransitionName".to_string()),
+        }];
+        assert!(widened_for_labels(&diagram, &style).h_gap > style.h_gap);
     }
 
     #[test]

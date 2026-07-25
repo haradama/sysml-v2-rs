@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use crate::graph::Node;
+use crate::layout::child_boxes;
 use crate::{Diagram, Edge, Layout, Placed, Relation, Shape, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
@@ -129,19 +131,43 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
 
     for placed in &layout.placed {
         let node = &diagram.nodes[placed.node];
-        let centre = placed.x + placed.width / 2.0;
-        let header = placed.y + style.padding;
-
         if node.shape == Shape::Initial {
             writeln!(
                 out,
-                "<circle class=\"initial\" cx=\"{centre:.1}\" cy=\"{:.1}\" r=\"{:.1}\"/>",
+                "<circle class=\"initial\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"{:.1}\"/>",
+                placed.x + placed.width / 2.0,
                 placed.y + placed.height / 2.0,
                 placed.width / 2.0
             )
             .unwrap();
             continue;
         }
+        draw_box(
+            &mut out,
+            node,
+            (placed.x, placed.y, placed.width, placed.height),
+            style,
+        );
+    }
+
+    out.push_str(&ports);
+    writeln!(out, "</svg>").unwrap();
+    out
+}
+
+/// Draw one box and, inside it, the parts it is assembled from.
+fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &Style) {
+    let (x, y, width, height) = rect;
+    {
+        let placed = Placed {
+            node: 0,
+            x,
+            y,
+            width,
+            height,
+        };
+        let centre = placed.x + placed.width / 2.0;
+        let header = placed.y + style.padding;
 
         writeln!(
             out,
@@ -189,10 +215,9 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         }
         writeln!(out, "</g>").unwrap();
     }
-
-    out.push_str(&ports);
-    writeln!(out, "</svg>").unwrap();
-    out
+    for (child, inner) in node.children.iter().zip(child_boxes(node, rect, style)) {
+        draw_box(out, child, inner, style);
+    }
 }
 
 /// For each edge, its perpendicular offset factor and how many edges share
@@ -564,6 +589,28 @@ mod tests {
         assert_eq!(svg.matches("<line class=\"rule\"").count(), 1);
         assert!(svg.contains(">attribute power</text>"));
         assert!(svg.contains(">port fuelIn : FuelPort</text>"));
+    }
+
+    #[test]
+    fn nested_parts_are_drawn_as_boxes_inside_their_parent() {
+        let ws = resolved(
+            "part def Bolt;\n\
+             part def Wheel { part bolt : Bolt; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(&interconnection_diagram(ws.model(), car), &Style::default());
+
+        // the part and the sub-part it holds
+        assert_eq!(svg.matches("<rect class=\"box\"").count(), 2);
+        assert!(svg.contains(">w : Wheel</text>"));
+        assert!(svg.contains(">bolt : Bolt</text>"));
     }
 
     #[test]

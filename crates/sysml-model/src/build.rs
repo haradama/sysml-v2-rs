@@ -87,6 +87,11 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
             model.set(id, "language", Value::String(lang));
         }
     }
+    if kind == ElementKind::TransitionUsage {
+        reify_trigger(model, node, id);
+        reify_guard(model, node, id);
+        reify_effect(model, node, id);
+    }
 
     // recurse into the element's body, parameter list and nested
     // declarations (`end x [1..*] feature y : T;`)
@@ -118,6 +123,101 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
             _ => {}
         }
     }
+}
+
+/// Reify the trigger a transition waits for: `accept pub : Publish via p`.
+///
+/// The parser leaves the clause flat, so the payload the transition accepts
+/// has nothing standing for it. Its name is what the rest of the model
+/// refers to (`subscribing.sub`), and `sysml-semantics` attaches the typing
+/// written after it.
+fn reify_trigger(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
+    let mut after_accept = false;
+    let mut name = None;
+    for element in node.children_with_tokens() {
+        match element.as_token() {
+            Some(token) if token.kind().is_trivia() => {}
+            Some(token) if token.kind() == SyntaxKind::ACCEPT_KW => after_accept = true,
+            // any other keyword closes the slot the payload name sits in
+            Some(_) if after_accept => break,
+            Some(_) => {}
+            None => {
+                let child = element.into_node().expect("checked for a token above");
+                if after_accept && child.kind() == SyntaxKind::NAME_REF {
+                    name = child.first_token().map(|t| unquote(t.text()));
+                    break;
+                }
+            }
+        }
+    }
+    let Some(name) = name else {
+        return;
+    };
+    let trigger = model.create(ElementKind::AcceptActionUsage);
+    model.add_owned(transition, trigger);
+    model.set(trigger, "declaredName", Value::String(name));
+    model.set(transition, "triggerAction", Value::RefList(vec![trigger]));
+}
+
+/// Reify the condition a transition is guarded by.
+///
+/// The condition parses as an expression tree, which this model does not
+/// represent as elements, so what is kept is its source text -- recorded the
+/// way SysML records any element in a concrete syntax, as a textual
+/// representation of the guard.
+fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
+    let Some(condition) = node
+        .children()
+        .find(|child| child.kind() == SyntaxKind::COND_EXPR)
+    else {
+        return;
+    };
+    let text = condition.text().to_string();
+    let guard = model.create(ElementKind::Expression);
+    model.add_owned(transition, guard);
+    model.set(transition, "guardExpression", Value::RefList(vec![guard]));
+
+    let written = model.create(ElementKind::TextualRepresentation);
+    model.add_owned(guard, written);
+    model.set(written, "language", Value::String("sysml".to_string()));
+    model.set(
+        written,
+        "body",
+        Value::String(text.strip_prefix("if").unwrap_or(&text).trim().to_string()),
+    );
+    model.set(written, "representedElement", Value::Ref(guard));
+}
+
+/// Reify the action a transition performs on its way across.
+///
+/// `transition t first a do send x to b then b;` writes the effect inline
+/// and the parser leaves it as flat tokens, so nothing would otherwise
+/// stand for it. The library declares that action as `TransitionAction::
+/// effect`, which the inline one redefines, so it is reified under that
+/// name -- `t.effect` then refers to what the transition actually does.
+fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
+    let mut after_do = false;
+    let mut sends = false;
+    for token in tokens(node) {
+        match token {
+            SyntaxKind::THEN_KW => break,
+            SyntaxKind::DO_KW => after_do = true,
+            SyntaxKind::SEND_KW if after_do => sends = true,
+            _ => {}
+        }
+    }
+    if !after_do {
+        return;
+    }
+    let kind = if sends {
+        ElementKind::SendActionUsage
+    } else {
+        ElementKind::ActionUsage
+    };
+    let effect = model.create(kind);
+    model.add_owned(transition, effect);
+    model.set(effect, "declaredName", Value::String("effect".to_string()));
+    model.set(transition, "effectAction", Value::RefList(vec![effect]));
 }
 
 /// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
@@ -445,6 +545,38 @@ mod tests {
     /// `in event occurrence x;` parses as an anonymous wrapper around the
     /// usage carrying the name, unlike `event occurrence x;`. The name has
     /// to end up where it was written either way.
+    /// The guard is an expression tree, which is not made of elements, so
+    /// its source text is kept as a textual representation instead.
+    #[test]
+    fn a_transition_guard_is_kept_as_written() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "state def S {\n\
+             \tstate a;\n\
+             \tstate b;\n\
+             \ttransition first a if 1 == 1 then b;\n\
+             }\n",
+        ));
+        let transition = model
+            .owned(roots[0])
+            .iter()
+            .copied()
+            .find(|&id| model.kind(id) == ElementKind::TransitionUsage)
+            .unwrap();
+        let guard = model.owned(transition)[0];
+        assert_eq!(model.kind(guard), ElementKind::Expression);
+
+        let written = model.owned(guard)[0];
+        assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("1 == 1")
+        );
+        assert_eq!(
+            model.get(written, "language").and_then(Value::as_str),
+            Some("sysml")
+        );
+    }
+
     #[test]
     fn a_direction_wrapper_does_not_swallow_the_name_it_wraps() {
         let (model, roots) = build_model(&sysml_syntax::parse(

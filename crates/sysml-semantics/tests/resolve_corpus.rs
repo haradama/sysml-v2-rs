@@ -30,21 +30,11 @@ fn standard_library_resolves_completely() {
     );
 }
 
-/// Connector and transition ends are resolved too, and 2 of them do not
-/// land: `server_2.serverBehavior.delivering.effect.sentMessage` in the two
-/// Interaction Sequencing examples.
-///
-/// The library declares a transition's `effect` as a plain `Action`; only
-/// the `do send ... to ...` clause written at the use site makes this one a
-/// send, and nothing binds that clause to `effect`. Reaching `sentMessage`
-/// therefore needs more than static member lookup.
-///
-/// The number is asserted exactly: it must fall as the resolver improves,
-/// and any new gap fails the test.
-const KNOWN_UNRESOLVED_ENDS: usize = 2;
-
+/// Connector and transition ends are resolved too, so this covers the
+/// operands of `connect`/`bind`/`allocate` and of `first ... then ...`
+/// alongside every typing and specialization.
 #[test]
-fn examples_resolve_against_the_library() {
+fn examples_resolve_completely_against_the_library() {
     let Some(root) = vendor() else { return };
     let mut ws = Workspace::new();
     ws.load_dir(&root.join("sysml.library")).unwrap();
@@ -52,8 +42,8 @@ fn examples_resolve_against_the_library() {
     let stats = ws.resolve_all();
     assert_eq!(
         stats.unresolved,
-        KNOWN_UNRESOLVED_ENDS,
-        "combined resolution moved ({} resolved): {:?}",
+        0,
+        "combined resolution regressed ({} resolved): {:?}",
         stats.resolved,
         &ws.unresolved()[..stats.unresolved.min(10)]
     );
