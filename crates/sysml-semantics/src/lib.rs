@@ -1168,6 +1168,11 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         InterfaceDefinition | InterfaceUsage => &["Interfaces::BinaryInterface"],
         AllocationDefinition | AllocationUsage => &["Allocations::Allocation"],
         ActionDefinition | ActionUsage | PerformActionUsage => &["Actions::Action"],
+        SendActionUsage => &["Actions::SendAction"],
+        // the library calls TransitionAction "the base type of all
+        // TransitionUsages"; it owns accepter and effect
+        TransitionUsage => &["States::StateTransitionAction", "Actions::TransitionAction"],
+        AcceptActionUsage => &["Actions::AcceptAction"],
         CalculationDefinition | CalculationUsage => &["Calculations::Calculation"],
         StateDefinition | StateUsage | ExhibitStateUsage => &["States::StateAction"],
         ConstraintDefinition | ConstraintUsage | AssertConstraintUsage => {
@@ -1341,17 +1346,20 @@ fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
     let mut after_keyword = false;
     for element in node.children_with_tokens() {
         match element.as_token() {
+            Some(token) if token.kind().is_trivia() => {}
+            // only a reference written directly after `first`/`then` is an
+            // end. Any other keyword in between starts a declaration --
+            // `then accept sig after ...`, `then timeslice bobDriving` --
+            // whose name is not something to resolve.
             Some(token) => {
-                if matches!(token.kind(), SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW) {
-                    after_keyword = true;
-                }
+                after_keyword = matches!(token.kind(), SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW);
             }
             None => {
                 let child = element.into_node().expect("element is a node");
                 if after_keyword && is_reference(child.kind()) {
                     out.push(child);
-                    after_keyword = false;
                 }
+                after_keyword = false;
             }
         }
     }

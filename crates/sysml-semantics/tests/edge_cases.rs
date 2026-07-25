@@ -354,6 +354,30 @@ fn a_performed_usage_answers_to_the_performed_name() {
 }
 
 #[test]
+fn an_inline_message_declaration_survives_its_succession() {
+    // `then message m2 of T;` is parsed flat, so the statement itself has
+    // to become the message rather than a succession that swallows it
+    let ws = ws(&[(
+        "m.sysml",
+        "item def T;\n\
+         occurrence def I {\n\
+         \tref part a { event m2.x; }\n\
+         \tmessage m1 of T;\n\
+         \tthen message m2 of T;\n\
+         }\n",
+    )]);
+    let model = ws.model();
+    let interaction = model.ids().find(|id| model.name(*id) == Some("I")).unwrap();
+    let messages: Vec<&str> = model
+        .owned(interaction)
+        .iter()
+        .filter(|&&id| model.kind(id) == ElementKind::FlowUsage)
+        .filter_map(|&id| model.name(id))
+        .collect();
+    assert_eq!(messages, ["m1", "m2"]);
+}
+
+#[test]
 fn a_succession_chain_declares_the_nodes_it_names() {
     // the shorthand `then <declaration>;` both sequences the flow and
     // declares the node, which must belong to the enclosing behaviour
@@ -384,4 +408,43 @@ fn a_succession_chain_declares_the_nodes_it_names() {
         .find(|&&id| model.name(id) == Some("continue"))
         .unwrap();
     assert_eq!(model.kind(*merge), ElementKind::MergeNode);
+}
+
+#[test]
+fn a_kerml_connector_gets_its_library_base_type() {
+    let ws = ws(&[(
+        "c.kerml",
+        "class C {\n\
+         \tfeature a;\n\
+         \tfeature b;\n\
+         \tconnector c1 from a to b;\n\
+         \tfeature d subsets c1.a;\n\
+         }\n",
+    )]);
+    let model = ws.model();
+    let connector = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::Connector)
+        .expect("the connector became an element");
+    assert_eq!(model.name(connector), Some("c1"));
+    // reaching through `c1` asks for its supertypes, which is where the
+    // implicit `Links::links` base comes in -- not loaded here, so the
+    // chained lookup has nothing to find
+    assert_eq!(ws.unresolved().len(), 1, "{:?}", ws.unresolved());
+}
+
+#[test]
+fn only_a_reference_right_after_then_is_a_succession_end() {
+    // `then accept sig ...` and `then timeslice t {}` declare rather than
+    // point at something, so their names must not be resolved as ends
+    let ws = ws(&[(
+        "s.sysml",
+        "attribute def S;\n\
+         action def A {\n\
+         \taction a;\n\
+         \tthen a;\n\
+         \tthen accept sig : S;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }

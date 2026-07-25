@@ -30,17 +30,18 @@ fn standard_library_resolves_completely() {
     );
 }
 
-/// Connector and transition ends are resolved too, and 28 of them do not
-/// yet land, all in example files and all about messages and events:
+/// Connector and transition ends are resolved too, and 2 of them do not
+/// land: `server_2.serverBehavior.delivering.effect.sentMessage` in the two
+/// Interaction Sequencing examples.
 ///
-/// - `bind` operands walking four levels into a behaviour to reach a
-///   payload parameter the standard library contributes
-///   (`...::publish::sentMessage`, `...::accepter::acceptedMessage`)
-/// - `sourceEvent`/`targetEvent` and the message usages carrying them
+/// The library declares a transition's `effect` as a plain `Action`; only
+/// the `do send ... to ...` clause written at the use site makes this one a
+/// send, and nothing binds that clause to `effect`. Reaching `sentMessage`
+/// therefore needs more than static member lookup.
 ///
 /// The number is asserted exactly: it must fall as the resolver improves,
 /// and any new gap fails the test.
-const KNOWN_UNRESOLVED_ENDS: usize = 28;
+const KNOWN_UNRESOLVED_ENDS: usize = 2;
 
 #[test]
 fn examples_resolve_against_the_library() {

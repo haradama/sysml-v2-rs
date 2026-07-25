@@ -97,14 +97,22 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
                     build_node(model, &member, Some(id), built);
                 }
             }
-            // `then action b;` declares b for the enclosing behaviour; the
-            // succession only points at it, so it must not own it
+            // Two shapes wrap the declaration the author wrote in an
+            // element of their own: `then action b;` (a succession) and
+            // `in event occurrence ieo;` (an anonymous direction/adapter
+            // wrapper). In both the name belongs to the enclosing scope,
+            // not one level in.
+            //
+            // A connector end really does own what it nests, though --
+            // `end [1] feature transferTarget references target;` is an
+            // anonymous end whose feature is its own member -- so `end`
+            // keeps the nesting.
             DEFINITION | USAGE => {
-                let parent = if node.kind() == CONTROL_STMT {
-                    owner
-                } else {
-                    Some(id)
-                };
+                let wrapper = node.kind() == CONTROL_STMT
+                    || (!has_token(node, END_KW)
+                        && declared_name(node).is_none()
+                        && statement_declared_name(node).is_none());
+                let parent = if wrapper { owner } else { Some(id) };
                 build_node(model, &child, parent, built);
             }
             _ => {}
@@ -148,20 +156,27 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     })
 }
 
-/// The control node a keyword declares, if it declares one.
+/// The element a keyword declares when it appears inside a control
+/// statement, if it declares one.
+///
+/// `then action b;` nests a `USAGE` the builder already descends into, but
+/// `then merge continue;` and `then message m2 of T;` are parsed flat, so
+/// the declaration only survives if this statement becomes it.
 fn control_node_kind(token: SyntaxKind) -> Option<ElementKind> {
     match token {
         SyntaxKind::MERGE_KW => Some(ElementKind::MergeNode),
         SyntaxKind::DECIDE_KW => Some(ElementKind::DecisionNode),
         SyntaxKind::FORK_KW => Some(ElementKind::ForkNode),
         SyntaxKind::JOIN_KW => Some(ElementKind::JoinNode),
+        SyntaxKind::MESSAGE_KW => Some(ElementKind::FlowUsage),
         _ => None,
     }
 }
 
 /// Some statements write their own name as a plain reference rather than
 /// the `NAME` node a declaration carries: `merge continue;`, `transition
-/// off_to_on first off then on`, `action engineStarted accept engineStart`.
+/// off_to_on first off then on`, `action engineStarted accept engineStart`,
+/// `action stop terminate;`.
 ///
 /// The name is the reference before the keyword that introduces the
 /// statement's operands, so a bare `first x then y` stays unnamed. A usage
@@ -175,6 +190,8 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
                 | SyntaxKind::THEN_KW
                 | SyntaxKind::ACCEPT_KW
                 | SyntaxKind::SEND_KW
+                | SyntaxKind::TERMINATE_KW
+                | SyntaxKind::ASSIGN_KW
         )
     };
     match node.kind() {
@@ -294,6 +311,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             SATISFY_KW => Some("SatisfyRequirementUsage"),
             ASSERT_KW => Some("AssertConstraintUsage"),
             MESSAGE_KW => Some("FlowUsage"),
+            // `action publish send ... via p` carries the library's payload
+            // parameters (sentMessage, acceptedMessage)
+            SEND_KW => Some("SendActionUsage"),
+            ACCEPT_KW => Some("AcceptActionUsage"),
             _ => None,
         };
         if let Some(name) = candidate {
@@ -421,19 +442,62 @@ fn unquote(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// `in event occurrence x;` parses as an anonymous wrapper around the
+    /// usage carrying the name, unlike `event occurrence x;`. The name has
+    /// to end up where it was written either way.
     #[test]
-    fn statements_name_themselves_with_a_plain_reference() {
-        // `action b accept x;` writes `b` as a reference, not a NAME node,
-        // while a bare `fork;` names nothing at all
+    fn a_direction_wrapper_does_not_swallow_the_name_it_wraps() {
         let (model, roots) = build_model(&sysml_syntax::parse(
-            "action def A {\n\tmerge m;\n\tfork;\n\taction b accept x;\n\tfirst m then b;\n}\n",
+            "part def M {\n\tevent occurrence eo;\n\tin event occurrence ieo;\n}\n",
         ));
         let names: Vec<&str> = model
             .owned(roots[0])
             .iter()
             .filter_map(|&id| model.name(id))
             .collect();
-        assert_eq!(names, ["m", "b"]);
+        assert_eq!(names, ["eo", "ieo"]);
+    }
+
+    /// A connector end is an anonymous wrapper too, but the feature it
+    /// nests really is its own member.
+    #[test]
+    fn a_connector_end_keeps_the_feature_it_nests() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "connection def C {\n\tend [1] feature src references source;\n}\n",
+        ));
+        assert!(model
+            .owned(roots[0])
+            .iter()
+            .all(|&id| model.name(id).is_none()));
+        let end = model.owned(roots[0])[0];
+        let nested: Vec<&str> = model
+            .owned(end)
+            .iter()
+            .filter_map(|&id| model.name(id))
+            .collect();
+        assert_eq!(nested, ["src"]);
+    }
+
+    #[test]
+    fn statements_name_themselves_with_a_plain_reference() {
+        // `action b accept x;` and `action stop terminate;` write their
+        // names as references, not NAME nodes, while a bare `fork;` names
+        // nothing at all
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tmerge m;\n\
+             \tfork;\n\
+             \taction b accept x;\n\
+             \taction stop terminate;\n\
+             \tfirst m then b;\n\
+             }\n",
+        ));
+        let names: Vec<&str> = model
+            .owned(roots[0])
+            .iter()
+            .filter_map(|&id| model.name(id))
+            .collect();
+        assert_eq!(names, ["m", "b", "stop"]);
     }
 
     use super::*;
