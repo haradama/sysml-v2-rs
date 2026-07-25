@@ -23,6 +23,7 @@ const CSS: &str = "\
 .diamond { fill: var(--line); stroke: var(--line); stroke-width: 1.2; }\n\
 .tip { fill: none; stroke: var(--line); stroke-width: 1.2; }\n\
 .initial { fill: var(--line); }\n\
+.port { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
 .name { fill: var(--text); font-weight: 600; }\n\
 .keyword, .feature { fill: var(--muted); }\n";
 
@@ -56,7 +57,9 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     )
     .unwrap();
 
-    // edges first, so the boxes paint over the line ends
+    // edges first, so the boxes paint over the line ends. Ports sit on
+    // those borders and must survive, so they are held back until after.
+    let mut ports = String::new();
     let lanes = lanes(diagram);
     for (edge, lane) in diagram.edges.iter().zip(&lanes) {
         let from = &layout.placed[edge.from];
@@ -103,10 +106,11 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                      y2=\"{y2:.1}\"{marker}/>"
                 )
                 .unwrap();
-                // name the feature each end attaches to, near its own box
+                // a connection meets each box at a port, drawn the SysML
+                // way: a small square on the border, named beside it
                 if let Some((first, second)) = &edge.ends {
-                    end_label(&mut out, (x1, y1), (x2, y2), 0.18, first);
-                    end_label(&mut out, (x1, y1), (x2, y2), 0.82, second);
+                    port(&mut ports, (x1, y1), (x2, y2), first, style);
+                    port(&mut ports, (x2, y2), (x1, y1), second, style);
                 }
                 Ok(())
             }
@@ -177,6 +181,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         writeln!(out, "</g>").unwrap();
     }
 
+    out.push_str(&ports);
     writeln!(out, "</svg>").unwrap();
     out
 }
@@ -202,13 +207,33 @@ fn lanes(diagram: &Diagram) -> Vec<f64> {
         .collect()
 }
 
-/// Write one end's feature name at `fraction` along the edge.
-fn end_label(out: &mut String, start: (f64, f64), end: (f64, f64), fraction: f64, name: &str) {
-    let x = start.0 + (end.0 - start.0) * fraction;
-    let y = start.1 + (end.1 - start.1) * fraction;
+/// Draw the port a connection attaches to: a small square centred on the
+/// box border at `at`, with its name set just clear of it along the edge
+/// and `across` (-1 or 1) to one side of it.
+fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style: &Style) {
+    let side = 0.6 * style.line_height;
     writeln!(
         out,
-        "<text class=\"feature\" x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"middle\">{}</text>",
+        "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\" width=\"{side:.1}\" height=\"{side:.1}\"/>",
+        at.0 - side / 2.0,
+        at.1 - side / 2.0
+    )
+    .unwrap();
+
+    // `max` keeps the direction finite when the two boxes somehow coincide
+    let (dx, dy) = (toward.0 - at.0, toward.1 - at.1);
+    let length = dx.hypot(dy).max(f64::EPSILON);
+    let (ux, uy) = (dx / length, dy / length);
+    // close to its own port rather than mid-line, so each name reads
+    // against the box it belongs to
+    let along = 0.6 * style.line_height;
+    let across = -0.7 * style.line_height;
+    writeln!(
+        out,
+        "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" \
+         dominant-baseline=\"middle\">{}</text>",
+        at.0 + ux * along - uy * across,
+        at.1 + uy * along + ux * across,
         escape(name)
     )
     .unwrap();
@@ -510,5 +535,81 @@ mod tests {
         for node in names {
             assert!(svg.contains(&format!(">{}</text>", node.name)));
         }
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+    use crate::tests::resolved;
+    use crate::{interconnection_diagram, layout, render};
+
+    fn car() -> String {
+        let ws = resolved(
+            "part def Wheel { port hub; }\n\
+             part def Axle { port mount; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        render(&interconnection_diagram(ws.model(), car), &Style::default())
+    }
+
+    #[test]
+    fn a_connection_ends_at_a_port_square_on_each_border() {
+        let svg = car();
+        assert_eq!(svg.matches("<rect class=\"port\"").count(), 2);
+        assert!(svg.contains(">hub</text>") && svg.contains(">mount</text>"));
+    }
+
+    #[test]
+    fn ports_are_drawn_after_the_boxes_they_sit_on() {
+        let svg = car();
+        // a port straddles the border, so a box painted over it would cut
+        // it in half
+        let last_box = svg.rfind("<rect class=\"box\"").unwrap();
+        let first_port = svg.find("<rect class=\"port\"").unwrap();
+        assert!(first_port > last_box, "ports must come last");
+    }
+
+    #[test]
+    fn the_two_names_of_one_connection_sit_on_opposite_sides() {
+        let ws = resolved(
+            "part def Wheel { port hub; }\n\
+             part def Axle { port mount; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let placed = layout(&diagram, &style);
+        let svg = to_svg(&diagram, &placed, &style);
+
+        let y_of = |name: &str| -> f64 {
+            let at = svg.find(&format!(">{name}</text>")).unwrap();
+            let head = &svg[..at];
+            let start = head.rfind("y=\"").unwrap() + 3;
+            head[start..].split('"').next().unwrap().parse().unwrap()
+        };
+        // the boxes share a row, so the line is horizontal and the names
+        // straddle it
+        let line = placed.placed[0].y + placed.placed[0].height / 2.0;
+        assert!(y_of("hub") < line, "hub should sit above the line");
+        assert!(y_of("mount") > line, "mount should sit below the line");
     }
 }

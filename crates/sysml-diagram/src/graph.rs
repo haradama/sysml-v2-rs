@@ -171,7 +171,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             id: child,
             name: label,
             keyword: keyword(model.kind(child)),
-            features: features_of(model, child),
+            features: features_with_type(model, child),
             shape: Shape::Box,
         });
     }
@@ -332,6 +332,25 @@ fn keyword(kind: ElementKind) -> String {
         out.extend(ch.to_lowercase());
     }
     out.push_str(suffix);
+    out
+}
+
+/// A part's own features followed by the ones its type declares.
+///
+/// `part w : Wheel;` usually declares nothing itself -- its ports come from
+/// `Wheel` -- so a box listing only what the usage writes would be empty
+/// even where a connection attaches to one of those ports. A feature the
+/// usage redefines keeps the usage's own entry.
+fn features_with_type(model: &Model, usage: ElementId) -> Vec<Feature> {
+    let mut out = features_of(model, usage);
+    let Some(ty) = type_reference(model, usage) else {
+        return out;
+    };
+    for inherited in features_of(model, ty) {
+        if !out.iter().any(|own| own.name == inherited.name) {
+            out.push(inherited);
+        }
+    }
     out
 }
 
@@ -668,6 +687,42 @@ mod interconnection_tests {
         let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
         assert_eq!(diagram.nodes.len(), 1);
         assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn a_part_box_lists_the_ports_its_type_declares() {
+        let ws = resolved(
+            "part def Wheel { port hub; port rim; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        let lines: Vec<String> = diagram.nodes[0]
+            .features
+            .iter()
+            .map(Feature::label)
+            .collect();
+        // the usage declares nothing of its own, so both come from Wheel
+        assert_eq!(lines, ["port hub", "port rim"]);
+    }
+
+    #[test]
+    fn a_part_redefining_a_feature_keeps_its_own_entry() {
+        let ws = resolved(
+            "port def Fast;\n\
+             part def Wheel { port hub; }\n\
+             part def Car {\n\
+             \tpart w : Wheel { port hub : Fast; }\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        let lines: Vec<String> = diagram.nodes[0]
+            .features
+            .iter()
+            .map(Feature::label)
+            .collect();
+        assert_eq!(lines, ["port hub : Fast"]);
     }
 
     #[test]
