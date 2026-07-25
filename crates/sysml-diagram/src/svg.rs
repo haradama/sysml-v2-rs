@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use crate::{Diagram, Layout, Style};
+use crate::{Diagram, Layout, Placed, Relation, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
 /// UI text, so a diagram looks native wherever it is embedded.
@@ -19,6 +19,7 @@ const CSS: &str = "\
 .box { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
 .rule, .edge { stroke: var(--line); stroke-width: 1.2; fill: none; }\n\
 .arrow { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
+.diamond { fill: var(--line); stroke: var(--line); stroke-width: 1.2; }\n\
 .name { fill: var(--text); font-weight: 600; }\n\
 .keyword, .feature { fill: var(--muted); }\n";
 
@@ -39,25 +40,45 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     writeln!(out, "<style>\n{CSS}</style>").unwrap();
     writeln!(
         out,
-        "<defs><marker id=\"specialization\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
+        "<defs>\
+         <marker id=\"specialization\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
          markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker></defs>"
+         <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
+         <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
+         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+         <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker></defs>"
     )
     .unwrap();
 
     // edges first, so the boxes paint over the line ends
     for edge in &diagram.edges {
-        let subtype = &layout.placed[edge.from];
-        let supertype = &layout.placed[edge.to];
-        writeln!(
-            out,
-            "<line class=\"edge\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
-             marker-end=\"url(#specialization)\"/>",
-            subtype.x + subtype.width / 2.0,
-            subtype.y,
-            supertype.x + supertype.width / 2.0,
-            supertype.y + supertype.height,
-        )
+        let from = &layout.placed[edge.from];
+        let to = &layout.placed[edge.to];
+        match edge.relation {
+            // the layering already put the supertype above, so the line
+            // runs from the subtype's top edge to the supertype's bottom
+            Relation::Specialization => writeln!(
+                out,
+                "<line class=\"edge\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
+                 marker-end=\"url(#specialization)\"/>",
+                from.x + from.width / 2.0,
+                from.y,
+                to.x + to.width / 2.0,
+                to.y + to.height,
+            ),
+            // composition ignores the layering and can point anywhere, so
+            // the line runs centre to centre clipped to both borders, with
+            // the filled diamond on the side of the whole
+            Relation::Composition => {
+                let (x1, y1) = border_point(from, centre_of(to));
+                let (x2, y2) = border_point(to, centre_of(from));
+                writeln!(
+                    out,
+                    "<line class=\"edge\" x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" \
+                     y2=\"{y2:.1}\" marker-start=\"url(#composition)\"/>"
+                )
+            }
+        }
         .unwrap();
     }
 
@@ -117,6 +138,27 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     out
 }
 
+fn centre_of(rect: &Placed) -> (f64, f64) {
+    (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+}
+
+/// Where the segment from the centre of `rect` toward `target` crosses the
+/// rectangle's border, so a line between two boxes stops at their edges
+/// instead of running underneath them.
+fn border_point(rect: &Placed, target: (f64, f64)) -> (f64, f64) {
+    let (cx, cy) = centre_of(rect);
+    let (dx, dy) = (target.0 - cx, target.1 - cy);
+    let horizontal = rect.width / 2.0 / dx.abs();
+    let vertical = rect.height / 2.0 / dy.abs();
+    let scale = horizontal.min(vertical);
+    if scale.is_finite() {
+        (cx + dx * scale, cy + dy * scale)
+    } else {
+        // the two centres coincide: there is no direction to clip along
+        (cx, cy)
+    }
+}
+
 /// Escape the five characters that cannot appear literally in XML text.
 fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -174,6 +216,48 @@ mod tests {
         // supertype's bottom edge, where the marker draws the triangle
         assert!(svg.contains(&format!("y1=\"{:.1}\"", sub.y)));
         assert!(svg.contains(&format!("y2=\"{:.1}\"", sup.y + sup.height)));
+    }
+
+    #[test]
+    fn composition_is_drawn_with_a_filled_diamond_at_the_whole() {
+        let svg = svg_of(
+            "part def Engine;\n\
+             part def Vehicle {\n\
+             	part eng : Engine;\n\
+             }\n",
+        );
+        assert_eq!(svg.matches("marker-start=\"url(#composition)\"").count(), 1);
+        assert!(!svg.contains("marker-end=\"url(#specialization)\""));
+        assert!(svg.contains("class=\"diamond\""));
+    }
+
+    #[test]
+    fn a_composition_line_stops_on_both_borders() {
+        let ws = resolved("part def Engine;\npart def Vehicle {\n\tpart eng : Engine;\n}\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let placed = layout(&diagram, &style);
+        let edge = diagram.edges[0];
+        let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
+
+        let (x1, y1) = border_point(whole, centre_of(part));
+        // the two boxes share a row, so the line leaves through a side
+        assert!((x1 - whole.x).abs() < f64::EPSILON || (x1 - (whole.x + whole.width)).abs() < 0.1);
+        assert!(y1 >= whole.y && y1 <= whole.y + whole.height);
+        assert!(to_svg(&diagram, &placed, &style).contains(&format!("x1=\"{x1:.1}\"")));
+        assert!(y1.is_finite());
+    }
+
+    #[test]
+    fn coincident_centres_clip_to_the_centre() {
+        let rect = Placed {
+            node: 0,
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        assert_eq!(border_point(&rect, centre_of(&rect)), (5.0, 5.0));
     }
 
     #[test]

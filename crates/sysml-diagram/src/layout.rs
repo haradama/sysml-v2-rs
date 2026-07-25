@@ -1,8 +1,8 @@
 //! Layered layout: every supertype sits above the subtypes that specialize
 //! it, and each layer is ordered to keep the edges between layers untangled.
 
-use crate::graph::Node;
-use crate::{Diagram, Style};
+use crate::graph::{Node, Relation};
+use crate::{Diagram, Edge, Style};
 
 /// How many times the crossing-reduction pass sweeps the layers. Four is the
 /// point past which the orderings stop changing for diagrams of this size.
@@ -85,6 +85,16 @@ fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     (width + 2.0 * style.padding, height)
 }
 
+/// Only specializations order the layers. Composition runs from a whole to
+/// its parts, the opposite way round, so mixing the two would fight over
+/// which box belongs above the other.
+fn specializations(diagram: &Diagram) -> impl Iterator<Item = &Edge> {
+    diagram
+        .edges
+        .iter()
+        .filter(|edge| edge.relation == Relation::Specialization)
+}
+
 /// Layer index of each node: 0 when it has no supertype inside the diagram,
 /// otherwise one below its deepest supertype.
 ///
@@ -95,7 +105,7 @@ fn ranks(diagram: &Diagram) -> Vec<usize> {
     let mut ranks = vec![0usize; diagram.nodes.len()];
     for _ in 0..diagram.nodes.len() {
         let mut changed = false;
-        for edge in &diagram.edges {
+        for edge in specializations(diagram) {
             if ranks[edge.from] <= ranks[edge.to] {
                 ranks[edge.from] = ranks[edge.to] + 1;
                 changed = true;
@@ -146,7 +156,7 @@ fn order_layers(diagram: &Diagram, ranks: &[usize]) -> Vec<Vec<usize>> {
 fn barycenter(diagram: &Diagram, node: usize, position: &[f64]) -> f64 {
     let mut sum = 0.0;
     let mut count = 0.0;
-    for edge in &diagram.edges {
+    for edge in specializations(diagram) {
         if edge.from == node {
             sum += position[edge.to];
             count += 1.0;
@@ -314,11 +324,34 @@ mod tests {
         let mut diagram = Diagram::default();
         let ws = resolved("part def A;\n");
         diagram.nodes = definition_diagram(ws.model(), &[ws.root()]).nodes;
-        diagram.edges = vec![crate::Edge { from: 0, to: 0 }];
+        diagram.edges = vec![Edge {
+            from: 0,
+            to: 0,
+            relation: Relation::Specialization,
+        }];
 
         let ranks = ranks(&diagram);
         assert_eq!(ranks.len(), 1);
         assert!(ranks[0] <= diagram.nodes.len());
+    }
+
+    #[test]
+    fn composition_does_not_order_the_layers() {
+        let (diagram, layout) = laid_out(
+            "part def Engine;\n\
+             part def Vehicle {\n\
+             	part eng : Engine;\n\
+             }\n",
+        );
+        assert_eq!(diagram.edges.len(), 1);
+        // a whole is not a subtype of its parts, so both stay on one row --
+        // boxes of unequal height are centred in it, so the centres match
+        let engine = placed_by_name(&diagram, &layout, "Engine");
+        let vehicle = placed_by_name(&diagram, &layout, "Vehicle");
+        assert_eq!(
+            engine.y + engine.height / 2.0,
+            vehicle.y + vehicle.height / 2.0
+        );
     }
 
     #[test]

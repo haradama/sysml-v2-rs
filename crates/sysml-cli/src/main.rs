@@ -269,10 +269,16 @@ fn diagram(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
                 eprintln!("error: cannot write {}: {err}", path.display());
                 return ExitCode::FAILURE;
             }
+            let specializations = diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == sysml_diagram::Relation::Specialization)
+                .count();
             eprintln!(
-                "wrote {} definition(s) and {} specialization(s) to {}",
+                "wrote {} definition(s), {specializations} specialization(s) and {} \
+                 composition(s) to {}",
                 diagram.nodes.len(),
-                diagram.edges.len(),
+                diagram.edges.len() - specializations,
                 path.display()
             );
         }

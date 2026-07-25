@@ -35,7 +35,7 @@ mod graph;
 mod layout;
 mod svg;
 
-pub use graph::{definition_diagram, Diagram, Edge, Feature, Node};
+pub use graph::{definition_diagram, Diagram, Edge, Feature, Node, Relation};
 pub use layout::{layout, Layout, Placed};
 pub use svg::to_svg;
 

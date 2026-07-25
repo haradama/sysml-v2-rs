@@ -203,7 +203,7 @@ fn diagram_renders_definitions_as_svg() {
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("2 definition(s) and 1 specialization(s)"),
+        stderr.contains("2 definition(s), 1 specialization(s) and 0 composition(s)"),
         "{stderr}"
     );
     assert!(std::fs::read_to_string(&svg)

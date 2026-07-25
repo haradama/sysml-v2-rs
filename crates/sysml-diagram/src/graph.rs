@@ -34,12 +34,24 @@ pub struct Node {
     pub features: Vec<Feature>,
 }
 
-/// A specialization: `from` (the subtype) specializes `to` (the supertype).
-/// Both fields index [`Diagram::nodes`].
+/// What an edge between two boxes means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Relation {
+    /// `from` specializes `to` (`part def Engine :> PowerSource`). Drives
+    /// the layering: the supertype is drawn above its subtypes.
+    Specialization,
+    /// `from` declares a part typed by `to` (`part def Vehicle { part eng
+    /// : Engine; }`), so `to` is one of the things `from` is made of.
+    Composition,
+}
+
+/// A relationship between two boxes. Both index fields index
+/// [`Diagram::nodes`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Edge {
     pub from: usize,
     pub to: usize,
+    pub relation: Relation,
 }
 
 /// The definitions to draw and the specializations between them.
@@ -91,12 +103,62 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 continue;
             };
             if let Some(&to) = index.get(target) {
-                edges.push(Edge { from, to });
+                edges.push(Edge {
+                    from,
+                    to,
+                    relation: Relation::Specialization,
+                });
             }
         }
+        compositions_of(model, node.id, from, &index, &mut edges);
     }
 
     Diagram { nodes, edges }
+}
+
+/// One composition edge per distinct part type a definition declares.
+///
+/// Two parts of the same type would draw the same line twice, so the target
+/// is only linked once; a definition holding a part of its own type is left
+/// to its compartment line rather than drawn as a loop back onto the box.
+fn compositions_of(
+    model: &Model,
+    definition: ElementId,
+    from: usize,
+    index: &HashMap<ElementId, usize>,
+    edges: &mut Vec<Edge>,
+) {
+    let mut linked: Vec<usize> = Vec::new();
+    for &child in model.owned(definition) {
+        if !model.kind(child).is_a(ElementKind::PartUsage) {
+            continue;
+        }
+        let Some(&to) = type_reference(model, child).and_then(|ty| index.get(&ty)) else {
+            continue;
+        };
+        if to == from || linked.contains(&to) {
+            continue;
+        }
+        linked.push(to);
+        edges.push(Edge {
+            from,
+            to,
+            relation: Relation::Composition,
+        });
+    }
+}
+
+/// The element a usage's reified `FeatureTyping` points at.
+fn type_reference(model: &Model, usage: ElementId) -> Option<ElementId> {
+    model.owned(usage).iter().find_map(|&rel| {
+        if model.kind(rel) != ElementKind::FeatureTyping {
+            return None;
+        }
+        match model.get(rel, "type") {
+            Some(Value::Ref(target)) => Some(*target),
+            _ => None,
+        }
+    })
 }
 
 /// The SysML keyword a metaclass is written with: `PartDefinition` becomes
@@ -138,18 +200,11 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<Feature> {
     out
 }
 
-/// The type of a usage, read off the `FeatureTyping` that name resolution
-/// reified for its `:` clause.
+/// The type name of a usage, read off the `FeatureTyping` that name
+/// resolution reified for its `:` clause.
 fn type_of(model: &Model, usage: ElementId) -> Option<String> {
-    model.owned(usage).iter().find_map(|&rel| {
-        if model.kind(rel) != ElementKind::FeatureTyping {
-            return None;
-        }
-        match model.get(rel, "type") {
-            Some(Value::Ref(target)) => model.name(*target).map(str::to_string),
-            _ => None,
-        }
-    })
+    let target = type_reference(model, usage)?;
+    model.name(target).map(str::to_string)
 }
 
 #[cfg(test)]
@@ -218,6 +273,70 @@ mod tests {
         );
         assert_eq!(engine.features[0].label(), "attribute power");
         assert_eq!(engine.features[1].label(), "port fuelIn : FuelPort");
+    }
+
+    /// `(from, to, relation)` for every edge, by name.
+    fn edges_of(diagram: &Diagram) -> Vec<(&str, &str, Relation)> {
+        diagram
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    diagram.nodes[e.from].name.as_str(),
+                    diagram.nodes[e.to].name.as_str(),
+                    e.relation,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn parts_become_composition_edges() {
+        let ws = resolved(
+            "part def Engine;\n\
+             part def Wheel;\n\
+             part def Vehicle {\n\
+             	part eng : Engine;\n\
+             	part front : Wheel;\n\
+             	part rear : Wheel;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+
+        // two wheels, but the pair of boxes is only linked once
+        assert_eq!(
+            edges_of(&diagram),
+            [
+                ("Vehicle", "Engine", Relation::Composition),
+                ("Vehicle", "Wheel", Relation::Composition),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_parts_compose_and_only_resolved_ones() {
+        let ws = resolved(
+            "part def Engine;\n\
+             part def Vehicle {\n\
+             	attribute mass;\n\
+             	part missing : NoSuchDefinition;\n\
+             	part eng : Engine;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            edges_of(&diagram),
+            [("Vehicle", "Engine", Relation::Composition)]
+        );
+    }
+
+    #[test]
+    fn a_part_of_the_definitions_own_type_is_left_to_its_compartment() {
+        let ws = resolved("part def Node {\n\tpart children : Node;\n}\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+
+        assert!(diagram.edges.is_empty(), "{:?}", diagram.edges);
+        assert_eq!(diagram.nodes[0].features[0].label(), "part children : Node");
     }
 
     #[test]
