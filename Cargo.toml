@@ -5,6 +5,7 @@ members = [
     "crates/sysml-model",
     "crates/sysml-semantics",
     "crates/sysml-interchange",
+    "crates/sysml-diagram",
     "crates/sysml-api-client",
     "crates/sysml-lsp",
     "crates/sysml-codegen",
@@ -30,4 +31,5 @@ sysml-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
 sysml-model = { path = "crates/sysml-model", version = "0.1.0" }
 sysml-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
 sysml-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
+sysml-diagram = { path = "crates/sysml-diagram", version = "0.1.0" }
 sysml-api-client = { path = "crates/sysml-api-client", version = "0.1.0" }

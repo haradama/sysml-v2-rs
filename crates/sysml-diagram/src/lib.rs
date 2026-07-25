@@ -54,6 +54,8 @@ pub struct Style {
     pub v_gap: f64,
     /// Space around the whole drawing.
     pub margin: f64,
+    /// Width a layer may reach before it wraps onto another row.
+    pub max_row_width: f64,
 }
 
 impl Default for Style {
@@ -65,6 +67,7 @@ impl Default for Style {
             h_gap: 32.0,
             v_gap: 56.0,
             margin: 16.0,
+            max_row_width: 1600.0,
         }
     }
 }

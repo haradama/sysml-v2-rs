@@ -24,6 +24,7 @@ cargo publish -p sysml-syntax
 cargo publish -p sysml-model
 cargo publish -p sysml-semantics
 cargo publish -p sysml-interchange
+cargo publish -p sysml-diagram
 cargo publish -p sysml-api-client
 cargo publish -p sysml-lsp
 cargo publish -p sysml-cli

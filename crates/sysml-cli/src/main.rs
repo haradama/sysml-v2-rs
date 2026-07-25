@@ -72,9 +72,13 @@ enum Command {
     /// Load files (or directories), resolve names and render the definitions
     /// and their specializations as an SVG diagram
     Diagram {
-        /// Files or directories to load
+        /// Files or directories to draw
         #[arg(required = true)]
         paths: Vec<PathBuf>,
+        /// Also load these files or directories so names resolve against
+        /// them, without drawing their definitions (e.g. sysml.library)
+        #[arg(long)]
+        library: Vec<PathBuf>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -106,7 +110,11 @@ fn main() -> ExitCode {
             check,
         } => fmt(&files, write, check),
         Command::Check { paths, show } => check(&paths, show),
-        Command::Diagram { paths, output } => diagram(&paths, output.as_deref()),
+        Command::Diagram {
+            paths,
+            library,
+            output,
+        } => diagram(&paths, &library, output.as_deref()),
         Command::Corpus {
             dir,
             worst,
@@ -210,15 +218,14 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool) -> ExitCode {
     }
 }
 
-/// Load every path -- file or directory -- into one workspace. Returns
-/// `None` after reporting the first path that cannot be read.
-fn load_workspace(paths: &[PathBuf]) -> Option<sysml_semantics::Workspace> {
-    let mut ws = sysml_semantics::Workspace::new();
+/// Load every path -- file or directory -- into `ws`. Reports the first path
+/// that cannot be read and returns `false`.
+fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> bool {
     for path in paths {
         if path.is_dir() {
             if let Err(err) = ws.load_dir(path) {
                 eprintln!("error: cannot load {}: {err}", path.display());
-                return None;
+                return false;
             }
         } else {
             match std::fs::read_to_string(path) {
@@ -227,21 +234,30 @@ fn load_workspace(paths: &[PathBuf]) -> Option<sysml_semantics::Workspace> {
                 }
                 Err(err) => {
                     eprintln!("error: cannot read {}: {err}", path.display());
-                    return None;
+                    return false;
                 }
             }
         }
     }
-    Some(ws)
+    true
 }
 
-fn diagram(paths: &[PathBuf], output: Option<&Path>) -> ExitCode {
-    let Some(mut ws) = load_workspace(paths) else {
+fn diagram(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+    let mut ws = sysml_semantics::Workspace::new();
+    if !load_paths(&mut ws, paths) {
         return ExitCode::FAILURE;
-    };
+    }
+    // everything loaded so far is drawn; the library that follows only has
+    // to be resolvable, so its definitions never become boxes
+    let drawn = ws.file_count();
+    if !load_paths(&mut ws, library) {
+        return ExitCode::FAILURE;
+    }
     ws.resolve_all();
-    let root = ws.root();
-    let diagram = sysml_diagram::definition_diagram(ws.model(), &[root]);
+    let roots: Vec<_> = (0..drawn)
+        .flat_map(|file| ws.file_roots(file).to_vec())
+        .collect();
+    let diagram = sysml_diagram::definition_diagram(ws.model(), &roots);
     if diagram.nodes.is_empty() {
         eprintln!("error: no definitions to draw");
         return ExitCode::FAILURE;
@@ -266,9 +282,10 @@ fn diagram(paths: &[PathBuf], output: Option<&Path>) -> ExitCode {
 }
 
 fn check(paths: &[PathBuf], show: usize) -> ExitCode {
-    let Some(mut ws) = load_workspace(paths) else {
+    let mut ws = sysml_semantics::Workspace::new();
+    if !load_paths(&mut ws, paths) {
         return ExitCode::FAILURE;
-    };
+    }
     let stats = ws.resolve_all();
     let total = stats.resolved + stats.unresolved;
     let rate = if total == 0 {

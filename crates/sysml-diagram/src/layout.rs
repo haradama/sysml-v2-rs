@@ -37,7 +37,36 @@ pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
         .collect();
     let ranks = ranks(diagram);
     let layers = order_layers(diagram, &ranks);
-    place(&sizes, &layers, style)
+    let rows = wrap_layers(&layers, &sizes, style);
+    place(&sizes, &rows, style)
+}
+
+/// Split each layer into rows no wider than [`Style::max_row_width`].
+///
+/// A layer holding hundreds of unrelated definitions would otherwise
+/// stretch the canvas into a strip tens of thousands of pixels wide; wrapping
+/// keeps it readable. A single box wider than the budget still gets its own
+/// row rather than being dropped.
+fn wrap_layers(layers: &[Vec<usize>], sizes: &[(f64, f64)], style: &Style) -> Vec<Vec<usize>> {
+    let mut rows: Vec<Vec<usize>> = Vec::new();
+    for layer in layers {
+        let mut row: Vec<usize> = Vec::new();
+        let mut width = 0.0;
+        for &node in layer {
+            let grown = width + style.h_gap + sizes[node].0;
+            if !row.is_empty() && grown > style.max_row_width {
+                rows.push(std::mem::take(&mut row));
+                width = sizes[node].0;
+            } else if row.is_empty() {
+                width = sizes[node].0;
+            } else {
+                width = grown;
+            }
+            row.push(node);
+        }
+        rows.push(row);
+    }
+    rows
 }
 
 /// Width and height of one box: wide enough for its longest line, tall
@@ -130,8 +159,8 @@ fn barycenter(diagram: &Diagram, node: usize, position: &[f64]) -> f64 {
     }
 }
 
-/// Turn layer orderings into coordinates, centring every layer against the
-/// widest one and centring each box vertically within its layer.
+/// Turn row orderings into coordinates, centring every row against the
+/// widest one and centring each box vertically within its row.
 fn place(sizes: &[(f64, f64)], layers: &[Vec<usize>], style: &Style) -> Layout {
     let mut placed = vec![
         Placed {
@@ -290,6 +319,46 @@ mod tests {
         let ranks = ranks(&diagram);
         assert_eq!(ranks.len(), 1);
         assert!(ranks[0] <= diagram.nodes.len());
+    }
+
+    #[test]
+    fn a_wide_layer_wraps_instead_of_stretching_the_canvas() {
+        let source: String = (0..12)
+            .map(|i| format!("part def Definition{i};\n"))
+            .collect();
+        let ws = resolved(&source);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+
+        let narrow = Style {
+            max_row_width: 400.0,
+            ..Style::default()
+        };
+        let wrapped = layout(&diagram, &narrow);
+        let wide = layout(&diagram, &Style::default());
+
+        assert!(wrapped.width < wide.width);
+        assert!(wrapped.height > wide.height);
+        assert!(wrapped.width <= narrow.max_row_width + 2.0 * narrow.margin);
+        // every box still lands somewhere on the canvas
+        assert_eq!(wrapped.placed.len(), 12);
+        assert!(wrapped
+            .placed
+            .iter()
+            .all(|p| p.x + p.width <= wrapped.width && p.y + p.height <= wrapped.height));
+    }
+
+    #[test]
+    fn a_box_wider_than_the_budget_gets_its_own_row() {
+        let ws = resolved("part def Short;\npart def AVeryLongDefinitionNameIndeed;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style {
+            max_row_width: 1.0,
+            ..Style::default()
+        };
+        let placed = layout(&diagram, &style);
+
+        assert_eq!(placed.placed.len(), 2);
+        assert_ne!(placed.placed[0].y, placed.placed[1].y);
     }
 
     #[test]

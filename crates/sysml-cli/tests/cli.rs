@@ -215,6 +215,48 @@ fn diagram_renders_definitions_as_svg() {
 }
 
 #[test]
+fn diagram_resolves_against_a_library_without_drawing_it() {
+    let dir = temp_dir("diagram-library");
+    let lib = dir.join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    write(&lib, "types.sysml", "attribute def Real;\n");
+    let model = write(
+        &dir,
+        "model.sysml",
+        "part def Engine { attribute power : Real; }\n",
+    );
+
+    // on its own, `Real` does not resolve, so the feature stays untyped
+    let bare = sysml(&["diagram", model.to_str().unwrap()]);
+    let bare = String::from_utf8_lossy(&bare.stdout);
+    assert!(bare.contains(">attribute power</text>"), "{bare}");
+
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--library",
+        lib.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(">attribute power : Real</text>"),
+        "{stdout}"
+    );
+    // the library supplies the name but never becomes a box of its own
+    assert_eq!(stdout.matches("<rect class=\"box\"").count(), 1);
+
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--library",
+        dir.join("missing.sysml").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+}
+
+#[test]
 fn diagram_reports_empty_models_and_write_failures() {
     let dir = temp_dir("diagram-err");
     let empty = write(&dir, "empty.sysml", "package OnlyAPackage;\n");
