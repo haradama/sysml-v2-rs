@@ -1,0 +1,4 @@
+[submodule "vendor/sysml-v2-release"]
+	path = vendor/sysml-v2-release
+	url = https://github.com/Systems-Modeling/SysML-v2-Release.git
+	shallow = true
