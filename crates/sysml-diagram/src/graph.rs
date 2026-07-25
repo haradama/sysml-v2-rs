@@ -73,6 +73,9 @@ pub struct Edge {
     /// For a connection, the feature each end attaches to (`hub`, `mount`),
     /// which is what tells two connections between the same pair apart.
     pub ends: Option<(String, String)>,
+    /// A name for the relationship itself, drawn beside the line. Only a
+    /// transition carries one: `transition subscribing first ... then ...`.
+    pub label: Option<String>,
 }
 
 /// The definitions to draw and the specializations between them.
@@ -130,6 +133,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                     to,
                     relation: Relation::Specialization,
                     ends: None,
+                    label: None,
                 });
             }
         }
@@ -189,6 +193,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                         to,
                         relation: Relation::Transition,
                         ends: None,
+                        label: None,
                     });
                     nodes.push(Node {
                         id: child,
@@ -221,6 +226,10 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 // a transition names its states twice over; only a
                 // connection's port labels add anything
                 ends: (!directed).then_some((first.1, second.1)),
+                // a named transition says what the step is for
+                label: directed
+                    .then(|| model.name(child).map(str::to_string))
+                    .flatten(),
             });
         }
     }
@@ -298,6 +307,7 @@ fn compositions_of(
             to,
             relation: Relation::Composition,
             ends: None,
+            label: None,
         });
     }
 }
@@ -657,6 +667,7 @@ mod interconnection_tests {
                 to: 1,
                 relation: Relation::Connection,
                 ends: Some(("hub".to_string(), "mount".to_string())),
+                label: None,
             }]
         );
     }
@@ -815,6 +826,7 @@ mod behaviour_tests {
 
         let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["off", "on"]);
+        // a named transition carries its name onto the arrow
         assert_eq!(
             diagram.edges,
             [
@@ -823,15 +835,31 @@ mod behaviour_tests {
                     to: 1,
                     relation: Relation::Transition,
                     ends: None,
+                    label: Some("off_to_on".to_string()),
                 },
                 Edge {
                     from: 1,
                     to: 0,
                     relation: Relation::Transition,
                     ends: None,
+                    label: Some("on_to_off".to_string()),
                 },
             ]
         );
+    }
+
+    #[test]
+    fn an_unnamed_succession_has_no_label() {
+        let diagram = internal(
+            "action def Flow {\n\
+             \taction a;\n\
+             \taction b;\n\
+             \tfirst a then b;\n\
+             }\n",
+            "Flow",
+        );
+        assert_eq!(diagram.edges.len(), 1);
+        assert_eq!(diagram.edges[0].label, None);
     }
 
     #[test]

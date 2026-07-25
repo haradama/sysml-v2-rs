@@ -334,6 +334,7 @@ mod tests {
             to: 0,
             relation: Relation::Specialization,
             ends: None,
+            label: None,
         }];
 
         let ranks = ranks(&diagram);

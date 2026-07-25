@@ -61,7 +61,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     // those borders and must survive, so they are held back until after.
     let mut ports = String::new();
     let lanes = lanes(diagram);
-    for (edge, lane) in diagram.edges.iter().zip(&lanes) {
+    for (edge, &(lane, siblings)) in diagram.edges.iter().zip(&lanes) {
         let from = &layout.placed[edge.from];
         let to = &layout.placed[edge.to];
         match edge.relation {
@@ -88,7 +88,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 let (dx, dy) = (x2 - x1, y2 - y1);
                 let length = dx.hypot(dy);
                 if length > 0.0 {
-                    let shift = lane * style.line_height;
+                    let shift = lane * lane_spacing(from, to, siblings, style);
                     let (nx, ny) = (-dy / length * shift, dx / length * shift);
                     x1 += nx;
                     y1 += ny;
@@ -111,6 +111,15 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 if let Some((first, second)) = &edge.ends {
                     port(&mut ports, (x1, y1), (x2, y2), first, style);
                     port(&mut ports, (x2, y2), (x1, y1), second, style);
+                }
+                if let Some(label) = &edge.label {
+                    beside(
+                        &mut out,
+                        ((x1 + x2) / 2.0, (y1 + y2) / 2.0),
+                        (x2, y2),
+                        label,
+                        style,
+                    );
                 }
                 Ok(())
             }
@@ -186,9 +195,10 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     out
 }
 
-/// Perpendicular offset factor for each edge: edges sharing a pair of boxes
-/// are spread symmetrically about the straight line between them.
-fn lanes(diagram: &Diagram) -> Vec<f64> {
+/// For each edge, its perpendicular offset factor and how many edges share
+/// its pair of boxes. Edges of one pair are spread symmetrically about the
+/// straight line between them.
+fn lanes(diagram: &Diagram) -> Vec<(f64, usize)> {
     let pair = |edge: &Edge| (edge.from.min(edge.to), edge.from.max(edge.to));
     let mut total: HashMap<(usize, usize), usize> = HashMap::new();
     for edge in &diagram.edges {
@@ -199,12 +209,24 @@ fn lanes(diagram: &Diagram) -> Vec<f64> {
         .edges
         .iter()
         .map(|edge| {
+            let siblings = total[&pair(edge)];
             let slot = taken.entry(pair(edge)).or_default();
             let index = *slot;
             *slot += 1;
-            index as f64 - (total[&pair(edge)] as f64 - 1.0) / 2.0
+            (index as f64 - (siblings as f64 - 1.0) / 2.0, siblings)
         })
         .collect()
+}
+
+/// How far apart to hold edges sharing a pair of boxes.
+///
+/// A line has to leave through a border, so the whole spread must fit within
+/// the extent the two boxes share. Enough of them and the preferred spacing
+/// would push the outermost lines clear off the boxes entirely.
+fn lane_spacing(from: &Placed, to: &Placed, siblings: usize, style: &Style) -> f64 {
+    let spread = (siblings as f64 - 1.0).max(1.0);
+    let room = from.height.min(to.height).min(from.width).min(to.width) * 0.8;
+    (room / spread).min(style.line_height)
 }
 
 /// Draw the port a connection attaches to: a small square centred on the
@@ -226,7 +248,27 @@ fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style:
     let (ux, uy) = (dx / length, dy / length);
     // close to its own port rather than mid-line, so each name reads
     // against the box it belongs to
-    let along = 0.6 * style.line_height;
+    beside_with(out, at, (ux, uy), 0.6 * style.line_height, style, name);
+}
+
+/// Set `text` beside the point `at`, offset to one side of the line running
+/// toward `toward`.
+fn beside(out: &mut String, at: (f64, f64), toward: (f64, f64), text: &str, style: &Style) {
+    let (dx, dy) = (toward.0 - at.0, toward.1 - at.1);
+    let length = dx.hypot(dy).max(f64::EPSILON);
+    beside_with(out, at, (dx / length, dy / length), 0.0, style, text);
+}
+
+/// Shared placement: `along` the given direction from `at`, then off to one
+/// side of it.
+fn beside_with(
+    out: &mut String,
+    at: (f64, f64),
+    (ux, uy): (f64, f64),
+    along: f64,
+    style: &Style,
+    text: &str,
+) {
     let across = -0.7 * style.line_height;
     writeln!(
         out,
@@ -234,7 +276,7 @@ fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style:
          dominant-baseline=\"middle\">{}</text>",
         at.0 + ux * along - uy * across,
         at.1 + uy * along + ux * across,
-        escape(name)
+        escape(text)
     )
     .unwrap();
 }
@@ -350,6 +392,28 @@ mod tests {
     }
 
     #[test]
+    fn lane_spacing_shrinks_to_fit_the_boxes() {
+        let style = Style::default();
+        let boxed = Placed {
+            node: 0,
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 84.0,
+        };
+
+        // a couple of edges fit at the preferred spacing
+        assert_eq!(lane_spacing(&boxed, &boxed, 1, &style), style.line_height);
+        assert_eq!(lane_spacing(&boxed, &boxed, 2, &style), style.line_height);
+
+        // six do not, so they close up rather than run off the borders
+        // they have to leave through
+        let tight = lane_spacing(&boxed, &boxed, 6, &style);
+        assert!(tight < style.line_height);
+        assert!(5.0 * tight < boxed.height);
+    }
+
+    #[test]
     fn coincident_centres_clip_to_the_centre() {
         let rect = Placed {
             node: 0,
@@ -408,6 +472,27 @@ mod tests {
         // the circle carries no label of its own, only the state does
         assert_eq!(svg.matches("<rect class=\"box\"").count(), 1);
         assert!(svg.contains(">off</text>"));
+    }
+
+    #[test]
+    fn a_named_transition_is_labelled_on_its_arrow() {
+        let ws = resolved(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition off_to_on first off then on;\n\
+             }\n",
+        );
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(
+            &interconnection_diagram(ws.model(), modes),
+            &Style::default(),
+        );
+        assert!(svg.contains(">off_to_on</text>"), "{svg}");
     }
 
     #[test]
