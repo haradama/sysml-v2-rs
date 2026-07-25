@@ -31,10 +31,12 @@
 //! assert!(svg.starts_with("<svg xmlns="));
 //! ```
 
+mod browser;
 mod graph;
 mod layout;
 mod svg;
 
+pub use browser::{browser_view, Browser, Row};
 pub use graph::{
     definition_diagram, interconnection_diagram, Diagram, Edge, Feature, Node, Relation, Shape,
 };
@@ -56,6 +58,8 @@ pub struct Style {
     pub v_gap: f64,
     /// Space around the whole drawing.
     pub margin: f64,
+    /// How far one level of a browser view is indented from the last.
+    pub indent: f64,
     /// Width a layer may reach before it wraps onto another row.
     pub max_row_width: f64,
 }
@@ -69,6 +73,7 @@ impl Default for Style {
             h_gap: 32.0,
             v_gap: 56.0,
             margin: 16.0,
+            indent: 24.0,
             max_row_width: 1600.0,
         }
     }
@@ -86,6 +91,11 @@ impl Style {
 /// Lay `diagram` out and render it as a standalone SVG document.
 pub fn render(diagram: &Diagram, style: &Style) -> String {
     to_svg(diagram, &layout(diagram, style), style)
+}
+
+/// Render a browser view as a standalone SVG document.
+pub fn render_browser(browser: &Browser, style: &Style) -> String {
+    browser::to_svg(browser, style)
 }
 
 #[cfg(test)]

@@ -287,6 +287,51 @@ fn diagram_draws_the_internal_structure_of_one_definition() {
 }
 
 #[test]
+fn diagram_draws_the_membership_tree() {
+    let dir = temp_dir("diagram-browser");
+    let model = write(
+        &dir,
+        "tree.sysml",
+        "package P {\n\tpart def Wheel { port hub; }\n}\n",
+    );
+
+    let out = sysml(&["diagram", model.to_str().unwrap(), "--browser"]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // one row per named element, no boxes at all
+    assert_eq!(stdout.matches("<text class=\"keyword\"").count(), 3);
+    assert!(!stdout.contains("<rect"));
+    assert!(stdout.contains(">hub</tspan>"), "{stdout}");
+
+    let svg = dir.join("tree.svg");
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--browser",
+        "-o",
+        svg.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("3 row(s)"));
+
+    // an empty model has no tree to draw
+    let empty = write(&dir, "empty.sysml", "\n");
+    let out = sysml(&["diagram", empty.to_str().unwrap(), "--browser"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("nothing to draw"));
+
+    // the two modes ask for different drawings
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--browser",
+        "--internal",
+        "Wheel",
+    ]);
+    assert!(!out.status.success());
+}
+
+#[test]
 fn diagram_reports_empty_models_and_write_failures() {
     let dir = temp_dir("diagram-err");
     let empty = write(&dir, "empty.sysml", "package OnlyAPackage;\n");

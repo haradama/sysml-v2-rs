@@ -26,6 +26,7 @@ const CSS: &str = "\
 .tip { fill: none; stroke: var(--line); stroke-width: 1.2; }\n\
 .initial { fill: var(--line); }\n\
 .port { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
+.guide { stroke: var(--muted); stroke-width: 1; }\n\
 .name { fill: var(--text); font-weight: 600; }\n\
 .keyword, .feature { fill: var(--muted); }\n";
 
@@ -33,17 +34,6 @@ const CSS: &str = "\
 /// be written to a `.svg` file or inlined into HTML as-is.
 pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     let mut out = String::new();
-    let (width, height) = (layout.width, layout.height);
-
-    writeln!(
-        out,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
-         viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{FONT}\" \
-         font-size=\"{:.0}\">",
-        style.font_size
-    )
-    .expect("writing to a String cannot fail");
-    writeln!(out, "<style>\n{CSS}</style>").unwrap();
     writeln!(
         out,
         "<defs>\
@@ -151,6 +141,23 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     }
 
     out.push_str(&ports);
+    document(layout.width, layout.height, style, &out)
+}
+
+/// Wrap `body` in the SVG shell every view shares: the canvas, the font and
+/// the palette that travels with the document.
+pub(crate) fn document(width: f64, height: f64, style: &Style, body: &str) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
+         viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{FONT}\" \
+         font-size=\"{:.0}\">",
+        style.font_size
+    )
+    .expect("writing to a String cannot fail");
+    writeln!(out, "<style>\n{CSS}</style>").unwrap();
+    out.push_str(body);
     writeln!(out, "</svg>").unwrap();
     out
 }
@@ -328,7 +335,7 @@ fn border_point(rect: &Placed, target: (f64, f64)) -> (f64, f64) {
 }
 
 /// Escape the five characters that cannot appear literally in XML text.
-fn escape(text: &str) -> String {
+pub(crate) fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {

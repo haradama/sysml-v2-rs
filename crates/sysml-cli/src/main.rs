@@ -84,6 +84,10 @@ enum Command {
         /// definitions themselves
         #[arg(long, value_name = "NAME")]
         internal: Option<String>,
+        /// Draw the membership hierarchy as an indented tree instead of a
+        /// diagram of relationships
+        #[arg(long, conflicts_with = "internal")]
+        browser: bool,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -119,8 +123,15 @@ fn main() -> ExitCode {
             paths,
             library,
             internal,
+            browser,
             output,
-        } => diagram(&paths, &library, internal.as_deref(), output.as_deref()),
+        } => diagram(
+            &paths,
+            &library,
+            internal.as_deref(),
+            browser,
+            output.as_deref(),
+        ),
         Command::Corpus {
             dir,
             worst,
@@ -252,6 +263,7 @@ fn diagram(
     paths: &[PathBuf],
     library: &[PathBuf],
     internal: Option<&str>,
+    browser: bool,
     output: Option<&Path>,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
@@ -265,6 +277,18 @@ fn diagram(
         return ExitCode::FAILURE;
     }
     ws.resolve_all();
+    let roots: Vec<_> = (0..drawn)
+        .flat_map(|file| ws.file_roots(file).to_vec())
+        .collect();
+    if browser {
+        let view = sysml_diagram::browser_view(ws.model(), &roots);
+        if view.rows.is_empty() {
+            eprintln!("error: nothing to draw");
+            return ExitCode::FAILURE;
+        }
+        let svg = sysml_diagram::render_browser(&view, &sysml_diagram::Style::default());
+        return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
+    }
     let diagram = match internal {
         Some(name) => {
             let Some(target) = ws
@@ -277,44 +301,43 @@ fn diagram(
             };
             sysml_diagram::interconnection_diagram(ws.model(), target)
         }
-        None => {
-            let roots: Vec<_> = (0..drawn)
-                .flat_map(|file| ws.file_roots(file).to_vec())
-                .collect();
-            sysml_diagram::definition_diagram(ws.model(), &roots)
-        }
+        None => sysml_diagram::definition_diagram(ws.model(), &roots),
     };
     if diagram.nodes.is_empty() {
         eprintln!("error: nothing to draw");
         return ExitCode::FAILURE;
     }
     let svg = sysml_diagram::render(&diagram, &sysml_diagram::Style::default());
-    match output {
-        Some(path) => {
-            if let Err(err) = std::fs::write(path, svg) {
-                eprintln!("error: cannot write {}: {err}", path.display());
-                return ExitCode::FAILURE;
-            }
-            let count = |relation| {
-                diagram
-                    .edges
-                    .iter()
-                    .filter(|edge| edge.relation == relation)
-                    .count()
-            };
-            eprintln!(
-                "wrote {} box(es), {} specialization(s), {} composition(s), {} \
-                 connection(s) and {} transition(s) to {}",
-                diagram.nodes.len(),
-                count(sysml_diagram::Relation::Specialization),
-                count(sysml_diagram::Relation::Composition),
-                count(sysml_diagram::Relation::Connection),
-                count(sysml_diagram::Relation::Transition),
-                path.display()
-            );
-        }
-        None => print!("{svg}"),
+    let count = |relation| {
+        diagram
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == relation)
+            .count()
+    };
+    let summary = format!(
+        "{} box(es), {} specialization(s), {} composition(s), {} connection(s) \
+         and {} transition(s)",
+        diagram.nodes.len(),
+        count(sysml_diagram::Relation::Specialization),
+        count(sysml_diagram::Relation::Composition),
+        count(sysml_diagram::Relation::Connection),
+        count(sysml_diagram::Relation::Transition),
+    );
+    emit(&svg, output, &summary)
+}
+
+/// Write a rendered view to `output`, or to stdout when there is none.
+fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
+    let Some(path) = output else {
+        print!("{svg}");
+        return ExitCode::SUCCESS;
+    };
+    if let Err(err) = std::fs::write(path, svg) {
+        eprintln!("error: cannot write {}: {err}", path.display());
+        return ExitCode::FAILURE;
     }
+    eprintln!("wrote {summary} to {}", path.display());
     ExitCode::SUCCESS
 }
 

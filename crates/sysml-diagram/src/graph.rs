@@ -381,7 +381,7 @@ fn type_reference(model: &Model, usage: ElementId) -> Option<ElementId> {
 /// The SysML keyword a metaclass is written with: `PartDefinition` becomes
 /// `part def`, `AttributeUsage` becomes `attribute`, and a multi-word
 /// metaclass such as `AnalysisCaseDefinition` becomes `analysis case def`.
-fn keyword(kind: ElementKind) -> String {
+pub(crate) fn keyword(kind: ElementKind) -> String {
     let name = kind.name();
     let (base, suffix) = match name.strip_suffix("Definition") {
         Some(base) => (base, " def"),
