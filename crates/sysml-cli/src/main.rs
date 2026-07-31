@@ -43,6 +43,10 @@ enum Command {
         /// Files to export
         #[arg(required = true)]
         files: Vec<PathBuf>,
+        /// Resolve names against these files or directories too and
+        /// export them along, marked `isLibraryElement`
+        #[arg(long)]
+        library: Vec<PathBuf>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -112,7 +116,11 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Parse { files, tree } => parse_files(&files, tree),
         Command::Stats { files } => stats(&files),
-        Command::Export { files, output } => export(&files, output.as_deref()),
+        Command::Export {
+            files,
+            library,
+            output,
+        } => export(&files, &library, output.as_deref()),
         Command::Fmt {
             files,
             write,
@@ -169,23 +177,52 @@ fn stats(files: &[PathBuf]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn export(files: &[PathBuf], output: Option<&Path>) -> ExitCode {
-    let mut model = sysml_model::Model::new();
-    for path in files {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(err) => {
-                eprintln!("error: cannot read {}: {err}", path.display());
-                return ExitCode::FAILURE;
-            }
-        };
-        let parse = parse_file(path, &text);
-        for diagnostic in parse.errors() {
-            print_diagnostic(path, &text, diagnostic);
-        }
-        sysml_model::build_into(&mut model, &parse);
+fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+    // resolve before serializing: the reified typings and specializations
+    // are what the interchange derives inheritance and types from
+    let mut ws = sysml_semantics::Workspace::new();
+    if !load_paths(&mut ws, files) {
+        return ExitCode::FAILURE;
     }
-    let json = sysml_interchange::to_json(&model);
+    let own = ws.file_count();
+    if !load_paths(&mut ws, library) {
+        return ExitCode::FAILURE;
+    }
+    // parse diagnostics still get printed while exporting
+    for file in 0..own {
+        let parse = ws.file_parse(file);
+        let text = parse.syntax().text().to_string();
+        for diagnostic in parse.errors() {
+            print_diagnostic(Path::new(ws.file_name(file)), &text, diagnostic);
+        }
+    }
+    ws.resolve_all();
+    // the implied specializations resolution reasons with become part of
+    // the model, the way the standard interchanges them
+    ws.materialize_implied();
+
+    // what only the resolver knows: imported memberships, import targets,
+    // and which elements came in as library models
+    let mut extras = sysml_interchange::Extras::default();
+    let ids: Vec<_> = ws.model().ids().collect();
+    for &id in &ids {
+        let imported = ws.imported_members(id);
+        if !imported.is_empty() {
+            extras.imported.insert(id, imported);
+        }
+        if let Some(target) = ws.import_of(id) {
+            extras.import_targets.insert(id, target);
+        }
+    }
+    for file in own..ws.file_count() {
+        for &root in ws.file_roots(file) {
+            extras.library.insert(root);
+            extras.library.extend(ws.model().descendants(root));
+        }
+    }
+
+    let model = ws.model();
+    let json = sysml_interchange::to_json_with(model, &extras);
     let rendered = serde_json::to_string_pretty(&json).expect("serializable");
     match output {
         Some(path) => {
@@ -316,13 +353,14 @@ fn diagram(
             .count()
     };
     let summary = format!(
-        "{} box(es), {} specialization(s), {} composition(s), {} connection(s) \
-         and {} transition(s)",
+        "{} box(es), {} specialization(s), {} composition(s), {} connection(s), \
+         {} transition(s) and {} satisfaction(s)",
         diagram.nodes.len(),
         count(sysml_diagram::Relation::Specialization),
         count(sysml_diagram::Relation::Composition),
         count(sysml_diagram::Relation::Connection),
         count(sysml_diagram::Relation::Transition),
+        count(sysml_diagram::Relation::Satisfy),
     );
     emit(&svg, output, &summary)
 }

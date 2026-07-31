@@ -1,0 +1,9 @@
+[package]
+name = "render-svg"
+description = "Development helper: rasterize a diagram so it can be looked at"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+resvg = "0.47"

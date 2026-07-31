@@ -18,3 +18,4 @@ uuid = { version = "1", features = ["v5"] }
 [dev-dependencies]
 sysml-syntax.workspace = true
 sysml-model.workspace = true
+sysml-semantics.workspace = true

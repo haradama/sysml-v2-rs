@@ -11,6 +11,9 @@ members = [
     "crates/sysml-codegen",
     "crates/sysml-cli",
 ]
+# a development helper for looking at the generated diagrams: it pulls in a
+# rasterizer the published crates must not depend on
+exclude = ["tools/render"]
 
 [workspace.package]
 version = "0.1.0"

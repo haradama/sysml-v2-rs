@@ -105,6 +105,56 @@ fn export_writes_interchange_json() {
 }
 
 #[test]
+fn export_resolves_and_marks_the_library() {
+    let dir = temp_dir("export-library");
+    let lib = write(&dir, "lib.sysml", "package L {\n\tpart def Base;\n}\n");
+    let model = write(
+        &dir,
+        "model.sysml",
+        "package M {\n\timport L::*;\n\tpart def Car :> Base;\n}\n",
+    );
+    let out = sysml(&[
+        "export",
+        model.to_str().unwrap(),
+        "--library",
+        lib.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let objects = json.as_array().unwrap();
+    let of = |name: &str| {
+        objects
+            .iter()
+            .find(|object| object["declaredName"] == name)
+            .unwrap()
+    };
+    // the library came along, marked as what it is
+    assert_eq!(of("Base")["isLibraryElement"], true);
+    assert_eq!(of("Car")["isLibraryElement"], false);
+    // resolution ran: the specialization is reified and derived from
+    let car = of("Car");
+    assert_eq!(car["ownedSubclassification"].as_array().unwrap().len(), 1);
+    // and the import reached M's member list
+    let m = of("M");
+    assert!(m["member"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["@id"] == of("Base")["@id"]));
+    assert_eq!(of("M")["importedMembership"].as_array().unwrap().len(), 1);
+
+    // a library that cannot be read fails the export like any input
+    let out = sysml(&[
+        "export",
+        model.to_str().unwrap(),
+        "--library",
+        dir.join("absent.sysml").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+}
+
+#[test]
 fn fmt_formats_checks_and_writes() {
     let dir = temp_dir("fmt");
     let messy = write(&dir, "messy.sysml", "package   P{part def A;}");
@@ -204,7 +254,7 @@ fn diagram_renders_definitions_as_svg() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains(
-            "2 box(es), 1 specialization(s), 0 composition(s), 0 connection(s) and 0 transition(s)"
+            "2 box(es), 1 specialization(s), 0 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s)"
         ),
         "{stderr}"
     );

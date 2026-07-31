@@ -55,3 +55,4 @@ Cargo.lock
 
 # local working notes (not part of the repository)
 /DESIGN.md
+*.svg

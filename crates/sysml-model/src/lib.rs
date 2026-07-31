@@ -68,6 +68,23 @@ struct ElementData {
     owner: Option<ElementId>,
     owned: Vec<ElementId>,
     props: Vec<(&'static str, Value)>,
+    /// What the membership owning this element says, when it says anything.
+    ///
+    /// The model holds ownership directly; the standard holds it through a
+    /// `Membership` that can carry a visibility and be of a more specific
+    /// metaclass. Both halves of that information live here, on the owned
+    /// element, so a serializer can put the membership back together.
+    membership: MemberSide,
+}
+
+/// The membership-borne facts about one owned element.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MemberSide {
+    /// `private` or `protected`; `None` is the default, `public`.
+    visibility: Option<&'static str>,
+    /// The syntactic role that picks the membership's metaclass:
+    /// `subject`, `actor`, `stakeholder`, `objective`, `variant`, `return`.
+    role: Option<&'static str>,
 }
 
 /// Arena holding every element of one model.
@@ -88,12 +105,35 @@ impl Model {
             owner: None,
             owned: Vec::new(),
             props: Vec::new(),
+            membership: MemberSide::default(),
         });
         id
     }
 
     pub fn len(&self) -> usize {
         self.elements.len()
+    }
+
+    /// Record that the membership owning `id` is not public.
+    pub fn set_member_visibility(&mut self, id: ElementId, visibility: &'static str) {
+        self.elements[id.index()].membership.visibility = Some(visibility);
+    }
+
+    /// The visibility of the membership owning `id`, when one was declared.
+    pub fn member_visibility(&self, id: ElementId) -> Option<&'static str> {
+        self.elements[id.index()].membership.visibility
+    }
+
+    /// Record the syntactic role `id` was declared in (`subject`, `actor`,
+    /// `stakeholder`, `objective`, `variant`, `return`), which decides the
+    /// metaclass of the membership owning it.
+    pub fn set_member_role(&mut self, id: ElementId, role: &'static str) {
+        self.elements[id.index()].membership.role = Some(role);
+    }
+
+    /// The declared role of `id`, when it has one.
+    pub fn member_role(&self, id: ElementId) -> Option<&'static str> {
+        self.elements[id.index()].membership.role
     }
 
     pub fn is_empty(&self) -> bool {

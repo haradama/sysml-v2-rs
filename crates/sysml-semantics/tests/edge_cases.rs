@@ -462,3 +462,316 @@ fn an_unresolvable_trigger_payload_type_is_reported() {
     let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
     assert_eq!(names, ["NoSuchSignal"]);
 }
+
+#[test]
+fn a_connection_written_as_a_usage_still_relates_its_ends() {
+    // `connection c : L connect a to b;` is a usage, not a connector
+    // statement, so its ends arrive by a different route
+    let ws = ws(&[(
+        "c.sysml",
+        "part def W { port hub; }\n\
+         part def A { port mount; }\n\
+         connection def L;\n\
+         part def Car {\n\
+         \tpart w : W;\n\
+         \tpart a : A;\n\
+         \tconnection : L connect w.hub to a.mount;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let connection = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::ConnectionUsage)
+        .unwrap();
+    let Some(sysml_model::Value::RefList(ends)) = model.get(connection, "relatedFeature") else {
+        panic!("the usage form recorded no ends");
+    };
+    let names: Vec<&str> = ends.iter().filter_map(|&e| model.name(e)).collect();
+    assert_eq!(names, ["hub", "mount"]);
+}
+
+#[test]
+fn a_satisfaction_resolves_both_of_its_sides() {
+    let ws = ws(&[(
+        "s.sysml",
+        "requirement def R;\n\
+         part def P;\n\
+         package K {\n\
+         \trequirement r : R;\n\
+         \tpart p : P;\n\
+         \tsatisfy r by p;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let assertion = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::SatisfyRequirementUsage)
+        .unwrap();
+    for (property, expected) in [("satisfiedRequirement", "r"), ("satisfyingFeature", "p")] {
+        let Some(sysml_model::Value::Ref(target)) = model.get(assertion, property) else {
+            panic!("{property} was not recorded");
+        };
+        assert_eq!(model.name(*target), Some(expected));
+    }
+}
+
+#[test]
+fn an_unresolvable_satisfaction_is_reported() {
+    // a single name would match the assertion's own effective name, which
+    // `resolve_from` allows for legal self-references; `that` outside any
+    // type has nothing to stand for either
+    let ws = ws(&[(
+        "s.sysml",
+        "part def P;\n\
+         part p : P;\n\
+         satisfy nowhere.deep by p;\n\
+         satisfy p by that;\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["nowhere::deep", "that"]);
+}
+
+#[test]
+fn imported_members_walk_the_imports() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "imports.sysml",
+        "package A {\n\tpart def X;\n\tprivate part def Hidden;\n\tpackage Inner {\n\tpart def Y;\n}\n}\n\
+         package B {\n\timport A::*;\n}\n\
+         package C {\n\timport A::X;\n}\n\
+         package D {\n\timport A::**;\n}\n\
+         package E;\n",
+    );
+    ws.resolve_all();
+    let named = |ws: &sysml_semantics::Workspace, name: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.model().name(id) == Some(name))
+            .unwrap()
+    };
+    let names_of = |ws: &mut sysml_semantics::Workspace, ns: &str| -> Vec<String> {
+        let ns = named(ws, ns);
+        let members = ws.imported_members(ns);
+        members
+            .into_iter()
+            .map(|id| ws.model().name(id).unwrap_or("?").to_string())
+            .collect()
+    };
+
+    // `A::*` sees the public members only; `A::X` just the one; `A::**`
+    // reaches into the nested package as well
+    assert_eq!(names_of(&mut ws, "B"), ["X", "Inner"]);
+    // an import that never resolves brings nothing, and `import all`
+    // reaches past the private member; the import inside A is not a member
+    let mut ws2 = sysml_semantics::Workspace::new();
+    ws2.add_file(
+        "all.sysml",
+        "package A {\n\tpart def X;\n\tprivate part def Hidden;\n\timport Nowhere::*;\n}\n\
+         package F {\n\timport all A::*;\n}\n\
+         package G {\n\timport Nowhere::*;\n}\n",
+    );
+    ws2.resolve_all();
+    assert_eq!(names_of(&mut ws2, "F"), ["X", "Hidden"]);
+    assert_eq!(names_of(&mut ws2, "G"), Vec::<String>::new());
+    assert_eq!(names_of(&mut ws, "C"), ["X"]);
+    assert_eq!(names_of(&mut ws, "D"), ["X", "Inner", "Y"]);
+    assert_eq!(names_of(&mut ws, "E"), Vec::<String>::new());
+
+    // and each import says what it resolved to
+    let imports: Vec<_> = ws
+        .model()
+        .ids()
+        .filter(|&id| ws.model().kind(id).is_a(sysml_model::ElementKind::Import))
+        .collect();
+    let a = named(&ws, "A");
+    let x = named(&ws, "X");
+    assert_eq!(ws.import_of(imports[0]), Some(a));
+    assert_eq!(ws.import_of(imports[1]), Some(x));
+}
+
+#[test]
+fn implied_specializations_are_materialized_once() {
+    let mut ws = sysml_semantics::Workspace::new();
+    // a miniature semantic library, enough for the bases to resolve
+    ws.add_file(
+        "mini-library.kerml",
+        "package Base {\n\tabstract classifier Anything;\n\tabstract feature things;\n\
+         \tabstract datatype DataValue;\n}\n",
+    );
+    ws.add_file(
+        "mini-parts.sysml",
+        "package Parts {\n\tabstract part def Part;\n}\n",
+    );
+    ws.add_file(
+        "model.sysml",
+        "part def Vehicle;\n\
+         part def Car :> Parts::Part {\n\tattribute mass;\n}\n",
+    );
+    ws.resolve_all();
+    let written = ws.materialize_implied();
+    assert!(written > 0);
+    let model = ws.model();
+    let named = |name: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(name))
+            .unwrap()
+    };
+
+    // Vehicle gained an implied subclassification of Parts::Part...
+    let vehicle = named("Vehicle");
+    let implied: Vec<_> = model
+        .owned(vehicle)
+        .iter()
+        .copied()
+        .filter(|&child| {
+            model.kind(child) == sysml_model::ElementKind::Subclassification
+                && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+        })
+        .collect();
+    assert_eq!(implied.len(), 1);
+    assert_eq!(
+        model.get(implied[0], "superclassifier"),
+        Some(&sysml_model::Value::Ref(named("Part")))
+    );
+    assert_eq!(
+        model.get(vehicle, "isImpliedIncluded"),
+        Some(&sysml_model::Value::Bool(true))
+    );
+
+    // ...Car reaches it explicitly, so nothing was implied for it
+    let car = named("Car");
+    assert!(!model.owned(car).iter().any(|&child| {
+        model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            && model.kind(child) == sysml_model::ElementKind::Subclassification
+    }));
+
+    // a feature subsets `Base::things` the implied way
+    let mass = named("mass");
+    let subsets: Vec<_> = model
+        .owned(mass)
+        .iter()
+        .copied()
+        .filter(|&child| model.kind(child) == sysml_model::ElementKind::Subsetting)
+        .collect();
+    assert!(subsets.iter().any(|&child| {
+        model.get(child, "subsettedFeature") == Some(&sysml_model::Value::Ref(named("things")))
+            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+    }));
+    // and is implicitly typed by the base classifier, not subsetting it
+    assert!(model.owned(mass).iter().any(|&child| {
+        model.kind(child) == sysml_model::ElementKind::FeatureTyping
+            && model.get(child, "type") == Some(&sysml_model::Value::Ref(named("DataValue")))
+            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+    }));
+
+    // running the pass again writes nothing: everything is reachable now
+    assert_eq!(ws.materialize_implied(), 0);
+}
+
+#[test]
+fn implied_bases_reach_through_chains_and_keywords() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "mini-parts.sysml",
+        "package Parts {\n\tabstract part def Part;\n}\n",
+    );
+    ws.add_file(
+        "model.sysml",
+        "package P {\n\
+         \tmetadata def SemanticMetadata { attribute baseType; }\n\
+         \tpart causes;\n\
+         \tmetadata def cause :> SemanticMetadata { :>> baseType = causes meta X; }\n\
+         \t#cause part def Storm;\n\
+         \tmetadata def plain;\n\
+         \t#plain part def Cloudy;\n\
+         \t#nowhere part def Foggy;\n\
+         \tpart def Middle :> Parts::Part;\n\
+         \tpart def Leaf :> Middle;\n}\n",
+    );
+    ws.resolve_all();
+    ws.materialize_implied();
+    let model = ws.model();
+    let named = |name: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(name))
+            .unwrap()
+    };
+    let implied_of = |elem| {
+        model
+            .owned(elem)
+            .iter()
+            .copied()
+            .filter(|&child| model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true)))
+            .count()
+    };
+
+    // `Leaf` reaches `Parts::Part` through `Middle`, so nothing is implied
+    assert_eq!(implied_of(named("Leaf")), 0);
+    // `#cause` implies the keyword's base alongside the library base
+    let storm = named("Storm");
+    assert!(model.owned(storm).iter().any(|&child| {
+        model.kind(child) == sysml_model::ElementKind::Subclassification
+            && model.get(child, "superclassifier")
+                == Some(&sysml_model::Value::Ref(named("causes")))
+    }));
+    // a keyword that names no SemanticMetadata implies nothing extra, and
+    // an unresolvable one implies nothing at all
+    assert_eq!(implied_of(named("Cloudy")), 1);
+    assert_eq!(implied_of(named("Foggy")), 1);
+}
+
+#[test]
+fn a_dangling_typing_does_not_stop_the_implied_walk() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "mini-actions.sysml",
+        "package Actions {\n\tabstract action def AcceptAction;\n}\n",
+    );
+    ws.add_file(
+        "mini-base.kerml",
+        "package Base {\n\tabstract feature things;\n}\n",
+    );
+    // the accept payload's type never resolves, so its reified typing has
+    // no target; the pass walks past it and still implies the base
+    ws.add_file(
+        "machine.sysml",
+        "state def S {\n\tstate a;\n\tstate b;\n\
+         \ttransition t1 first a accept p : Nowhere then b;\n}\n",
+    );
+    ws.resolve_all();
+    ws.materialize_implied();
+    let model = ws.model();
+    let accept = model
+        .ids()
+        .find(|&id| model.kind(id) == sysml_model::ElementKind::AcceptActionUsage)
+        .expect("the trigger was reified");
+    let base = model
+        .ids()
+        .find(|&id| model.name(id) == Some("AcceptAction"))
+        .unwrap();
+    assert!(model.owned(accept).iter().any(|&child| {
+        model.kind(child) == sysml_model::ElementKind::FeatureTyping
+            && model.get(child, "type") == Some(&sysml_model::Value::Ref(base))
+            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+    }));
+    // the payload feature itself: its declared typing never resolved, so
+    // the walk passed the dangling relationship and implied the subset
+    let payload = model
+        .ids()
+        .find(|&id| model.name(id) == Some("p"))
+        .expect("the payload was built");
+    let things = model
+        .ids()
+        .find(|&id| model.name(id) == Some("things"))
+        .unwrap();
+    assert!(model.owned(payload).iter().any(|&child| {
+        model.kind(child) == sysml_model::ElementKind::Subsetting
+            && model.get(child, "subsettedFeature") == Some(&sysml_model::Value::Ref(things))
+    }));
+}

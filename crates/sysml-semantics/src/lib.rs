@@ -541,6 +541,18 @@ impl Workspace {
                     }
                 }
             }
+            // `connection c : L connect a to b;` is written as a usage, so
+            // its ends arrive here rather than through a connector statement
+            if self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
+                self.resolve_connector_ends(id, &node, &mut stats);
+            }
+            if self
+                .model
+                .kind(id)
+                .is_a(ElementKind::SatisfyRequirementUsage)
+            {
+                self.resolve_satisfaction(id, &node, &mut stats);
+            }
         }
         stats
     }
@@ -964,6 +976,165 @@ impl Workspace {
         result
     }
 
+    /// What one import element resolved to: the member a
+    /// `import A::B;` names, or the namespace whose members a
+    /// `import A::*;` or `import A::**;` exposes.
+    pub fn import_of(&mut self, import: ElementId) -> Option<ElementId> {
+        self.import_target(import).map(|target| target.target)
+    }
+
+    /// The members the imports of `ns` bring into it, resolved and
+    /// visibility-filtered, in import order: what the standard's derived
+    /// `importedMembership` reaches beyond the owned members.
+    ///
+    /// A member import contributes the member itself; a namespace import
+    /// contributes the target's visible members (all of them under
+    /// `import all`); a recursive import adds the visible members of every
+    /// namespace below the target as well.
+    pub fn imported_members(&mut self, ns: ElementId) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        let mut seen: HashSet<ElementId> = self.model.owned(ns).iter().copied().collect();
+        for import in self.imports_of(ns) {
+            let Some(imp) = self.import_target(import) else {
+                continue;
+            };
+            let access = if imp.all {
+                Access::Internal
+            } else {
+                Access::External
+            };
+            match imp.scope {
+                ImportScope::Member => {
+                    if seen.insert(imp.target) {
+                        out.push(imp.target);
+                    }
+                }
+                ImportScope::Members => {
+                    self.visible_members_into(imp.target, access, &mut out, &mut seen);
+                }
+                ImportScope::Recursive => {
+                    self.visible_members_into(imp.target, access, &mut out, &mut seen);
+                    for below in self.model.descendants(imp.target) {
+                        if self.model.kind(below).is_a(ElementKind::Namespace)
+                            && !self.model.kind(below).is_a(ElementKind::Relationship)
+                            && self.visible(below, access)
+                        {
+                            self.visible_members_into(below, access, &mut out, &mut seen);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Append the members of `ns` that `access` can see, each once.
+    fn visible_members_into(
+        &mut self,
+        ns: ElementId,
+        access: Access,
+        out: &mut Vec<ElementId>,
+        seen: &mut HashSet<ElementId>,
+    ) {
+        for child in self.model.owned(ns).to_vec() {
+            if self.model.kind(child).is_a(ElementKind::Import)
+                || self.model.kind(child).is_a(ElementKind::Relationship)
+            {
+                continue;
+            }
+            if self.visible(child, access) && seen.insert(child) {
+                out.push(child);
+            }
+        }
+    }
+
+    /// Reify the implied specializations resolution reasons with, as the
+    /// relationship elements the standard stores.
+    ///
+    /// Every definition and usage inherits from a semantic-library base --
+    /// a `part def` from `Parts::Part`, a feature from `Base::things`, an
+    /// element under a user-defined `#keyword` from that keyword's base --
+    /// and resolution has always used those bases without materializing
+    /// them. This pass writes each one the model does not already reach
+    /// explicitly as an owned `Subclassification` (classifiers) or
+    /// `Subsetting` (features) with `isImplied` set, the way the standard
+    /// interchanges them. Elements that gained one are marked
+    /// `isImpliedIncluded`.
+    ///
+    /// Call after [`resolve_all`](Workspace::resolve_all); bases that do
+    /// not resolve (no library loaded) are skipped. Running the pass again
+    /// adds nothing: what the first run wrote is reachable now. Returns
+    /// how many relationships were written.
+    pub fn materialize_implied(&mut self) -> usize {
+        let mut written = 0;
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            let kind = self.model.kind(elem);
+            // relationships do not specialize; only types inherit
+            if kind.is_a(ElementKind::Relationship) || !kind.is_a(ElementKind::Type) {
+                continue;
+            }
+            let mut implied: Vec<&str> = implicit_supertype(kind).to_vec();
+            if kind.is_a(ElementKind::Feature) && !implied.contains(&"Base::things") {
+                implied.push("Base::things");
+            }
+            let mut bases = Vec::new();
+            for path in implied {
+                let segments: Vec<String> = path.split("::").map(String::from).collect();
+                if let Some(target) = self.resolve_from(elem, &segments) {
+                    if target != elem && !bases.contains(&target) {
+                        bases.push(target);
+                    }
+                }
+            }
+            // `#cause 'battery old' { ... }` implies the keyword's baseType
+            if let Some(node) = self.source.get(&elem).cloned() {
+                for segments in prefix_metadata_segments(&node) {
+                    if let Some(meta_def) = self.resolve_from(elem, &segments) {
+                        if let Some(base) = self.semantic_base(meta_def) {
+                            if base != elem && !bases.contains(&base) {
+                                bases.push(base);
+                            }
+                        }
+                    }
+                }
+            }
+            for base in bases {
+                // implied only where nothing explicit -- or already
+                // implied -- reaches the base; what this loop writes
+                // counts for the bases after it
+                if reaches(&self.model, elem, base) {
+                    continue;
+                }
+                // a classifier subclassifies its base; a feature is
+                // implicitly typed by a base classifier and subsets a
+                // base feature
+                let (kind, from, to) = if self.model.kind(elem).is_a(ElementKind::Classifier) {
+                    (
+                        ElementKind::Subclassification,
+                        "subclassifier",
+                        "superclassifier",
+                    )
+                } else if self.model.kind(base).is_a(ElementKind::Classifier) {
+                    (ElementKind::FeatureTyping, "typedFeature", "type")
+                } else {
+                    (
+                        ElementKind::Subsetting,
+                        "subsettingFeature",
+                        "subsettedFeature",
+                    )
+                };
+                let relationship = self.model.create(kind);
+                self.model.add_owned(elem, relationship);
+                self.model.set(relationship, from, Value::Ref(elem));
+                self.model.set(relationship, to, Value::Ref(base));
+                self.model.set(relationship, "isImplied", Value::Bool(true));
+                self.model.set(elem, "isImpliedIncluded", Value::Bool(true));
+                written += 1;
+            }
+        }
+        written
+    }
+
     fn imports_of(&self, ns: ElementId) -> Vec<ElementId> {
         self.model
             .owned(ns)
@@ -1191,6 +1362,63 @@ impl Workspace {
         }
     }
 
+    /// Resolve what `satisfy r by p;` relates: the requirement named after
+    /// `satisfy` and the feature named after `by`.
+    ///
+    /// `satisfy requirement r : R by p;` declares the requirement inline
+    /// instead of naming one, so only the `by` side is a reference there --
+    /// the usage is the requirement.
+    fn resolve_satisfaction(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        for (keyword, property) in [
+            (SyntaxKind::SATISFY_KW, "satisfiedRequirement"),
+            (SyntaxKind::BY_KW, "satisfyingFeature"),
+        ] {
+            let Some(operand) = operand_after(node, keyword) else {
+                continue;
+            };
+            let segments = operand_segments(&operand);
+            let range = operand.text_range();
+            match self.resolve_operand(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.references.push(Reference {
+                        file,
+                        range,
+                        name_range: range,
+                        target,
+                    });
+                    self.try_set(id, property, Value::Ref(target));
+                }
+                None => {
+                    stats.unresolved += 1;
+                    self.unresolved.push(Unresolved {
+                        file,
+                        range,
+                        name: segments.join("::"),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Resolve an operand that may be the implicit `self` or `that` rather
+    /// than a declared name -- `satisfy requirement r by that;` means the
+    /// type the assertion is written in satisfies it.
+    fn resolve_operand(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
+        if !matches!(segments, [only] if only == "self" || only == "that") {
+            return self.resolve_from(elem, segments);
+        }
+        let mut scope = self.model.owner(elem);
+        while let Some(current) = scope {
+            if self.model.kind(current).is_a(ElementKind::Type) {
+                return Some(current);
+            }
+            scope = self.model.owner(current);
+        }
+        None
+    }
+
     fn try_set(&mut self, id: ElementId, prop: &str, value: Value) {
         if self.model.kind(id).feature(prop).is_some() {
             self.model.set(id, prop, value);
@@ -1202,6 +1430,36 @@ impl Workspace {
 /// specializes (KerML §7 / SysML §9 semantic library mappings, abridged:
 /// only what inherited-member lookup needs). Targets that are not loaded in
 /// the workspace are silently skipped.
+/// Does `elem` already specialize `base`, walking the reified
+/// specialization relationships the model holds -- the implied ones a
+/// materialization pass has written included?
+fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
+    let mut queue = vec![elem];
+    let mut visited = HashSet::new();
+    while let Some(current) = queue.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        for &child in model.owned(current) {
+            let target = match model.kind(child) {
+                ElementKind::Subclassification => "superclassifier",
+                ElementKind::Subsetting => "subsettedFeature",
+                ElementKind::Redefinition => "redefinedFeature",
+                ElementKind::FeatureTyping => "type",
+                ElementKind::ReferenceSubsetting => "referencedFeature",
+                _ => continue,
+            };
+            if let Some(Value::Ref(target)) = model.get(child, target) {
+                if *target == base {
+                    return true;
+                }
+                queue.push(*target);
+            }
+        }
+    }
+    false
+}
+
 fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
     use ElementKind::*;
     match kind {
@@ -1259,7 +1517,7 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         Interaction => &["Transfers::Transfer"],
         Metaclass => &["Metaobjects::Metaobject"],
         // KerML features
-        Feature | Usage => &["Base::things"],
+        Feature | Usage | ReferenceUsage => &["Base::things"],
         Step => &["Performances::performances"],
         Expression => &["Performances::evaluations"],
         BooleanExpression => &["Performances::booleanEvaluations"],
@@ -1381,6 +1639,30 @@ fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementI
     }
 }
 
+/// The reference written directly after `keyword`, if the next thing is one.
+fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
+    let mut seen = false;
+    for element in node.children_with_tokens() {
+        match element.as_token() {
+            Some(token) if token.kind().is_trivia() => {}
+            Some(token) => {
+                if seen {
+                    return None;
+                }
+                seen = token.kind() == keyword;
+            }
+            None => {
+                let child = element.into_node().expect("checked for a token above");
+                if seen {
+                    return matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
+                        .then_some(child);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The operands naming a connector's or transition's ends.
 ///
 /// A connector relates every reference it holds. A transition writes an
@@ -1388,20 +1670,32 @@ fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementI
 /// on`), so only the references introduced by `first`/`then` are ends.
 fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
     let is_reference = |kind| matches!(kind, SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR);
-    if node.kind() != SyntaxKind::CONTROL_STMT {
-        return node.children().filter(|c| is_reference(c.kind())).collect();
-    }
+    let introduces_end = match node.kind() {
+        // a connector statement relates every reference it holds
+        SyntaxKind::CONNECTOR_STMT => {
+            return node.children().filter(|c| is_reference(c.kind())).collect()
+        }
+        // `transition t first a ... then b` writes a name of its own first
+        SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
+        // `connection c : L connect a to b;` and `flow f of T from a to b;`
+        // declare a name and a type before the ends arrive
+        _ => &[
+            SyntaxKind::CONNECT_KW,
+            SyntaxKind::TO_KW,
+            SyntaxKind::FROM_KW,
+        ][..],
+    };
     let mut out = Vec::new();
     let mut after_keyword = false;
     for element in node.children_with_tokens() {
         match element.as_token() {
             Some(token) if token.kind().is_trivia() => {}
-            // only a reference written directly after `first`/`then` is an
-            // end. Any other keyword in between starts a declaration --
-            // `then accept sig after ...`, `then timeslice bobDriving` --
-            // whose name is not something to resolve.
+            // only a reference written directly after one of those keywords
+            // is an end. Any other keyword in between starts a declaration --
+            // `then accept sig after ...`, `flow of Fuel ...` -- whose name
+            // is not something to resolve.
             Some(token) => {
-                after_keyword = matches!(token.kind(), SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW);
+                after_keyword = introduces_end.contains(&token.kind());
             }
             None => {
                 let child = element.into_node().expect("element is a node");
@@ -1475,6 +1769,18 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relationship_without_a_target_does_not_reach() {
+        // a foreign model may hold a specialization that never says what
+        // it specializes; the walk passes it by
+        let mut model = Model::new();
+        let sub = model.create(ElementKind::PartDefinition);
+        let sup = model.create(ElementKind::PartDefinition);
+        let dangling = model.create(ElementKind::Subclassification);
+        model.add_owned(sub, dangling);
+        assert!(!reaches(&model, sub, sup));
+    }
 
     fn resolved_workspace(files: &[(&str, &str)]) -> (Workspace, ResolveStats) {
         let mut ws = Workspace::new();

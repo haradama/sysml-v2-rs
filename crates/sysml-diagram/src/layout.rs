@@ -1,6 +1,8 @@
 //! Layered layout: every supertype sits above the subtypes that specialize
 //! it, and each layer is ordered to keep the edges between layers untangled.
 
+use std::collections::HashMap;
+
 use crate::graph::{Node, Relation, Shape};
 use crate::{Diagram, Edge, Style};
 
@@ -30,26 +32,29 @@ pub struct Layout {
 
 /// Assign every node of `diagram` a position.
 pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
-    let style = &widened_for_labels(diagram, style);
     let sizes: Vec<(f64, f64)> = diagram
         .nodes
         .iter()
         .map(|node| box_size(node, style))
         .collect();
+    let gaps = label_gaps(diagram, style);
     let ranks = ranks(diagram);
     let layers = order_layers(diagram, &ranks);
-    let rows = wrap_layers(&layers, &sizes, style);
-    place(&sizes, &rows, style)
+    let rows = wrap_layers(&layers, &sizes, &gaps, style);
+    place(&sizes, &rows, &gaps, style)
 }
 
-/// Widen the gap between boxes to fit the names drawn in it.
+/// How much room the names drawn between two boxes need, per pair.
 ///
 /// A connection names the port at each end and a transition names itself,
 /// and all of those sit between the boxes. At the default gap they pile up
-/// on each other as soon as two connections share a pair of boxes.
-fn widened_for_labels(diagram: &Diagram, style: &Style) -> Style {
-    let mut needed: f64 = 0.0;
+/// on each other as soon as two connections share a pair of boxes. Only the
+/// pair a name is drawn between is widened: one long transition label would
+/// otherwise push every unrelated box in the row apart with it.
+fn label_gaps(diagram: &Diagram, style: &Style) -> HashMap<(usize, usize), f64> {
+    let mut gaps: HashMap<(usize, usize), f64> = HashMap::new();
     for edge in &diagram.edges {
+        let mut needed: f64 = 0.0;
         if let Some((first, second)) = &edge.ends {
             // one name per end, each set clear of its own port
             let widest = style.text_width(first).max(style.text_width(second));
@@ -58,11 +63,27 @@ fn widened_for_labels(diagram: &Diagram, style: &Style) -> Style {
         if let Some(label) = &edge.label {
             needed = needed.max(style.text_width(label) + style.line_height);
         }
+        let room = gaps.entry(pair(edge.from, edge.to)).or_default();
+        *room = room.max(needed);
     }
-    Style {
-        h_gap: style.h_gap.max(needed),
-        ..*style
-    }
+    gaps
+}
+
+/// Two nodes as one key, whichever way round the edge between them runs.
+fn pair(one: usize, other: usize) -> (usize, usize) {
+    (one.min(other), one.max(other))
+}
+
+/// The gap to leave between two boxes drawn side by side.
+fn gap_between(
+    gaps: &HashMap<(usize, usize), f64>,
+    one: usize,
+    other: usize,
+    style: &Style,
+) -> f64 {
+    style
+        .h_gap
+        .max(gaps.get(&pair(one, other)).copied().unwrap_or_default())
 }
 
 /// Split each layer into rows no wider than [`Style::max_row_width`].
@@ -71,17 +92,23 @@ fn widened_for_labels(diagram: &Diagram, style: &Style) -> Style {
 /// stretch the canvas into a strip tens of thousands of pixels wide; wrapping
 /// keeps it readable. A single box wider than the budget still gets its own
 /// row rather than being dropped.
-fn wrap_layers(layers: &[Vec<usize>], sizes: &[(f64, f64)], style: &Style) -> Vec<Vec<usize>> {
+fn wrap_layers(
+    layers: &[Vec<usize>],
+    sizes: &[(f64, f64)],
+    gaps: &HashMap<(usize, usize), f64>,
+    style: &Style,
+) -> Vec<Vec<usize>> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for layer in layers {
         let mut row: Vec<usize> = Vec::new();
         let mut width = 0.0;
         for &node in layer {
-            let grown = width + style.h_gap + sizes[node].0;
+            let grown = match row.last() {
+                Some(&previous) => width + gap_between(gaps, previous, node, style) + sizes[node].0,
+                None => sizes[node].0,
+            };
             if !row.is_empty() && grown > style.max_row_width {
                 rows.push(std::mem::take(&mut row));
-                width = sizes[node].0;
-            } else if row.is_empty() {
                 width = sizes[node].0;
             } else {
                 width = grown;
@@ -226,7 +253,53 @@ fn order_layers(diagram: &Diagram, ranks: &[usize]) -> Vec<Vec<usize>> {
             *layer = keyed.into_iter().map(|(_, node)| node).collect();
         }
     }
+    group_within_layers(diagram, &mut layers);
     layers
+}
+
+/// Bring boxes joined to each other within one layer together, keeping the
+/// order the crossing reduction settled on otherwise.
+///
+/// Only specializations decide the layers, so a whole and its parts often
+/// land in the same one. An unrelated definition declared between them
+/// would then sit between them on the canvas as well, and the line joining
+/// them would have to go the long way round something it has nothing to do
+/// with.
+fn group_within_layers(diagram: &Diagram, layers: &mut [Vec<usize>]) {
+    for layer in layers.iter_mut() {
+        let mut grouped: Vec<usize> = Vec::with_capacity(layer.len());
+        let mut taken = vec![false; layer.len()];
+        for start in 0..layer.len() {
+            if taken[start] {
+                continue;
+            }
+            taken[start] = true;
+            let mut group = vec![start];
+            let mut next = 0;
+            // everything reachable from here without leaving the layer
+            while next < group.len() {
+                let node = layer[group[next]];
+                next += 1;
+                for slot in 0..layer.len() {
+                    if !taken[slot] && joined(diagram, node, layer[slot]) {
+                        taken[slot] = true;
+                        group.push(slot);
+                    }
+                }
+            }
+            // within a group the layer's own order still stands
+            group.sort_unstable();
+            grouped.extend(group.into_iter().map(|slot| layer[slot]));
+        }
+        *layer = grouped;
+    }
+}
+
+/// Is there an edge between these two boxes, either way round?
+fn joined(diagram: &Diagram, one: usize, other: usize) -> bool {
+    diagram.edges.iter().any(|edge| {
+        (edge.from == one && edge.to == other) || (edge.from == other && edge.to == one)
+    })
 }
 
 /// Mean position of a node's supertypes, or its own position when it has
@@ -249,7 +322,12 @@ fn barycenter(diagram: &Diagram, node: usize, position: &[f64]) -> f64 {
 
 /// Turn row orderings into coordinates, centring every row against the
 /// widest one and centring each box vertically within its row.
-fn place(sizes: &[(f64, f64)], layers: &[Vec<usize>], style: &Style) -> Layout {
+fn place(
+    sizes: &[(f64, f64)],
+    layers: &[Vec<usize>],
+    gaps: &HashMap<(usize, usize), f64>,
+    style: &Style,
+) -> Layout {
     let mut placed = vec![
         Placed {
             node: 0,
@@ -272,7 +350,10 @@ fn place(sizes: &[(f64, f64)], layers: &[Vec<usize>], style: &Style) -> Layout {
         .iter()
         .map(|layer| {
             let width = layer.iter().map(|&node| sizes[node].0).sum::<f64>()
-                + style.h_gap * (layer.len() as f64 - 1.0);
+                + layer
+                    .windows(2)
+                    .map(|side_by_side| gap_between(gaps, side_by_side[0], side_by_side[1], style))
+                    .sum::<f64>();
             let height = layer
                 .iter()
                 .map(|&node| sizes[node].1)
@@ -285,7 +366,7 @@ fn place(sizes: &[(f64, f64)], layers: &[Vec<usize>], style: &Style) -> Layout {
     let mut y = style.margin;
     for (layer, &(row_width, row_height)) in layers.iter().zip(&rows) {
         let mut x = style.margin + (content - row_width) / 2.0;
-        for &node in layer {
+        for (at, &node) in layer.iter().enumerate() {
             let (width, height) = sizes[node];
             placed[node] = Placed {
                 node,
@@ -294,7 +375,10 @@ fn place(sizes: &[(f64, f64)], layers: &[Vec<usize>], style: &Style) -> Layout {
                 width,
                 height,
             };
-            x += width + style.h_gap;
+            x += width;
+            if let Some(&next) = layer.get(at + 1) {
+                x += gap_between(gaps, node, next, style);
+            }
         }
         y += row_height + style.v_gap;
     }
@@ -311,6 +395,19 @@ mod tests {
     use super::*;
     use crate::definition_diagram;
     use crate::tests::resolved;
+
+    fn laid_out_internal(source: &str, owner: &str) -> (Diagram, Layout) {
+        let ws = resolved(source);
+        let model = ws.model();
+        let id = model
+            .descendants(ws.root())
+            .into_iter()
+            .find(|&id| model.name(id) == Some(owner))
+            .expect("the owner is in the model");
+        let diagram = crate::interconnection_diagram(model, id);
+        let layout = layout(&diagram, &Style::default());
+        (diagram, layout)
+    }
 
     fn laid_out(source: &str) -> (Diagram, Layout) {
         let ws = resolved(source);
@@ -445,7 +542,7 @@ mod tests {
     fn labels_widen_the_gap_they_are_drawn_in() {
         let style = Style::default();
         let mut diagram = Diagram::default();
-        assert_eq!(widened_for_labels(&diagram, &style).h_gap, style.h_gap);
+        assert!(label_gaps(&diagram, &style).is_empty());
 
         // a connection sets two names down, one per end
         diagram.edges = vec![Edge {
@@ -455,7 +552,7 @@ mod tests {
             ends: Some(("aVeryLongPortName".to_string(), "short".to_string())),
             label: None,
         }];
-        let widened = widened_for_labels(&diagram, &style).h_gap;
+        let widened = gap_between(&label_gaps(&diagram, &style), 0, 1, &style);
         // room for the longer name at both ends
         assert!(widened > 2.0 * style.text_width("aVeryLongPortName"));
 
@@ -467,7 +564,69 @@ mod tests {
             ends: None,
             label: Some("aVeryLongTransitionName".to_string()),
         }];
-        assert!(widened_for_labels(&diagram, &style).h_gap > style.h_gap);
+        let gaps = label_gaps(&diagram, &style);
+        assert!(gap_between(&gaps, 0, 1, &style) > style.h_gap);
+        // and the pair it is drawn between is the only one widened, whichever
+        // way round the edge is read
+        assert_eq!(
+            gap_between(&gaps, 1, 0, &style),
+            gap_between(&gaps, 0, 1, &style)
+        );
+        assert_eq!(gap_between(&gaps, 1, 2, &style), style.h_gap);
+    }
+
+    #[test]
+    fn a_long_label_leaves_the_rest_of_the_row_alone() {
+        // `a` and `b` are joined by a long transition; `sink` is joined to
+        // nothing and must not be pushed away by it
+        let (_, layout) = laid_out_internal(
+            "state def S {\n\
+             	state a;\n\
+             	state b;\n\
+             	state sink;\n\
+             	transition aVeryLongTransitionNameIndeed first a then b;\n\
+             }\n",
+            "S",
+        );
+        let mut placed: Vec<Placed> = layout.placed.clone();
+        placed.sort_by(|one, other| one.x.total_cmp(&other.x));
+        let gaps: Vec<f64> = placed
+            .windows(2)
+            .map(|side_by_side| side_by_side[1].x - (side_by_side[0].x + side_by_side[0].width))
+            .collect();
+        let style = Style::default();
+        // exactly one gap carries the label; the others stay at the default
+        assert_eq!(
+            gaps.iter().filter(|&&gap| gap > style.h_gap + 1.0).count(),
+            1,
+            "gaps: {gaps:?}"
+        );
+    }
+
+    #[test]
+    fn a_whole_is_placed_beside_its_parts() {
+        // `FuelPort` is declared between `Wheel` and `Vehicle` but has
+        // nothing to do with either, so it must not come between them
+        let (diagram, layout) = laid_out(
+            "part def Wheel;\n\
+             port def FuelPort;\n\
+             part def Vehicle {\n\
+             	part wheels : Wheel;\n\
+             }\n",
+        );
+        let named = |name: &str| {
+            diagram
+                .nodes
+                .iter()
+                .position(|node| node.name == name)
+                .map(|node| layout.placed[node].x)
+                .expect("the box is drawn")
+        };
+        let (wheel, port, vehicle) = (named("Wheel"), named("FuelPort"), named("Vehicle"));
+        assert!(
+            port < wheel.min(vehicle) || port > wheel.max(vehicle),
+            "FuelPort sits between the two boxes it is unrelated to"
+        );
     }
 
     #[test]
