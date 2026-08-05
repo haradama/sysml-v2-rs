@@ -37,6 +37,7 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | [`sysml-import-api`](crates/sysml-import-api) | Imports an existing Rust API surface (rustdoc JSON) as a SysML package whose definitions carry `@rust` binding metadata — the bridge from in-house crates into the model |
 | [`sysml-rustgen`](crates/sysml-rustgen) | Generates Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, go-to-definition, find-references, rename, completion, hover, symbols, formatting — with a [VSCode extension](editors/vscode) as its client |
+| [`sysml-mcp`](crates/sysml-mcp) | Model Context Protocol server: lets an AI agent ask whether a model parses and resolves, what names are legal at a point, and what the standard library actually declares |
 | [`sysml-codegen`](crates/sysml-codegen) | Generates `sysml-model`'s metamodel code from [`vendor/metamodel`](vendor/metamodel) |
 | [`sysml-cli`](crates/sysml-cli) | `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`, `diagram`, `import-rust`, `rustgen`, `corpus`) |
 

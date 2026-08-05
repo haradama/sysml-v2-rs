@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "sysml": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--quiet",
+        "--release",
+        "--manifest-path",
+        "${CLAUDE_PROJECT_DIR}/Cargo.toml",
+        "-p",
+        "sysml-mcp",
+        "--",
+        "--library",
+        "${CLAUDE_PROJECT_DIR}/vendor/sysml-v2-release/sysml.library"
+      ]
+    }
+  }
+}

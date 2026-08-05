@@ -10,6 +10,7 @@ members = [
     "crates/sysml-diagram",
     "crates/sysml-api-client",
     "crates/sysml-lsp",
+    "crates/sysml-mcp",
     "crates/sysml-codegen",
     "crates/sysml-cli",
 ]

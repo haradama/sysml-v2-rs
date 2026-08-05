@@ -29,6 +29,7 @@ cargo publish -p sysml-rustgen
 cargo publish -p sysml-diagram
 cargo publish -p sysml-api-client
 cargo publish -p sysml-lsp
+cargo publish -p sysml-mcp
 cargo publish -p sysml-cli
 ```
 
