@@ -128,12 +128,13 @@ pub fn element_uuid(model: &Model, id: ElementId) -> Uuid {
 /// a role or a visibility the owned element keeps -- so they fold into
 /// edges on import and are synthesized back on export. `FeatureValue` and
 /// friends stay real elements: they carry state of their own.
-const FOLDED: [ElementKind; 14] = [
+const FOLDED: [ElementKind; 15] = [
     ElementKind::OwningMembership,
     ElementKind::FeatureMembership,
     ElementKind::EndFeatureMembership,
     ElementKind::ParameterMembership,
     ElementKind::ReturnParameterMembership,
+    ElementKind::ResultExpressionMembership,
     ElementKind::SubjectMembership,
     ElementKind::ActorMembership,
     ElementKind::StakeholderMembership,
@@ -194,13 +195,14 @@ const SYNTHESIZED: [&str; 38] = [
 /// subaction's and a requirement constraint's metaclass alone does not
 /// say which role it was: their `kind` does.
 fn folded_role(bridge: &Json) -> Option<&'static str> {
-    let roles: [(ElementKind, &str); 6] = [
+    let roles: [(ElementKind, &str); 7] = [
         (ElementKind::SubjectMembership, "subject"),
         (ElementKind::ActorMembership, "actor"),
         (ElementKind::StakeholderMembership, "stakeholder"),
         (ElementKind::ObjectiveMembership, "objective"),
         (ElementKind::VariantMembership, "variant"),
         (ElementKind::ReturnParameterMembership, "return"),
+        (ElementKind::ResultExpressionMembership, "result"),
     ];
     let written = bridge["@type"].as_str();
     if let Some((_, role)) = roles.iter().find(|(kind, _)| Some(kind.name()) == written) {
@@ -374,6 +376,7 @@ fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
             "objective" => ElementKind::ObjectiveMembership,
             "variant" => ElementKind::VariantMembership,
             "return" => ElementKind::ReturnParameterMembership,
+            "result" => ElementKind::ResultExpressionMembership,
             "entry" | "do" | "exit" => ElementKind::StateSubactionMembership,
             "assume" | "require" => ElementKind::RequirementConstraintMembership,
             "frame" => ElementKind::FramedConcernMembership,

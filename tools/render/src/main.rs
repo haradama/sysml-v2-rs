@@ -83,9 +83,9 @@ fn render(input: &Path, output: &Path, scale: f32) -> Result<(), String> {
 fn flatten_variables(svg: &str) -> String {
     const PALETTE: [(&str, &str); 4] = [
         ("var(--box)", "#ffffff"),
-        ("var(--line)", "#3f4451"),
-        ("var(--text)", "#1b1f27"),
-        ("var(--muted)", "#6b7280"),
+        ("var(--line)", "#000000"),
+        ("var(--text)", "#000000"),
+        ("var(--muted)", "#000000"),
     ];
     let mut out = svg.to_string();
     if let (Some(start), Some(end)) = (out.find("@media"), out.find("</style>")) {

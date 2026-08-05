@@ -26,7 +26,7 @@ mod kind;
 mod lexer;
 mod parser;
 
-pub use kind::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, SysMLLanguage};
+pub use kind::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, SysMLLanguage, KEYWORDS};
 pub use lexer::{lex, lex_dialect, Token};
 pub use parser::{parse, parse_dialect, Parse};
 pub use rowan::{TextRange, TextSize, TokenAtOffset};

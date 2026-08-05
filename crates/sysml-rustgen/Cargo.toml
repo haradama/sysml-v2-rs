@@ -1,0 +1,18 @@
+[package]
+name = "sysml-rustgen"
+description = "Generates Rust from a resolved SysML model: parts become structs, performed API actions become methods calling the bound Rust items"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sysml-model.workspace = true
+
+[dev-dependencies]
+sysml-semantics.workspace = true
+sysml-import-api.workspace = true

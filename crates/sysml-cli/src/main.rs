@@ -16,8 +16,20 @@ fn parse_file(path: &Path, text: &str) -> sysml_syntax::Parse {
 #[derive(Parser)]
 #[command(name = "sysml", version, about = "SysML v2 command-line tools")]
 struct Cli {
+    /// How findings are reported: for a person, or as JSON for a program
+    #[arg(long, value_enum, default_value_t = Format::Text, global = true)]
+    format: Format,
     #[command(subcommand)]
     command: Command,
+}
+
+/// What `parse`, `check`, `stats` and `fmt --check` report in. The
+/// artifacts of `export`, `diagram` and `rustgen` are machine-readable
+/// already and are unaffected.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Format {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -92,6 +104,40 @@ enum Command {
         /// diagram of relationships
         #[arg(long, conflicts_with = "internal")]
         browser: bool,
+        /// Let Graphviz `dot` decide the positions (PlantUML-style: the
+        /// drawing itself stays the same); needs Graphviz installed
+        #[arg(long)]
+        graphviz: bool,
+        /// The Graphviz command to run with --graphviz
+        #[arg(long, default_value = "dot", value_name = "COMMAND")]
+        dot: String,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Import a Rust crate's public API as a SysML package with `@rust`
+    /// binding metadata, from the JSON `cargo +nightly rustdoc --
+    /// -Zunstable-options --output-format json` writes
+    ImportRust {
+        /// The crate's rustdoc JSON file
+        json: PathBuf,
+        /// Name of the generated package (default: derived from the crate)
+        #[arg(long)]
+        package: Option<String>,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Generate Rust from a resolved model: parts become structs and the
+    /// `perform`ed actions of imported `@rust`-bound APIs become methods
+    Rustgen {
+        /// Files or directories holding the model to generate for
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Also load these files or directories so names resolve, without
+        /// generating for them (imported API packages, libraries)
+        #[arg(long)]
+        library: Vec<PathBuf>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -113,9 +159,10 @@ enum Command {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let format = cli.format;
     match cli.command {
-        Command::Parse { files, tree } => parse_files(&files, tree),
-        Command::Stats { files } => stats(&files),
+        Command::Parse { files, tree } => parse_files(&files, tree, format),
+        Command::Stats { files } => stats(&files, format),
         Command::Export {
             files,
             library,
@@ -125,21 +172,34 @@ fn main() -> ExitCode {
             files,
             write,
             check,
-        } => fmt(&files, write, check),
-        Command::Check { paths, show } => check(&paths, show),
+        } => fmt(&files, write, check, format),
+        Command::Check { paths, show } => check(&paths, show, format),
         Command::Diagram {
             paths,
             library,
             internal,
             browser,
+            graphviz,
+            dot,
             output,
         } => diagram(
             &paths,
             &library,
             internal.as_deref(),
             browser,
+            graphviz.then_some(dot.as_str()),
             output.as_deref(),
         ),
+        Command::ImportRust {
+            json,
+            package,
+            output,
+        } => import_rust(&json, package.as_deref(), output.as_deref()),
+        Command::Rustgen {
+            paths,
+            library,
+            output,
+        } => rustgen(&paths, &library, output.as_deref()),
         Command::Corpus {
             dir,
             worst,
@@ -148,7 +208,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn stats(files: &[PathBuf]) -> ExitCode {
+fn stats(files: &[PathBuf], format: Format) -> ExitCode {
     let mut counts: std::collections::BTreeMap<&'static str, usize> = Default::default();
     let mut total = 0usize;
     let mut errors = 0usize;
@@ -167,6 +227,16 @@ fn stats(files: &[PathBuf]) -> ExitCode {
         for id in model.ids() {
             *counts.entry(model.kind(id).name()).or_default() += 1;
         }
+    }
+    if format == Format::Json {
+        report(serde_json::json!({
+            "command": "stats",
+            "ok": errors == 0,
+            "elements": total,
+            "parseErrors": errors,
+            "counts": counts,
+        }));
+        return ExitCode::SUCCESS;
     }
     let mut rows: Vec<_> = counts.into_iter().collect();
     rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
@@ -237,8 +307,9 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exit
     ExitCode::SUCCESS
 }
 
-fn fmt(files: &[PathBuf], write: bool, check_only: bool) -> ExitCode {
+fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> ExitCode {
     let mut dirty = 0usize;
+    let mut unformatted = Vec::new();
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -250,7 +321,10 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool) -> ExitCode {
         let formatted = sysml_syntax::fmt::format_file(&path.to_string_lossy(), &text);
         if check_only {
             if formatted != text {
-                eprintln!("{}: not formatted", path.display());
+                if format == Format::Text {
+                    eprintln!("{}: not formatted", path.display());
+                }
+                unformatted.push(path.display().to_string());
                 dirty += 1;
             }
         } else if write {
@@ -264,6 +338,13 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool) -> ExitCode {
         } else {
             print!("{formatted}");
         }
+    }
+    if check_only && format == Format::Json {
+        report(serde_json::json!({
+            "command": "fmt",
+            "ok": dirty == 0,
+            "unformatted": unformatted,
+        }));
     }
     if dirty > 0 {
         ExitCode::FAILURE
@@ -301,6 +382,7 @@ fn diagram(
     library: &[PathBuf],
     internal: Option<&str>,
     browser: bool,
+    graphviz: Option<&str>,
     output: Option<&Path>,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
@@ -344,7 +426,17 @@ fn diagram(
         eprintln!("error: nothing to draw");
         return ExitCode::FAILURE;
     }
-    let svg = sysml_diagram::render(&diagram, &sysml_diagram::Style::default());
+    let style = sysml_diagram::Style::default();
+    let svg = match graphviz {
+        Some(command) => match sysml_diagram::render_with_graphviz(&diagram, &style, command) {
+            Ok(svg) => svg,
+            Err(error) => {
+                eprintln!("error: {error}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => sysml_diagram::render(&diagram, &style),
+    };
     let count = |relation| {
         diagram
             .edges
@@ -366,6 +458,69 @@ fn diagram(
 }
 
 /// Write a rendered view to `output`, or to stdout when there is none.
+fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+    let mut ws = sysml_semantics::Workspace::new();
+    if !load_paths(&mut ws, paths) {
+        return ExitCode::FAILURE;
+    }
+    // generation covers what was named; the library only resolves
+    let own = ws.file_count();
+    if !load_paths(&mut ws, library) {
+        return ExitCode::FAILURE;
+    }
+    let stats = ws.resolve_all();
+    if stats.unresolved > 0 {
+        // generated code would silently miss whatever did not resolve
+        for missing in ws.unresolved() {
+            eprintln!(
+                "error: unresolved `{}` in {}",
+                missing.name,
+                ws.file_name(missing.file)
+            );
+        }
+        return ExitCode::FAILURE;
+    }
+    let roots: Vec<_> = (0..own)
+        .flat_map(|file| ws.file_roots(file).to_vec())
+        .collect();
+    match sysml_rustgen::generate(ws.model(), &roots) {
+        Ok(rust) => {
+            let structs = rust.matches("pub struct ").count();
+            let methods =
+                rust.matches("    pub fn ").count() + rust.matches("    pub async fn ").count();
+            emit(
+                &rust,
+                output,
+                &format!("{structs} struct(s) and {methods} method(s)"),
+            )
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> ExitCode {
+    let text = match std::fs::read_to_string(json) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("error: cannot read {}: {err}", json.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    match sysml_import_api::rustdoc_to_sysml(&text, package) {
+        Ok(sysml) => {
+            let definitions = sysml.matches(" def ").count();
+            emit(&sysml, output, &format!("{definitions} definition(s)"))
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
     let Some(path) = output else {
         print!("{svg}");
@@ -379,7 +534,7 @@ fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn check(paths: &[PathBuf], show: usize) -> ExitCode {
+fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if !load_paths(&mut ws, paths) {
         return ExitCode::FAILURE;
@@ -391,16 +546,47 @@ fn check(paths: &[PathBuf], show: usize) -> ExitCode {
     } else {
         100.0 * stats.resolved as f64 / total as f64
     };
-    let limit = if show == 0 { usize::MAX } else { show };
+    // `--show` trims a list a person reads; a program is given all of
+    // them, since it is the list it works from
+    let limit = if show == 0 || format == Format::Json {
+        usize::MAX
+    } else {
+        show
+    };
     let mut texts: std::collections::HashMap<usize, String> = Default::default();
+    let mut unresolved = Vec::new();
     for u in ws.unresolved().iter().take(limit) {
         let file = ws.file_name(u.file).to_string();
         let text = texts
             .entry(u.file)
             .or_insert_with(|| std::fs::read_to_string(&file).unwrap_or_default());
         let offset = usize::from(u.range.start()).min(text.len());
-        let (line, col) = line_col(text, offset);
-        eprintln!("{file}:{}:{}: unresolved `{}`", line + 1, col + 1, u.name);
+        match format {
+            Format::Text => {
+                let (line, col) = line_col(text, offset);
+                eprintln!("{file}:{}:{}: unresolved `{}`", line + 1, col + 1, u.name);
+            }
+            Format::Json => unresolved.push(at(
+                text,
+                offset,
+                serde_json::json!({ "path": file, "name": u.name.clone() }),
+            )),
+        }
+    }
+    if format == Format::Json {
+        report(serde_json::json!({
+            "command": "check",
+            "ok": stats.unresolved == 0,
+            "elements": ws.model().len(),
+            "resolved": stats.resolved,
+            "references": total,
+            "unresolved": unresolved,
+        }));
+        return if stats.unresolved == 0 {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
     }
     if ws.unresolved().len() > limit {
         eprintln!("... and {} more", ws.unresolved().len() - limit);
@@ -500,14 +686,21 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_files(files: &[PathBuf], dump_tree: bool) -> ExitCode {
+fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
     let mut total_errors = 0usize;
+    let mut reported = Vec::new();
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(err) => {
-                eprintln!("error: cannot read {}: {err}", path.display());
                 total_errors += 1;
+                match format {
+                    Format::Text => eprintln!("error: cannot read {}: {err}", path.display()),
+                    Format::Json => reported.push(serde_json::json!({
+                        "path": path.display().to_string(),
+                        "unreadable": err.to_string(),
+                    })),
+                }
                 continue;
             }
         };
@@ -515,22 +708,64 @@ fn parse_files(files: &[PathBuf], dump_tree: bool) -> ExitCode {
         if dump_tree {
             println!("{:#?}", parse.syntax());
         }
-        for diagnostic in parse.errors() {
-            print_diagnostic(path, &text, diagnostic);
-        }
         total_errors += parse.errors().len();
-        let status = if parse.ok() { "ok" } else { "FAILED" };
-        eprintln!(
-            "{}: {status} ({} error(s))",
-            path.display(),
-            parse.errors().len()
-        );
+        match format {
+            Format::Text => {
+                for diagnostic in parse.errors() {
+                    print_diagnostic(path, &text, diagnostic);
+                }
+                let status = if parse.ok() { "ok" } else { "FAILED" };
+                eprintln!(
+                    "{}: {status} ({} error(s))",
+                    path.display(),
+                    parse.errors().len()
+                );
+            }
+            Format::Json => reported.push(serde_json::json!({
+                "path": path.display().to_string(),
+                "ok": parse.ok(),
+                "errors": parse
+                    .errors()
+                    .iter()
+                    .map(|d| at(&text, usize::from(d.range.start()), serde_json::json!({
+                        "message": d.message.clone(),
+                    })))
+                    .collect::<Vec<_>>(),
+            })),
+        }
+    }
+    if format == Format::Json {
+        report(serde_json::json!({
+            "command": "parse",
+            "ok": total_errors == 0,
+            "errors": total_errors,
+            "files": reported,
+        }));
     }
     if total_errors == 0 {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
     }
+}
+
+/// A finding with its place in the file: byte offset as the model sees
+/// it, line and column as an editor counts them (from one).
+fn at(text: &str, offset: usize, mut value: serde_json::Value) -> serde_json::Value {
+    let (line, column) = line_col(text, offset);
+    let map = value.as_object_mut().expect("built as an object");
+    map.insert("offset".into(), offset.into());
+    map.insert("line".into(), (line + 1).into());
+    map.insert("column".into(), (column + 1).into());
+    value
+}
+
+/// One JSON document per run, on stdout.
+fn report(value: serde_json::Value) {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).expect("a built value serializes")
+    );
 }
 
 fn print_diagnostic(path: &Path, text: &str, diagnostic: &Diagnostic) {

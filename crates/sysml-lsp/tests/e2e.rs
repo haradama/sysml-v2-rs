@@ -14,6 +14,12 @@ struct Client {
 
 impl Client {
     fn request(&mut self, method: &str, params: Value) -> Value {
+        let resp = self.send_request(method, params);
+        assert!(resp.error.is_none(), "error response: {:?}", resp.error);
+        resp.result.unwrap_or(Value::Null)
+    }
+
+    fn send_request(&mut self, method: &str, params: Value) -> lsp_server::Response {
         let id = RequestId::from(self.next_id);
         self.next_id += 1;
         self.connection
@@ -26,10 +32,7 @@ impl Client {
             .unwrap();
         loop {
             match self.recv() {
-                Message::Response(resp) if resp.id == id => {
-                    assert!(resp.error.is_none(), "error response: {:?}", resp.error);
-                    return resp.result.unwrap_or(Value::Null);
-                }
+                Message::Response(resp) if resp.id == id => return resp,
                 _ => continue,
             }
         }
@@ -163,6 +166,19 @@ fn serves_diagnostics_definition_hover_and_formatting() {
     assert_eq!(edits.len(), 2, "{edits:?}");
     assert!(edits.iter().all(|e| e["newText"] == "Car"));
 
+    // renaming onto a name already visible there would capture it
+    let clash = client.send_request(
+        lsp_types::request::Rename::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 3, "character": 16 },
+            "newName": "Sum"
+        }),
+    );
+    assert!(clash
+        .error
+        .is_some_and(|e| e.message.contains("already visible")));
+
     // completion inside the package body sees Vehicle and keywords
     let completions = client.request(
         lsp_types::request::Completion::METHOD,
@@ -231,4 +247,142 @@ fn serves_diagnostics_definition_hover_and_formatting() {
     client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
     client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
     handle.join().unwrap();
+}
+
+#[test]
+fn serves_diagrams_for_a_preview() {
+    let (server_side, client_side) = Connection::memory();
+    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
+    let mut client = Client {
+        connection: client_side,
+        next_id: 1,
+    };
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({ "capabilities": {} }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+
+    let uri = "file:///preview.sysml";
+    let text = "part def PowerSource;\npart def Engine :> PowerSource {\n\tpart p : Piston;\n}\npart def Piston;\n";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1, "text": text } }),
+    );
+    client.wait_diagnostics();
+
+    // the default view draws the definitions and their relationships
+    let result = client.request("sysml/diagram", json!({ "uri": uri }));
+    let svg = result["svg"].as_str().unwrap();
+    assert!(svg.starts_with("<svg xmlns="));
+    assert!(svg.contains("PowerSource"));
+    assert!(svg.contains("marker-end=\"url(#specialization)\""));
+
+    // the internal view draws one element's structure
+    let result = client.request(
+        "sysml/diagram",
+        json!({ "uri": uri, "view": "internal", "element": "Engine" }),
+    );
+    assert!(result["svg"].as_str().unwrap().contains("p : Piston"));
+
+    // the browser view draws the membership tree
+    let result = client.request("sysml/diagram", json!({ "uri": uri, "view": "browser" }));
+    assert!(result["svg"].as_str().unwrap().contains("Engine"));
+
+    // a document with no definitions falls back to the tree
+    let empty = "package P {\n\tpart car;\n}\n";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": "file:///plain.sysml", "languageId": "sysml", "version": 1, "text": empty } }),
+    );
+    client.wait_diagnostics();
+    let result = client.request("sysml/diagram", json!({ "uri": "file:///plain.sysml" }));
+    assert!(result["svg"].as_str().unwrap().contains("car"));
+
+    // an unknown document is null, not an error
+    let result = client.request("sysml/diagram", json!({ "uri": "file:///nowhere.sysml" }));
+    assert!(result.is_null());
+
+    // malformed parameters are a proper error response, not a crash
+    let id = client.next_id;
+    client.next_id += 1;
+    client
+        .connection
+        .sender
+        .send(Message::Request(lsp_server::Request {
+            id: id.into(),
+            method: "sysml/diagram".into(),
+            params: json!({ "uri": 42 }),
+        }))
+        .unwrap();
+    loop {
+        if let Message::Response(response) = client.recv() {
+            assert!(response.error.is_some());
+            break;
+        }
+    }
+
+    client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
+    client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
+    handle.join().unwrap();
+}
+
+/// `layout: "graphviz"` runs the configured dot command for positions;
+/// a missing command falls back to the built-in layout instead of
+/// leaving the preview empty.
+#[test]
+fn lays_diagrams_out_with_graphviz_when_asked() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake = std::env::temp_dir().join(format!("sysml-e2e-fake-dot-{}", std::process::id()));
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncat >/dev/null\n\
+         printf 'graph 1 6 2\\n'\n\
+         printf 'node n0 1.5 1 1 1\\n'\n\
+         printf 'node n1 4 1 1 1\\n'\n\
+         printf 'stop\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for (command, expected_height) in [
+        // the fake lays a 6in x 2in canvas: 2in * 72dpi + two 16px margins
+        (fake.to_str().unwrap(), Some("height=\"176\"")),
+        // no such command: the built-in layout draws instead
+        ("/nonexistent/graphviz/dot", None),
+    ] {
+        let (server_side, client_side) = Connection::memory();
+        let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
+        let mut client = Client {
+            connection: client_side,
+            next_id: 1,
+        };
+        client.request(
+            lsp_types::request::Initialize::METHOD,
+            json!({ "capabilities": {}, "initializationOptions": { "dotCommand": command } }),
+        );
+        client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+
+        let uri = "file:///layout.sysml";
+        client.notify(
+            lsp_types::notification::DidOpenTextDocument::METHOD,
+            json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1,
+                     "text": "part def A;\npart def B :> A;\n" } }),
+        );
+        client.wait_diagnostics();
+
+        let result = client.request("sysml/diagram", json!({ "uri": uri, "layout": "graphviz" }));
+        let svg = result["svg"].as_str().unwrap();
+        assert!(svg.starts_with("<svg xmlns="));
+        assert!(svg.contains(">A<") && svg.contains(">B<"));
+        match expected_height {
+            Some(height) => assert!(svg.contains(height), "{svg:.240}"),
+            None => assert!(svg.contains("marker-end=\"url(#specialization)\"")),
+        }
+
+        client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
+        client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
+        handle.join().unwrap();
+    }
+    std::fs::remove_file(&fake).ok();
 }

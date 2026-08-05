@@ -25,6 +25,13 @@ fn corpus() -> Option<std::path::PathBuf> {
     None
 }
 
+/// The KerML half of the corpus, drawn through the same checks.
+fn kerml_corpus() -> Option<std::path::PathBuf> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vendor/sysml-v2-release/kerml/src");
+    root.is_dir().then_some(root)
+}
+
 fn sysml_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -33,7 +40,10 @@ fn sysml_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let path = entry.path();
         if path.is_dir() {
             sysml_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "sysml") {
+        } else if path
+            .extension()
+            .is_some_and(|e| e == "sysml" || e == "kerml")
+        {
             out.push(path);
         }
     }
@@ -117,6 +127,9 @@ fn definition_diagrams_are_faithful_to_their_models() {
     let Some(root) = corpus() else { return };
     let mut files = Vec::new();
     sysml_files(&root, &mut files);
+    if let Some(kerml) = kerml_corpus() {
+        sysml_files(&kerml, &mut files);
+    }
     files.sort();
     assert!(files.len() > 100, "the corpus looks truncated");
 
@@ -127,19 +140,19 @@ fn definition_diagrams_are_faithful_to_their_models() {
         let where_ = path.file_name().unwrap().to_string_lossy().to_string();
         check_shape(&diagram, model, &where_);
 
-        // every box is a named definition of this file, and nothing else is
+        // every box is a named classifier of this file, and nothing else is
         let drawn: Vec<ElementId> = diagram.nodes.iter().map(|node| node.id).collect();
         for &id in &drawn {
             assert!(
-                model.kind(id).is_a(ElementKind::Definition),
-                "{where_}: {:?} is not a definition",
+                model.kind(id).is_a(ElementKind::Classifier),
+                "{where_}: {:?} is not a classifier",
                 id
             );
         }
         let definitions: Vec<ElementId> = model
             .descendants(ws.root())
             .into_iter()
-            .filter(|&id| model.kind(id).is_a(ElementKind::Definition) && model.name(id).is_some())
+            .filter(|&id| model.kind(id).is_a(ElementKind::Classifier) && model.name(id).is_some())
             .collect();
         assert_eq!(
             drawn, definitions,

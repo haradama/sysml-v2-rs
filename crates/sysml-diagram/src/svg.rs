@@ -9,26 +9,28 @@ use crate::{Diagram, Edge, Layout, Placed, Relation, Shape, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
 /// UI text, so a diagram looks native wherever it is embedded.
-const FONT: &str =
-    "ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif";
+/// The typeface the specification's own notation figures are set in.
+const FONT: &str = "Arial, Helvetica, sans-serif";
 
-/// Colours for both viewer themes. The document is self-contained, so the
-/// palette travels with it rather than depending on the embedding page.
+/// Colours for both viewer themes, after the specification's figures:
+/// black ink on white boxes, keywords included. The dark palette keeps the
+/// same print-like contrast for dark viewers (the VSCode preview among
+/// them); the document is self-contained, so the palette travels with it.
 const CSS: &str = "\
-:root { --box: #ffffff; --line: #3f4451; --text: #1b1f27; --muted: #6b7280; }\n\
+:root { --box: #ffffff; --line: #000000; --text: #000000; --muted: #000000; }\n\
 @media (prefers-color-scheme: dark) {\n\
-  :root { --box: #1f2430; --line: #9aa3b2; --text: #e6e9ef; --muted: #9aa3b2; }\n\
+  :root { --box: #1e1e1e; --line: #d4d4d4; --text: #d4d4d4; --muted: #d4d4d4; }\n\
 }\n\
-.box { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
-.rule, .edge { stroke: var(--line); stroke-width: 1.2; fill: none; }\n\
-.arrow { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
-.diamond { fill: var(--line); stroke: var(--line); stroke-width: 1.2; }\n\
-.tip { fill: none; stroke: var(--line); stroke-width: 1.2; }\n\
+.box { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
+.rule, .edge { stroke: var(--line); stroke-width: 1; fill: none; }\n\
+.arrow { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
+.diamond { fill: var(--line); stroke: var(--line); stroke-width: 1; }\n\
+.tip { fill: none; stroke: var(--line); stroke-width: 1; }\n\
 .initial { fill: var(--line); }\n\
-.port { fill: var(--box); stroke: var(--line); stroke-width: 1.2; }\n\
-.guide { stroke: var(--muted); stroke-width: 1; }\n\
-.dependency { stroke: var(--line); stroke-width: 1.2; fill: none; stroke-dasharray: 6 4; }\n\
-.name { fill: var(--text); font-weight: 600; }\n\
+.port { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
+.guide { stroke: var(--muted); stroke-width: 1; opacity: 0.4; }\n\
+.dependency { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
+.name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
 .keyword, .feature { fill: var(--muted); }\n";
 
@@ -446,8 +448,13 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
 
         writeln!(
             out,
-            "<g>\n<rect class=\"box\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"4\"/>",
-            placed.x, placed.y, placed.width, placed.height
+            "<g>\n<rect class=\"box\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"{}\"/>",
+            placed.x,
+            placed.y,
+            placed.width,
+            placed.height,
+            // the notation rounds usages and leaves definitions square
+            if node.rounded { 10 } else { 0 }
         )
         .unwrap();
         writeln!(

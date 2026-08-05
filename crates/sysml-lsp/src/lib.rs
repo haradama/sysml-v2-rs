@@ -66,15 +66,19 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
     let init_params = connection.initialize(serde_json::to_value(server_capabilities())?)?;
     let init: lsp_types::InitializeParams = serde_json::from_value(init_params)?;
 
-    let library_path = init
-        .initialization_options
-        .as_ref()
-        .and_then(|o| o.get("libraryPath"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| std::env::var("SYSML_LIBRARY_PATH").ok());
+    let option = |name: &str| {
+        init.initialization_options
+            .as_ref()
+            .and_then(|o| o.get(name))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
+    let library_path = option("libraryPath").or_else(|| std::env::var("SYSML_LIBRARY_PATH").ok());
 
     let mut server = Server::new(library_path);
+    if let Some(command) = option("dotCommand") {
+        server.dot_command = command;
+    }
     server.serve(connection)
 }
 
@@ -87,6 +91,8 @@ pub struct Server {
     docs: HashMap<Url, String>,
     /// cached analysis, invalidated on document changes
     analysis: Option<Analysis>,
+    /// the Graphviz command a `layout: "graphviz"` diagram request runs
+    dot_command: String,
 }
 
 /// One analysis pass over the library + all open documents.
@@ -110,6 +116,7 @@ impl Server {
             base,
             docs: HashMap::new(),
             analysis: None,
+            dot_command: "dot".to_string(),
         }
     }
 
@@ -293,14 +300,17 @@ impl Server {
                         Err(e) => return error_response(id, e),
                     };
                 let position = params.text_document_position;
-                ok_response(
-                    id,
-                    self.rename(
-                        &position.text_document.uri,
-                        position.position,
-                        &params.new_name,
-                    ),
-                )
+                match self.rename(
+                    &position.text_document.uri,
+                    position.position,
+                    &params.new_name,
+                ) {
+                    // the reason is the useful part: an editor shows it
+                    // where it would otherwise say only that nothing
+                    // happened
+                    Ok(edit) => ok_response(id, Some(edit)),
+                    Err(reason) => error_response(id, reason),
+                }
             }
             Completion::METHOD => {
                 let params: lsp_types::CompletionParams =
@@ -341,6 +351,16 @@ impl Server {
                         Err(e) => return error_response(id, e),
                     };
                 ok_response(id, self.format(&params.text_document.uri))
+            }
+            // custom: the diagram of one open document, as a standalone
+            // SVG -- what the `sysml diagram` CLI draws, served from the
+            // buffer so a preview can follow unsaved edits
+            "sysml/diagram" => {
+                let params: DiagramParams = match serde_json::from_value(req.params.clone()) {
+                    Ok(p) => p,
+                    Err(e) => return error_response(id, e),
+                };
+                ok_response(id, self.diagram(&params))
             }
             _ => Response::new_err(
                 id,
@@ -422,17 +442,50 @@ impl Server {
         Some(locations)
     }
 
-    fn rename(&mut self, uri: &Url, position: Position, new_name: &str) -> Option<WorkspaceEdit> {
-        let target = self.target_at(uri, position)?;
+    /// Renaming touches every file the workspace knows, so what makes it
+    /// safe is checked across all of them before a single edit is
+    /// offered: the new name has to be a name, nothing already visible
+    /// where the declaration stands may answer to it, and every file
+    /// holding a reference has to be one the editor can write.
+    fn rename(
+        &mut self,
+        uri: &Url,
+        position: Position,
+        new_name: &str,
+    ) -> Result<WorkspaceEdit, String> {
+        if sysml_syntax::SyntaxKind::from_keyword(new_name).is_some() {
+            return Err(format!("`{new_name}` is a keyword"));
+        }
+        let mut chars = new_name.chars();
+        let spelled = chars
+            .next()
+            .is_some_and(|ch| ch.is_alphabetic() || ch == '_')
+            && chars.all(|ch| ch.is_alphanumeric() || ch == '_');
+        if !spelled {
+            return Err(format!("`{new_name}` is not a name"));
+        }
+
+        let Some(target) = self.target_at(uri, position) else {
+            return Err("there is nothing to rename here".to_string());
+        };
         let analysis = self.analysis();
         // the declaration must live in an open document — library elements
         // cannot be renamed
-        let decl_file = analysis.ws.element_file(target)?;
+        let decl_file = analysis
+            .ws
+            .element_file(target)
+            .ok_or("that element belongs to no file".to_string())?;
         let decl_name = analysis.ws.file_name(decl_file).to_string();
-        Url::parse(&decl_name)
+        let editable = Url::parse(&decl_name)
             .ok()
-            .filter(|url| analysis.doc_files.contains_key(url))?;
-        let (_, decl_range) = analysis.ws.element_ranges(target)?;
+            .filter(|url| analysis.doc_files.contains_key(url));
+        if editable.is_none() {
+            return Err("that element is declared outside the open documents".to_string());
+        }
+        let (_, decl_range) = analysis
+            .ws
+            .element_ranges(target)
+            .ok_or("that element declares no name to rename".to_string())?;
         let mut edits: Vec<(usize, sysml_syntax::TextRange)> = vec![(decl_file, decl_range)];
         edits.extend(
             analysis
@@ -441,18 +494,37 @@ impl Server {
                 .map(|r| (r.file, r.name_range)),
         );
 
+        // a name already visible where the declaration stands would
+        // capture, or be captured by, the renamed one
+        let start = decl_range.start();
+        let taken = self
+            .analysis()
+            .ws
+            .visible_names(decl_file, start)
+            .into_iter()
+            .any(|(name, _)| name == new_name);
+        if taken {
+            return Err(format!("`{new_name}` is already visible there"));
+        }
+
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for (file, range) in edits {
             let name = self.analysis().ws.file_name(file).to_string();
-            let url = Url::parse(&name).ok()?;
-            let text = self.docs.get(&url)?.clone();
+            let url = Url::parse(&name).map_err(|_| format!("`{name}` is no document"))?;
+            // a partial rename is worse than none: every file holding a
+            // reference has to be open for the edit to reach it
+            let text = self
+                .docs
+                .get(&url)
+                .ok_or_else(|| format!("`{name}` refers to it and is not open"))?
+                .clone();
             let index = LineIndex::new(&text);
             changes.entry(url).or_default().push(TextEdit {
                 range: index.range(&text, range),
                 new_text: new_name.to_string(),
             });
         }
-        Some(WorkspaceEdit {
+        Ok(WorkspaceEdit {
             changes: Some(changes),
             ..Default::default()
         })
@@ -472,7 +544,7 @@ impl Server {
                 ..Default::default()
             })
             .collect();
-        for keyword in KEYWORDS {
+        for (keyword, _) in sysml_syntax::KEYWORDS {
             items.push(CompletionItem {
                 label: (*keyword).to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),
@@ -604,12 +676,84 @@ impl Server {
         })
     }
 
+    /// The diagram of one open document: its definitions and their
+    /// relationships by default, the internal structure of one element
+    /// with `view: "internal"`, the membership tree with `view: "browser"`.
+    fn diagram(&mut self, params: &DiagramParams) -> Option<DiagramResult> {
+        let uri = Url::parse(&params.uri).ok()?;
+        let graphviz = params.layout.as_deref() == Some("graphviz");
+        let command = self.dot_command.clone();
+        let analysis = self.analysis();
+        let file = *analysis.doc_files.get(&uri)?;
+        let ws = &analysis.ws;
+        let style = sysml_diagram::Style::default();
+        // Graphviz when asked for and available, this crate's own layout
+        // otherwise -- the preview always renders something
+        let draw = |diagram: &sysml_diagram::Diagram| {
+            if graphviz {
+                match sysml_diagram::render_with_graphviz(diagram, &style, &command) {
+                    Ok(svg) => return svg,
+                    Err(error) => {
+                        eprintln!("sysml-lsp: falling back to the built-in layout: {error}")
+                    }
+                }
+            }
+            sysml_diagram::render(diagram, &style)
+        };
+        let svg = match params.view.as_deref() {
+            Some("browser") => {
+                let view = sysml_diagram::browser_view(ws.model(), ws.file_roots(file));
+                sysml_diagram::render_browser(&view, &style)
+            }
+            Some("internal") => {
+                let name = params.element.as_deref()?;
+                let target = ws
+                    .named_elements()
+                    .find(|(_, declared)| *declared == name)
+                    .map(|(id, _)| id)?;
+                let diagram = sysml_diagram::interconnection_diagram(ws.model(), target);
+                draw(&diagram)
+            }
+            _ => {
+                let diagram = sysml_diagram::definition_diagram(ws.model(), ws.file_roots(file));
+                let empty = diagram.nodes.is_empty();
+                if empty {
+                    // nothing definitional to draw: fall back to the tree,
+                    // which can show any model at all
+                    let view = sysml_diagram::browser_view(ws.model(), ws.file_roots(file));
+                    sysml_diagram::render_browser(&view, &style)
+                } else {
+                    draw(&diagram)
+                }
+            }
+        };
+        Some(DiagramResult { svg })
+    }
+
     fn locate(&mut self, uri: &Url, position: Position) -> Option<(usize, TextSize)> {
         let text = self.docs.get(uri)?.clone();
         let file = *self.analysis().doc_files.get(uri)?;
         let index = LineIndex::new(&text);
         Some((file, index.offset(&text, position)?))
     }
+}
+
+/// Parameters of the custom `sysml/diagram` request.
+#[derive(serde::Deserialize)]
+struct DiagramParams {
+    uri: String,
+    /// `definitions` (default), `internal` or `browser`.
+    view: Option<String>,
+    /// The element an `internal` view is of.
+    element: Option<String>,
+    /// `builtin` (default) or `graphviz` -- who decides the positions.
+    layout: Option<String>,
+}
+
+/// Result of the custom `sysml/diagram` request.
+#[derive(serde::Serialize)]
+struct DiagramResult {
+    svg: String,
 }
 
 /// Apply one LSP content change (ranged or whole-document) to `text`.
@@ -634,48 +778,6 @@ fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentChangeE
         None => *text = change.text,
     }
 }
-
-const KEYWORDS: &[&str] = &[
-    "about",
-    "abstract",
-    "action",
-    "attribute",
-    "calc",
-    "case",
-    "connect",
-    "connection",
-    "constraint",
-    "def",
-    "doc",
-    "end",
-    "enum",
-    "exhibit",
-    "flow",
-    "import",
-    "in",
-    "interface",
-    "item",
-    "occurrence",
-    "out",
-    "package",
-    "part",
-    "perform",
-    "port",
-    "private",
-    "public",
-    "redefines",
-    "ref",
-    "requirement",
-    "satisfy",
-    "specializes",
-    "state",
-    "subject",
-    "subsets",
-    "transition",
-    "verification",
-    "view",
-    "viewpoint",
-];
 
 fn completion_kind(kind: ElementKind) -> CompletionItemKind {
     if kind.is_a(ElementKind::Package) || kind == ElementKind::Namespace {

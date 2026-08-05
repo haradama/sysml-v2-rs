@@ -57,6 +57,9 @@ pub struct Node {
     /// Whether the element is declared `abstract`, which the drawing shows
     /// the UML way: the name set in italic.
     pub is_abstract: bool,
+    /// The notation rounds the corners of usages and leaves definitions
+    /// square.
+    pub rounded: bool,
     pub shape: Shape,
     /// The parts this box is itself assembled from, drawn inside it. Only
     /// an interconnection view fills this, and only one level deep.
@@ -117,7 +120,10 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
 
     for &root in roots {
         for id in model.descendants(root) {
-            if !model.kind(id).is_a(ElementKind::Definition) {
+            // every classifier gets a box: SysML definitions and KerML's
+            // own classifiers (`classifier`, `datatype`, `assoc`, ...)
+            // alike, so a KerML model draws as more than an empty page
+            if !model.kind(id).is_a(ElementKind::Classifier) {
                 continue;
             }
             let Some(name) = model.name(id) else {
@@ -134,6 +140,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 keyword: keyword(model.kind(id)),
                 features: features_of(model, id),
                 is_abstract: is_abstract(model, id),
+                rounded: model.kind(id).is_a(ElementKind::Usage),
                 shape: Shape::Box,
                 children: Vec::new(),
             });
@@ -220,6 +227,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             keyword: keyword(model.kind(child)),
             features,
             is_abstract: is_abstract(model, child),
+            rounded: model.kind(child).is_a(ElementKind::Usage),
             shape: Shape::Box,
             children,
         });
@@ -253,6 +261,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                             keyword: String::new(),
                             features: Vec::new(),
                             is_abstract: false,
+                            rounded: false,
                             shape: Shape::Initial,
                             children: Vec::new(),
                         });
@@ -538,6 +547,14 @@ fn type_reference(model: &Model, usage: ElementId) -> Option<ElementId> {
 /// `part def`, `AttributeUsage` becomes `attribute`, and a multi-word
 /// metaclass such as `AnalysisCaseDefinition` becomes `analysis case def`.
 pub(crate) fn keyword(kind: ElementKind) -> String {
+    // KerML spells a few of its keywords tighter than the metaclass name
+    match kind {
+        ElementKind::DataType => return "datatype".to_string(),
+        ElementKind::Structure => return "struct".to_string(),
+        ElementKind::Association => return "assoc".to_string(),
+        ElementKind::AssociationStructure => return "assoc struct".to_string(),
+        _ => {}
+    }
     let name = kind.name();
     // `Usage` and `Definition` are the abstract bases: stripping the suffix
     // would leave nothing, so they answer to their own name
@@ -587,6 +604,7 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
                 keyword: keyword(model.kind(part)),
                 features: Vec::new(),
                 is_abstract: is_abstract(model, part),
+                rounded: model.kind(part).is_a(ElementKind::Usage),
                 shape: Shape::Box,
                 children: Vec::new(),
             });
@@ -964,6 +982,35 @@ mod tests {
         // stripping the suffix off `Usage` or `Definition` leaves nothing
         assert_eq!(keyword(ElementKind::Usage), "usage");
         assert_eq!(keyword(ElementKind::Definition), "definition");
+    }
+
+    #[test]
+    fn kerml_classifiers_are_drawn_with_their_specializations() {
+        let mut ws = sysml_semantics::Workspace::new();
+        ws.add_file(
+            "model.kerml",
+            "package Vehicles {\n\tclassifier Vehicle;\n\tclassifier Car specializes Vehicle;\n\
+             \tdatatype Mass;\n\tstruct Chassis;\n\tassoc Owns;\n}\n",
+        );
+        ws.resolve_all();
+        let diagram = crate::definition_diagram(ws.model(), &[ws.root()]);
+        let drawn: Vec<(String, String)> = diagram
+            .nodes
+            .iter()
+            .map(|node| (node.keyword.clone(), node.name.clone()))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                ("classifier".to_string(), "Vehicle".to_string()),
+                ("classifier".to_string(), "Car".to_string()),
+                ("datatype".to_string(), "Mass".to_string()),
+                ("struct".to_string(), "Chassis".to_string()),
+                ("assoc".to_string(), "Owns".to_string()),
+            ]
+        );
+        assert_eq!(diagram.edges.len(), 1);
+        assert_eq!(diagram.edges[0].relation, Relation::Specialization);
     }
 
     #[test]

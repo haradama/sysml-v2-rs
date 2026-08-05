@@ -1,0 +1,19 @@
+[package]
+name = "sysml-import-api"
+description = "Imports an existing Rust API surface (rustdoc JSON) as a SysML package with binding metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sysml-syntax.workspace = true
+serde_json = "1"
+
+[dev-dependencies]
+sysml-model.workspace = true
+sysml-semantics.workspace = true

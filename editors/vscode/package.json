@@ -1,0 +1,158 @@
+{
+  "name": "sysml-v2",
+  "displayName": "SysML v2",
+  "description": "SysML v2 / KerML language support: diagnostics, completion, navigation, formatting via sysml-lsp",
+  "version": "0.1.0",
+  "publisher": "sysml-v2-rs",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/haradama/sysml-v2-rs"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "sysml",
+        "aliases": [
+          "SysML v2",
+          "sysml"
+        ],
+        "extensions": [
+          ".sysml"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "kerml",
+        "aliases": [
+          "KerML",
+          "kerml"
+        ],
+        "extensions": [
+          ".kerml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sysml",
+        "scopeName": "source.sysml",
+        "path": "./syntaxes/sysml.tmLanguage.json"
+      },
+      {
+        "language": "kerml",
+        "scopeName": "source.sysml",
+        "path": "./syntaxes/sysml.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "SysML v2",
+      "properties": {
+        "sysml.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a sysml-lsp executable. Empty uses the server bundled into the extension, falling back to `sysml-lsp` on PATH."
+        },
+        "sysml.library.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a SysML standard library. Empty uses the copy bundled into the extension, falling back to SYSML_LIBRARY_PATH."
+        },
+        "sysml.diagram.layout": {
+          "type": "string",
+          "enum": [
+            "graphviz",
+            "builtin"
+          ],
+          "default": "graphviz",
+          "description": "Layout engine for the diagram preview. `graphviz` runs the `dot` command (PlantUML-style; positions only, the drawing stays the same) and falls back to the built-in layout when Graphviz is not installed."
+        },
+        "sysml.diagram.dot": {
+          "type": "string",
+          "default": "dot",
+          "description": "The Graphviz command the language server runs for diagram layout."
+        },
+        "sysml.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the traffic between VSCode and sysml-lsp in the output channel, for debugging."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "sysml.restartServer",
+        "title": "SysML: Restart Language Server"
+      },
+      {
+        "command": "sysml.showPreview",
+        "title": "SysML: Open Diagram Preview",
+        "icon": "$(open-preview)"
+      }
+    ],
+    "configurationDefaults": {
+      "[sysml]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "off"
+        },
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.quickSuggestionsDelay": 10,
+        "editor.wordBasedSuggestions": "off"
+      },
+      "[kerml]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "off"
+        },
+        "editor.suggestOnTriggerCharacters": true,
+        "editor.quickSuggestionsDelay": 10,
+        "editor.wordBasedSuggestions": "off"
+      }
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "sysml.showPreview",
+          "when": "resourceLangId == sysml || resourceLangId == kerml",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.0"
+  },
+  "activationEvents": [
+    "onLanguage:sysml",
+    "onLanguage:kerml"
+  ]
+}

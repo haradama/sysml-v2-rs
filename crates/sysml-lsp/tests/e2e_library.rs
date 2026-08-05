@@ -138,8 +138,8 @@ fn library_navigation_and_error_paths() {
     );
     assert_eq!(refs.as_array().unwrap().len(), 1);
 
-    // renaming a library element is refused
-    let rename = client.request(
+    // renaming a library element is refused, and says why
+    let rename = client.send_request(
         lsp_types::request::Rename::METHOD,
         json!({
             "textDocument": { "uri": uri },
@@ -147,7 +147,9 @@ fn library_navigation_and_error_paths() {
             "newName": "Something"
         }),
     );
-    assert!(rename.is_null());
+    assert!(rename
+        .error
+        .is_some_and(|e| e.message.contains("outside the open documents")));
 
     // requests that miss return null
     for method in [
@@ -164,8 +166,8 @@ fn library_navigation_and_error_paths() {
         );
         assert!(miss.is_null(), "{method} should miss");
     }
-    // rename with no target
-    let miss = client.request(
+    // rename with no target, and rename to something that is no name
+    let miss = client.send_request(
         lsp_types::request::Rename::METHOD,
         json!({
             "textDocument": { "uri": uri },
@@ -173,7 +175,20 @@ fn library_navigation_and_error_paths() {
             "newName": "x"
         }),
     );
-    assert!(miss.is_null());
+    assert!(miss
+        .error
+        .is_some_and(|e| e.message.contains("nothing to rename")));
+    for (spelling, reason) in [("part", "is a keyword"), ("2nd", "is not a name")] {
+        let refused = client.send_request(
+            lsp_types::request::Rename::METHOD,
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 2, "character": 20 },
+                "newName": spelling
+            }),
+        );
+        assert!(refused.error.is_some_and(|e| e.message.contains(reason)));
+    }
     // workspace symbols: library hit and a miss
     let symbols = client.request(
         lsp_types::request::WorkspaceSymbolRequest::METHOD,

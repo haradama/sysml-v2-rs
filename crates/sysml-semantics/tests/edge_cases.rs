@@ -775,3 +775,12 @@ fn a_dangling_typing_does_not_stop_the_implied_walk() {
             && model.get(child, "subsettedFeature") == Some(&sysml_model::Value::Ref(things))
     }));
 }
+
+#[test]
+fn a_bare_annotation_resolves_to_nothing_quietly() {
+    // error recovery can leave an annotation with no name at all
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file("bare.sysml", "part def A {\n\t@ ;\n}\n");
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0);
+}

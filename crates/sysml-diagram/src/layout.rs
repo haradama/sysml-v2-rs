@@ -122,7 +122,7 @@ fn wrap_layers(
 
 /// Width and height of one box: wide enough for its longest line, tall
 /// enough for the keyword, the name and one line per feature.
-fn box_size(node: &Node, style: &Style) -> (f64, f64) {
+pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     if node.shape == Shape::Initial {
         // a filled circle, sized to read at the same weight as a box border
         let diameter = style.line_height;

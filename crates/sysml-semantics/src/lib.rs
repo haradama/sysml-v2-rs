@@ -513,6 +513,13 @@ impl Workspace {
                 self.resolve_trigger_type(id, &node, &mut stats);
                 continue;
             }
+            // `@rust { ... }` types the metadata usage by its metadata
+            // definition; resolving it is what lets the `:>> attribute`
+            // settings inside reach the definition's attributes
+            if node.kind() == SyntaxKind::METADATA_ANNOTATION {
+                self.resolve_metadata_typing(id, &node, &mut stats);
+                continue;
+            }
             if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
                 continue;
             }
@@ -555,6 +562,40 @@ impl Workspace {
             }
         }
         stats
+    }
+
+    /// Resolve the metadata definition an `@name { ... }` usage is typed
+    /// by, and reify the typing so the settings inside the body resolve
+    /// against the definition's attributes.
+    fn resolve_metadata_typing(
+        &mut self,
+        usage: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let Some(target) = metadata_target(node) else {
+            return;
+        };
+        match self.resolve_from(usage, &target.segments) {
+            Some(def) => {
+                stats.resolved += 1;
+                self.references.push(Reference {
+                    file: self.elem_file.get(&usage).copied().unwrap_or(0),
+                    range: target.range,
+                    name_range: target.name_range,
+                    target: def,
+                });
+                self.reify(usage, false, SyntaxKind::TYPING, def);
+            }
+            None => {
+                stats.unresolved += 1;
+                self.unresolved.push(Unresolved {
+                    file: self.elem_file.get(&usage).copied().unwrap_or(0),
+                    range: target.range,
+                    name: target.segments.join("::"),
+                });
+            }
+        }
     }
 
     /// Resolve a qualified name starting from the scope that contains
@@ -901,6 +942,12 @@ impl Workspace {
         }
         let mut supers = Vec::new();
         if let Some(node) = self.source.get(&elem).cloned() {
+            // an `@name` metadata usage inherits the definition's members
+            if let Some(target) = metadata_target(&node) {
+                if let Some(def) = self.resolve_from(elem, &target.segments) {
+                    push_supertype(&mut supers, elem, def);
+                }
+            }
             for (_, targets) in relationship_parts(&node) {
                 for t in targets {
                     if let Some(target) = self.resolve_from(elem, &t.segments) {
@@ -1537,6 +1584,29 @@ struct Target {
     range: TextRange,
     /// range of the final name segment (what a rename must replace)
     name_range: TextRange,
+}
+
+/// The metadata definition an `@name`/`#name` annotation names: the
+/// qualified name sitting directly under the annotation node.
+fn metadata_target(node: &SyntaxNode) -> Option<Target> {
+    if node.kind() != SyntaxKind::METADATA_ANNOTATION {
+        return None;
+    }
+    let qname = node
+        .children()
+        .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
+    let name_range = qname
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+        .last()
+        .map(|t| t.text_range())
+        .unwrap_or_else(|| qname.text_range());
+    Some(Target {
+        segments: name_segments(&qname),
+        range: qname.text_range(),
+        name_range,
+    })
 }
 
 fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {

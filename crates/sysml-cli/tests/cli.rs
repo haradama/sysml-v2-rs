@@ -155,6 +155,123 @@ fn export_resolves_and_marks_the_library() {
 }
 
 #[test]
+fn import_rust_writes_a_package_from_rustdoc_json() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sysml-import-api/tests/fixtures/inventory_store.rustdoc.json");
+    let dir = temp_dir("import-rust");
+    let out_path = dir.join("api.sysml");
+    let out = sysml(&[
+        "import-rust",
+        fixture.to_str().unwrap(),
+        "--package",
+        "Warehouse",
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("definition(s)"));
+    let written = std::fs::read_to_string(&out_path).unwrap();
+    assert!(written.contains("package Warehouse {"));
+    assert!(written.contains("action def GetStock {"));
+
+    // to stdout without -o
+    let out = sysml(&["import-rust", fixture.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("package InventoryStoreApi {"));
+
+    // a missing file and a broken one are named errors
+    let out = sysml(&["import-rust", dir.join("absent.json").to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+    let bad = write(&dir, "bad.json", "not json");
+    let out = sysml(&["import-rust", bad.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("not JSON"));
+}
+
+#[test]
+fn rustgen_generates_from_the_demo_model() {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let model = repo.join("examples/order-system/model");
+    let dir = temp_dir("rustgen");
+    let out_path = dir.join("generated.rs");
+    let out = sysml(&[
+        "rustgen",
+        model.join("order_system.sysml").to_str().unwrap(),
+        "--library",
+        model.join("InventoryStoreApi.sysml").to_str().unwrap(),
+        "--library",
+        model.join("scalars.kerml").to_str().unwrap(),
+        "-o",
+        out_path.to_str().unwrap(),
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("3 struct(s) and 6 method(s)"));
+    assert!(std::fs::read_to_string(&out_path)
+        .unwrap()
+        .contains("pub struct OrderPlanner"));
+
+    // an unresolved model is refused: generated code would silently miss
+    // whatever did not resolve
+    let broken = write(
+        &dir,
+        "broken.sysml",
+        "part def P {\n\tport x : Nowhere;\n}\n",
+    );
+    let out = sysml(&["rustgen", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unresolved `Nowhere`"));
+
+    // unreadable inputs fail like everywhere else
+    let out = sysml(&["rustgen", dir.join("absent.sysml").to_str().unwrap()]);
+    assert!(!out.status.success());
+    let out = sysml(&[
+        "rustgen",
+        model.join("order_system.sysml").to_str().unwrap(),
+        "--library",
+        dir.join("absent.sysml").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+
+    // a performed API no port provides is a named error
+    let scalars = write(
+        &dir,
+        "scalars.kerml",
+        "package ScalarValues {\n\tabstract datatype String;\n}\n",
+    );
+    let api = write(
+        &dir,
+        "api.sysml",
+        "package Api {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tmetadata def rust { attribute path : String; attribute takesSelf : String; }\n\
+         \taction def Orphan { @rust { :>> path = \"elsewhere::Api::orphan\"; :>> takesSelf = \"&self\"; } }\n\
+         }\n",
+    );
+    let system = write(
+        &dir,
+        "system.sysml",
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tpart def Node {\n\t\tperform action stray : Orphan;\n\t}\n}\n",
+    );
+    let out = sysml(&[
+        "rustgen",
+        system.to_str().unwrap(),
+        "--library",
+        api.to_str().unwrap(),
+        "--library",
+        scalars.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no port of the part"));
+}
+
+#[test]
 fn fmt_formats_checks_and_writes() {
     let dir = temp_dir("fmt");
     let messy = write(&dir, "messy.sysml", "package   P{part def A;}");
@@ -480,4 +597,111 @@ fn no_arguments_prints_usage() {
     let out = sysml(&[]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("Usage"));
+}
+
+#[test]
+fn diagram_can_let_graphviz_lay_out_the_boxes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("diagram-graphviz");
+    let model = write(
+        &dir,
+        "model.sysml",
+        "part def PowerSource;\npart def Engine :> PowerSource;\n",
+    );
+    let fake = dir.join("fake-dot");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\ncat >/dev/null\n\
+         printf 'graph 1 6 2\\n'\n\
+         printf 'node n0 1.5 1 1 1\\n'\n\
+         printf 'node n1 4 1 1 1\\n'\n\
+         printf 'stop\\n'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--graphviz",
+        "--dot",
+        fake.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // the fake's 6in x 2in canvas, not the built-in layered one
+    assert!(stdout.contains("height=\"176\""), "{stdout}");
+
+    // a missing dot is an error that says what to install
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--graphviz",
+        "--dot",
+        "/nonexistent/graphviz/dot",
+    ]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("is Graphviz installed?"), "{stderr}");
+}
+
+#[test]
+fn json_reports_what_a_program_works_from() {
+    let dir = temp_dir("json");
+    let ok = write(&dir, "ok.sysml", OK_MODEL);
+    let broken = write(
+        &dir,
+        "broken.sysml",
+        "package P {\n\tpart def A;\n\tpart b : Missing;\n",
+    );
+    let json = |out: &Output| -> serde_json::Value {
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON document")
+    };
+
+    // a syntax error, placed where an editor counts from one
+    let out = sysml(&["--format", "json", "parse", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json(&out);
+    assert_eq!(v["command"], "parse");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["files"][0]["errors"][0]["line"], 4);
+    assert!(v["files"][0]["errors"][0]["message"].is_string());
+
+    // an unresolved reference, by name and place
+    let out = sysml(&["--format", "json", "check", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json(&out);
+    assert_eq!(v["command"], "check");
+    assert_eq!(v["unresolved"][0]["name"], "Missing");
+    assert_eq!(v["unresolved"][0]["line"], 3);
+    assert_eq!(v["unresolved"][0]["column"], 11);
+
+    // and nothing to say, said the same way
+    let out = sysml(&["--format", "json", "check", ok.to_str().unwrap()]);
+    assert!(out.status.success());
+    let v = json(&out);
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["unresolved"].as_array().unwrap().len(), 0);
+
+    let out = sysml(&["--format", "json", "stats", ok.to_str().unwrap()]);
+    assert!(out.status.success());
+    let v = json(&out);
+    assert_eq!(v["counts"]["PartDefinition"], 1);
+    assert_eq!(v["parseErrors"], 0);
+
+    // a file that cannot be read is a finding, not a stray line
+    let out = sysml(&["--format", "json", "parse", "no-such-file.sysml"]);
+    assert!(!out.status.success());
+    assert!(json(&out)["files"][0]["unreadable"].is_string());
+
+    // fmt --check names the files a program would rewrite
+    let ugly = write(&dir, "ugly.sysml", "package  P {  }\n");
+    let out = sysml(&["--format", "json", "fmt", "--check", ugly.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json(&out);
+    assert_eq!(v["command"], "fmt");
+    assert_eq!(v["unformatted"].as_array().unwrap().len(), 1);
+    let out = sysml(&["--format", "json", "fmt", "--check", ok.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert_eq!(json(&out)["ok"], true);
 }

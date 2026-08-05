@@ -52,6 +52,12 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         COMMENT_ELEM => Some(ElementKind::Comment),
         REP => Some(ElementKind::TextualRepresentation),
         METADATA_ANNOTATION => Some(ElementKind::MetadataUsage),
+        // `mass * speed` ending a calculation body -- the result
+        // expression, kept as the text the author wrote the way a guard
+        // is. `if c { ... }` structured control is not a result.
+        EXPR_STMT if node.children().all(|child| child.kind() != BODY) => {
+            Some(ElementKind::Expression)
+        }
         _ => None,
     };
 
@@ -111,6 +117,12 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if kind == ElementKind::TextualRepresentation {
         if let Some(lang) = string_token(node) {
             model.set(id, "language", Value::String(lang));
+        }
+    }
+    if kind == ElementKind::Expression && node.kind() == EXPR_STMT {
+        model.set_member_role(id, "result");
+        if let Some(written) = node.children().next() {
+            represent_textually(model, id, written.text().to_string().trim());
         }
     }
     if kind == ElementKind::TransitionUsage {
@@ -279,8 +291,30 @@ fn value_expression(model: &mut Model, membership: ElementId, written: &SyntaxNo
 }
 
 /// The literal a value clause holds, when it holds one this model reifies.
+/// `-2` arrives as a unary minus around the literal and is folded here.
 fn literal_value(written: &SyntaxNode) -> Option<(ElementKind, Value)> {
     use SyntaxKind::*;
+    if written.kind() == UNARY_EXPR {
+        let mut parts = written.children_with_tokens().filter(|part| {
+            !part
+                .as_token()
+                .is_some_and(|token| token.kind().is_trivia())
+        });
+        let minus = parts.next()?.into_token()?.kind() == MINUS;
+        let inner = parts.next()?.into_node()?;
+        if !minus || parts.next().is_some() {
+            return None;
+        }
+        return match literal_value(&inner)? {
+            (ElementKind::LiteralInteger, Value::Int(int)) => {
+                Some((ElementKind::LiteralInteger, Value::Int(-int)))
+            }
+            (ElementKind::LiteralRational, Value::Real(real)) => {
+                Some((ElementKind::LiteralRational, Value::Real(-real)))
+            }
+            _ => None,
+        };
+    }
     if written.kind() != LITERAL {
         return None;
     }
@@ -858,6 +892,31 @@ mod tests {
     }
 
     #[test]
+    fn a_trailing_expression_becomes_the_result_member() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "calc def Momentum {\n\tin mass : Real;\n\tin speed : Real;\n\tmass * speed\n}\n",
+        ));
+        let result = *model.owned(roots[0]).last().unwrap();
+        assert_eq!(model.kind(result), ElementKind::Expression);
+        assert_eq!(model.member_role(result), Some("result"));
+        let written = model.owned(result)[0];
+        assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("mass * speed")
+        );
+
+        // structured control (`if c { ... }`) is a statement, not a result
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def Act {\n\tif ready { action a; }\n}\n",
+        ));
+        assert!(model
+            .owned(roots[0])
+            .iter()
+            .all(|&child| model.kind(child) != ElementKind::Expression));
+    }
+
+    #[test]
     fn a_value_that_is_not_a_literal_is_kept_as_text() {
         let (model, roots) = build_model(&sysml_syntax::parse(
             "part def V {\n\tattribute a = 2 + b;\n\tattribute c = false;\n}\n",
@@ -886,6 +945,28 @@ mod tests {
         let n = model.owned(roots[0])[0];
         let kept = reference(&model, model.owned(n)[0], "value").unwrap();
         assert_eq!(model.kind(kept), ElementKind::Expression);
+    }
+
+    #[test]
+    fn a_negative_default_is_still_a_literal() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def M {\n\tattribute shift = -2;\n\tattribute drop = -1.5;\n\tattribute odd = -true;\n}\n",
+        ));
+        let value_of = |at: usize| {
+            let attribute = model.owned(roots[0])[at];
+            let literal = reference(&model, model.owned(attribute)[0], "value").unwrap();
+            (model.kind(literal), model.get(literal, "value").cloned())
+        };
+        assert_eq!(
+            value_of(0),
+            (ElementKind::LiteralInteger, Some(Value::Int(-2)))
+        );
+        assert_eq!(
+            value_of(1),
+            (ElementKind::LiteralRational, Some(Value::Real(-1.5)))
+        );
+        // a minus on something that is not a number stays an expression
+        assert_eq!(value_of(2).0, ElementKind::Expression);
     }
 
     /// The element a property points at, when it points at one.

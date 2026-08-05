@@ -1,0 +1,11 @@
+[package]
+name = "order-system"
+description = "Demo: a system modeled in SysML, generated into Rust, calling an existing in-house API"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+inventory-store = { path = "../../crates/sysml-import-api/tests/fixtures/inventory-store" }
+
+[workspace]

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SysML v2",
+  "scopeName": "source.sysml",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.sysml",
+          "begin": "/\\*\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.block.sysml",
+          "begin": "/\\*",
+          "end": "\\*/"
+        },
+        {
+          "name": "comment.line.double-slash.sysml",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.sysml",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.sysml",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "entity.name.type.quoted.sysml",
+          "match": "'[^']*'"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.metadata.sysml",
+          "match": "#[A-Za-z_][A-Za-z0-9_]*"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.sysml",
+          "match": "\\b\\d+(\\.\\d+)?([eE][+-]?\\d+)?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "constant.language.sysml",
+          "match": "\\b(false|true|null)\\b"
+        },
+        {
+          "name": "keyword.declaration.sysml",
+          "match": "\\b(multiplicity|verification|interaction|requirement|allocation|classifier|connection|constraint|dependency|occurrence|succession|attribute|connector|interface|metaclass|namespace|predicate|rendering|viewpoint|analysis|behavior|datatype|function|metadata|binding|comment|concern|feature|library|package|action|struct|alias|assoc|class|state|calc|case|enum|expr|flow|item|part|port|step|type|view|def|doc|rep|use)\\b"
+        },
+        {
+          "name": "keyword.control.sysml",
+          "match": "\\b(stakeholder|transition|objective|terminate|variation|allocate|parallel|connect|exhibit|include|perform|require|satisfy|subject|trigger|variant|accept|assert|assign|assume|decide|effect|expose|filter|import|return|verify|actor|entry|event|first|frame|guard|merge|until|while|bind|else|exit|fork|join|loop|send|then|when|for|do|if)\\b"
+        },
+        {
+          "name": "keyword.operator.wordlike.sysml",
+          "match": "\\b(differences|specializes|conjugates|intersects|references|redefines|disjoint|featured|crosses|defined|hastype|implies|subsets|chains|istype|unions|about|typed|from|meta|and|not|via|xor|as|by|of|or|to)\\b"
+        },
+        {
+          "name": "storage.modifier.sysml",
+          "match": "\\b(specialization|subclassifier|redefinition|conjugation|assumption|disjoining|individual|composite|conjugate|featuring|inverting|nonunique|protected|timeslice|abstract|constant|language|snapshot|standard|default|derived|inverse|message|ordered|portion|private|subtype|locale|member|public|render|subset|typing|after|const|inout|bool|all|end|inv|new|out|ref|var|at|in)\\b"
+        },
+        {
+          "name": "keyword.operator.sysml",
+          "match": ":>>|::>|:>|:=|::|\\.\\.|=|\\[|\\]|~|\\^"
+        }
+      ]
+    }
+  }
+}

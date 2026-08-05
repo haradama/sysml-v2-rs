@@ -56,3 +56,25 @@ Cargo.lock
 # local working notes (not part of the repository)
 /DESIGN.md
 *.svg
+
+# VSCode extension build artifacts
+/editors/vscode/node_modules/
+/editors/vscode/out/
+/editors/vscode/package-lock.json
+/editors/vscode/*.vsix
+/editors/vscode/server/
+/editors/vscode/library/
+
+# the importer fixture is a standalone crate; only its source is tracked
+/crates/sysml-import-api/tests/fixtures/*/target/
+/crates/sysml-import-api/tests/fixtures/*/Cargo.lock
+
+# the demo crate builds standalone
+/examples/order-system/target/
+/examples/order-system/Cargo.lock
+
+# the project's own Claude Code configuration is shared with the team,
+# even where a global ignore excludes `.claude` (a directory has to be
+# un-ignored before anything in it can be)
+!.claude/
+!.claude/**

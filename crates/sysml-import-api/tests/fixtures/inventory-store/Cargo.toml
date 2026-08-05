@@ -1,0 +1,11 @@
+[package]
+name = "inventory-store"
+description = "Fixture: an in-house Rust API surface for sysml-import-api tests"
+version = "2.3.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]

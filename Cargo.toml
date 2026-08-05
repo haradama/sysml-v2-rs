@@ -5,6 +5,8 @@ members = [
     "crates/sysml-model",
     "crates/sysml-semantics",
     "crates/sysml-interchange",
+    "crates/sysml-import-api",
+    "crates/sysml-rustgen",
     "crates/sysml-diagram",
     "crates/sysml-api-client",
     "crates/sysml-lsp",
@@ -13,7 +15,11 @@ members = [
 ]
 # a development helper for looking at the generated diagrams: it pulls in a
 # rasterizer the published crates must not depend on
-exclude = ["tools/render"]
+exclude = [
+    "tools/render",
+    "crates/sysml-import-api/tests/fixtures/inventory-store",
+    "examples/order-system",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -34,5 +40,7 @@ sysml-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
 sysml-model = { path = "crates/sysml-model", version = "0.1.0" }
 sysml-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
 sysml-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
+sysml-import-api = { path = "crates/sysml-import-api", version = "0.1.0" }
+sysml-rustgen = { path = "crates/sysml-rustgen", version = "0.1.0" }
 sysml-diagram = { path = "crates/sysml-diagram", version = "0.1.0" }
 sysml-api-client = { path = "crates/sysml-api-client", version = "0.1.0" }

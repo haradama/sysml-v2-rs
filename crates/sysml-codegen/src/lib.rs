@@ -7,7 +7,7 @@
 //! only needs to run again when the vendored metamodel is updated; a test
 //! keeps the committed file in sync with the vendored metamodel.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -489,5 +489,278 @@ fn generate(
         writeln!(w).unwrap();
     }
 
+    accessors(classes, enums, w);
+
     o
+}
+
+/// The metamodel's features as typed accessors on `Model`, one per
+/// distinct feature name: `model.declared_name(id)` instead of
+/// `model.get(id, "declaredName")?.as_str()`, and the property name
+/// spelled once here rather than at every call.
+///
+/// A name declared with different multiplicities by different metaclasses
+/// takes the slice form, which answers for both. A name that would
+/// collide with one of `Model`'s own methods is left out and said so, so
+/// that the hand-written meaning wins.
+fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, w: &mut String) {
+    /// `Model`'s hand-written inherent methods, which a generated
+    /// accessor must not shadow.
+    const TAKEN: &[&str] = &[
+        "add_owned",
+        "create",
+        "descendants",
+        "get",
+        "ids",
+        "is_empty",
+        "kind",
+        "len",
+        "member_role",
+        "member_visibility",
+        "name",
+        "new",
+        "owned",
+        "owner",
+        "props",
+        "set",
+        "set_member_role",
+        "set_member_visibility",
+    ];
+
+    // by feature name: the shapes it is declared with, and one metaclass
+    // that declares it (for the documentation)
+    let mut features: BTreeMap<&str, Declared<'_>> = BTreeMap::new();
+    for (class_name, class) in classes {
+        for f in &class.features {
+            let shape = match &f.ty {
+                FeatureTy::Data(d) => (*d).to_string(),
+                FeatureTy::Named(n) if enums.contains_key(n) => "Enumeration".to_string(),
+                FeatureTy::Named(_) => "Class".to_string(),
+            };
+            features
+                .entry(f.name.as_str())
+                .or_insert_with(|| (BTreeSet::new(), class_name.as_str()))
+                .0
+                .insert((shape, f.many));
+        }
+    }
+
+    writeln!(w, "use crate::{{ElementId, Model, Value}};").unwrap();
+    writeln!(w).unwrap();
+    writeln!(w, "impl Model {{").unwrap();
+    let mut written: Vec<Written<'_>> = Vec::new();
+    for (name, (shapes, declared_by)) in &features {
+        let method = snake(name);
+        if TAKEN.contains(&method.as_str()) {
+            writeln!(
+                w,
+                "    // `{name}` is left to `Model::{method}`, which is written by hand"
+            )
+            .unwrap();
+            continue;
+        }
+        let kinds: BTreeSet<&str> = shapes.iter().map(|(kind, _)| kind.as_str()).collect();
+        let many = shapes.iter().any(|(_, many)| *many);
+        // one name, one type: a feature declared as two different things
+        // has no one accessor to be
+        if kinds.len() != 1 {
+            writeln!(
+                w,
+                "    // `{name}` is declared as {} different types; no one accessor fits",
+                kinds.len()
+            )
+            .unwrap();
+            continue;
+        }
+        let kind = *kinds.iter().next().expect("just counted one");
+        // a feature named `type` is still a feature; Rust just needs
+        // telling that it is a name here
+        let method = escape(&method);
+        writeln!(w, "    /// `{name}`, as {declared_by} declares it.").unwrap();
+        match (kind, many) {
+            ("Class", false) => {
+                writeln!(
+                    w,
+                    "    pub fn {method}(&self, id: ElementId) -> Option<ElementId> {{"
+                )
+                .unwrap();
+                writeln!(
+                    w,
+                    "        match self.get(id, \"{name}\") {{ Some(Value::Ref(to)) => Some(*to), _ => None }}"
+                )
+                .unwrap();
+            }
+            ("Class", true) => {
+                writeln!(
+                    w,
+                    "    pub fn {method}(&self, id: ElementId) -> &[ElementId] {{"
+                )
+                .unwrap();
+                // the singular declaration of the same name answers as a
+                // slice of one, so both readings hold
+                writeln!(w, "        match self.get(id, \"{name}\") {{").unwrap();
+                writeln!(w, "            Some(Value::RefList(list)) => list,").unwrap();
+                writeln!(
+                    w,
+                    "            Some(Value::Ref(to)) => std::slice::from_ref(to),"
+                )
+                .unwrap();
+                writeln!(w, "            _ => &[],").unwrap();
+                writeln!(w, "        }}").unwrap();
+            }
+            ("Boolean", _) => {
+                writeln!(w, "    pub fn {method}(&self, id: ElementId) -> bool {{").unwrap();
+                writeln!(
+                    w,
+                    "        matches!(self.get(id, \"{name}\"), Some(Value::Bool(true)))"
+                )
+                .unwrap();
+            }
+            ("Integer" | "UnlimitedNatural", _) => {
+                writeln!(
+                    w,
+                    "    pub fn {method}(&self, id: ElementId) -> Option<i64> {{"
+                )
+                .unwrap();
+                writeln!(
+                    w,
+                    "        match self.get(id, \"{name}\") {{ Some(Value::Int(n)) => Some(*n), _ => None }}"
+                )
+                .unwrap();
+            }
+            ("Real", _) => {
+                writeln!(
+                    w,
+                    "    pub fn {method}(&self, id: ElementId) -> Option<f64> {{"
+                )
+                .unwrap();
+                writeln!(
+                    w,
+                    "        match self.get(id, \"{name}\") {{ Some(Value::Real(x)) => Some(*x), _ => None }}"
+                )
+                .unwrap();
+            }
+            // a string or an enumeration literal reads the same way, and
+            // the model holds no list of either
+            _ => {
+                writeln!(
+                    w,
+                    "    pub fn {method}(&self, id: ElementId) -> Option<&str> {{"
+                )
+                .unwrap();
+                writeln!(w, "        self.get(id, \"{name}\")?.as_str()").unwrap();
+            }
+        }
+        writeln!(w, "    }}").unwrap();
+        written.push(Written {
+            method,
+            feature: name,
+            declared_by,
+            kind,
+            many,
+        });
+    }
+    writeln!(w, "}}").unwrap();
+    writeln!(w).unwrap();
+
+    // Every accessor is answered for twice: once by an element that
+    // declares nothing, and once by one carrying the value it reads.
+    // That keeps generated code as executed as it is written, which is
+    // what this repository gates on.
+    writeln!(w, "#[cfg(test)]").unwrap();
+    writeln!(w, "mod accessor_tests {{").unwrap();
+    writeln!(w, "    use super::*;").unwrap();
+    writeln!(w).unwrap();
+    writeln!(w, "    #[test]").unwrap();
+    writeln!(w, "    fn every_accessor_answers_for_an_empty_element() {{").unwrap();
+    writeln!(w, "        let mut model = Model::new();").unwrap();
+    writeln!(w, "        let id = model.create(ElementKind::Namespace);").unwrap();
+    for entry in &written {
+        writeln!(w, "        let _ = model.{}(id);", entry.method).unwrap();
+    }
+    writeln!(w, "    }}").unwrap();
+    writeln!(w).unwrap();
+    writeln!(w, "    #[test]").unwrap();
+    writeln!(w, "    fn every_accessor_reads_back_what_was_set() {{").unwrap();
+    writeln!(w, "        let mut model = Model::new();").unwrap();
+    writeln!(
+        w,
+        "        let other = model.create(ElementKind::Namespace);"
+    )
+    .unwrap();
+    for entry in &written {
+        let (feature, declared_by, method) = (entry.feature, entry.declared_by, &entry.method);
+        writeln!(
+            w,
+            "        let id = model.create(ElementKind::{declared_by});"
+        )
+        .unwrap();
+        let value = match entry.kind {
+            "Class" => "Value::Ref(other)".to_string(),
+            "Boolean" => "Value::Bool(true)".to_string(),
+            "Integer" | "UnlimitedNatural" => "Value::Int(1)".to_string(),
+            "Real" => "Value::Real(1.0)".to_string(),
+            _ => format!("Value::String(String::from({}))", "\"x\""),
+        };
+        if entry.kind == "Class" && entry.many {
+            // a name declared each way is read both ways
+            writeln!(
+                w,
+                "        model.set(id, \"{feature}\", Value::RefList(vec![other]));"
+            )
+            .unwrap();
+            writeln!(w, "        let _ = model.{method}(id);").unwrap();
+        }
+        writeln!(w, "        model.set(id, \"{feature}\", {value});").unwrap();
+        writeln!(w, "        let _ = model.{method}(id);").unwrap();
+    }
+    writeln!(w, "    }}").unwrap();
+    writeln!(w, "}}").unwrap();
+}
+
+/// One generated accessor, and what a test needs in order to exercise it.
+struct Written<'a> {
+    method: String,
+    feature: &'a str,
+    declared_by: &'a str,
+    kind: &'a str,
+    many: bool,
+}
+
+/// How one feature name is declared across the metaclasses: every
+/// (type, multiplicity) it appears with, and one metaclass declaring it.
+type Declared<'a> = (BTreeSet<(String, bool)>, &'a str);
+
+/// Out of the way of the words Rust has taken. The metamodel names
+/// nothing `self`, `crate` or `super`, which are the words no `r#` can
+/// rescue, so a raw identifier always serves.
+fn escape(name: &str) -> String {
+    const RESERVED: [&str; 47] = [
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do",
+        "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let",
+        "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
+        "static", "struct", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
+        "virtual", "where", "while", "yield",
+    ];
+    if RESERVED.contains(&name) {
+        format!("r#{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// `declaredName` -> `declared_name`.
+fn snake(name: &str) -> String {
+    let mut out = String::new();
+    for (at, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if at > 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

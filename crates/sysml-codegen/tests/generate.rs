@@ -58,6 +58,18 @@ fn generates_a_minimal_metamodel() {
              <ownedAttribute xmi:id="Sub-kind" xmi:type="uml:Property" name="kind">
                <type xmi:idref="Color"/>
              </ownedAttribute>
+             <ownedAttribute xmi:id="Sub-count" xmi:type="uml:Property" name="count">
+               <type href="https://www.omg.org/spec/UML/20161101/PrimitiveTypes.xmi#Integer"/>
+             </ownedAttribute>
+             <ownedAttribute xmi:id="Sub-ratio" xmi:type="uml:Property" name="ratio">
+               <type href="https://www.omg.org/spec/UML/20161101/PrimitiveTypes.xmi#Real"/>
+             </ownedAttribute>
+             <ownedAttribute xmi:id="Sub-label" xmi:type="uml:Property" name="label">
+               <type href="https://www.omg.org/spec/UML/20161101/PrimitiveTypes.xmi#String"/>
+             </ownedAttribute>
+             <ownedAttribute xmi:id="Sub-type" xmi:type="uml:Property" name="type">
+               <type xmi:idref="Thing"/>
+             </ownedAttribute>
            </packagedElement>
            <packagedElement xmi:id="Color" xmi:type="uml:Enumeration" name="Color">
              <ownedLiteral xmi:id="Color-red" name="red"/>
@@ -73,6 +85,16 @@ fn generates_a_minimal_metamodel() {
         r#"FeatureMeta { name: "items", ty: FeatureType::Class(ElementKind::Thing), many: true, derived: true }"#
     ));
     assert!(code.contains(r#"Color::Red => "red""#));
+    // the metamodel's features as typed accessors, one per shape
+    assert!(code.contains("pub fn flag(&self, id: ElementId) -> bool {"));
+    assert!(code.contains("pub fn count(&self, id: ElementId) -> Option<i64> {"));
+    assert!(code.contains("pub fn ratio(&self, id: ElementId) -> Option<f64> {"));
+    assert!(code.contains("pub fn label(&self, id: ElementId) -> Option<&str> {"));
+    assert!(code.contains("pub fn items(&self, id: ElementId) -> &[ElementId] {"));
+    // a feature named for a keyword is still a feature
+    assert!(code.contains("pub fn r#type(&self, id: ElementId) -> Option<ElementId> {"));
+    // and one that would shadow a hand-written method is left alone
+    assert!(code.contains("// `kind` is left to `Model::kind`"));
 }
 
 #[test]

@@ -32,11 +32,13 @@
 //! ```
 
 mod browser;
+mod dot;
 mod graph;
 mod layout;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
+pub use dot::{graphviz_layout, GraphvizError};
 pub use graph::{
     definition_diagram, interconnection_diagram, Diagram, Edge, Feature, Node, Relation, Shape,
 };
@@ -67,8 +69,8 @@ pub struct Style {
 impl Default for Style {
     fn default() -> Style {
         Style {
-            font_size: 13.0,
-            line_height: 18.0,
+            font_size: 12.0,
+            line_height: 17.0,
             padding: 10.0,
             h_gap: 32.0,
             v_gap: 56.0,
@@ -91,6 +93,22 @@ impl Style {
 /// Lay `diagram` out and render it as a standalone SVG document.
 pub fn render(diagram: &Diagram, style: &Style) -> String {
     to_svg(diagram, &layout(diagram, style), style)
+}
+
+/// Like [`render`], but let Graphviz decide the positions -- `command`
+/// names the `dot` binary. PlantUML-style: only the layout comes from
+/// Graphviz; boxes, edges and labels are still drawn here, so the two
+/// engines produce the same visual language.
+pub fn render_with_graphviz(
+    diagram: &Diagram,
+    style: &Style,
+    command: &str,
+) -> Result<String, GraphvizError> {
+    Ok(to_svg(
+        diagram,
+        &graphviz_layout(diagram, style, command)?,
+        style,
+    ))
 }
 
 /// Render a browser view as a standalone SVG document.
@@ -118,7 +136,7 @@ mod tests {
         assert_eq!(style.text_width(""), 0.0);
 
         let bigger = Style {
-            font_size: 26.0,
+            font_size: 24.0,
             ..Style::default()
         };
         assert_eq!(bigger.text_width("m"), 2.0 * style.text_width("m"));

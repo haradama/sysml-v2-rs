@@ -2096,3 +2096,3672 @@ impl VisibilityKind {
     }
 }
 
+use crate::{ElementId, Model, Value};
+
+impl Model {
+    /// `action`, as ActionDefinition declares it.
+    pub fn action(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "action") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `actionDefinition`, as ActionUsage declares it.
+    pub fn action_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "actionDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `actorParameter`, as CaseDefinition declares it.
+    pub fn actor_parameter(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "actorParameter") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `aliasIds`, as Element declares it.
+    pub fn alias_ids(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "aliasIds")?.as_str()
+    }
+    /// `allocation`, as AllocationDefinition declares it.
+    pub fn allocation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "allocation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `allocationDefinition`, as AllocationUsage declares it.
+    pub fn allocation_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "allocationDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `analysisCaseDefinition`, as AnalysisCaseUsage declares it.
+    pub fn analysis_case_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "analysisCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `annotatedElement`, as AnnotatingElement declares it.
+    pub fn annotated_element(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "annotatedElement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `annotatingElement`, as Annotation declares it.
+    pub fn annotating_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "annotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `annotation`, as AnnotatingElement declares it.
+    pub fn annotation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "annotation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `argument`, as InstantiationExpression declares it.
+    pub fn argument(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "argument") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `assertedConstraint`, as AssertConstraintUsage declares it.
+    pub fn asserted_constraint(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "assertedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `association`, as Connector declares it.
+    pub fn association(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "association") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `associationEnd`, as Association declares it.
+    pub fn association_end(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "associationEnd") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `assumedConstraint`, as RequirementDefinition declares it.
+    pub fn assumed_constraint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "assumedConstraint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `attributeDefinition`, as AttributeUsage declares it.
+    pub fn attribute_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "attributeDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `behavior`, as Step declares it.
+    pub fn behavior(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "behavior") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `body`, as Comment declares it.
+    pub fn body(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "body")?.as_str()
+    }
+    /// `bodyAction`, as LoopActionUsage declares it.
+    pub fn body_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "bodyAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `bound`, as MultiplicityRange declares it.
+    pub fn bound(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "bound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `calculation`, as CalculationDefinition declares it.
+    pub fn calculation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "calculation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `calculationDefinition`, as CalculationUsage declares it.
+    pub fn calculation_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "calculationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `caseDefinition`, as CaseUsage declares it.
+    pub fn case_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "caseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `chainingFeature`, as Feature declares it.
+    pub fn chaining_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "chainingFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `client`, as Dependency declares it.
+    pub fn client(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "client") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `concernDefinition`, as ConcernUsage declares it.
+    pub fn concern_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "concernDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `condition`, as ElementFilterMembership declares it.
+    pub fn condition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "condition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `conjugatedPortDefinition`, as ConjugatedPortTyping declares it.
+    pub fn conjugated_port_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "conjugatedPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `conjugatedType`, as Conjugation declares it.
+    pub fn conjugated_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "conjugatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `connectionDefinition`, as ConnectionUsage declares it.
+    pub fn connection_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "connectionDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `connectionEnd`, as ConnectionDefinition declares it.
+    pub fn connection_end(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "connectionEnd") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `connectorEnd`, as Connector declares it.
+    pub fn connector_end(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "connectorEnd") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `constraintDefinition`, as ConstraintUsage declares it.
+    pub fn constraint_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "constraintDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `crossFeature`, as Feature declares it.
+    pub fn cross_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "crossFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `crossedFeature`, as CrossSubsetting declares it.
+    pub fn crossed_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "crossedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `crossingFeature`, as CrossSubsetting declares it.
+    pub fn crossing_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "crossingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `declaredName`, as Element declares it.
+    pub fn declared_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "declaredName")?.as_str()
+    }
+    /// `declaredShortName`, as Element declares it.
+    pub fn declared_short_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "declaredShortName")?.as_str()
+    }
+    /// `defaultFeaturingType`, as Connector declares it.
+    pub fn default_featuring_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "defaultFeaturingType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `definition`, as Usage declares it.
+    pub fn definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "definition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `differencingType`, as Differencing declares it.
+    pub fn differencing_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "differencingType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `directedFeature`, as Type declares it.
+    pub fn directed_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "directedFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `directedUsage`, as Definition declares it.
+    pub fn directed_usage(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "directedUsage") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `direction`, as Feature declares it.
+    pub fn direction(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "direction")?.as_str()
+    }
+    /// `disjoiningType`, as Disjoining declares it.
+    pub fn disjoining_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "disjoiningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `doAction`, as StateDefinition declares it.
+    pub fn do_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "doAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `documentation`, as Element declares it.
+    pub fn documentation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "documentation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `documentedElement`, as Documentation declares it.
+    pub fn documented_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "documentedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `effectAction`, as TransitionUsage declares it.
+    pub fn effect_action(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "effectAction") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `elementId`, as Element declares it.
+    pub fn element_id(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "elementId")?.as_str()
+    }
+    /// `elseAction`, as IfActionUsage declares it.
+    pub fn else_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "elseAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `endFeature`, as Type declares it.
+    pub fn end_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "endFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `endOwningType`, as Feature declares it.
+    pub fn end_owning_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "endOwningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `entryAction`, as StateDefinition declares it.
+    pub fn entry_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "entryAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `enumeratedValue`, as EnumerationDefinition declares it.
+    pub fn enumerated_value(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "enumeratedValue") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `enumerationDefinition`, as EnumerationUsage declares it.
+    pub fn enumeration_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "enumerationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `eventOccurrence`, as EventOccurrenceUsage declares it.
+    pub fn event_occurrence(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "eventOccurrence") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `exhibitedState`, as ExhibitStateUsage declares it.
+    pub fn exhibited_state(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "exhibitedState") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `exitAction`, as StateDefinition declares it.
+    pub fn exit_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "exitAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `exposedElement`, as ViewUsage declares it.
+    pub fn exposed_element(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "exposedElement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `expression`, as Function declares it.
+    pub fn expression(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "expression") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `feature`, as Type declares it.
+    pub fn feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "feature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `featureChained`, as FeatureChaining declares it.
+    pub fn feature_chained(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "featureChained") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `featureInverted`, as FeatureInverting declares it.
+    pub fn feature_inverted(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "featureInverted") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `featureMembership`, as Type declares it.
+    pub fn feature_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "featureMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `featureOfType`, as TypeFeaturing declares it.
+    pub fn feature_of_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "featureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `featureTarget`, as Feature declares it.
+    pub fn feature_target(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "featureTarget") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `featureWithValue`, as FeatureValue declares it.
+    pub fn feature_with_value(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "featureWithValue") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `featuringType`, as Feature declares it.
+    pub fn featuring_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "featuringType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `filterCondition`, as Package declares it.
+    pub fn filter_condition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "filterCondition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `flowDefinition`, as FlowUsage declares it.
+    pub fn flow_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "flowDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `flowEnd`, as Flow declares it.
+    pub fn flow_end(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "flowEnd") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `framedConcern`, as RequirementDefinition declares it.
+    pub fn framed_concern(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "framedConcern") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `function`, as Expression declares it.
+    pub fn function(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "function") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `general`, as Specialization declares it.
+    pub fn general(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "general") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `guardExpression`, as TransitionUsage declares it.
+    pub fn guard_expression(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "guardExpression") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ifArgument`, as IfActionUsage declares it.
+    pub fn if_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ifArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `importOwningNamespace`, as Import declares it.
+    pub fn import_owning_namespace(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "importOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `importedElement`, as Import declares it.
+    pub fn imported_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "importedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `importedMembership`, as MembershipImport declares it.
+    pub fn imported_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "importedMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `importedNamespace`, as NamespaceImport declares it.
+    pub fn imported_namespace(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "importedNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `includedUseCase`, as UseCaseDefinition declares it.
+    pub fn included_use_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "includedUseCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `individualDefinition`, as OccurrenceUsage declares it.
+    pub fn individual_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "individualDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `inheritedFeature`, as Type declares it.
+    pub fn inherited_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "inheritedFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `inheritedMembership`, as Type declares it.
+    pub fn inherited_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "inheritedMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `input`, as Type declares it.
+    pub fn input(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "input") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `instantiatedType`, as InstantiationExpression declares it.
+    pub fn instantiated_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "instantiatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `interaction`, as Flow declares it.
+    pub fn interaction(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "interaction") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `interfaceDefinition`, as InterfaceUsage declares it.
+    pub fn interface_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "interfaceDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `interfaceEnd`, as InterfaceDefinition declares it.
+    pub fn interface_end(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "interfaceEnd") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `intersectingType`, as Intersecting declares it.
+    pub fn intersecting_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "intersectingType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `invertingFeature`, as FeatureInverting declares it.
+    pub fn inverting_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "invertingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `isAbstract`, as Type declares it.
+    pub fn is_abstract(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isAbstract"), Some(Value::Bool(true)))
+    }
+    /// `isComposite`, as Feature declares it.
+    pub fn is_composite(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isComposite"), Some(Value::Bool(true)))
+    }
+    /// `isConjugated`, as Type declares it.
+    pub fn is_conjugated(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isConjugated"), Some(Value::Bool(true)))
+    }
+    /// `isConstant`, as Feature declares it.
+    pub fn is_constant(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isConstant"), Some(Value::Bool(true)))
+    }
+    /// `isDefault`, as FeatureValue declares it.
+    pub fn is_default(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isDefault"), Some(Value::Bool(true)))
+    }
+    /// `isDerived`, as Feature declares it.
+    pub fn is_derived(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isDerived"), Some(Value::Bool(true)))
+    }
+    /// `isEnd`, as Feature declares it.
+    pub fn is_end(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isEnd"), Some(Value::Bool(true)))
+    }
+    /// `isImplied`, as Relationship declares it.
+    pub fn is_implied(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isImplied"), Some(Value::Bool(true)))
+    }
+    /// `isImpliedIncluded`, as Element declares it.
+    pub fn is_implied_included(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isImpliedIncluded"), Some(Value::Bool(true)))
+    }
+    /// `isImportAll`, as Expose declares it.
+    pub fn is_import_all(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isImportAll"), Some(Value::Bool(true)))
+    }
+    /// `isIndividual`, as OccurrenceDefinition declares it.
+    pub fn is_individual(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isIndividual"), Some(Value::Bool(true)))
+    }
+    /// `isInitial`, as FeatureValue declares it.
+    pub fn is_initial(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isInitial"), Some(Value::Bool(true)))
+    }
+    /// `isLibraryElement`, as Element declares it.
+    pub fn is_library_element(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isLibraryElement"), Some(Value::Bool(true)))
+    }
+    /// `isModelLevelEvaluable`, as Expression declares it.
+    pub fn is_model_level_evaluable(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isModelLevelEvaluable"), Some(Value::Bool(true)))
+    }
+    /// `isNegated`, as Invariant declares it.
+    pub fn is_negated(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isNegated"), Some(Value::Bool(true)))
+    }
+    /// `isOrdered`, as Feature declares it.
+    pub fn is_ordered(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isOrdered"), Some(Value::Bool(true)))
+    }
+    /// `isParallel`, as StateDefinition declares it.
+    pub fn is_parallel(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isParallel"), Some(Value::Bool(true)))
+    }
+    /// `isPortion`, as Feature declares it.
+    pub fn is_portion(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isPortion"), Some(Value::Bool(true)))
+    }
+    /// `isRecursive`, as Import declares it.
+    pub fn is_recursive(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isRecursive"), Some(Value::Bool(true)))
+    }
+    /// `isReference`, as AttributeUsage declares it.
+    pub fn is_reference(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isReference"), Some(Value::Bool(true)))
+    }
+    /// `isStandard`, as LibraryPackage declares it.
+    pub fn is_standard(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isStandard"), Some(Value::Bool(true)))
+    }
+    /// `isSufficient`, as ConnectionDefinition declares it.
+    pub fn is_sufficient(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isSufficient"), Some(Value::Bool(true)))
+    }
+    /// `isUnique`, as Feature declares it.
+    pub fn is_unique(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isUnique"), Some(Value::Bool(true)))
+    }
+    /// `isVariable`, as Feature declares it.
+    pub fn is_variable(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isVariable"), Some(Value::Bool(true)))
+    }
+    /// `isVariation`, as Definition declares it.
+    pub fn is_variation(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "isVariation"), Some(Value::Bool(true)))
+    }
+    /// `itemDefinition`, as ItemUsage declares it.
+    pub fn item_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "itemDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    // `kind` is left to `Model::kind`, which is written by hand
+    /// `language`, as TextualRepresentation declares it.
+    pub fn language(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "language")?.as_str()
+    }
+    /// `locale`, as Comment declares it.
+    pub fn locale(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "locale")?.as_str()
+    }
+    /// `loopVariable`, as ForLoopActionUsage declares it.
+    pub fn loop_variable(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "loopVariable") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `lowerBound`, as MultiplicityRange declares it.
+    pub fn lower_bound(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "lowerBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `mayTimeVary`, as Usage declares it.
+    pub fn may_time_vary(&self, id: ElementId) -> bool {
+        matches!(self.get(id, "mayTimeVary"), Some(Value::Bool(true)))
+    }
+    /// `member`, as Namespace declares it.
+    pub fn member(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "member") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `memberElement`, as Membership declares it.
+    pub fn member_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "memberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `memberElementId`, as Membership declares it.
+    pub fn member_element_id(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "memberElementId")?.as_str()
+    }
+    /// `memberName`, as Membership declares it.
+    pub fn member_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "memberName")?.as_str()
+    }
+    /// `memberShortName`, as Membership declares it.
+    pub fn member_short_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "memberShortName")?.as_str()
+    }
+    /// `membership`, as Namespace declares it.
+    pub fn membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "membership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `membershipOwningNamespace`, as Membership declares it.
+    pub fn membership_owning_namespace(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "membershipOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `metaclass`, as MetadataFeature declares it.
+    pub fn metaclass(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "metaclass") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `metadataDefinition`, as MetadataUsage declares it.
+    pub fn metadata_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "metadataDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `multiplicity`, as Type declares it.
+    pub fn multiplicity(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "multiplicity") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    // `name` is left to `Model::name`, which is written by hand
+    /// `nestedAction`, as Usage declares it.
+    pub fn nested_action(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedAction") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedAllocation`, as Usage declares it.
+    pub fn nested_allocation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedAllocation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedAnalysisCase`, as Usage declares it.
+    pub fn nested_analysis_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedAnalysisCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedAttribute`, as Usage declares it.
+    pub fn nested_attribute(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedAttribute") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedCalculation`, as Usage declares it.
+    pub fn nested_calculation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedCalculation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedCase`, as Usage declares it.
+    pub fn nested_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedConcern`, as Usage declares it.
+    pub fn nested_concern(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedConcern") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedConnection`, as Usage declares it.
+    pub fn nested_connection(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedConnection") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedConstraint`, as Usage declares it.
+    pub fn nested_constraint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedConstraint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedEnumeration`, as Usage declares it.
+    pub fn nested_enumeration(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedEnumeration") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedFlow`, as Usage declares it.
+    pub fn nested_flow(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedFlow") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedInterface`, as Usage declares it.
+    pub fn nested_interface(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedInterface") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedItem`, as Usage declares it.
+    pub fn nested_item(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedItem") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedMetadata`, as Usage declares it.
+    pub fn nested_metadata(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedMetadata") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedOccurrence`, as Usage declares it.
+    pub fn nested_occurrence(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedOccurrence") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedPart`, as Usage declares it.
+    pub fn nested_part(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedPart") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedPort`, as Usage declares it.
+    pub fn nested_port(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedPort") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedReference`, as Usage declares it.
+    pub fn nested_reference(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedReference") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedRendering`, as Usage declares it.
+    pub fn nested_rendering(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedRendering") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedRequirement`, as Usage declares it.
+    pub fn nested_requirement(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedRequirement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedState`, as Usage declares it.
+    pub fn nested_state(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedState") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedTransition`, as Usage declares it.
+    pub fn nested_transition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedTransition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedUsage`, as Usage declares it.
+    pub fn nested_usage(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedUsage") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedUseCase`, as Usage declares it.
+    pub fn nested_use_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedUseCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedVerificationCase`, as Usage declares it.
+    pub fn nested_verification_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedVerificationCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedView`, as Usage declares it.
+    pub fn nested_view(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedView") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `nestedViewpoint`, as Usage declares it.
+    pub fn nested_viewpoint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "nestedViewpoint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `objectiveRequirement`, as CaseDefinition declares it.
+    pub fn objective_requirement(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "objectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `occurrenceDefinition`, as OccurrenceUsage declares it.
+    pub fn occurrence_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "occurrenceDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `operator`, as CollectExpression declares it.
+    pub fn operator(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "operator")?.as_str()
+    }
+    /// `originalPortDefinition`, as ConjugatedPortDefinition declares it.
+    pub fn original_port_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "originalPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `originalType`, as Conjugation declares it.
+    pub fn original_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "originalType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `output`, as Type declares it.
+    pub fn output(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "output") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedAction`, as Definition declares it.
+    pub fn owned_action(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAction") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedActorParameter`, as ActorMembership declares it.
+    pub fn owned_actor_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedActorParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedAllocation`, as Definition declares it.
+    pub fn owned_allocation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAllocation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedAnalysisCase`, as Definition declares it.
+    pub fn owned_analysis_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAnalysisCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedAnnotatingElement`, as Annotation declares it.
+    pub fn owned_annotating_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedAnnotatingRelationship`, as AnnotatingElement declares it.
+    pub fn owned_annotating_relationship(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAnnotatingRelationship") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedAnnotation`, as Element declares it.
+    pub fn owned_annotation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAnnotation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedAttribute`, as Definition declares it.
+    pub fn owned_attribute(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedAttribute") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedCalculation`, as Definition declares it.
+    pub fn owned_calculation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedCalculation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedCase`, as Definition declares it.
+    pub fn owned_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedConcern`, as Definition declares it.
+    pub fn owned_concern(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedConcern") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedConjugator`, as Type declares it.
+    pub fn owned_conjugator(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedConnection`, as Definition declares it.
+    pub fn owned_connection(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedConnection") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedConstraint`, as Definition declares it.
+    pub fn owned_constraint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedConstraint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedCrossSubsetting`, as Feature declares it.
+    pub fn owned_cross_subsetting(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedCrossSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedDifferencing`, as Type declares it.
+    pub fn owned_differencing(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedDifferencing") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedDisjoining`, as Type declares it.
+    pub fn owned_disjoining(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedDisjoining") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedElement`, as Element declares it.
+    pub fn owned_element(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedElement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedEndFeature`, as Type declares it.
+    pub fn owned_end_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedEndFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedEnumeration`, as Definition declares it.
+    pub fn owned_enumeration(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedEnumeration") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedFeature`, as Type declares it.
+    pub fn owned_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedFeatureChaining`, as Feature declares it.
+    pub fn owned_feature_chaining(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedFeatureChaining") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedFeatureInverting`, as Feature declares it.
+    pub fn owned_feature_inverting(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedFeatureInverting") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedFeatureMembership`, as Type declares it.
+    pub fn owned_feature_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedFeatureMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedFlow`, as Definition declares it.
+    pub fn owned_flow(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedFlow") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedImport`, as Namespace declares it.
+    pub fn owned_import(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedImport") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedInterface`, as Definition declares it.
+    pub fn owned_interface(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedInterface") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedIntersecting`, as Type declares it.
+    pub fn owned_intersecting(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedIntersecting") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedItem`, as Definition declares it.
+    pub fn owned_item(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedItem") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedMember`, as Namespace declares it.
+    pub fn owned_member(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedMember") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedMemberElement`, as OwningMembership declares it.
+    pub fn owned_member_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedMemberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedMemberElementId`, as OwningMembership declares it.
+    pub fn owned_member_element_id(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "ownedMemberElementId")?.as_str()
+    }
+    /// `ownedMemberFeature`, as EndFeatureMembership declares it.
+    pub fn owned_member_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedMemberFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedMemberName`, as OwningMembership declares it.
+    pub fn owned_member_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "ownedMemberName")?.as_str()
+    }
+    /// `ownedMemberParameter`, as ParameterMembership declares it.
+    pub fn owned_member_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedMemberParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedMemberShortName`, as OwningMembership declares it.
+    pub fn owned_member_short_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "ownedMemberShortName")?.as_str()
+    }
+    /// `ownedMembership`, as Namespace declares it.
+    pub fn owned_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedMetadata`, as Definition declares it.
+    pub fn owned_metadata(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedMetadata") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedObjectiveRequirement`, as ObjectiveMembership declares it.
+    pub fn owned_objective_requirement(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedObjectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedOccurrence`, as Definition declares it.
+    pub fn owned_occurrence(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedOccurrence") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedPart`, as Definition declares it.
+    pub fn owned_part(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedPart") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedPort`, as Definition declares it.
+    pub fn owned_port(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedPort") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedPortConjugator`, as ConjugatedPortDefinition declares it.
+    pub fn owned_port_conjugator(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedPortConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedRedefinition`, as Feature declares it.
+    pub fn owned_redefinition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedRedefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedReference`, as Definition declares it.
+    pub fn owned_reference(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedReference") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedReferenceSubsetting`, as Feature declares it.
+    pub fn owned_reference_subsetting(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedReferenceSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedRelatedElement`, as Relationship declares it.
+    pub fn owned_related_element(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedRelatedElement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedRelationship`, as Element declares it.
+    pub fn owned_relationship(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedRelationship") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedRendering`, as Definition declares it.
+    pub fn owned_rendering(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedRendering") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedRequirement`, as Definition declares it.
+    pub fn owned_requirement(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedRequirement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedResultExpression`, as ResultExpressionMembership declares it.
+    pub fn owned_result_expression(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedResultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedSpecialization`, as Type declares it.
+    pub fn owned_specialization(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedSpecialization") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedStakeholderParameter`, as StakeholderMembership declares it.
+    pub fn owned_stakeholder_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedStakeholderParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedState`, as Definition declares it.
+    pub fn owned_state(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedState") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedSubclassification`, as Classifier declares it.
+    pub fn owned_subclassification(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedSubclassification") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedSubjectParameter`, as SubjectMembership declares it.
+    pub fn owned_subject_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedSubjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedSubsetting`, as Feature declares it.
+    pub fn owned_subsetting(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedSubsetting") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedTransition`, as Definition declares it.
+    pub fn owned_transition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedTransition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedTypeFeaturing`, as Feature declares it.
+    pub fn owned_type_featuring(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedTypeFeaturing") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedTyping`, as Feature declares it.
+    pub fn owned_typing(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedTyping") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedUnioning`, as Type declares it.
+    pub fn owned_unioning(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedUnioning") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedUsage`, as Definition declares it.
+    pub fn owned_usage(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedUsage") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedUseCase`, as Definition declares it.
+    pub fn owned_use_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedUseCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedVariantUsage`, as VariantMembership declares it.
+    pub fn owned_variant_usage(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "ownedVariantUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `ownedVerificationCase`, as Definition declares it.
+    pub fn owned_verification_case(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedVerificationCase") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedView`, as Definition declares it.
+    pub fn owned_view(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedView") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `ownedViewpoint`, as Definition declares it.
+    pub fn owned_viewpoint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "ownedViewpoint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    // `owner` is left to `Model::owner`, which is written by hand
+    /// `owningAnnotatedElement`, as Annotation declares it.
+    pub fn owning_annotated_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningAnnotatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningAnnotatingElement`, as Annotation declares it.
+    pub fn owning_annotating_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningAnnotatingRelationship`, as AnnotatingElement declares it.
+    pub fn owning_annotating_relationship(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningAnnotatingRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningClassifier`, as Subclassification declares it.
+    pub fn owning_classifier(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningClassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningDefinition`, as Usage declares it.
+    pub fn owning_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningFeature`, as FeatureInverting declares it.
+    pub fn owning_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningFeatureMembership`, as Feature declares it.
+    pub fn owning_feature_membership(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningFeatureMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningFeatureOfType`, as TypeFeaturing declares it.
+    pub fn owning_feature_of_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningFeatureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningMembership`, as Element declares it.
+    pub fn owning_membership(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningNamespace`, as Element declares it.
+    pub fn owning_namespace(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningRelatedElement`, as Relationship declares it.
+    pub fn owning_related_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningRelatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningRelationship`, as Element declares it.
+    pub fn owning_relationship(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningType`, as Conjugation declares it.
+    pub fn owning_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `owningUsage`, as Usage declares it.
+    pub fn owning_usage(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "owningUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `parameter`, as Behavior declares it.
+    pub fn parameter(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "parameter") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `partDefinition`, as PartUsage declares it.
+    pub fn part_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "partDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `payloadArgument`, as AcceptActionUsage declares it.
+    pub fn payload_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "payloadArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `payloadFeature`, as Flow declares it.
+    pub fn payload_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "payloadFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `payloadParameter`, as AcceptActionUsage declares it.
+    pub fn payload_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "payloadParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `payloadType`, as Flow declares it.
+    pub fn payload_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "payloadType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `performedAction`, as PerformActionUsage declares it.
+    pub fn performed_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "performedAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `portDefinition`, as ConjugatedPortTyping declares it.
+    pub fn port_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "portDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `portionKind`, as OccurrenceUsage declares it.
+    pub fn portion_kind(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "portionKind")?.as_str()
+    }
+    /// `predicate`, as BooleanExpression declares it.
+    pub fn predicate(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "predicate") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `qualifiedName`, as Element declares it.
+    pub fn qualified_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "qualifiedName")?.as_str()
+    }
+    /// `receiverArgument`, as AcceptActionUsage declares it.
+    pub fn receiver_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "receiverArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `redefinedFeature`, as Redefinition declares it.
+    pub fn redefined_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "redefinedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `redefiningFeature`, as Redefinition declares it.
+    pub fn redefining_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "redefiningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencedConcern`, as FramedConcernMembership declares it.
+    pub fn referenced_concern(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencedConcern") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencedConstraint`, as RequirementConstraintMembership declares it.
+    pub fn referenced_constraint(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencedElement`, as MetadataAccessExpression declares it.
+    pub fn referenced_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencedFeature`, as ReferenceSubsetting declares it.
+    pub fn referenced_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencedRendering`, as ViewRenderingMembership declares it.
+    pub fn referenced_rendering(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencedRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referencingFeature`, as ReferenceSubsetting declares it.
+    pub fn referencing_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referencingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `referent`, as AssignmentActionUsage declares it.
+    pub fn referent(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "referent") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `relatedElement`, as Relationship declares it.
+    pub fn related_element(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "relatedElement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `relatedFeature`, as Connector declares it.
+    pub fn related_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "relatedFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `relatedType`, as Association declares it.
+    pub fn related_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "relatedType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `rendering`, as RenderingDefinition declares it.
+    pub fn rendering(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "rendering") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `renderingDefinition`, as RenderingUsage declares it.
+    pub fn rendering_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "renderingDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `representedElement`, as TextualRepresentation declares it.
+    pub fn represented_element(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "representedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `reqId`, as RequirementDefinition declares it.
+    pub fn req_id(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "reqId")?.as_str()
+    }
+    /// `requiredConstraint`, as RequirementDefinition declares it.
+    pub fn required_constraint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "requiredConstraint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `requirementDefinition`, as RequirementUsage declares it.
+    pub fn requirement_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "requirementDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `result`, as Expression declares it.
+    pub fn result(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "result") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `resultExpression`, as AnalysisCaseDefinition declares it.
+    pub fn result_expression(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "resultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `satisfiedRequirement`, as SatisfyRequirementUsage declares it.
+    pub fn satisfied_requirement(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "satisfiedRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `satisfiedViewpoint`, as ViewDefinition declares it.
+    pub fn satisfied_viewpoint(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "satisfiedViewpoint") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `satisfyingFeature`, as SatisfyRequirementUsage declares it.
+    pub fn satisfying_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "satisfyingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `senderArgument`, as SendActionUsage declares it.
+    pub fn sender_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "senderArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `seqArgument`, as ForLoopActionUsage declares it.
+    pub fn seq_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "seqArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `shortName`, as Element declares it.
+    pub fn short_name(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "shortName")?.as_str()
+    }
+    /// `source`, as Relationship declares it.
+    pub fn source(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "source") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `sourceFeature`, as Connector declares it.
+    pub fn source_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "sourceFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `sourceOutputFeature`, as Flow declares it.
+    pub fn source_output_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "sourceOutputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `sourceType`, as Association declares it.
+    pub fn source_type(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "sourceType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `specific`, as Specialization declares it.
+    pub fn specific(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "specific") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `stakeholderParameter`, as RequirementDefinition declares it.
+    pub fn stakeholder_parameter(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "stakeholderParameter") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `state`, as StateDefinition declares it.
+    pub fn state(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "state") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `stateDefinition`, as StateUsage declares it.
+    pub fn state_definition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "stateDefinition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `step`, as Behavior declares it.
+    pub fn step(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "step") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `subclassifier`, as Subclassification declares it.
+    pub fn subclassifier(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "subclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `subjectParameter`, as CaseDefinition declares it.
+    pub fn subject_parameter(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "subjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `subsettedFeature`, as Subsetting declares it.
+    pub fn subsetted_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "subsettedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `subsettingFeature`, as Subsetting declares it.
+    pub fn subsetting_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "subsettingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `succession`, as TransitionUsage declares it.
+    pub fn succession(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "succession") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `superclassifier`, as Subclassification declares it.
+    pub fn superclassifier(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "superclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `supplier`, as Dependency declares it.
+    pub fn supplier(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "supplier") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `target`, as Relationship declares it.
+    pub fn target(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "target") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `targetArgument`, as AssignmentActionUsage declares it.
+    pub fn target_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "targetArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `targetFeature`, as Connector declares it.
+    pub fn target_feature(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "targetFeature") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `targetInputFeature`, as Flow declares it.
+    pub fn target_input_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "targetInputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `targetType`, as Association declares it.
+    pub fn target_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "targetType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `terminatedOccurrenceArgument`, as TerminateActionUsage declares it.
+    pub fn terminated_occurrence_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "terminatedOccurrenceArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `text`, as RequirementDefinition declares it.
+    pub fn text(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "text")?.as_str()
+    }
+    /// `textualRepresentation`, as Element declares it.
+    pub fn textual_representation(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "textualRepresentation") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `thenAction`, as IfActionUsage declares it.
+    pub fn then_action(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "thenAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `transitionFeature`, as TransitionFeatureMembership declares it.
+    pub fn transition_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "transitionFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `triggerAction`, as TransitionUsage declares it.
+    pub fn trigger_action(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "triggerAction") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `type`, as Feature declares it.
+    pub fn r#type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "type") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `typeDifferenced`, as Differencing declares it.
+    pub fn type_differenced(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "typeDifferenced") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `typeDisjoined`, as Disjoining declares it.
+    pub fn type_disjoined(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "typeDisjoined") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `typeIntersected`, as Intersecting declares it.
+    pub fn type_intersected(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "typeIntersected") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `typeUnioned`, as Unioning declares it.
+    pub fn type_unioned(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "typeUnioned") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `typedFeature`, as FeatureTyping declares it.
+    pub fn typed_feature(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "typedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `unioningType`, as Type declares it.
+    pub fn unioning_type(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "unioningType") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `untilArgument`, as WhileLoopActionUsage declares it.
+    pub fn until_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "untilArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `upperBound`, as MultiplicityRange declares it.
+    pub fn upper_bound(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "upperBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `usage`, as Definition declares it.
+    pub fn usage(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "usage") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `useCaseDefinition`, as UseCaseUsage declares it.
+    pub fn use_case_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "useCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `useCaseIncluded`, as IncludeUseCaseUsage declares it.
+    pub fn use_case_included(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "useCaseIncluded") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    // `value` is declared as 5 different types; no one accessor fits
+    /// `valueExpression`, as AssignmentActionUsage declares it.
+    pub fn value_expression(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "valueExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `variant`, as Definition declares it.
+    pub fn variant(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "variant") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `variantMembership`, as Definition declares it.
+    pub fn variant_membership(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "variantMembership") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `verificationCaseDefinition`, as VerificationCaseUsage declares it.
+    pub fn verification_case_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "verificationCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `verifiedRequirement`, as RequirementVerificationMembership declares it.
+    pub fn verified_requirement(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "verifiedRequirement") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `view`, as ViewDefinition declares it.
+    pub fn view(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "view") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `viewCondition`, as ViewDefinition declares it.
+    pub fn view_condition(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "viewCondition") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `viewDefinition`, as ViewUsage declares it.
+    pub fn view_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "viewDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `viewRendering`, as ViewDefinition declares it.
+    pub fn view_rendering(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "viewRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `viewpointDefinition`, as ViewpointUsage declares it.
+    pub fn viewpoint_definition(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "viewpointDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+    /// `viewpointStakeholder`, as ViewpointDefinition declares it.
+    pub fn viewpoint_stakeholder(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "viewpointStakeholder") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
+    }
+    /// `visibility`, as Expose declares it.
+    pub fn visibility(&self, id: ElementId) -> Option<&str> {
+        self.get(id, "visibility")?.as_str()
+    }
+    /// `whileArgument`, as WhileLoopActionUsage declares it.
+    pub fn while_argument(&self, id: ElementId) -> Option<ElementId> {
+        match self.get(id, "whileArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    }
+}
+
+#[cfg(test)]
+mod accessor_tests {
+    use super::*;
+
+    #[test]
+    fn every_accessor_answers_for_an_empty_element() {
+        let mut model = Model::new();
+        let id = model.create(ElementKind::Namespace);
+        let _ = model.action(id);
+        let _ = model.action_definition(id);
+        let _ = model.actor_parameter(id);
+        let _ = model.alias_ids(id);
+        let _ = model.allocation(id);
+        let _ = model.allocation_definition(id);
+        let _ = model.analysis_case_definition(id);
+        let _ = model.annotated_element(id);
+        let _ = model.annotating_element(id);
+        let _ = model.annotation(id);
+        let _ = model.argument(id);
+        let _ = model.asserted_constraint(id);
+        let _ = model.association(id);
+        let _ = model.association_end(id);
+        let _ = model.assumed_constraint(id);
+        let _ = model.attribute_definition(id);
+        let _ = model.behavior(id);
+        let _ = model.body(id);
+        let _ = model.body_action(id);
+        let _ = model.bound(id);
+        let _ = model.calculation(id);
+        let _ = model.calculation_definition(id);
+        let _ = model.case_definition(id);
+        let _ = model.chaining_feature(id);
+        let _ = model.client(id);
+        let _ = model.concern_definition(id);
+        let _ = model.condition(id);
+        let _ = model.conjugated_port_definition(id);
+        let _ = model.conjugated_type(id);
+        let _ = model.connection_definition(id);
+        let _ = model.connection_end(id);
+        let _ = model.connector_end(id);
+        let _ = model.constraint_definition(id);
+        let _ = model.cross_feature(id);
+        let _ = model.crossed_feature(id);
+        let _ = model.crossing_feature(id);
+        let _ = model.declared_name(id);
+        let _ = model.declared_short_name(id);
+        let _ = model.default_featuring_type(id);
+        let _ = model.definition(id);
+        let _ = model.differencing_type(id);
+        let _ = model.directed_feature(id);
+        let _ = model.directed_usage(id);
+        let _ = model.direction(id);
+        let _ = model.disjoining_type(id);
+        let _ = model.do_action(id);
+        let _ = model.documentation(id);
+        let _ = model.documented_element(id);
+        let _ = model.effect_action(id);
+        let _ = model.element_id(id);
+        let _ = model.else_action(id);
+        let _ = model.end_feature(id);
+        let _ = model.end_owning_type(id);
+        let _ = model.entry_action(id);
+        let _ = model.enumerated_value(id);
+        let _ = model.enumeration_definition(id);
+        let _ = model.event_occurrence(id);
+        let _ = model.exhibited_state(id);
+        let _ = model.exit_action(id);
+        let _ = model.exposed_element(id);
+        let _ = model.expression(id);
+        let _ = model.feature(id);
+        let _ = model.feature_chained(id);
+        let _ = model.feature_inverted(id);
+        let _ = model.feature_membership(id);
+        let _ = model.feature_of_type(id);
+        let _ = model.feature_target(id);
+        let _ = model.feature_with_value(id);
+        let _ = model.featuring_type(id);
+        let _ = model.filter_condition(id);
+        let _ = model.flow_definition(id);
+        let _ = model.flow_end(id);
+        let _ = model.framed_concern(id);
+        let _ = model.function(id);
+        let _ = model.general(id);
+        let _ = model.guard_expression(id);
+        let _ = model.if_argument(id);
+        let _ = model.import_owning_namespace(id);
+        let _ = model.imported_element(id);
+        let _ = model.imported_membership(id);
+        let _ = model.imported_namespace(id);
+        let _ = model.included_use_case(id);
+        let _ = model.individual_definition(id);
+        let _ = model.inherited_feature(id);
+        let _ = model.inherited_membership(id);
+        let _ = model.input(id);
+        let _ = model.instantiated_type(id);
+        let _ = model.interaction(id);
+        let _ = model.interface_definition(id);
+        let _ = model.interface_end(id);
+        let _ = model.intersecting_type(id);
+        let _ = model.inverting_feature(id);
+        let _ = model.is_abstract(id);
+        let _ = model.is_composite(id);
+        let _ = model.is_conjugated(id);
+        let _ = model.is_constant(id);
+        let _ = model.is_default(id);
+        let _ = model.is_derived(id);
+        let _ = model.is_end(id);
+        let _ = model.is_implied(id);
+        let _ = model.is_implied_included(id);
+        let _ = model.is_import_all(id);
+        let _ = model.is_individual(id);
+        let _ = model.is_initial(id);
+        let _ = model.is_library_element(id);
+        let _ = model.is_model_level_evaluable(id);
+        let _ = model.is_negated(id);
+        let _ = model.is_ordered(id);
+        let _ = model.is_parallel(id);
+        let _ = model.is_portion(id);
+        let _ = model.is_recursive(id);
+        let _ = model.is_reference(id);
+        let _ = model.is_standard(id);
+        let _ = model.is_sufficient(id);
+        let _ = model.is_unique(id);
+        let _ = model.is_variable(id);
+        let _ = model.is_variation(id);
+        let _ = model.item_definition(id);
+        let _ = model.language(id);
+        let _ = model.locale(id);
+        let _ = model.loop_variable(id);
+        let _ = model.lower_bound(id);
+        let _ = model.may_time_vary(id);
+        let _ = model.member(id);
+        let _ = model.member_element(id);
+        let _ = model.member_element_id(id);
+        let _ = model.member_name(id);
+        let _ = model.member_short_name(id);
+        let _ = model.membership(id);
+        let _ = model.membership_owning_namespace(id);
+        let _ = model.metaclass(id);
+        let _ = model.metadata_definition(id);
+        let _ = model.multiplicity(id);
+        let _ = model.nested_action(id);
+        let _ = model.nested_allocation(id);
+        let _ = model.nested_analysis_case(id);
+        let _ = model.nested_attribute(id);
+        let _ = model.nested_calculation(id);
+        let _ = model.nested_case(id);
+        let _ = model.nested_concern(id);
+        let _ = model.nested_connection(id);
+        let _ = model.nested_constraint(id);
+        let _ = model.nested_enumeration(id);
+        let _ = model.nested_flow(id);
+        let _ = model.nested_interface(id);
+        let _ = model.nested_item(id);
+        let _ = model.nested_metadata(id);
+        let _ = model.nested_occurrence(id);
+        let _ = model.nested_part(id);
+        let _ = model.nested_port(id);
+        let _ = model.nested_reference(id);
+        let _ = model.nested_rendering(id);
+        let _ = model.nested_requirement(id);
+        let _ = model.nested_state(id);
+        let _ = model.nested_transition(id);
+        let _ = model.nested_usage(id);
+        let _ = model.nested_use_case(id);
+        let _ = model.nested_verification_case(id);
+        let _ = model.nested_view(id);
+        let _ = model.nested_viewpoint(id);
+        let _ = model.objective_requirement(id);
+        let _ = model.occurrence_definition(id);
+        let _ = model.operator(id);
+        let _ = model.original_port_definition(id);
+        let _ = model.original_type(id);
+        let _ = model.output(id);
+        let _ = model.owned_action(id);
+        let _ = model.owned_actor_parameter(id);
+        let _ = model.owned_allocation(id);
+        let _ = model.owned_analysis_case(id);
+        let _ = model.owned_annotating_element(id);
+        let _ = model.owned_annotating_relationship(id);
+        let _ = model.owned_annotation(id);
+        let _ = model.owned_attribute(id);
+        let _ = model.owned_calculation(id);
+        let _ = model.owned_case(id);
+        let _ = model.owned_concern(id);
+        let _ = model.owned_conjugator(id);
+        let _ = model.owned_connection(id);
+        let _ = model.owned_constraint(id);
+        let _ = model.owned_cross_subsetting(id);
+        let _ = model.owned_differencing(id);
+        let _ = model.owned_disjoining(id);
+        let _ = model.owned_element(id);
+        let _ = model.owned_end_feature(id);
+        let _ = model.owned_enumeration(id);
+        let _ = model.owned_feature(id);
+        let _ = model.owned_feature_chaining(id);
+        let _ = model.owned_feature_inverting(id);
+        let _ = model.owned_feature_membership(id);
+        let _ = model.owned_flow(id);
+        let _ = model.owned_import(id);
+        let _ = model.owned_interface(id);
+        let _ = model.owned_intersecting(id);
+        let _ = model.owned_item(id);
+        let _ = model.owned_member(id);
+        let _ = model.owned_member_element(id);
+        let _ = model.owned_member_element_id(id);
+        let _ = model.owned_member_feature(id);
+        let _ = model.owned_member_name(id);
+        let _ = model.owned_member_parameter(id);
+        let _ = model.owned_member_short_name(id);
+        let _ = model.owned_membership(id);
+        let _ = model.owned_metadata(id);
+        let _ = model.owned_objective_requirement(id);
+        let _ = model.owned_occurrence(id);
+        let _ = model.owned_part(id);
+        let _ = model.owned_port(id);
+        let _ = model.owned_port_conjugator(id);
+        let _ = model.owned_redefinition(id);
+        let _ = model.owned_reference(id);
+        let _ = model.owned_reference_subsetting(id);
+        let _ = model.owned_related_element(id);
+        let _ = model.owned_relationship(id);
+        let _ = model.owned_rendering(id);
+        let _ = model.owned_requirement(id);
+        let _ = model.owned_result_expression(id);
+        let _ = model.owned_specialization(id);
+        let _ = model.owned_stakeholder_parameter(id);
+        let _ = model.owned_state(id);
+        let _ = model.owned_subclassification(id);
+        let _ = model.owned_subject_parameter(id);
+        let _ = model.owned_subsetting(id);
+        let _ = model.owned_transition(id);
+        let _ = model.owned_type_featuring(id);
+        let _ = model.owned_typing(id);
+        let _ = model.owned_unioning(id);
+        let _ = model.owned_usage(id);
+        let _ = model.owned_use_case(id);
+        let _ = model.owned_variant_usage(id);
+        let _ = model.owned_verification_case(id);
+        let _ = model.owned_view(id);
+        let _ = model.owned_viewpoint(id);
+        let _ = model.owning_annotated_element(id);
+        let _ = model.owning_annotating_element(id);
+        let _ = model.owning_annotating_relationship(id);
+        let _ = model.owning_classifier(id);
+        let _ = model.owning_definition(id);
+        let _ = model.owning_feature(id);
+        let _ = model.owning_feature_membership(id);
+        let _ = model.owning_feature_of_type(id);
+        let _ = model.owning_membership(id);
+        let _ = model.owning_namespace(id);
+        let _ = model.owning_related_element(id);
+        let _ = model.owning_relationship(id);
+        let _ = model.owning_type(id);
+        let _ = model.owning_usage(id);
+        let _ = model.parameter(id);
+        let _ = model.part_definition(id);
+        let _ = model.payload_argument(id);
+        let _ = model.payload_feature(id);
+        let _ = model.payload_parameter(id);
+        let _ = model.payload_type(id);
+        let _ = model.performed_action(id);
+        let _ = model.port_definition(id);
+        let _ = model.portion_kind(id);
+        let _ = model.predicate(id);
+        let _ = model.qualified_name(id);
+        let _ = model.receiver_argument(id);
+        let _ = model.redefined_feature(id);
+        let _ = model.redefining_feature(id);
+        let _ = model.referenced_concern(id);
+        let _ = model.referenced_constraint(id);
+        let _ = model.referenced_element(id);
+        let _ = model.referenced_feature(id);
+        let _ = model.referenced_rendering(id);
+        let _ = model.referencing_feature(id);
+        let _ = model.referent(id);
+        let _ = model.related_element(id);
+        let _ = model.related_feature(id);
+        let _ = model.related_type(id);
+        let _ = model.rendering(id);
+        let _ = model.rendering_definition(id);
+        let _ = model.represented_element(id);
+        let _ = model.req_id(id);
+        let _ = model.required_constraint(id);
+        let _ = model.requirement_definition(id);
+        let _ = model.result(id);
+        let _ = model.result_expression(id);
+        let _ = model.satisfied_requirement(id);
+        let _ = model.satisfied_viewpoint(id);
+        let _ = model.satisfying_feature(id);
+        let _ = model.sender_argument(id);
+        let _ = model.seq_argument(id);
+        let _ = model.short_name(id);
+        let _ = model.source(id);
+        let _ = model.source_feature(id);
+        let _ = model.source_output_feature(id);
+        let _ = model.source_type(id);
+        let _ = model.specific(id);
+        let _ = model.stakeholder_parameter(id);
+        let _ = model.state(id);
+        let _ = model.state_definition(id);
+        let _ = model.step(id);
+        let _ = model.subclassifier(id);
+        let _ = model.subject_parameter(id);
+        let _ = model.subsetted_feature(id);
+        let _ = model.subsetting_feature(id);
+        let _ = model.succession(id);
+        let _ = model.superclassifier(id);
+        let _ = model.supplier(id);
+        let _ = model.target(id);
+        let _ = model.target_argument(id);
+        let _ = model.target_feature(id);
+        let _ = model.target_input_feature(id);
+        let _ = model.target_type(id);
+        let _ = model.terminated_occurrence_argument(id);
+        let _ = model.text(id);
+        let _ = model.textual_representation(id);
+        let _ = model.then_action(id);
+        let _ = model.transition_feature(id);
+        let _ = model.trigger_action(id);
+        let _ = model.r#type(id);
+        let _ = model.type_differenced(id);
+        let _ = model.type_disjoined(id);
+        let _ = model.type_intersected(id);
+        let _ = model.type_unioned(id);
+        let _ = model.typed_feature(id);
+        let _ = model.unioning_type(id);
+        let _ = model.until_argument(id);
+        let _ = model.upper_bound(id);
+        let _ = model.usage(id);
+        let _ = model.use_case_definition(id);
+        let _ = model.use_case_included(id);
+        let _ = model.value_expression(id);
+        let _ = model.variant(id);
+        let _ = model.variant_membership(id);
+        let _ = model.verification_case_definition(id);
+        let _ = model.verified_requirement(id);
+        let _ = model.view(id);
+        let _ = model.view_condition(id);
+        let _ = model.view_definition(id);
+        let _ = model.view_rendering(id);
+        let _ = model.viewpoint_definition(id);
+        let _ = model.viewpoint_stakeholder(id);
+        let _ = model.visibility(id);
+        let _ = model.while_argument(id);
+    }
+
+    #[test]
+    fn every_accessor_reads_back_what_was_set() {
+        let mut model = Model::new();
+        let other = model.create(ElementKind::Namespace);
+        let id = model.create(ElementKind::ActionDefinition);
+        model.set(id, "action", Value::RefList(vec![other]));
+        let _ = model.action(id);
+        model.set(id, "action", Value::Ref(other));
+        let _ = model.action(id);
+        let id = model.create(ElementKind::ActionUsage);
+        model.set(id, "actionDefinition", Value::RefList(vec![other]));
+        let _ = model.action_definition(id);
+        model.set(id, "actionDefinition", Value::Ref(other));
+        let _ = model.action_definition(id);
+        let id = model.create(ElementKind::CaseDefinition);
+        model.set(id, "actorParameter", Value::RefList(vec![other]));
+        let _ = model.actor_parameter(id);
+        model.set(id, "actorParameter", Value::Ref(other));
+        let _ = model.actor_parameter(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "aliasIds", Value::String(String::from("x")));
+        let _ = model.alias_ids(id);
+        let id = model.create(ElementKind::AllocationDefinition);
+        model.set(id, "allocation", Value::RefList(vec![other]));
+        let _ = model.allocation(id);
+        model.set(id, "allocation", Value::Ref(other));
+        let _ = model.allocation(id);
+        let id = model.create(ElementKind::AllocationUsage);
+        model.set(id, "allocationDefinition", Value::RefList(vec![other]));
+        let _ = model.allocation_definition(id);
+        model.set(id, "allocationDefinition", Value::Ref(other));
+        let _ = model.allocation_definition(id);
+        let id = model.create(ElementKind::AnalysisCaseUsage);
+        model.set(id, "analysisCaseDefinition", Value::Ref(other));
+        let _ = model.analysis_case_definition(id);
+        let id = model.create(ElementKind::AnnotatingElement);
+        model.set(id, "annotatedElement", Value::RefList(vec![other]));
+        let _ = model.annotated_element(id);
+        model.set(id, "annotatedElement", Value::Ref(other));
+        let _ = model.annotated_element(id);
+        let id = model.create(ElementKind::Annotation);
+        model.set(id, "annotatingElement", Value::Ref(other));
+        let _ = model.annotating_element(id);
+        let id = model.create(ElementKind::AnnotatingElement);
+        model.set(id, "annotation", Value::RefList(vec![other]));
+        let _ = model.annotation(id);
+        model.set(id, "annotation", Value::Ref(other));
+        let _ = model.annotation(id);
+        let id = model.create(ElementKind::InstantiationExpression);
+        model.set(id, "argument", Value::RefList(vec![other]));
+        let _ = model.argument(id);
+        model.set(id, "argument", Value::Ref(other));
+        let _ = model.argument(id);
+        let id = model.create(ElementKind::AssertConstraintUsage);
+        model.set(id, "assertedConstraint", Value::Ref(other));
+        let _ = model.asserted_constraint(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "association", Value::RefList(vec![other]));
+        let _ = model.association(id);
+        model.set(id, "association", Value::Ref(other));
+        let _ = model.association(id);
+        let id = model.create(ElementKind::Association);
+        model.set(id, "associationEnd", Value::RefList(vec![other]));
+        let _ = model.association_end(id);
+        model.set(id, "associationEnd", Value::Ref(other));
+        let _ = model.association_end(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "assumedConstraint", Value::RefList(vec![other]));
+        let _ = model.assumed_constraint(id);
+        model.set(id, "assumedConstraint", Value::Ref(other));
+        let _ = model.assumed_constraint(id);
+        let id = model.create(ElementKind::AttributeUsage);
+        model.set(id, "attributeDefinition", Value::RefList(vec![other]));
+        let _ = model.attribute_definition(id);
+        model.set(id, "attributeDefinition", Value::Ref(other));
+        let _ = model.attribute_definition(id);
+        let id = model.create(ElementKind::Step);
+        model.set(id, "behavior", Value::RefList(vec![other]));
+        let _ = model.behavior(id);
+        model.set(id, "behavior", Value::Ref(other));
+        let _ = model.behavior(id);
+        let id = model.create(ElementKind::Comment);
+        model.set(id, "body", Value::String(String::from("x")));
+        let _ = model.body(id);
+        let id = model.create(ElementKind::LoopActionUsage);
+        model.set(id, "bodyAction", Value::Ref(other));
+        let _ = model.body_action(id);
+        let id = model.create(ElementKind::MultiplicityRange);
+        model.set(id, "bound", Value::Ref(other));
+        let _ = model.bound(id);
+        let id = model.create(ElementKind::CalculationDefinition);
+        model.set(id, "calculation", Value::RefList(vec![other]));
+        let _ = model.calculation(id);
+        model.set(id, "calculation", Value::Ref(other));
+        let _ = model.calculation(id);
+        let id = model.create(ElementKind::CalculationUsage);
+        model.set(id, "calculationDefinition", Value::Ref(other));
+        let _ = model.calculation_definition(id);
+        let id = model.create(ElementKind::CaseUsage);
+        model.set(id, "caseDefinition", Value::Ref(other));
+        let _ = model.case_definition(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "chainingFeature", Value::RefList(vec![other]));
+        let _ = model.chaining_feature(id);
+        model.set(id, "chainingFeature", Value::Ref(other));
+        let _ = model.chaining_feature(id);
+        let id = model.create(ElementKind::Dependency);
+        model.set(id, "client", Value::RefList(vec![other]));
+        let _ = model.client(id);
+        model.set(id, "client", Value::Ref(other));
+        let _ = model.client(id);
+        let id = model.create(ElementKind::ConcernUsage);
+        model.set(id, "concernDefinition", Value::Ref(other));
+        let _ = model.concern_definition(id);
+        let id = model.create(ElementKind::ElementFilterMembership);
+        model.set(id, "condition", Value::Ref(other));
+        let _ = model.condition(id);
+        let id = model.create(ElementKind::ConjugatedPortTyping);
+        model.set(id, "conjugatedPortDefinition", Value::Ref(other));
+        let _ = model.conjugated_port_definition(id);
+        let id = model.create(ElementKind::Conjugation);
+        model.set(id, "conjugatedType", Value::Ref(other));
+        let _ = model.conjugated_type(id);
+        let id = model.create(ElementKind::ConnectionUsage);
+        model.set(id, "connectionDefinition", Value::RefList(vec![other]));
+        let _ = model.connection_definition(id);
+        model.set(id, "connectionDefinition", Value::Ref(other));
+        let _ = model.connection_definition(id);
+        let id = model.create(ElementKind::ConnectionDefinition);
+        model.set(id, "connectionEnd", Value::RefList(vec![other]));
+        let _ = model.connection_end(id);
+        model.set(id, "connectionEnd", Value::Ref(other));
+        let _ = model.connection_end(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "connectorEnd", Value::RefList(vec![other]));
+        let _ = model.connector_end(id);
+        model.set(id, "connectorEnd", Value::Ref(other));
+        let _ = model.connector_end(id);
+        let id = model.create(ElementKind::ConstraintUsage);
+        model.set(id, "constraintDefinition", Value::Ref(other));
+        let _ = model.constraint_definition(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "crossFeature", Value::Ref(other));
+        let _ = model.cross_feature(id);
+        let id = model.create(ElementKind::CrossSubsetting);
+        model.set(id, "crossedFeature", Value::Ref(other));
+        let _ = model.crossed_feature(id);
+        let id = model.create(ElementKind::CrossSubsetting);
+        model.set(id, "crossingFeature", Value::Ref(other));
+        let _ = model.crossing_feature(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "declaredName", Value::String(String::from("x")));
+        let _ = model.declared_name(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "declaredShortName", Value::String(String::from("x")));
+        let _ = model.declared_short_name(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "defaultFeaturingType", Value::Ref(other));
+        let _ = model.default_featuring_type(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "definition", Value::RefList(vec![other]));
+        let _ = model.definition(id);
+        model.set(id, "definition", Value::Ref(other));
+        let _ = model.definition(id);
+        let id = model.create(ElementKind::Differencing);
+        model.set(id, "differencingType", Value::RefList(vec![other]));
+        let _ = model.differencing_type(id);
+        model.set(id, "differencingType", Value::Ref(other));
+        let _ = model.differencing_type(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "directedFeature", Value::RefList(vec![other]));
+        let _ = model.directed_feature(id);
+        model.set(id, "directedFeature", Value::Ref(other));
+        let _ = model.directed_feature(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "directedUsage", Value::RefList(vec![other]));
+        let _ = model.directed_usage(id);
+        model.set(id, "directedUsage", Value::Ref(other));
+        let _ = model.directed_usage(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "direction", Value::String(String::from("x")));
+        let _ = model.direction(id);
+        let id = model.create(ElementKind::Disjoining);
+        model.set(id, "disjoiningType", Value::Ref(other));
+        let _ = model.disjoining_type(id);
+        let id = model.create(ElementKind::StateDefinition);
+        model.set(id, "doAction", Value::Ref(other));
+        let _ = model.do_action(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "documentation", Value::RefList(vec![other]));
+        let _ = model.documentation(id);
+        model.set(id, "documentation", Value::Ref(other));
+        let _ = model.documentation(id);
+        let id = model.create(ElementKind::Documentation);
+        model.set(id, "documentedElement", Value::Ref(other));
+        let _ = model.documented_element(id);
+        let id = model.create(ElementKind::TransitionUsage);
+        model.set(id, "effectAction", Value::RefList(vec![other]));
+        let _ = model.effect_action(id);
+        model.set(id, "effectAction", Value::Ref(other));
+        let _ = model.effect_action(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "elementId", Value::String(String::from("x")));
+        let _ = model.element_id(id);
+        let id = model.create(ElementKind::IfActionUsage);
+        model.set(id, "elseAction", Value::Ref(other));
+        let _ = model.else_action(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "endFeature", Value::RefList(vec![other]));
+        let _ = model.end_feature(id);
+        model.set(id, "endFeature", Value::Ref(other));
+        let _ = model.end_feature(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "endOwningType", Value::Ref(other));
+        let _ = model.end_owning_type(id);
+        let id = model.create(ElementKind::StateDefinition);
+        model.set(id, "entryAction", Value::Ref(other));
+        let _ = model.entry_action(id);
+        let id = model.create(ElementKind::EnumerationDefinition);
+        model.set(id, "enumeratedValue", Value::RefList(vec![other]));
+        let _ = model.enumerated_value(id);
+        model.set(id, "enumeratedValue", Value::Ref(other));
+        let _ = model.enumerated_value(id);
+        let id = model.create(ElementKind::EnumerationUsage);
+        model.set(id, "enumerationDefinition", Value::Ref(other));
+        let _ = model.enumeration_definition(id);
+        let id = model.create(ElementKind::EventOccurrenceUsage);
+        model.set(id, "eventOccurrence", Value::Ref(other));
+        let _ = model.event_occurrence(id);
+        let id = model.create(ElementKind::ExhibitStateUsage);
+        model.set(id, "exhibitedState", Value::Ref(other));
+        let _ = model.exhibited_state(id);
+        let id = model.create(ElementKind::StateDefinition);
+        model.set(id, "exitAction", Value::Ref(other));
+        let _ = model.exit_action(id);
+        let id = model.create(ElementKind::ViewUsage);
+        model.set(id, "exposedElement", Value::RefList(vec![other]));
+        let _ = model.exposed_element(id);
+        model.set(id, "exposedElement", Value::Ref(other));
+        let _ = model.exposed_element(id);
+        let id = model.create(ElementKind::Function);
+        model.set(id, "expression", Value::RefList(vec![other]));
+        let _ = model.expression(id);
+        model.set(id, "expression", Value::Ref(other));
+        let _ = model.expression(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "feature", Value::RefList(vec![other]));
+        let _ = model.feature(id);
+        model.set(id, "feature", Value::Ref(other));
+        let _ = model.feature(id);
+        let id = model.create(ElementKind::FeatureChaining);
+        model.set(id, "featureChained", Value::Ref(other));
+        let _ = model.feature_chained(id);
+        let id = model.create(ElementKind::FeatureInverting);
+        model.set(id, "featureInverted", Value::Ref(other));
+        let _ = model.feature_inverted(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "featureMembership", Value::RefList(vec![other]));
+        let _ = model.feature_membership(id);
+        model.set(id, "featureMembership", Value::Ref(other));
+        let _ = model.feature_membership(id);
+        let id = model.create(ElementKind::TypeFeaturing);
+        model.set(id, "featureOfType", Value::Ref(other));
+        let _ = model.feature_of_type(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "featureTarget", Value::Ref(other));
+        let _ = model.feature_target(id);
+        let id = model.create(ElementKind::FeatureValue);
+        model.set(id, "featureWithValue", Value::Ref(other));
+        let _ = model.feature_with_value(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "featuringType", Value::RefList(vec![other]));
+        let _ = model.featuring_type(id);
+        model.set(id, "featuringType", Value::Ref(other));
+        let _ = model.featuring_type(id);
+        let id = model.create(ElementKind::Package);
+        model.set(id, "filterCondition", Value::RefList(vec![other]));
+        let _ = model.filter_condition(id);
+        model.set(id, "filterCondition", Value::Ref(other));
+        let _ = model.filter_condition(id);
+        let id = model.create(ElementKind::FlowUsage);
+        model.set(id, "flowDefinition", Value::RefList(vec![other]));
+        let _ = model.flow_definition(id);
+        model.set(id, "flowDefinition", Value::Ref(other));
+        let _ = model.flow_definition(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "flowEnd", Value::RefList(vec![other]));
+        let _ = model.flow_end(id);
+        model.set(id, "flowEnd", Value::Ref(other));
+        let _ = model.flow_end(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "framedConcern", Value::RefList(vec![other]));
+        let _ = model.framed_concern(id);
+        model.set(id, "framedConcern", Value::Ref(other));
+        let _ = model.framed_concern(id);
+        let id = model.create(ElementKind::Expression);
+        model.set(id, "function", Value::Ref(other));
+        let _ = model.function(id);
+        let id = model.create(ElementKind::Specialization);
+        model.set(id, "general", Value::Ref(other));
+        let _ = model.general(id);
+        let id = model.create(ElementKind::TransitionUsage);
+        model.set(id, "guardExpression", Value::RefList(vec![other]));
+        let _ = model.guard_expression(id);
+        model.set(id, "guardExpression", Value::Ref(other));
+        let _ = model.guard_expression(id);
+        let id = model.create(ElementKind::IfActionUsage);
+        model.set(id, "ifArgument", Value::Ref(other));
+        let _ = model.if_argument(id);
+        let id = model.create(ElementKind::Import);
+        model.set(id, "importOwningNamespace", Value::Ref(other));
+        let _ = model.import_owning_namespace(id);
+        let id = model.create(ElementKind::Import);
+        model.set(id, "importedElement", Value::Ref(other));
+        let _ = model.imported_element(id);
+        let id = model.create(ElementKind::MembershipImport);
+        model.set(id, "importedMembership", Value::RefList(vec![other]));
+        let _ = model.imported_membership(id);
+        model.set(id, "importedMembership", Value::Ref(other));
+        let _ = model.imported_membership(id);
+        let id = model.create(ElementKind::NamespaceImport);
+        model.set(id, "importedNamespace", Value::Ref(other));
+        let _ = model.imported_namespace(id);
+        let id = model.create(ElementKind::UseCaseDefinition);
+        model.set(id, "includedUseCase", Value::RefList(vec![other]));
+        let _ = model.included_use_case(id);
+        model.set(id, "includedUseCase", Value::Ref(other));
+        let _ = model.included_use_case(id);
+        let id = model.create(ElementKind::OccurrenceUsage);
+        model.set(id, "individualDefinition", Value::Ref(other));
+        let _ = model.individual_definition(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "inheritedFeature", Value::RefList(vec![other]));
+        let _ = model.inherited_feature(id);
+        model.set(id, "inheritedFeature", Value::Ref(other));
+        let _ = model.inherited_feature(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "inheritedMembership", Value::RefList(vec![other]));
+        let _ = model.inherited_membership(id);
+        model.set(id, "inheritedMembership", Value::Ref(other));
+        let _ = model.inherited_membership(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "input", Value::RefList(vec![other]));
+        let _ = model.input(id);
+        model.set(id, "input", Value::Ref(other));
+        let _ = model.input(id);
+        let id = model.create(ElementKind::InstantiationExpression);
+        model.set(id, "instantiatedType", Value::Ref(other));
+        let _ = model.instantiated_type(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "interaction", Value::RefList(vec![other]));
+        let _ = model.interaction(id);
+        model.set(id, "interaction", Value::Ref(other));
+        let _ = model.interaction(id);
+        let id = model.create(ElementKind::InterfaceUsage);
+        model.set(id, "interfaceDefinition", Value::RefList(vec![other]));
+        let _ = model.interface_definition(id);
+        model.set(id, "interfaceDefinition", Value::Ref(other));
+        let _ = model.interface_definition(id);
+        let id = model.create(ElementKind::InterfaceDefinition);
+        model.set(id, "interfaceEnd", Value::RefList(vec![other]));
+        let _ = model.interface_end(id);
+        model.set(id, "interfaceEnd", Value::Ref(other));
+        let _ = model.interface_end(id);
+        let id = model.create(ElementKind::Intersecting);
+        model.set(id, "intersectingType", Value::RefList(vec![other]));
+        let _ = model.intersecting_type(id);
+        model.set(id, "intersectingType", Value::Ref(other));
+        let _ = model.intersecting_type(id);
+        let id = model.create(ElementKind::FeatureInverting);
+        model.set(id, "invertingFeature", Value::Ref(other));
+        let _ = model.inverting_feature(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "isAbstract", Value::Bool(true));
+        let _ = model.is_abstract(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isComposite", Value::Bool(true));
+        let _ = model.is_composite(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "isConjugated", Value::Bool(true));
+        let _ = model.is_conjugated(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isConstant", Value::Bool(true));
+        let _ = model.is_constant(id);
+        let id = model.create(ElementKind::FeatureValue);
+        model.set(id, "isDefault", Value::Bool(true));
+        let _ = model.is_default(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isDerived", Value::Bool(true));
+        let _ = model.is_derived(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isEnd", Value::Bool(true));
+        let _ = model.is_end(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "isImplied", Value::Bool(true));
+        let _ = model.is_implied(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "isImpliedIncluded", Value::Bool(true));
+        let _ = model.is_implied_included(id);
+        let id = model.create(ElementKind::Expose);
+        model.set(id, "isImportAll", Value::Bool(true));
+        let _ = model.is_import_all(id);
+        let id = model.create(ElementKind::OccurrenceDefinition);
+        model.set(id, "isIndividual", Value::Bool(true));
+        let _ = model.is_individual(id);
+        let id = model.create(ElementKind::FeatureValue);
+        model.set(id, "isInitial", Value::Bool(true));
+        let _ = model.is_initial(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "isLibraryElement", Value::Bool(true));
+        let _ = model.is_library_element(id);
+        let id = model.create(ElementKind::Expression);
+        model.set(id, "isModelLevelEvaluable", Value::Bool(true));
+        let _ = model.is_model_level_evaluable(id);
+        let id = model.create(ElementKind::Invariant);
+        model.set(id, "isNegated", Value::Bool(true));
+        let _ = model.is_negated(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isOrdered", Value::Bool(true));
+        let _ = model.is_ordered(id);
+        let id = model.create(ElementKind::StateDefinition);
+        model.set(id, "isParallel", Value::Bool(true));
+        let _ = model.is_parallel(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isPortion", Value::Bool(true));
+        let _ = model.is_portion(id);
+        let id = model.create(ElementKind::Import);
+        model.set(id, "isRecursive", Value::Bool(true));
+        let _ = model.is_recursive(id);
+        let id = model.create(ElementKind::AttributeUsage);
+        model.set(id, "isReference", Value::Bool(true));
+        let _ = model.is_reference(id);
+        let id = model.create(ElementKind::LibraryPackage);
+        model.set(id, "isStandard", Value::Bool(true));
+        let _ = model.is_standard(id);
+        let id = model.create(ElementKind::ConnectionDefinition);
+        model.set(id, "isSufficient", Value::Bool(true));
+        let _ = model.is_sufficient(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isUnique", Value::Bool(true));
+        let _ = model.is_unique(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "isVariable", Value::Bool(true));
+        let _ = model.is_variable(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "isVariation", Value::Bool(true));
+        let _ = model.is_variation(id);
+        let id = model.create(ElementKind::ItemUsage);
+        model.set(id, "itemDefinition", Value::RefList(vec![other]));
+        let _ = model.item_definition(id);
+        model.set(id, "itemDefinition", Value::Ref(other));
+        let _ = model.item_definition(id);
+        let id = model.create(ElementKind::TextualRepresentation);
+        model.set(id, "language", Value::String(String::from("x")));
+        let _ = model.language(id);
+        let id = model.create(ElementKind::Comment);
+        model.set(id, "locale", Value::String(String::from("x")));
+        let _ = model.locale(id);
+        let id = model.create(ElementKind::ForLoopActionUsage);
+        model.set(id, "loopVariable", Value::Ref(other));
+        let _ = model.loop_variable(id);
+        let id = model.create(ElementKind::MultiplicityRange);
+        model.set(id, "lowerBound", Value::Ref(other));
+        let _ = model.lower_bound(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "mayTimeVary", Value::Bool(true));
+        let _ = model.may_time_vary(id);
+        let id = model.create(ElementKind::Namespace);
+        model.set(id, "member", Value::RefList(vec![other]));
+        let _ = model.member(id);
+        model.set(id, "member", Value::Ref(other));
+        let _ = model.member(id);
+        let id = model.create(ElementKind::Membership);
+        model.set(id, "memberElement", Value::Ref(other));
+        let _ = model.member_element(id);
+        let id = model.create(ElementKind::Membership);
+        model.set(id, "memberElementId", Value::String(String::from("x")));
+        let _ = model.member_element_id(id);
+        let id = model.create(ElementKind::Membership);
+        model.set(id, "memberName", Value::String(String::from("x")));
+        let _ = model.member_name(id);
+        let id = model.create(ElementKind::Membership);
+        model.set(id, "memberShortName", Value::String(String::from("x")));
+        let _ = model.member_short_name(id);
+        let id = model.create(ElementKind::Namespace);
+        model.set(id, "membership", Value::RefList(vec![other]));
+        let _ = model.membership(id);
+        model.set(id, "membership", Value::Ref(other));
+        let _ = model.membership(id);
+        let id = model.create(ElementKind::Membership);
+        model.set(id, "membershipOwningNamespace", Value::Ref(other));
+        let _ = model.membership_owning_namespace(id);
+        let id = model.create(ElementKind::MetadataFeature);
+        model.set(id, "metaclass", Value::Ref(other));
+        let _ = model.metaclass(id);
+        let id = model.create(ElementKind::MetadataUsage);
+        model.set(id, "metadataDefinition", Value::Ref(other));
+        let _ = model.metadata_definition(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "multiplicity", Value::Ref(other));
+        let _ = model.multiplicity(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedAction", Value::RefList(vec![other]));
+        let _ = model.nested_action(id);
+        model.set(id, "nestedAction", Value::Ref(other));
+        let _ = model.nested_action(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedAllocation", Value::RefList(vec![other]));
+        let _ = model.nested_allocation(id);
+        model.set(id, "nestedAllocation", Value::Ref(other));
+        let _ = model.nested_allocation(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedAnalysisCase", Value::RefList(vec![other]));
+        let _ = model.nested_analysis_case(id);
+        model.set(id, "nestedAnalysisCase", Value::Ref(other));
+        let _ = model.nested_analysis_case(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedAttribute", Value::RefList(vec![other]));
+        let _ = model.nested_attribute(id);
+        model.set(id, "nestedAttribute", Value::Ref(other));
+        let _ = model.nested_attribute(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedCalculation", Value::RefList(vec![other]));
+        let _ = model.nested_calculation(id);
+        model.set(id, "nestedCalculation", Value::Ref(other));
+        let _ = model.nested_calculation(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedCase", Value::RefList(vec![other]));
+        let _ = model.nested_case(id);
+        model.set(id, "nestedCase", Value::Ref(other));
+        let _ = model.nested_case(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedConcern", Value::RefList(vec![other]));
+        let _ = model.nested_concern(id);
+        model.set(id, "nestedConcern", Value::Ref(other));
+        let _ = model.nested_concern(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedConnection", Value::RefList(vec![other]));
+        let _ = model.nested_connection(id);
+        model.set(id, "nestedConnection", Value::Ref(other));
+        let _ = model.nested_connection(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedConstraint", Value::RefList(vec![other]));
+        let _ = model.nested_constraint(id);
+        model.set(id, "nestedConstraint", Value::Ref(other));
+        let _ = model.nested_constraint(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedEnumeration", Value::RefList(vec![other]));
+        let _ = model.nested_enumeration(id);
+        model.set(id, "nestedEnumeration", Value::Ref(other));
+        let _ = model.nested_enumeration(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedFlow", Value::RefList(vec![other]));
+        let _ = model.nested_flow(id);
+        model.set(id, "nestedFlow", Value::Ref(other));
+        let _ = model.nested_flow(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedInterface", Value::RefList(vec![other]));
+        let _ = model.nested_interface(id);
+        model.set(id, "nestedInterface", Value::Ref(other));
+        let _ = model.nested_interface(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedItem", Value::RefList(vec![other]));
+        let _ = model.nested_item(id);
+        model.set(id, "nestedItem", Value::Ref(other));
+        let _ = model.nested_item(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedMetadata", Value::RefList(vec![other]));
+        let _ = model.nested_metadata(id);
+        model.set(id, "nestedMetadata", Value::Ref(other));
+        let _ = model.nested_metadata(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedOccurrence", Value::RefList(vec![other]));
+        let _ = model.nested_occurrence(id);
+        model.set(id, "nestedOccurrence", Value::Ref(other));
+        let _ = model.nested_occurrence(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedPart", Value::RefList(vec![other]));
+        let _ = model.nested_part(id);
+        model.set(id, "nestedPart", Value::Ref(other));
+        let _ = model.nested_part(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedPort", Value::RefList(vec![other]));
+        let _ = model.nested_port(id);
+        model.set(id, "nestedPort", Value::Ref(other));
+        let _ = model.nested_port(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedReference", Value::RefList(vec![other]));
+        let _ = model.nested_reference(id);
+        model.set(id, "nestedReference", Value::Ref(other));
+        let _ = model.nested_reference(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedRendering", Value::RefList(vec![other]));
+        let _ = model.nested_rendering(id);
+        model.set(id, "nestedRendering", Value::Ref(other));
+        let _ = model.nested_rendering(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedRequirement", Value::RefList(vec![other]));
+        let _ = model.nested_requirement(id);
+        model.set(id, "nestedRequirement", Value::Ref(other));
+        let _ = model.nested_requirement(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedState", Value::RefList(vec![other]));
+        let _ = model.nested_state(id);
+        model.set(id, "nestedState", Value::Ref(other));
+        let _ = model.nested_state(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedTransition", Value::RefList(vec![other]));
+        let _ = model.nested_transition(id);
+        model.set(id, "nestedTransition", Value::Ref(other));
+        let _ = model.nested_transition(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedUsage", Value::RefList(vec![other]));
+        let _ = model.nested_usage(id);
+        model.set(id, "nestedUsage", Value::Ref(other));
+        let _ = model.nested_usage(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedUseCase", Value::RefList(vec![other]));
+        let _ = model.nested_use_case(id);
+        model.set(id, "nestedUseCase", Value::Ref(other));
+        let _ = model.nested_use_case(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedVerificationCase", Value::RefList(vec![other]));
+        let _ = model.nested_verification_case(id);
+        model.set(id, "nestedVerificationCase", Value::Ref(other));
+        let _ = model.nested_verification_case(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedView", Value::RefList(vec![other]));
+        let _ = model.nested_view(id);
+        model.set(id, "nestedView", Value::Ref(other));
+        let _ = model.nested_view(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "nestedViewpoint", Value::RefList(vec![other]));
+        let _ = model.nested_viewpoint(id);
+        model.set(id, "nestedViewpoint", Value::Ref(other));
+        let _ = model.nested_viewpoint(id);
+        let id = model.create(ElementKind::CaseDefinition);
+        model.set(id, "objectiveRequirement", Value::Ref(other));
+        let _ = model.objective_requirement(id);
+        let id = model.create(ElementKind::OccurrenceUsage);
+        model.set(id, "occurrenceDefinition", Value::RefList(vec![other]));
+        let _ = model.occurrence_definition(id);
+        model.set(id, "occurrenceDefinition", Value::Ref(other));
+        let _ = model.occurrence_definition(id);
+        let id = model.create(ElementKind::CollectExpression);
+        model.set(id, "operator", Value::String(String::from("x")));
+        let _ = model.operator(id);
+        let id = model.create(ElementKind::ConjugatedPortDefinition);
+        model.set(id, "originalPortDefinition", Value::Ref(other));
+        let _ = model.original_port_definition(id);
+        let id = model.create(ElementKind::Conjugation);
+        model.set(id, "originalType", Value::Ref(other));
+        let _ = model.original_type(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "output", Value::RefList(vec![other]));
+        let _ = model.output(id);
+        model.set(id, "output", Value::Ref(other));
+        let _ = model.output(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedAction", Value::RefList(vec![other]));
+        let _ = model.owned_action(id);
+        model.set(id, "ownedAction", Value::Ref(other));
+        let _ = model.owned_action(id);
+        let id = model.create(ElementKind::ActorMembership);
+        model.set(id, "ownedActorParameter", Value::Ref(other));
+        let _ = model.owned_actor_parameter(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedAllocation", Value::RefList(vec![other]));
+        let _ = model.owned_allocation(id);
+        model.set(id, "ownedAllocation", Value::Ref(other));
+        let _ = model.owned_allocation(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedAnalysisCase", Value::RefList(vec![other]));
+        let _ = model.owned_analysis_case(id);
+        model.set(id, "ownedAnalysisCase", Value::Ref(other));
+        let _ = model.owned_analysis_case(id);
+        let id = model.create(ElementKind::Annotation);
+        model.set(id, "ownedAnnotatingElement", Value::Ref(other));
+        let _ = model.owned_annotating_element(id);
+        let id = model.create(ElementKind::AnnotatingElement);
+        model.set(id, "ownedAnnotatingRelationship", Value::RefList(vec![other]));
+        let _ = model.owned_annotating_relationship(id);
+        model.set(id, "ownedAnnotatingRelationship", Value::Ref(other));
+        let _ = model.owned_annotating_relationship(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "ownedAnnotation", Value::RefList(vec![other]));
+        let _ = model.owned_annotation(id);
+        model.set(id, "ownedAnnotation", Value::Ref(other));
+        let _ = model.owned_annotation(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedAttribute", Value::RefList(vec![other]));
+        let _ = model.owned_attribute(id);
+        model.set(id, "ownedAttribute", Value::Ref(other));
+        let _ = model.owned_attribute(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedCalculation", Value::RefList(vec![other]));
+        let _ = model.owned_calculation(id);
+        model.set(id, "ownedCalculation", Value::Ref(other));
+        let _ = model.owned_calculation(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedCase", Value::RefList(vec![other]));
+        let _ = model.owned_case(id);
+        model.set(id, "ownedCase", Value::Ref(other));
+        let _ = model.owned_case(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedConcern", Value::RefList(vec![other]));
+        let _ = model.owned_concern(id);
+        model.set(id, "ownedConcern", Value::Ref(other));
+        let _ = model.owned_concern(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedConjugator", Value::Ref(other));
+        let _ = model.owned_conjugator(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedConnection", Value::RefList(vec![other]));
+        let _ = model.owned_connection(id);
+        model.set(id, "ownedConnection", Value::Ref(other));
+        let _ = model.owned_connection(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedConstraint", Value::RefList(vec![other]));
+        let _ = model.owned_constraint(id);
+        model.set(id, "ownedConstraint", Value::Ref(other));
+        let _ = model.owned_constraint(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedCrossSubsetting", Value::Ref(other));
+        let _ = model.owned_cross_subsetting(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedDifferencing", Value::RefList(vec![other]));
+        let _ = model.owned_differencing(id);
+        model.set(id, "ownedDifferencing", Value::Ref(other));
+        let _ = model.owned_differencing(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedDisjoining", Value::RefList(vec![other]));
+        let _ = model.owned_disjoining(id);
+        model.set(id, "ownedDisjoining", Value::Ref(other));
+        let _ = model.owned_disjoining(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "ownedElement", Value::RefList(vec![other]));
+        let _ = model.owned_element(id);
+        model.set(id, "ownedElement", Value::Ref(other));
+        let _ = model.owned_element(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedEndFeature", Value::RefList(vec![other]));
+        let _ = model.owned_end_feature(id);
+        model.set(id, "ownedEndFeature", Value::Ref(other));
+        let _ = model.owned_end_feature(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedEnumeration", Value::RefList(vec![other]));
+        let _ = model.owned_enumeration(id);
+        model.set(id, "ownedEnumeration", Value::Ref(other));
+        let _ = model.owned_enumeration(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedFeature", Value::RefList(vec![other]));
+        let _ = model.owned_feature(id);
+        model.set(id, "ownedFeature", Value::Ref(other));
+        let _ = model.owned_feature(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedFeatureChaining", Value::RefList(vec![other]));
+        let _ = model.owned_feature_chaining(id);
+        model.set(id, "ownedFeatureChaining", Value::Ref(other));
+        let _ = model.owned_feature_chaining(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedFeatureInverting", Value::RefList(vec![other]));
+        let _ = model.owned_feature_inverting(id);
+        model.set(id, "ownedFeatureInverting", Value::Ref(other));
+        let _ = model.owned_feature_inverting(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedFeatureMembership", Value::RefList(vec![other]));
+        let _ = model.owned_feature_membership(id);
+        model.set(id, "ownedFeatureMembership", Value::Ref(other));
+        let _ = model.owned_feature_membership(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedFlow", Value::RefList(vec![other]));
+        let _ = model.owned_flow(id);
+        model.set(id, "ownedFlow", Value::Ref(other));
+        let _ = model.owned_flow(id);
+        let id = model.create(ElementKind::Namespace);
+        model.set(id, "ownedImport", Value::RefList(vec![other]));
+        let _ = model.owned_import(id);
+        model.set(id, "ownedImport", Value::Ref(other));
+        let _ = model.owned_import(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedInterface", Value::RefList(vec![other]));
+        let _ = model.owned_interface(id);
+        model.set(id, "ownedInterface", Value::Ref(other));
+        let _ = model.owned_interface(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedIntersecting", Value::RefList(vec![other]));
+        let _ = model.owned_intersecting(id);
+        model.set(id, "ownedIntersecting", Value::Ref(other));
+        let _ = model.owned_intersecting(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedItem", Value::RefList(vec![other]));
+        let _ = model.owned_item(id);
+        model.set(id, "ownedItem", Value::Ref(other));
+        let _ = model.owned_item(id);
+        let id = model.create(ElementKind::Namespace);
+        model.set(id, "ownedMember", Value::RefList(vec![other]));
+        let _ = model.owned_member(id);
+        model.set(id, "ownedMember", Value::Ref(other));
+        let _ = model.owned_member(id);
+        let id = model.create(ElementKind::OwningMembership);
+        model.set(id, "ownedMemberElement", Value::Ref(other));
+        let _ = model.owned_member_element(id);
+        let id = model.create(ElementKind::OwningMembership);
+        model.set(id, "ownedMemberElementId", Value::String(String::from("x")));
+        let _ = model.owned_member_element_id(id);
+        let id = model.create(ElementKind::EndFeatureMembership);
+        model.set(id, "ownedMemberFeature", Value::Ref(other));
+        let _ = model.owned_member_feature(id);
+        let id = model.create(ElementKind::OwningMembership);
+        model.set(id, "ownedMemberName", Value::String(String::from("x")));
+        let _ = model.owned_member_name(id);
+        let id = model.create(ElementKind::ParameterMembership);
+        model.set(id, "ownedMemberParameter", Value::Ref(other));
+        let _ = model.owned_member_parameter(id);
+        let id = model.create(ElementKind::OwningMembership);
+        model.set(id, "ownedMemberShortName", Value::String(String::from("x")));
+        let _ = model.owned_member_short_name(id);
+        let id = model.create(ElementKind::Namespace);
+        model.set(id, "ownedMembership", Value::RefList(vec![other]));
+        let _ = model.owned_membership(id);
+        model.set(id, "ownedMembership", Value::Ref(other));
+        let _ = model.owned_membership(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedMetadata", Value::RefList(vec![other]));
+        let _ = model.owned_metadata(id);
+        model.set(id, "ownedMetadata", Value::Ref(other));
+        let _ = model.owned_metadata(id);
+        let id = model.create(ElementKind::ObjectiveMembership);
+        model.set(id, "ownedObjectiveRequirement", Value::Ref(other));
+        let _ = model.owned_objective_requirement(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedOccurrence", Value::RefList(vec![other]));
+        let _ = model.owned_occurrence(id);
+        model.set(id, "ownedOccurrence", Value::Ref(other));
+        let _ = model.owned_occurrence(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedPart", Value::RefList(vec![other]));
+        let _ = model.owned_part(id);
+        model.set(id, "ownedPart", Value::Ref(other));
+        let _ = model.owned_part(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedPort", Value::RefList(vec![other]));
+        let _ = model.owned_port(id);
+        model.set(id, "ownedPort", Value::Ref(other));
+        let _ = model.owned_port(id);
+        let id = model.create(ElementKind::ConjugatedPortDefinition);
+        model.set(id, "ownedPortConjugator", Value::Ref(other));
+        let _ = model.owned_port_conjugator(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedRedefinition", Value::RefList(vec![other]));
+        let _ = model.owned_redefinition(id);
+        model.set(id, "ownedRedefinition", Value::Ref(other));
+        let _ = model.owned_redefinition(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedReference", Value::RefList(vec![other]));
+        let _ = model.owned_reference(id);
+        model.set(id, "ownedReference", Value::Ref(other));
+        let _ = model.owned_reference(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedReferenceSubsetting", Value::Ref(other));
+        let _ = model.owned_reference_subsetting(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "ownedRelatedElement", Value::RefList(vec![other]));
+        let _ = model.owned_related_element(id);
+        model.set(id, "ownedRelatedElement", Value::Ref(other));
+        let _ = model.owned_related_element(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "ownedRelationship", Value::RefList(vec![other]));
+        let _ = model.owned_relationship(id);
+        model.set(id, "ownedRelationship", Value::Ref(other));
+        let _ = model.owned_relationship(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedRendering", Value::RefList(vec![other]));
+        let _ = model.owned_rendering(id);
+        model.set(id, "ownedRendering", Value::Ref(other));
+        let _ = model.owned_rendering(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedRequirement", Value::RefList(vec![other]));
+        let _ = model.owned_requirement(id);
+        model.set(id, "ownedRequirement", Value::Ref(other));
+        let _ = model.owned_requirement(id);
+        let id = model.create(ElementKind::ResultExpressionMembership);
+        model.set(id, "ownedResultExpression", Value::Ref(other));
+        let _ = model.owned_result_expression(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedSpecialization", Value::RefList(vec![other]));
+        let _ = model.owned_specialization(id);
+        model.set(id, "ownedSpecialization", Value::Ref(other));
+        let _ = model.owned_specialization(id);
+        let id = model.create(ElementKind::StakeholderMembership);
+        model.set(id, "ownedStakeholderParameter", Value::Ref(other));
+        let _ = model.owned_stakeholder_parameter(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedState", Value::RefList(vec![other]));
+        let _ = model.owned_state(id);
+        model.set(id, "ownedState", Value::Ref(other));
+        let _ = model.owned_state(id);
+        let id = model.create(ElementKind::Classifier);
+        model.set(id, "ownedSubclassification", Value::RefList(vec![other]));
+        let _ = model.owned_subclassification(id);
+        model.set(id, "ownedSubclassification", Value::Ref(other));
+        let _ = model.owned_subclassification(id);
+        let id = model.create(ElementKind::SubjectMembership);
+        model.set(id, "ownedSubjectParameter", Value::Ref(other));
+        let _ = model.owned_subject_parameter(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedSubsetting", Value::RefList(vec![other]));
+        let _ = model.owned_subsetting(id);
+        model.set(id, "ownedSubsetting", Value::Ref(other));
+        let _ = model.owned_subsetting(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedTransition", Value::RefList(vec![other]));
+        let _ = model.owned_transition(id);
+        model.set(id, "ownedTransition", Value::Ref(other));
+        let _ = model.owned_transition(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedTypeFeaturing", Value::RefList(vec![other]));
+        let _ = model.owned_type_featuring(id);
+        model.set(id, "ownedTypeFeaturing", Value::Ref(other));
+        let _ = model.owned_type_featuring(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "ownedTyping", Value::RefList(vec![other]));
+        let _ = model.owned_typing(id);
+        model.set(id, "ownedTyping", Value::Ref(other));
+        let _ = model.owned_typing(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "ownedUnioning", Value::RefList(vec![other]));
+        let _ = model.owned_unioning(id);
+        model.set(id, "ownedUnioning", Value::Ref(other));
+        let _ = model.owned_unioning(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedUsage", Value::RefList(vec![other]));
+        let _ = model.owned_usage(id);
+        model.set(id, "ownedUsage", Value::Ref(other));
+        let _ = model.owned_usage(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedUseCase", Value::RefList(vec![other]));
+        let _ = model.owned_use_case(id);
+        model.set(id, "ownedUseCase", Value::Ref(other));
+        let _ = model.owned_use_case(id);
+        let id = model.create(ElementKind::VariantMembership);
+        model.set(id, "ownedVariantUsage", Value::Ref(other));
+        let _ = model.owned_variant_usage(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedVerificationCase", Value::RefList(vec![other]));
+        let _ = model.owned_verification_case(id);
+        model.set(id, "ownedVerificationCase", Value::Ref(other));
+        let _ = model.owned_verification_case(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedView", Value::RefList(vec![other]));
+        let _ = model.owned_view(id);
+        model.set(id, "ownedView", Value::Ref(other));
+        let _ = model.owned_view(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "ownedViewpoint", Value::RefList(vec![other]));
+        let _ = model.owned_viewpoint(id);
+        model.set(id, "ownedViewpoint", Value::Ref(other));
+        let _ = model.owned_viewpoint(id);
+        let id = model.create(ElementKind::Annotation);
+        model.set(id, "owningAnnotatedElement", Value::Ref(other));
+        let _ = model.owning_annotated_element(id);
+        let id = model.create(ElementKind::Annotation);
+        model.set(id, "owningAnnotatingElement", Value::Ref(other));
+        let _ = model.owning_annotating_element(id);
+        let id = model.create(ElementKind::AnnotatingElement);
+        model.set(id, "owningAnnotatingRelationship", Value::Ref(other));
+        let _ = model.owning_annotating_relationship(id);
+        let id = model.create(ElementKind::Subclassification);
+        model.set(id, "owningClassifier", Value::Ref(other));
+        let _ = model.owning_classifier(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "owningDefinition", Value::Ref(other));
+        let _ = model.owning_definition(id);
+        let id = model.create(ElementKind::FeatureInverting);
+        model.set(id, "owningFeature", Value::Ref(other));
+        let _ = model.owning_feature(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "owningFeatureMembership", Value::Ref(other));
+        let _ = model.owning_feature_membership(id);
+        let id = model.create(ElementKind::TypeFeaturing);
+        model.set(id, "owningFeatureOfType", Value::Ref(other));
+        let _ = model.owning_feature_of_type(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "owningMembership", Value::Ref(other));
+        let _ = model.owning_membership(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "owningNamespace", Value::Ref(other));
+        let _ = model.owning_namespace(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "owningRelatedElement", Value::Ref(other));
+        let _ = model.owning_related_element(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "owningRelationship", Value::Ref(other));
+        let _ = model.owning_relationship(id);
+        let id = model.create(ElementKind::Conjugation);
+        model.set(id, "owningType", Value::Ref(other));
+        let _ = model.owning_type(id);
+        let id = model.create(ElementKind::Usage);
+        model.set(id, "owningUsage", Value::Ref(other));
+        let _ = model.owning_usage(id);
+        let id = model.create(ElementKind::Behavior);
+        model.set(id, "parameter", Value::RefList(vec![other]));
+        let _ = model.parameter(id);
+        model.set(id, "parameter", Value::Ref(other));
+        let _ = model.parameter(id);
+        let id = model.create(ElementKind::PartUsage);
+        model.set(id, "partDefinition", Value::RefList(vec![other]));
+        let _ = model.part_definition(id);
+        model.set(id, "partDefinition", Value::Ref(other));
+        let _ = model.part_definition(id);
+        let id = model.create(ElementKind::AcceptActionUsage);
+        model.set(id, "payloadArgument", Value::Ref(other));
+        let _ = model.payload_argument(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "payloadFeature", Value::Ref(other));
+        let _ = model.payload_feature(id);
+        let id = model.create(ElementKind::AcceptActionUsage);
+        model.set(id, "payloadParameter", Value::Ref(other));
+        let _ = model.payload_parameter(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "payloadType", Value::RefList(vec![other]));
+        let _ = model.payload_type(id);
+        model.set(id, "payloadType", Value::Ref(other));
+        let _ = model.payload_type(id);
+        let id = model.create(ElementKind::PerformActionUsage);
+        model.set(id, "performedAction", Value::Ref(other));
+        let _ = model.performed_action(id);
+        let id = model.create(ElementKind::ConjugatedPortTyping);
+        model.set(id, "portDefinition", Value::RefList(vec![other]));
+        let _ = model.port_definition(id);
+        model.set(id, "portDefinition", Value::Ref(other));
+        let _ = model.port_definition(id);
+        let id = model.create(ElementKind::OccurrenceUsage);
+        model.set(id, "portionKind", Value::String(String::from("x")));
+        let _ = model.portion_kind(id);
+        let id = model.create(ElementKind::BooleanExpression);
+        model.set(id, "predicate", Value::Ref(other));
+        let _ = model.predicate(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "qualifiedName", Value::String(String::from("x")));
+        let _ = model.qualified_name(id);
+        let id = model.create(ElementKind::AcceptActionUsage);
+        model.set(id, "receiverArgument", Value::Ref(other));
+        let _ = model.receiver_argument(id);
+        let id = model.create(ElementKind::Redefinition);
+        model.set(id, "redefinedFeature", Value::Ref(other));
+        let _ = model.redefined_feature(id);
+        let id = model.create(ElementKind::Redefinition);
+        model.set(id, "redefiningFeature", Value::Ref(other));
+        let _ = model.redefining_feature(id);
+        let id = model.create(ElementKind::FramedConcernMembership);
+        model.set(id, "referencedConcern", Value::Ref(other));
+        let _ = model.referenced_concern(id);
+        let id = model.create(ElementKind::RequirementConstraintMembership);
+        model.set(id, "referencedConstraint", Value::Ref(other));
+        let _ = model.referenced_constraint(id);
+        let id = model.create(ElementKind::MetadataAccessExpression);
+        model.set(id, "referencedElement", Value::Ref(other));
+        let _ = model.referenced_element(id);
+        let id = model.create(ElementKind::ReferenceSubsetting);
+        model.set(id, "referencedFeature", Value::Ref(other));
+        let _ = model.referenced_feature(id);
+        let id = model.create(ElementKind::ViewRenderingMembership);
+        model.set(id, "referencedRendering", Value::Ref(other));
+        let _ = model.referenced_rendering(id);
+        let id = model.create(ElementKind::ReferenceSubsetting);
+        model.set(id, "referencingFeature", Value::Ref(other));
+        let _ = model.referencing_feature(id);
+        let id = model.create(ElementKind::AssignmentActionUsage);
+        model.set(id, "referent", Value::Ref(other));
+        let _ = model.referent(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "relatedElement", Value::RefList(vec![other]));
+        let _ = model.related_element(id);
+        model.set(id, "relatedElement", Value::Ref(other));
+        let _ = model.related_element(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "relatedFeature", Value::RefList(vec![other]));
+        let _ = model.related_feature(id);
+        model.set(id, "relatedFeature", Value::Ref(other));
+        let _ = model.related_feature(id);
+        let id = model.create(ElementKind::Association);
+        model.set(id, "relatedType", Value::RefList(vec![other]));
+        let _ = model.related_type(id);
+        model.set(id, "relatedType", Value::Ref(other));
+        let _ = model.related_type(id);
+        let id = model.create(ElementKind::RenderingDefinition);
+        model.set(id, "rendering", Value::RefList(vec![other]));
+        let _ = model.rendering(id);
+        model.set(id, "rendering", Value::Ref(other));
+        let _ = model.rendering(id);
+        let id = model.create(ElementKind::RenderingUsage);
+        model.set(id, "renderingDefinition", Value::Ref(other));
+        let _ = model.rendering_definition(id);
+        let id = model.create(ElementKind::TextualRepresentation);
+        model.set(id, "representedElement", Value::Ref(other));
+        let _ = model.represented_element(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "reqId", Value::String(String::from("x")));
+        let _ = model.req_id(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "requiredConstraint", Value::RefList(vec![other]));
+        let _ = model.required_constraint(id);
+        model.set(id, "requiredConstraint", Value::Ref(other));
+        let _ = model.required_constraint(id);
+        let id = model.create(ElementKind::RequirementUsage);
+        model.set(id, "requirementDefinition", Value::Ref(other));
+        let _ = model.requirement_definition(id);
+        let id = model.create(ElementKind::Expression);
+        model.set(id, "result", Value::Ref(other));
+        let _ = model.result(id);
+        let id = model.create(ElementKind::AnalysisCaseDefinition);
+        model.set(id, "resultExpression", Value::Ref(other));
+        let _ = model.result_expression(id);
+        let id = model.create(ElementKind::SatisfyRequirementUsage);
+        model.set(id, "satisfiedRequirement", Value::Ref(other));
+        let _ = model.satisfied_requirement(id);
+        let id = model.create(ElementKind::ViewDefinition);
+        model.set(id, "satisfiedViewpoint", Value::RefList(vec![other]));
+        let _ = model.satisfied_viewpoint(id);
+        model.set(id, "satisfiedViewpoint", Value::Ref(other));
+        let _ = model.satisfied_viewpoint(id);
+        let id = model.create(ElementKind::SatisfyRequirementUsage);
+        model.set(id, "satisfyingFeature", Value::Ref(other));
+        let _ = model.satisfying_feature(id);
+        let id = model.create(ElementKind::SendActionUsage);
+        model.set(id, "senderArgument", Value::Ref(other));
+        let _ = model.sender_argument(id);
+        let id = model.create(ElementKind::ForLoopActionUsage);
+        model.set(id, "seqArgument", Value::Ref(other));
+        let _ = model.seq_argument(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "shortName", Value::String(String::from("x")));
+        let _ = model.short_name(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "source", Value::RefList(vec![other]));
+        let _ = model.source(id);
+        model.set(id, "source", Value::Ref(other));
+        let _ = model.source(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "sourceFeature", Value::Ref(other));
+        let _ = model.source_feature(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "sourceOutputFeature", Value::Ref(other));
+        let _ = model.source_output_feature(id);
+        let id = model.create(ElementKind::Association);
+        model.set(id, "sourceType", Value::Ref(other));
+        let _ = model.source_type(id);
+        let id = model.create(ElementKind::Specialization);
+        model.set(id, "specific", Value::Ref(other));
+        let _ = model.specific(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "stakeholderParameter", Value::RefList(vec![other]));
+        let _ = model.stakeholder_parameter(id);
+        model.set(id, "stakeholderParameter", Value::Ref(other));
+        let _ = model.stakeholder_parameter(id);
+        let id = model.create(ElementKind::StateDefinition);
+        model.set(id, "state", Value::RefList(vec![other]));
+        let _ = model.state(id);
+        model.set(id, "state", Value::Ref(other));
+        let _ = model.state(id);
+        let id = model.create(ElementKind::StateUsage);
+        model.set(id, "stateDefinition", Value::RefList(vec![other]));
+        let _ = model.state_definition(id);
+        model.set(id, "stateDefinition", Value::Ref(other));
+        let _ = model.state_definition(id);
+        let id = model.create(ElementKind::Behavior);
+        model.set(id, "step", Value::RefList(vec![other]));
+        let _ = model.step(id);
+        model.set(id, "step", Value::Ref(other));
+        let _ = model.step(id);
+        let id = model.create(ElementKind::Subclassification);
+        model.set(id, "subclassifier", Value::Ref(other));
+        let _ = model.subclassifier(id);
+        let id = model.create(ElementKind::CaseDefinition);
+        model.set(id, "subjectParameter", Value::Ref(other));
+        let _ = model.subject_parameter(id);
+        let id = model.create(ElementKind::Subsetting);
+        model.set(id, "subsettedFeature", Value::Ref(other));
+        let _ = model.subsetted_feature(id);
+        let id = model.create(ElementKind::Subsetting);
+        model.set(id, "subsettingFeature", Value::Ref(other));
+        let _ = model.subsetting_feature(id);
+        let id = model.create(ElementKind::TransitionUsage);
+        model.set(id, "succession", Value::Ref(other));
+        let _ = model.succession(id);
+        let id = model.create(ElementKind::Subclassification);
+        model.set(id, "superclassifier", Value::Ref(other));
+        let _ = model.superclassifier(id);
+        let id = model.create(ElementKind::Dependency);
+        model.set(id, "supplier", Value::RefList(vec![other]));
+        let _ = model.supplier(id);
+        model.set(id, "supplier", Value::Ref(other));
+        let _ = model.supplier(id);
+        let id = model.create(ElementKind::Relationship);
+        model.set(id, "target", Value::RefList(vec![other]));
+        let _ = model.target(id);
+        model.set(id, "target", Value::Ref(other));
+        let _ = model.target(id);
+        let id = model.create(ElementKind::AssignmentActionUsage);
+        model.set(id, "targetArgument", Value::Ref(other));
+        let _ = model.target_argument(id);
+        let id = model.create(ElementKind::Connector);
+        model.set(id, "targetFeature", Value::RefList(vec![other]));
+        let _ = model.target_feature(id);
+        model.set(id, "targetFeature", Value::Ref(other));
+        let _ = model.target_feature(id);
+        let id = model.create(ElementKind::Flow);
+        model.set(id, "targetInputFeature", Value::Ref(other));
+        let _ = model.target_input_feature(id);
+        let id = model.create(ElementKind::Association);
+        model.set(id, "targetType", Value::RefList(vec![other]));
+        let _ = model.target_type(id);
+        model.set(id, "targetType", Value::Ref(other));
+        let _ = model.target_type(id);
+        let id = model.create(ElementKind::TerminateActionUsage);
+        model.set(id, "terminatedOccurrenceArgument", Value::Ref(other));
+        let _ = model.terminated_occurrence_argument(id);
+        let id = model.create(ElementKind::RequirementDefinition);
+        model.set(id, "text", Value::String(String::from("x")));
+        let _ = model.text(id);
+        let id = model.create(ElementKind::Element);
+        model.set(id, "textualRepresentation", Value::RefList(vec![other]));
+        let _ = model.textual_representation(id);
+        model.set(id, "textualRepresentation", Value::Ref(other));
+        let _ = model.textual_representation(id);
+        let id = model.create(ElementKind::IfActionUsage);
+        model.set(id, "thenAction", Value::Ref(other));
+        let _ = model.then_action(id);
+        let id = model.create(ElementKind::TransitionFeatureMembership);
+        model.set(id, "transitionFeature", Value::Ref(other));
+        let _ = model.transition_feature(id);
+        let id = model.create(ElementKind::TransitionUsage);
+        model.set(id, "triggerAction", Value::RefList(vec![other]));
+        let _ = model.trigger_action(id);
+        model.set(id, "triggerAction", Value::Ref(other));
+        let _ = model.trigger_action(id);
+        let id = model.create(ElementKind::Feature);
+        model.set(id, "type", Value::RefList(vec![other]));
+        let _ = model.r#type(id);
+        model.set(id, "type", Value::Ref(other));
+        let _ = model.r#type(id);
+        let id = model.create(ElementKind::Differencing);
+        model.set(id, "typeDifferenced", Value::Ref(other));
+        let _ = model.type_differenced(id);
+        let id = model.create(ElementKind::Disjoining);
+        model.set(id, "typeDisjoined", Value::Ref(other));
+        let _ = model.type_disjoined(id);
+        let id = model.create(ElementKind::Intersecting);
+        model.set(id, "typeIntersected", Value::Ref(other));
+        let _ = model.type_intersected(id);
+        let id = model.create(ElementKind::Unioning);
+        model.set(id, "typeUnioned", Value::Ref(other));
+        let _ = model.type_unioned(id);
+        let id = model.create(ElementKind::FeatureTyping);
+        model.set(id, "typedFeature", Value::Ref(other));
+        let _ = model.typed_feature(id);
+        let id = model.create(ElementKind::Type);
+        model.set(id, "unioningType", Value::RefList(vec![other]));
+        let _ = model.unioning_type(id);
+        model.set(id, "unioningType", Value::Ref(other));
+        let _ = model.unioning_type(id);
+        let id = model.create(ElementKind::WhileLoopActionUsage);
+        model.set(id, "untilArgument", Value::Ref(other));
+        let _ = model.until_argument(id);
+        let id = model.create(ElementKind::MultiplicityRange);
+        model.set(id, "upperBound", Value::Ref(other));
+        let _ = model.upper_bound(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "usage", Value::RefList(vec![other]));
+        let _ = model.usage(id);
+        model.set(id, "usage", Value::Ref(other));
+        let _ = model.usage(id);
+        let id = model.create(ElementKind::UseCaseUsage);
+        model.set(id, "useCaseDefinition", Value::Ref(other));
+        let _ = model.use_case_definition(id);
+        let id = model.create(ElementKind::IncludeUseCaseUsage);
+        model.set(id, "useCaseIncluded", Value::Ref(other));
+        let _ = model.use_case_included(id);
+        let id = model.create(ElementKind::AssignmentActionUsage);
+        model.set(id, "valueExpression", Value::Ref(other));
+        let _ = model.value_expression(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "variant", Value::RefList(vec![other]));
+        let _ = model.variant(id);
+        model.set(id, "variant", Value::Ref(other));
+        let _ = model.variant(id);
+        let id = model.create(ElementKind::Definition);
+        model.set(id, "variantMembership", Value::RefList(vec![other]));
+        let _ = model.variant_membership(id);
+        model.set(id, "variantMembership", Value::Ref(other));
+        let _ = model.variant_membership(id);
+        let id = model.create(ElementKind::VerificationCaseUsage);
+        model.set(id, "verificationCaseDefinition", Value::Ref(other));
+        let _ = model.verification_case_definition(id);
+        let id = model.create(ElementKind::RequirementVerificationMembership);
+        model.set(id, "verifiedRequirement", Value::RefList(vec![other]));
+        let _ = model.verified_requirement(id);
+        model.set(id, "verifiedRequirement", Value::Ref(other));
+        let _ = model.verified_requirement(id);
+        let id = model.create(ElementKind::ViewDefinition);
+        model.set(id, "view", Value::RefList(vec![other]));
+        let _ = model.view(id);
+        model.set(id, "view", Value::Ref(other));
+        let _ = model.view(id);
+        let id = model.create(ElementKind::ViewDefinition);
+        model.set(id, "viewCondition", Value::RefList(vec![other]));
+        let _ = model.view_condition(id);
+        model.set(id, "viewCondition", Value::Ref(other));
+        let _ = model.view_condition(id);
+        let id = model.create(ElementKind::ViewUsage);
+        model.set(id, "viewDefinition", Value::Ref(other));
+        let _ = model.view_definition(id);
+        let id = model.create(ElementKind::ViewDefinition);
+        model.set(id, "viewRendering", Value::Ref(other));
+        let _ = model.view_rendering(id);
+        let id = model.create(ElementKind::ViewpointUsage);
+        model.set(id, "viewpointDefinition", Value::Ref(other));
+        let _ = model.viewpoint_definition(id);
+        let id = model.create(ElementKind::ViewpointDefinition);
+        model.set(id, "viewpointStakeholder", Value::RefList(vec![other]));
+        let _ = model.viewpoint_stakeholder(id);
+        model.set(id, "viewpointStakeholder", Value::Ref(other));
+        let _ = model.viewpoint_stakeholder(id);
+        let id = model.create(ElementKind::Expose);
+        model.set(id, "visibility", Value::String(String::from("x")));
+        let _ = model.visibility(id);
+        let id = model.create(ElementKind::WhileLoopActionUsage);
+        model.set(id, "whileArgument", Value::Ref(other));
+        let _ = model.while_argument(id);
+    }
+}
