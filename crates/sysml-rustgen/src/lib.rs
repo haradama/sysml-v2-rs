@@ -96,6 +96,15 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenErr
     for &def in &generator.order {
         generator.definition(def, &mut out)?;
     }
+    for &(def, kind) in &generator.skipped {
+        let name = model.name(def).expect("collected named");
+        writeln!(
+            out,
+            "\n// not generated: `{name}` -- {} has no Rust shape",
+            kind.name()
+        )
+        .expect("writing to a String cannot fail");
+    }
     generator.requirements(roots, &mut out);
     Ok(out)
 }
@@ -120,6 +129,9 @@ enum Shape {
 struct Generator<'a> {
     model: &'a Model,
     order: Vec<ElementId>,
+    /// Definitions this generator has no shape for, in declaration
+    /// order, so that the output says so instead of passing over them.
+    skipped: Vec<(ElementId, ElementKind)>,
     shapes: HashMap<ElementId, Shape>,
     /// Generated types that can answer `Default::default()`.
     defaultable: HashSet<ElementId>,
@@ -148,6 +160,7 @@ impl<'a> Generator<'a> {
     fn collect(model: &'a Model, roots: &[ElementId]) -> Generator<'a> {
         let mut order = Vec::new();
         let mut shapes = HashMap::new();
+        let mut skipped: Vec<(ElementId, ElementKind)> = Vec::new();
         for &root in roots {
             for id in model.descendants(root) {
                 if model.name(id).is_none() || binding(model, id).is_some() {
@@ -159,10 +172,15 @@ impl<'a> Generator<'a> {
                     ElementKind::CalculationDefinition => Shape::Calculation,
                     ElementKind::ConstraintDefinition => Shape::Calculation,
                     ElementKind::ActionDefinition => Shape::Action,
+                    // an interface or a connection definition is a pair
+                    // of ends and whatever they carry -- a struct like
+                    // any other definition with features
                     ElementKind::PartDefinition
                     | ElementKind::ItemDefinition
                     | ElementKind::AttributeDefinition
-                    | ElementKind::PortDefinition => {
+                    | ElementKind::PortDefinition
+                    | ElementKind::InterfaceDefinition
+                    | ElementKind::ConnectionDefinition => {
                         if model
                             .owned(id)
                             .iter()
@@ -175,6 +193,20 @@ impl<'a> Generator<'a> {
                             Shape::Struct
                         }
                     }
+                    // what has no shape is still said out loud, since
+                    // silence reads as "there was nothing here"
+                    // a requirement has a shape of its own -- the ignored
+                    // test each one becomes -- so it is not skipped. Only
+                    // that exact kind: a viewpoint is a requirement by
+                    // specialization and gets no test.
+                    kind if kind.is_a(ElementKind::Definition)
+                        && kind != ElementKind::RequirementDefinition =>
+                    {
+                        if !skipped.iter().any(|&(seen, _)| seen == id) {
+                            skipped.push((id, kind));
+                        }
+                        continue;
+                    }
                     _ => continue,
                 };
                 if let std::collections::hash_map::Entry::Vacant(slot) = shapes.entry(id) {
@@ -186,6 +218,7 @@ impl<'a> Generator<'a> {
         let mut generator = Generator {
             model,
             order,
+            skipped,
             shapes,
             defaultable: HashSet::new(),
             derivable: HashSet::new(),
@@ -539,7 +572,13 @@ impl<'a> Generator<'a> {
             for &child in self.model.owned(level) {
                 if !matches!(
                     self.model.kind(child),
-                    ElementKind::AttributeUsage | ElementKind::PartUsage | ElementKind::ItemUsage
+                    ElementKind::AttributeUsage
+                        | ElementKind::PartUsage
+                        | ElementKind::ItemUsage
+                        // the `end`s an interface or connection definition
+                        // declares are references, and they are what the
+                        // definition is made of
+                        | ElementKind::ReferenceUsage
                 ) {
                     continue;
                 }
@@ -661,7 +700,10 @@ impl<'a> Generator<'a> {
                 },
                 // a nested definition is generated at the top level
                 kind if kind.is_a(ElementKind::Definition) => {}
-                ElementKind::AttributeUsage | ElementKind::PartUsage | ElementKind::ItemUsage => {
+                ElementKind::AttributeUsage
+                | ElementKind::PartUsage
+                | ElementKind::ItemUsage
+                | ElementKind::ReferenceUsage => {
                     if !fields.iter().any(|field| {
                         field.usage == child || Some(field.usage) == redefined(model, child)
                     }) && self.field(def, def, child).is_none()
@@ -1426,6 +1468,59 @@ impl<'a> Generator<'a> {
         self.delegation(usage, def, fields, "assert", "bool", performer, "&")
     }
 
+    /// How the model says a behaviour is put together: the subactions it
+    /// is composed of, the order it puts them in, and what flows between
+    /// them. None of it becomes code; all of it is what the code has to
+    /// do.
+    fn decomposition(&self, def: ElementId) -> Vec<String> {
+        let model = self.model;
+        let mut steps = Vec::new();
+        let mut subactions = Vec::new();
+        for &child in model.owned(def) {
+            match model.kind(child) {
+                ElementKind::ActionUsage | ElementKind::PerformActionUsage => {
+                    if let Some(name) = model.name(child) {
+                        let of = type_of(model, child)
+                            .and_then(|ty| model.name(ty))
+                            .map(|ty| format!(" : {ty}"))
+                            .unwrap_or_default();
+                        subactions.push(format!("`{name}{of}`"));
+                    }
+                }
+                kind if kind.is_a(ElementKind::SuccessionAsUsage) => {
+                    if let Some(order) = self.ends_of(child) {
+                        steps.push(format!("then: {order}"));
+                    }
+                }
+                kind if kind.is_a(ElementKind::FlowUsage) => {
+                    if let Some(order) = self.ends_of(child) {
+                        steps.push(format!("flow: {order}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        if !subactions.is_empty() {
+            out.push(format!("Made of {}.", subactions.join(", ")));
+        }
+        out.extend(steps);
+        out
+    }
+
+    /// The two ends of a succession or a flow, as the model resolved
+    /// them -- `relatedFeature` is where the semantics pass records what
+    /// the operands of `first ... then ...` and `flow ... to ...` point
+    /// at.
+    fn ends_of(&self, usage: ElementId) -> Option<String> {
+        let ends = self.model.related_feature(usage);
+        let named: Vec<&str> = ends
+            .iter()
+            .filter_map(|&end| self.model.name(end))
+            .collect();
+        (named.len() == 2).then(|| format!("`{}` -> `{}`", named[0], named[1]))
+    }
+
     /// What an action definition's `out` parameters make of its result:
     /// nothing, the one type, or a tuple of them.
     fn action_result(&self, def: ElementId) -> Option<String> {
@@ -1495,6 +1590,13 @@ impl<'a> Generator<'a> {
              the implementation is yours."
         )
         .unwrap();
+        // What the model does say is what the behaviour is made of. The
+        // generator cannot compile a dataflow into a body, but it can
+        // hand the implementor the model's own account of one instead of
+        // making them go and read it.
+        for step in self.decomposition(def) {
+            writeln!(out, "/// {step}").unwrap();
+        }
         writeln!(out, "pub trait {name} {{").unwrap();
         writeln!(
             out,
@@ -1915,11 +2017,27 @@ impl<'a> Generator<'a> {
     /// definition generated, where the definition generated one. An
     /// `abstract` definition became a trait instead, and a trait method
     /// is not callable out of nowhere.
-    fn callable(&self, name: &str) -> Option<String> {
+    fn callable(&self, name: &str) -> Option<expr::Callee> {
         let (&target, _) = self.shapes.iter().find(|(&id, &shape)| {
             shape == Shape::Calculation && self.model.name(id) == Some(name)
         })?;
-        (!self.model.is_abstract(target)).then(|| ident(name))
+        if self.model.is_abstract(target) {
+            return None;
+        }
+        // in declaration order, which is the order the generated function
+        // takes them in, so a call that named its arguments can be put
+        // back into it
+        let parameters = self
+            .model
+            .owned(target)
+            .iter()
+            .filter(|&&child| self.model.direction(child) == Some("in"))
+            .filter_map(|&child| self.model.name(child).map(str::to_string))
+            .collect();
+        Some(expr::Callee {
+            function: ident(name),
+            parameters,
+        })
     }
 
     /// The Rust type of a parameter and the container its multiplicity
@@ -2277,8 +2395,9 @@ fn camel(name: &str) -> String {
 
 /// A SysML name as the Rust name of a field, parameter or method:
 /// `spectralRadius` -> `spectral_radius`, since the model's own
-/// convention is the one Rust keeps for types, and raw -- or, where no
-/// raw form exists, suffixed -- where Rust reserves the word.
+/// convention is the one Rust keeps for types; anything Rust cannot
+/// spell in an identifier becomes `_`; and a reserved word is taken raw,
+/// or suffixed where no raw form exists.
 fn ident(name: &str) -> String {
     /// Everything Rust has taken, including what it has only reserved.
     const RESERVED: [&str; 51] = [
@@ -2293,7 +2412,24 @@ fn ident(name: &str) -> String {
     /// The keywords `r#` cannot rescue.
     const SUFFIXED: [&str; 4] = ["crate", "self", "Self", "super"];
 
-    let name = snake(name);
+    // an escaped name may hold anything at all -- `'provide transportation'`
+    // is one name in SysML -- and Rust spells identifiers out of a much
+    // smaller alphabet
+    let name: String = snake(name)
+        .chars()
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let name = if name.starts_with(|ch: char| ch.is_ascii_digit()) {
+        format!("_{name}")
+    } else {
+        name
+    };
     if SUFFIXED.contains(&name.as_str()) {
         format!("{name}_")
     } else if RESERVED.contains(&name.as_str()) {

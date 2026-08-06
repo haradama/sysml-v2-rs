@@ -36,6 +36,25 @@ jobs:
       - name: tests (incl. corpus regressions)
         run: cargo test --release
 
+  # the extension is the language server's only client, so an API change
+  # that breaks it would otherwise go unnoticed: nothing else compiles
+  # this TypeScript
+  vscode:
+    name: VSCode extension compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      # `npm ci` wants a lockfile, and this one is not checked in
+      - name: install
+        run: npm install --no-audit --no-fund
+        working-directory: editors/vscode
+      - name: compile
+        run: npm run compile
+        working-directory: editors/vscode
+
   coverage:
     name: C0 coverage (every line executed)
     runs-on: ubuntu-latest

@@ -2,15 +2,24 @@
 //!
 //! What translates: literals, references to what the caller can name
 //! (parameters, fields), feature chains (`line.amount`), the arithmetic,
-//! comparison and logical operators, parentheses, the conditional
+//! comparison and logical operators, `**` as `powf`, escaped names,
+//! parentheses, the conditional
 //! `if c ? a else b`, and a call of a calculation the generator wrote a
 //! function for. Numeric literals keep their written form, so a
 //! model mixing `2` into Real arithmetic surfaces as a Rust type error
-//! rather than a silent coercion. Anything beyond the subset -- `**`, a
-//! quoted name, a named argument, a call of something abstract or of
-//! nothing at all, an unresolvable reference -- makes
+//! rather than a silent coercion. Anything beyond the subset -- a call
+//! of something abstract or of nothing at all, a call that names only
+//! some of its arguments, an unresolvable reference -- makes
 //! the whole expression untranslatable, and the caller says so instead
 //! of approximating.
+
+/// What a call resolves to: the function Rust spells it as, and the
+/// parameters it takes, in order, so that a call written with named
+/// arguments can be put back into that order.
+pub(crate) struct Callee {
+    pub function: String,
+    pub parameters: Vec<String>,
+}
 
 /// A translated expression and what the caller may want to know of it.
 pub(crate) struct Translated {
@@ -27,7 +36,7 @@ pub(crate) struct Translated {
 pub(crate) fn translate(
     text: &str,
     resolve: &dyn Fn(&str) -> Option<String>,
-    resolve_call: &dyn Fn(&str) -> Option<String>,
+    resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
     let tokens = lex(text)?;
     let mut parser = Parser {
@@ -62,12 +71,14 @@ enum Token {
     Plus,
     Minus,
     Star,
+    StarStar,
     Slash,
     Percent,
     Lt,
     Le,
     Gt,
     Ge,
+    Eq,
     EqEq,
     Ne,
     LParen,
@@ -133,6 +144,22 @@ fn lex(text: &str) -> Option<Vec<Token>> {
             });
             continue;
         }
+        // an escaped name -- `'provide transportation'` -- is a name
+        // like any other; what Rust can spell it as is the caller's
+        // business, not the lexer's
+        if ch == '\'' {
+            let start = at + 1;
+            at += 1;
+            while at < chars.len() && chars[at] != '\'' {
+                at += 1;
+            }
+            if at >= chars.len() {
+                return None;
+            }
+            tokens.push(Token::Name(chars[start..at].iter().collect()));
+            at += 1;
+            continue;
+        }
         if ch == '"' {
             let start = at;
             at += 1;
@@ -154,11 +181,13 @@ fn lex(text: &str) -> Option<Vec<Token>> {
             ('<', Some('=')) => (Token::Le, 2),
             ('>', Some('=')) => (Token::Ge, 2),
             ('=', Some('=')) => (Token::EqEq, 2),
+            ('=', _) => (Token::Eq, 1),
             ('!', Some('=')) => (Token::Ne, 2),
             ('<', _) => (Token::Lt, 1),
             ('>', _) => (Token::Gt, 1),
             ('+', _) => (Token::Plus, 1),
             ('-', _) => (Token::Minus, 1),
+            ('*', Some('*')) => (Token::StarStar, 2),
             ('*', _) => (Token::Star, 1),
             ('/', _) => (Token::Slash, 1),
             ('%', _) => (Token::Percent, 1),
@@ -199,7 +228,7 @@ struct Parser<'a> {
     at: usize,
     references: Vec<String>,
     resolve: &'a dyn Fn(&str) -> Option<String>,
-    resolve_call: &'a dyn Fn(&str) -> Option<String>,
+    resolve_call: &'a dyn Fn(&str) -> Option<Callee>,
 }
 
 impl Parser<'_> {
@@ -209,6 +238,51 @@ impl Parser<'_> {
             return true;
         }
         false
+    }
+
+    /// The arguments of a call, in the order the callee declares its
+    /// parameters. SysML lets them be named -- `Widen(size = 1)` -- and
+    /// a name says which parameter it is for, not where it goes, so the
+    /// callee's own order is what puts them back in place. Naming one
+    /// argument means naming them all, since a call that mixes the two
+    /// says nothing about where the unnamed ones belong.
+    fn arguments(&mut self, callee: &Callee) -> Option<Vec<String>> {
+        let mut positional = Vec::new();
+        let mut named: Vec<(String, String)> = Vec::new();
+        if !self.eat(&Token::RParen) {
+            loop {
+                match (self.tokens.get(self.at), self.tokens.get(self.at + 1)) {
+                    (Some(Token::Name(parameter)), Some(Token::Eq)) => {
+                        let parameter = parameter.clone();
+                        self.at += 2;
+                        named.push((parameter, self.expression()?.rust));
+                    }
+                    _ => positional.push(self.expression()?.rust),
+                }
+                if self.eat(&Token::RParen) {
+                    break;
+                }
+                if !self.eat(&Token::Comma) {
+                    return None;
+                }
+            }
+        }
+        if named.is_empty() {
+            return Some(positional);
+        }
+        if !positional.is_empty() || named.len() != callee.parameters.len() {
+            return None;
+        }
+        callee
+            .parameters
+            .iter()
+            .map(|parameter| {
+                named
+                    .iter()
+                    .find(|(named, _)| named == parameter)
+                    .map(|(_, argument)| argument.clone())
+            })
+            .collect()
     }
 
     /// Precedence low to high, after KerML: implies, or, xor, and,
@@ -275,9 +349,31 @@ impl Parser<'_> {
                 (Token::Slash, " / "),
                 (Token::Percent, " % "),
             ],
-            Self::unary,
+            Self::power,
             false,
         )
+    }
+
+    /// `a ** b`, which Rust spells as a method. Both sides have to be
+    /// `Real`; an exponent written as a whole number is spelled as one
+    /// anyway, since `x ** 2` means the same real number as `x ** 2.0`
+    /// and only one of the two compiles.
+    fn power(&mut self) -> Option<Node> {
+        let lhs = self.unary()?;
+        if !self.eat(&Token::StarStar) {
+            return Some(lhs);
+        }
+        // right-associative, as exponentiation is
+        let rhs = self.power()?;
+        let exponent = match rhs.rust.parse::<i64>() {
+            Ok(whole) => format!("{whole}.0"),
+            Err(_) => wrap(&rhs),
+        };
+        Some(Node {
+            rust: format!("{}.powf({exponent})", wrap(&lhs)),
+            atomic: true,
+            boolean: false,
+        })
     }
 
     fn binary(
@@ -353,20 +449,9 @@ impl Parser<'_> {
             Token::Name(leading) if self.tokens.get(self.at) == Some(&Token::LParen) => {
                 let callee = (self.resolve_call)(&leading)?;
                 self.at += 1;
-                let mut arguments = Vec::new();
-                if !self.eat(&Token::RParen) {
-                    loop {
-                        arguments.push(self.expression()?.rust);
-                        if self.eat(&Token::RParen) {
-                            break;
-                        }
-                        if !self.eat(&Token::Comma) {
-                            return None;
-                        }
-                    }
-                }
+                let arguments = self.arguments(&callee)?;
                 Some(Node {
-                    rust: format!("{callee}({})", arguments.join(", ")),
+                    rust: format!("{}({})", callee.function, arguments.join(", ")),
                     atomic: true,
                     boolean: false,
                 })
@@ -424,11 +509,16 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::translate;
+    use super::{translate, Callee};
 
+    /// Every name resolves to itself, and every call to a lowercase
+    /// function of two parameters -- enough to exercise the shapes.
     fn plain(text: &str) -> Option<String> {
         translate(text, &|name| Some(name.to_string()), &|name| {
-            Some(name.to_lowercase())
+            Some(Callee {
+                function: name.to_lowercase(),
+                parameters: vec!["a".to_string(), "b".to_string()],
+            })
         })
         .map(|t| t.rust)
     }
@@ -501,9 +591,7 @@ mod tests {
     fn what_falls_outside_stays_untranslated() {
         for text in [
             "",
-            "a ** b",
             "a ^ b",
-            "'quoted name' + 1",
             "a..b",
             "a b",
             "\"unterminated",
@@ -519,9 +607,11 @@ mod tests {
             "a := b",
             "a == ==",
             "2 .. 3",
-            // a named argument names a parameter, and the caller has no
-            // way to know which position that is
-            "f(x = 1)",
+            // naming only some of the arguments says nothing about where
+            // the unnamed ones belong
+            "f(a = 1, 2)",
+            // and a name that is no parameter of the callee places nothing
+            "f(a = 1, x = 2)",
             "f(1,)",
             "f(1",
         ] {
@@ -536,6 +626,17 @@ mod tests {
         .is_none());
         // and so does a call of something the caller cannot spell
         assert!(plain("Widen(1, 2) > 0").is_some());
+        // `**` is a method in Rust, and a whole-number exponent is
+        // spelled as the real number it stands for
+        assert_eq!(plain("s ** 2").as_deref(), Some("s.powf(2.0)"));
+        assert_eq!(plain("s ** 2.5").as_deref(), Some("s.powf(2.5)"));
+        assert_eq!(plain("a ** b ** c").as_deref(), Some("a.powf(b.powf(c))"));
+        // an escaped name is a name
+        assert_eq!(plain("'a name' + 1").as_deref(), Some("a name + 1"));
+        assert!(plain("'unterminated").is_none());
+        // named arguments go back into the order the callee declares
+        assert_eq!(plain("F(b = 1, a = 2)").as_deref(), Some("f(2, 1)"));
+        assert_eq!(plain("F(1, 2)").as_deref(), Some("f(1, 2)"));
         assert!(translate("Widen(1) > 0", &|n| Some(n.to_string()), &|_| None).is_none());
     }
 }

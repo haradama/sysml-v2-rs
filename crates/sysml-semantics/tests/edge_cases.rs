@@ -784,3 +784,37 @@ fn a_bare_annotation_resolves_to_nothing_quietly() {
     let stats = ws.resolve_all();
     assert_eq!(stats.unresolved, 0);
 }
+
+#[test]
+fn a_kerml_relation_after_a_name_still_leaves_a_declaration() {
+    // `featured by` and its siblings follow a declared name the way
+    // `chains` does. Reading one of them as the start of a reference
+    // costs the declaration its name, and every qualified path through
+    // it stops resolving -- which is how ten references in the official
+    // `TimeVaryingFeatures.kerml` went unresolved.
+    for relation in [
+        "featured by f",
+        "chains f",
+        "unions f",
+        "intersects f",
+        "differences f",
+        "disjoint from f",
+        "inverse of f",
+        "conjugates f",
+    ] {
+        let text = format!(
+            "package T {{\n\tclass C {{\n\t\tmember feature x {relation};\n\
+             \t\tfeature q :>> C::x;\n\t}}\n\tfeature f;\n}}\n"
+        );
+        let mut ws = Workspace::default();
+        let file = ws.add_file("t.kerml", &text);
+        let stats = ws.resolve_all();
+        assert!(ws.file_parse(file).ok(), "{relation}: parses");
+        assert_eq!(
+            stats.unresolved,
+            0,
+            "{relation}: `C::x` found nothing -- {:?}",
+            ws.unresolved()
+        );
+    }
+}

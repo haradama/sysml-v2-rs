@@ -892,8 +892,9 @@ fn calculations_translate_where_the_simple_subset_allows() {
          \t\tw * h\n\
          \t}\n\
          \tcalc def Braking { in v : Real; return d : Real = v * v / 2.0; }\n\
-         \tcalc def Weird { in x : Real; return r : Real = x ** 2; }\n\
+         \tcalc def Weird { in x : Real; return r : Real = x[1]; }\n\
          \tcalc def Blank { in a : Real; return r : Real; }\n\
+         \tcalc def Squared { in x : Real; return r : Real = x ** 2; }\n\
          \tcalc def Anon { in : Real; return r : Real = 1.0; }\n\
          \titem def Job { attribute weight : Integer; }\n\
          \tpart def Sensor {\n\
@@ -907,7 +908,7 @@ fn calculations_translate_where_the_simple_subset_allows() {
          \t\tstate quiet;\n\
          \t\tstate loud;\n\
          \t\ttransition ring first quiet accept p : Payload if p then loud;\n\
-         \t\ttransition spark first quiet accept q : Job if q.weight ** 2 > 1 then loud;\n\
+         \t\ttransition spark first quiet accept q : Job if q.weight[1] > 1 then loud;\n\
          \t}\n\
          }\n",
     )
@@ -919,10 +920,13 @@ fn calculations_translate_where_the_simple_subset_allows() {
     // beyond the subset: the formula stays in the model's words
     assert!(rust.contains("/// The formula is beyond the simple subset"));
     assert!(rust.contains(
-        "#[allow(unused_variables)]\npub fn weird(x: f64) -> f64 {\n    todo!(\"x ** 2\")\n}"
+        "#[allow(unused_variables)]\npub fn weird(x: f64) -> f64 {\n    todo!(\"x[1]\")\n}"
     ));
     // typed but formula-less: an honest empty todo
     assert!(rust.contains("pub fn blank(a: f64) -> f64 {\n    todo!()\n}"));
+    // `**` is Rust's `powf`, and a whole-number exponent is spelled as
+    // the real number it stands for
+    assert!(rust.contains("pub fn squared(x: f64) -> f64 {\n    x.powf(2.0)\n}"));
     // a literal return value, an anonymous `in` skipped from the arguments
     assert!(rust.contains("pub fn anon() -> f64 {\n    1.0\n}"));
     // a calc usage reads the struct through `self`, its own params plainly
@@ -953,7 +957,7 @@ fn calculations_note_what_they_cannot_type() {
          \t\tcalc opaque : Unbound;\n\
          \t\tcalc unfit : Real { in k : Unbound; k }\n\
          \t\tcalc fixed : Real = 9.8;\n\
-         \t\tcalc odd : Real = reach ** 2;\n\
+         \t\tcalc odd : Real = reach[1];\n\
          \t\tcalc alone : Real { in : Integer; 4.0 }\n\
          \t}\n\
          }\n",
@@ -973,6 +977,57 @@ fn calculations_note_what_they_cannot_type() {
     // literal clauses and untranslated formulas on calc usages
     assert!(rust.contains("    pub fn fixed(&self) -> f64 {\n        9.8\n    }"));
     assert!(rust.contains("    /// The formula is beyond the simple subset"));
-    assert!(rust.contains("        todo!(\"reach ** 2\")"));
+    assert!(rust.contains("        todo!(\"reach[1]\")"));
     assert!(rust.contains("    pub fn alone(&self) -> f64 {\n        4.0\n    }"));
+}
+
+#[test]
+fn what_the_model_is_made_of_is_said_even_where_it_cannot_be_written() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tport def Fuel {\n\t\tout item rate : Real;\n\t}\n\
+         \tport def FuelIn {\n\t\tin item rate : Real;\n\t}\n\
+         \tinterface def FuelLine {\n\
+         \t\tend supplier : Fuel;\n\
+         \t\tend consumer : FuelIn;\n\
+         \t}\n\
+         \taction def Wash {\n\t\tout washed : Real;\n\t}\n\
+         \taction def Fit {\n\t\tin start : Real;\n\t\tout weights : Real;\n\t}\n\
+         \taction def Session {\n\
+         \t\taction wash : Wash;\n\
+         \t\taction fit : Fit;\n\
+         \t\taction;\n\
+         \t\tfirst wash then fit;\n\
+         \t\tflow from wash.washed to fit.start;\n\
+         \t}\n\
+         \tview def Overview;\n\
+         \tviewpoint def Stakeholder;\n\
+         \tpart def Stage {\n\
+         \t\tattribute 'cross section' : Real;\n\
+         \t\tattribute '2nd reading' : Real;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // an interface is its ends, which is a struct like any other
+    assert!(rust.contains("pub struct FuelLine {"));
+    assert!(rust.contains("pub supplier: Fuel,"));
+    assert!(rust.contains("pub consumer: FuelIn,"));
+    // a behaviour still cannot be written, but what the model says it is
+    // made of goes to whoever has to write it
+    assert!(rust.contains("/// Made of `wash : Wash`, `fit : Fit`."));
+    assert!(rust.contains("/// then: `wash` -> `fit`"));
+    assert!(rust.contains("/// flow: `washed` -> `start`"));
+    // and a definition with no Rust shape at all is named, not passed
+    // over in silence
+    assert!(rust.contains("// not generated: `Overview` -- ViewDefinition has no Rust shape"));
+    assert!(
+        rust.contains("// not generated: `Stakeholder` -- ViewpointDefinition has no Rust shape")
+    );
+    // an escaped name holds whatever the modeller wrote; Rust spells
+    // identifiers out of a smaller alphabet, and cannot start one with a
+    // digit
+    assert!(rust.contains("pub cross_section: f64,"));
+    assert!(rust.contains("pub _2nd_reading: f64,"));
 }

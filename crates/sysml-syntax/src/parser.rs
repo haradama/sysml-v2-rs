@@ -853,7 +853,19 @@ impl Parser<'_> {
                     | CROSSES_KW
                     | TYPED_KW
                     | DEFINED_KW
+                    // the KerML relations, which follow a declared name
+                    // exactly as `chains` does -- leaving one out reads
+                    // the name as a reference and the declaration loses
+                    // its name entirely
                     | CHAINS_KW
+                    | UNIONS_KW
+                    | INTERSECTS_KW
+                    | DIFFERENCES_KW
+                    | DISJOINT_KW
+                    | INVERSE_KW
+                    | FEATURED_KW
+                    | CONJUGATES_KW
+                    | CONJUGATE_KW
             )
         {
             self.opt_name();
