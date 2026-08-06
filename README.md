@@ -12,8 +12,8 @@ and a CLI. Both are validated against the official
 corpus — all 403 `.sysml`/`.kerml` files: the complete standard libraries
 (`sysml.library`) and every official example, training and validation
 model. **All 403 files parse cleanly and every reference resolves**: the
-standard library on its own (12752/12752) and the library together with all
-official examples (17629/17629), counting the operands of `connect`, `bind`,
+standard library on its own (12757/12757) and the library together with all
+official examples (17700/17700), counting the operands of `connect`, `bind`,
 `allocate`, `first ... then ...` and `satisfy ... by ...` alongside every
 typing and specialization.
 
