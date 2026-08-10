@@ -20,6 +20,13 @@
 //! - generic items, and anything else, are skipped and listed at the end
 //!   of the package rather than dropped silently
 //!
+//! A `pub use` re-export is followed to the item it names, so a crate
+//! that keeps its types in modules imports as what it publishes rather
+//! than as what its `lib.rs` happens to spell out. Nothing that was
+//! skipped is ever named by a signature: a definition whose parameters
+//! or result have no shape is skipped in turn, so every name in the
+//! package resolves.
+//!
 //! Names that collide with SysML keywords are quoted (`'filter'`). The
 //! output is deterministic: declaration order in, declaration order out.
 //!
@@ -29,6 +36,7 @@
 //! cargo +nightly rustdoc -- -Zunstable-options --output-format json
 //! ```
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use serde_json::Value as Json;
@@ -76,9 +84,31 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
         .and_then(Json::as_str)
         .ok_or_else(|| ImportError::Malformed("the crate's name".to_string()))?
         .to_string();
-    let members = root_item["inner"]["module"]["items"]
+    let listed = root_item["inner"]["module"]["items"]
         .as_array()
         .ok_or_else(|| ImportError::Malformed("the root module's members".to_string()))?;
+    // A crate that keeps its types in private modules and re-exports them
+    // -- `pub use graph::Diagram;` -- lists a `use` here, not the struct.
+    // Following it is what makes such a crate importable at all: without
+    // it only the items spelled out in `lib.rs` are seen, while the
+    // signatures that mention the rest are written regardless.
+    let mut members: Vec<Json> = Vec::new();
+    for id in listed {
+        match item(id).map(|entry| &entry["inner"]) {
+            Some(inner) if inner.get("use").is_some() => {
+                let reexport = &inner["use"];
+                if reexport["is_glob"].as_bool() != Some(true) {
+                    if let Some(target) = reexport.get("id") {
+                        if index.contains_key(&id_key(target)) {
+                            members.push(target.clone());
+                        }
+                    }
+                }
+            }
+            _ => members.push(id.clone()),
+        }
+    }
+    let members = &members;
 
     let package_name = package.map_or_else(|| format!("{}Api", camel(&crate_name)), String::from);
     let mut out = String::new();
@@ -103,6 +133,13 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
     writeln!(out, "\t\tattribute isFallible : Boolean;").unwrap();
     writeln!(out, "\t}}").unwrap();
 
+    // Which types will end up in the model. A signature may name one
+    // that has no SysML shape -- an error enum carrying a payload, a
+    // newtype over an id -- and writing `out error : ImportError` for a
+    // definition that was refused leaves a name nothing answers to. So
+    // settle the set first and let the signatures respect it.
+    let settled = written_types(index, &crate_name, members);
+
     for id in members {
         let Some(entry) = item(id) else {
             continue;
@@ -117,6 +154,7 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
         let ctx = Context {
             index,
             crate_name: &crate_name,
+            written: Some(&settled),
         };
         match kind.as_str() {
             "struct" => match ctx.item_def(&mut out, name, entry, &mut skipped) {
@@ -147,10 +185,57 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
     Ok(out)
 }
 
+/// The names of the crate's types that become definitions, found by
+/// writing them and keeping the ones that came out. Asking the emitters
+/// rather than re-deciding here is what keeps the two answers the same.
+fn written_types(
+    index: &serde_json::Map<String, Json>,
+    crate_name: &str,
+    members: &[Json],
+) -> HashSet<String> {
+    let ctx = Context {
+        index,
+        crate_name,
+        written: None,
+    };
+    let mut names = HashSet::new();
+    for id in members {
+        let Some(entry) = index.get(&id_key(id)) else {
+            continue;
+        };
+        let (Some(name), Some(inner)) = (
+            entry.get("name").and_then(Json::as_str),
+            entry.get("inner").and_then(Json::as_object),
+        ) else {
+            continue;
+        };
+        let mut scratch = String::new();
+        let mut ignored = Vec::new();
+        let made = match inner.keys().next().map(String::as_str) {
+            Some("struct") => ctx
+                .item_def(&mut scratch, name, entry, &mut ignored)
+                .is_some(),
+            Some("enum") => ctx.enum_def(&mut scratch, name, entry).is_some(),
+            Some("trait") => {
+                ctx.port_def(&mut scratch, name, entry, &mut ignored);
+                true
+            }
+            _ => false,
+        };
+        if made {
+            names.insert(name.to_string());
+        }
+    }
+    names
+}
+
 /// The pieces every emitter needs at hand.
 struct Context<'a> {
     index: &'a serde_json::Map<String, Json>,
     crate_name: &'a str,
+    /// The type names that will be in the model, or `None` while that is
+    /// still being worked out.
+    written: Option<&'a HashSet<String>>,
 }
 
 impl Context<'_> {
@@ -369,7 +454,10 @@ impl Context<'_> {
                     // a type of this crate, by the name its item declares
                     let local = self.item(&path["id"])?;
                     let declared = local.get("name")?.as_str()?;
-                    Some((quoted(declared), String::new()))
+                    match self.written {
+                        Some(written) if !written.contains(declared) => None,
+                        _ => Some((quoted(declared), String::new())),
+                    }
                 }
             };
         }

@@ -310,6 +310,7 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exit
 fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> ExitCode {
     let mut dirty = 0usize;
     let mut unformatted = Vec::new();
+    let mut broken = Vec::new();
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -318,6 +319,21 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
                 return ExitCode::FAILURE;
             }
         };
+        // Re-spacing a file the parser could not follow can move where a
+        // quote or a comment ends -- `package Name' {` runs the quote on
+        // to wherever the next one is, and putting the tokens back with
+        // different spacing puts the name somewhere else. Printing that
+        // is harmless, since every character is still there to read.
+        // Writing it over the modeller's file is not, so `--write`
+        // reports such a file instead of rewriting it.
+        if write && !parse_file(path, &text).ok() {
+            eprintln!(
+                "error: {} does not parse; `sysml parse` says where",
+                path.display()
+            );
+            broken.push(path.display().to_string());
+            continue;
+        }
         let formatted = sysml_syntax::fmt::format_file(&path.to_string_lossy(), &text);
         if check_only {
             if formatted != text {
@@ -346,7 +362,7 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
             "unformatted": unformatted,
         }));
     }
-    if dirty > 0 {
+    if dirty > 0 || !broken.is_empty() {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -539,6 +555,44 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     if !load_paths(&mut ws, paths) {
         return ExitCode::FAILURE;
     }
+    // A file that does not parse has no names to resolve, so resolution
+    // finds nothing wrong with it and this used to answer `ok`. Anyone
+    // running only `check` -- which is most of the reason it exists --
+    // would be told a broken model was fine. Syntax comes first, as it
+    // does in the MCP server's tool of the same name.
+    let mut broken = Vec::new();
+    for file in 0..ws.file_count() {
+        let parse = ws.file_parse(file);
+        if parse.ok() {
+            continue;
+        }
+        let name = ws.file_name(file).to_string();
+        let text = std::fs::read_to_string(&name).unwrap_or_default();
+        for error in parse.errors() {
+            let offset = usize::from(error.range.start()).min(text.len());
+            if format == Format::Text {
+                let (line, col) = line_col(&text, offset);
+                eprintln!("{name}:{}:{}: {}", line + 1, col + 1, error.message);
+            }
+            broken.push(at(
+                &text,
+                offset,
+                serde_json::json!({ "path": name.clone(), "message": error.message }),
+            ));
+        }
+    }
+    if !broken.is_empty() {
+        if format == Format::Json {
+            report(serde_json::json!({
+                "command": "check",
+                "ok": false,
+                "elements": ws.model().len(),
+                "parseErrors": broken,
+            }));
+        }
+        return ExitCode::FAILURE;
+    }
+
     let stats = ws.resolve_all();
     let total = stats.resolved + stats.unresolved;
     let rate = if total == 0 {
@@ -578,6 +632,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             "command": "check",
             "ok": stats.unresolved == 0,
             "elements": ws.model().len(),
+            "parseErrors": [],
             "resolved": stats.resolved,
             "references": total,
             "unresolved": unresolved,

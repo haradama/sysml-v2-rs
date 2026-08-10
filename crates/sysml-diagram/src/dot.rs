@@ -225,6 +225,17 @@ mod tests {
         definition_diagram(ws.model(), &[ws.root()])
     }
 
+    /// Held while a test writes a stand-in for `dot` and runs it.
+    ///
+    /// Writing a program and then running it is a race when anything
+    /// else in the process forks in between: the child inherits the
+    /// still-open write handle, and Linux refuses to run a file that
+    /// something holds open for writing. Two tests here write and run
+    /// their own `dot`, and either one's fork can spoil the other's
+    /// exec, which showed up as one or the other failing every few runs.
+    /// Taking turns is enough -- nothing else in this process forks.
+    static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// An executable stand-in for `dot`, unique per test.
     fn fake_dot(name: &str, script: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -346,6 +357,7 @@ mod tests {
 
     #[test]
     fn a_fake_dot_lays_the_whole_diagram_out() {
+        let _turn = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
         let diagram = diagram();
         assert_eq!(diagram.nodes.len(), 3);
         let script = fake_dot(
@@ -367,6 +379,7 @@ mod tests {
 
     #[test]
     fn a_missing_or_broken_dot_is_reported_not_papered_over() {
+        let _turn = SPAWNING.lock().unwrap_or_else(|e| e.into_inner());
         let diagram = diagram();
         let style = Style::default();
 

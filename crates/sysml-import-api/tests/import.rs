@@ -240,6 +240,73 @@ fn odd_shapes_are_skipped_not_dropped() {
     assert!(sysml.contains("port def Hollow {"));
 }
 
+/// A crate that keeps its types in modules and re-exports them is the
+/// normal shape of a Rust library, and it used to import as almost
+/// nothing: only what `lib.rs` spelled out was seen, while the
+/// signatures naming the rest were written anyway, leaving the package
+/// full of names it never declared.
+#[test]
+fn a_re_exported_type_is_imported_and_can_be_referred_to() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "layered", "inner": { "module": { "items": ["use_shape", "use_glob", "use_gone", "use_idless", "fun"] } } },
+            "use_shape": { "name": "Shape", "inner": { "use": { "source": "inner::Shape", "name": "Shape", "id": "shape", "is_glob": false } } },
+            "use_glob": { "name": "*", "inner": { "use": { "source": "inner", "name": "*", "id": "shape", "is_glob": true } } },
+            "use_gone": { "name": "Gone", "inner": { "use": { "source": "inner::Gone", "name": "Gone", "id": "nowhere", "is_glob": false } } },
+            "use_idless": { "name": "Idless", "inner": { "use": { "source": "elsewhere::Idless", "name": "Idless", "is_glob": false } } },
+            "shape": { "name": "Shape", "inner": { "struct": { "kind": { "plain": { "fields": ["w"] } } } } },
+            "w": { "name": "width", "inner": { "struct_field": { "primitive": "f64" } } },
+            "fun": { "name": "area", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "shape", { "resolved_path": { "path": "Shape", "id": "shape" } } ] ],
+                         "output": { "primitive": "f64" } },
+                "header": { "is_async": false } } } }
+        }
+    }"#;
+    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    assert!(sysml.contains("item def Shape {"), "{sysml}");
+    assert!(sysml.contains("in shape : Shape;"), "{sysml}");
+    // the glob re-export names the same struct and must not double it
+    assert_eq!(sysml.matches("item def Shape {").count(), 1, "{sysml}");
+    // a re-export of something outside the crate names no item here
+    assert!(!sysml.contains("Gone"), "{sysml}");
+    assert!(!sysml.contains("Idless"), "{sysml}");
+}
+
+/// The other half of the same rule: a signature may not name a type the
+/// importer refused to write. `Fickle` is an enum with a payload, which
+/// has no SysML shape, so the function returning it is skipped whole --
+/// a model that mentioned it would have a name nothing answers to.
+#[test]
+fn a_signature_never_names_a_type_that_was_refused() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "picky", "inner": { "module": { "items": ["e", "fun", "plain"] } } },
+            "e": { "name": "Fickle", "inner": { "enum": { "variants": ["v"] } } },
+            "v": { "name": "Sometimes", "inner": { "variant": { "kind": { "tuple": ["w"] } } } },
+            "plain": { "name": "Mood", "inner": { "enum": { "variants": ["m"] } } },
+            "m": { "name": "Calm", "inner": { "variant": { "kind": "plain" } } },
+            "fun": { "name": "try_it", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "resolved_path": { "path": "Result",
+                    "args": { "angle_bracketed": { "args": [
+                        { "type": { "resolved_path": { "path": "Mood", "id": "plain" } } },
+                        { "type": { "resolved_path": { "path": "Fickle", "id": "e" } } } ] } } } } },
+                "header": { "is_async": false } } } }
+        }
+    }"#;
+    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    assert!(sysml.contains("enum def Mood {"), "{sysml}");
+    assert!(sysml.contains("//   Fickle -- not a plain enum"), "{sysml}");
+    assert!(
+        sysml.contains("//   try_it -- unsupported signature"),
+        "{sysml}"
+    );
+    assert!(!sysml.contains(": Fickle"), "{sysml}");
+}
+
 #[test]
 fn broken_inputs_are_named_errors() {
     use sysml_import_api::ImportError;

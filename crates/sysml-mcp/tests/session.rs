@@ -189,6 +189,22 @@ fn library_search_finds_what_the_library_declares() {
         first["name"].as_str().unwrap().contains("MassValue"),
         "{found}"
     );
+
+    // what was asked for exactly comes first: searching `Natural` and
+    // being handed two SI units before `ScalarValues::Natural` is an
+    // answer that has to be read through rather than used
+    let response = server
+        .handle(&call(
+            "library_search",
+            json!({ "query": "natural", "limit": 3 }),
+        ))
+        .expect("a request is answered");
+    assert_eq!(
+        answered(&response)["found"][0]["name"],
+        "ScalarValues::Natural",
+        "{}",
+        answered(&response)
+    );
     assert!(first["kind"].is_string());
     assert!(first["documentation"].is_string());
 
@@ -279,5 +295,75 @@ fn the_binary_speaks_it_over_its_own_stdio() {
         assert!(out.status.success());
         let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(answered(&answer)["found"][0]["name"], "Tiny::Widget");
+    }
+}
+
+/// A model is rarely one file. `alongside` names the others so that the
+/// references between them resolve; without it the server would report
+/// every one of them as a name it cannot find, which is the answer an
+/// agent would act on.
+#[test]
+fn a_model_that_spans_files_is_checked_against_the_rest_of_it() {
+    let dir = std::env::temp_dir().join("sysml-mcp-alongside");
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("parts.sysml");
+    std::fs::write(&other, "package Parts {\n\tpart def Wheel;\n}\n").unwrap();
+    let text = "package Car {\n\tprivate import Parts::*;\n\tpart w : Wheel;\n}\n";
+
+    // on its own, `Wheel` is a name nothing answers to
+    let alone = answered(&session(&[call("check", json!({ "text": text }))])[0]);
+    assert_eq!(alone["ok"], false, "{alone}");
+    assert!(
+        alone["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["name"] == "Wheel"),
+        "{alone}"
+    );
+
+    // told where the rest of the model is, it resolves
+    let together = answered(
+        &session(&[call(
+            "check",
+            json!({ "text": text, "alongside": [other.to_str().unwrap()] }),
+        )])[0],
+    );
+    assert_eq!(together["ok"], true, "{together}");
+
+    // and the same file is what `visible_names` can see from inside it
+    let names = answered(
+        &session(&[call(
+            "visible_names",
+            json!({
+                "text": text, "line": 3, "column": 13,
+                "alongside": [other.to_str().unwrap()],
+            }),
+        )])[0],
+    );
+    assert!(
+        names["visible"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["name"] == "Wheel"),
+        "{names}"
+    );
+
+    // a companion that is not there is named, not passed over: a check
+    // that quietly dropped it would answer about a different model
+    for tool in ["check", "visible_names"] {
+        let missing = session(&[call(
+            tool,
+            json!({ "text": text, "line": 1, "column": 1, "alongside": ["/nowhere/parts.sysml"] }),
+        )]);
+        assert_eq!(missing[0]["result"]["isError"], true, "{missing:?}");
+        assert!(
+            answered(&missing[0])["error"]
+                .as_str()
+                .unwrap()
+                .contains("cannot read"),
+            "{missing:?}"
+        );
     }
 }

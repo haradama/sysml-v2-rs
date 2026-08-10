@@ -271,6 +271,34 @@ fn rustgen_generates_from_the_demo_model() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("no port of the part"));
 }
 
+/// Re-spacing a file the parser could not follow can move where a quote
+/// ends, and `--write` puts that in the modeller's file. Printing it is
+/// safe -- every character is still there -- so only the rewrite is
+/// refused.
+#[test]
+fn fmt_will_not_rewrite_a_file_it_could_not_parse() {
+    let dir = temp_dir("fmt-broken");
+    let text = "package 'Half Open {\n\tpart def A;\n";
+    let broken = write(&dir, "broken.sysml", text);
+
+    let out = sysml(&["fmt", "--write", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("does not parse"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&broken).unwrap(),
+        text,
+        "the file must be as it was"
+    );
+
+    // printing it is still allowed, and loses nothing
+    let out = sysml(&["fmt", broken.to_str().unwrap()]);
+    assert!(out.status.success());
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let letters = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
+    assert_eq!(letters(&printed), letters(text), "{printed}");
+}
+
 #[test]
 fn fmt_formats_checks_and_writes() {
     let dir = temp_dir("fmt");
@@ -341,6 +369,13 @@ fn check_resolves_and_reports_unresolved() {
     let out = sysml(&["check", dir.join("missing.sysml").to_str().unwrap()]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+
+    // and a file that does not parse is a finding here too, in words
+    let unclosed = write(&dir, "unclosed.sysml", "package Q {\n\tpart def A;\n");
+    let out = sysml(&["check", unclosed.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("expected"), "{stderr}");
 }
 
 #[test]
@@ -654,6 +689,12 @@ fn json_reports_what_a_program_works_from() {
         "broken.sysml",
         "package P {\n\tpart def A;\n\tpart b : Missing;\n",
     );
+    // the same model, closed: a name nothing answers to, and nothing else
+    let unresolved = write(
+        &dir,
+        "unresolved.sysml",
+        "package P {\n\tpart def A;\n\tpart b : Missing;\n}\n",
+    );
     let json = |out: &Output| -> serde_json::Value {
         serde_json::from_slice(&out.stdout).expect("stdout is one JSON document")
     };
@@ -667,11 +708,23 @@ fn json_reports_what_a_program_works_from() {
     assert_eq!(v["files"][0]["errors"][0]["line"], 4);
     assert!(v["files"][0]["errors"][0]["message"].is_string());
 
-    // an unresolved reference, by name and place
+    // a file that does not parse has no names worth resolving, and
+    // `check` says so rather than reporting nothing wrong with it
     let out = sysml(&["--format", "json", "check", broken.to_str().unwrap()]);
     assert!(!out.status.success());
     let v = json(&out);
     assert_eq!(v["command"], "check");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["parseErrors"][0]["line"], 4);
+    assert!(v["parseErrors"][0]["message"].is_string());
+    assert!(v["unresolved"].is_null(), "syntax first, names after");
+
+    // an unresolved reference, by name and place
+    let out = sysml(&["--format", "json", "check", unresolved.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json(&out);
+    assert_eq!(v["command"], "check");
+    assert_eq!(v["parseErrors"].as_array().unwrap().len(), 0);
     assert_eq!(v["unresolved"][0]["name"], "Missing");
     assert_eq!(v["unresolved"][0]["line"], 3);
     assert_eq!(v["unresolved"][0]["column"], 11);

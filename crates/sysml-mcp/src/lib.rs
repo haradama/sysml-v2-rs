@@ -20,6 +20,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use serde_json::{json, Value};
+use sysml_model::ElementId;
 use sysml_semantics::Workspace;
 
 /// What this server answers to. Newer clients may ask for a later
@@ -117,7 +118,14 @@ impl Server {
     fn check(&mut self, arguments: &Value) -> Result<Value, String> {
         let (name, text) = source(arguments)?;
         let mut ws = self.base.clone();
+        let mut open = Vec::new();
+        for path in alongside(arguments) {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|err| format!("cannot read `{path}`: {err}"))?;
+            open.push(ws.add_file(path, &text));
+        }
         let file = ws.add_file(name.clone(), &text);
+        open.push(file);
 
         let parse = ws.file_parse(file);
         if !parse.ok() {
@@ -135,7 +143,7 @@ impl Server {
             return Ok(json!({ "ok": false, "parseErrors": errors }));
         }
 
-        let stats = ws.resolve_files(&[file]);
+        let stats = ws.resolve_files(&open);
         let unresolved: Vec<Value> = ws
             .unresolved()
             .iter()
@@ -168,8 +176,15 @@ impl Server {
             .ok_or_else(|| format!("line {line}, column {column} is past the end of the text"))?;
 
         let mut ws = self.base.clone();
+        let mut open = Vec::new();
+        for path in alongside(arguments) {
+            let text = std::fs::read_to_string(&path)
+                .map_err(|err| format!("cannot read `{path}`: {err}"))?;
+            open.push(ws.add_file(path, &text));
+        }
         let file = ws.add_file(name, &text);
-        ws.resolve_files(&[file]);
+        open.push(file);
+        ws.resolve_files(&open);
         let names: Vec<Value> = ws
             .visible_names(file, (offset as u32).into())
             .into_iter()
@@ -191,13 +206,30 @@ impl Server {
             .and_then(Value::as_u64)
             .unwrap_or(20)
             .min(200) as usize;
-        let mut found: Vec<Value> = Vec::new();
+        // Exactly what was asked for first, then what starts with it,
+        // then the rest. Searching for `Natural` and being handed two SI
+        // units before `ScalarValues::Natural` is the difference between
+        // a useful answer and one that has to be read through.
+        let mut matched: Vec<(u8, ElementId)> = Vec::new();
         for (elem, name) in self.base.named_elements() {
+            let lowered = name.to_lowercase();
+            let rank = if lowered == query {
+                0
+            } else if lowered.starts_with(&query) {
+                1
+            } else if lowered.contains(&query) {
+                2
+            } else {
+                continue;
+            };
+            matched.push((rank, elem));
+        }
+        matched.sort_by_key(|&(rank, elem)| (rank, elem.index()));
+
+        let mut found: Vec<Value> = Vec::new();
+        for (_, elem) in matched {
             if found.len() == limit {
                 break;
-            }
-            if !name.to_lowercase().contains(&query) {
-                continue;
             }
             let mut entry = json!({
                 "name": self.base.qualified_name_of(elem),
@@ -210,6 +242,24 @@ impl Server {
         }
         json!({ "found": found })
     }
+}
+
+/// The other files the model is spread over. A model of any size is,
+/// and checking one file of it alone reports every reference into the
+/// rest as unresolved -- a false alarm on every line that reaches for
+/// something the project declares elsewhere.
+fn alongside(arguments: &Value) -> Vec<String> {
+    arguments
+        .get("alongside")
+        .and_then(Value::as_array)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The text a tool works on: written out in the call, or read from a
@@ -283,6 +333,11 @@ fn tools() -> Value {
         "text": { "type": "string", "description": "The model source itself, where it is not on disk yet" },
         "path": { "type": "string", "description": "A file to read instead of `text`" },
         "name": { "type": "string", "description": "The name `text` should be read under; the extension picks the dialect (default `model.sysml`)" },
+        "alongside": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The other files of the model, loaded so that references into them resolve. Give these whenever the model spans more than one file.",
+        },
     });
     json!([
         {
@@ -302,6 +357,7 @@ fn tools() -> Value {
                     "text": source_properties["text"],
                     "path": source_properties["path"],
                     "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
                     "line": { "type": "integer", "description": "Line, counting from one" },
                     "column": { "type": "integer", "description": "Column in bytes, counting from one" },
                 },
