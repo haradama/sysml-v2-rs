@@ -9,7 +9,6 @@ members = [
     "crates/sysml-diagram",
     "crates/sysml-lsp",
     "crates/sysml-mcp",
-    "crates/sysml-codegen",
     "crates/sysml-cli",
 ]
 # a development helper for looking at the generated diagrams: it pulls in a

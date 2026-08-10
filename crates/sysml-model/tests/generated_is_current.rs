@@ -1,5 +1,10 @@
 //! The committed `generated.rs` must stay in sync with the vendored
 //! metamodel, and malformed metamodels must be rejected.
+//!
+//! The generator lives in this crate because it writes into this
+//! crate's `src/`, so this is where the file it writes is held to what
+//! it would write.
+#![cfg(feature = "codegen")]
 
 use std::path::Path;
 
@@ -8,16 +13,16 @@ fn committed_generated_file_is_in_sync() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let kerml = std::fs::read_to_string(root.join("vendor/metamodel/KerML.xmi")).unwrap();
     let sysml = std::fs::read_to_string(root.join("vendor/metamodel/SysML.xmi")).unwrap();
-    let generated = sysml_codegen::generate_source(&kerml, &sysml);
+    let generated = sysml_model::codegen::generate_source(&kerml, &sysml);
     let committed =
         std::fs::read_to_string(root.join("crates/sysml-model/src/generated.rs")).unwrap();
     assert_eq!(
         generated, committed,
-        "generated.rs is stale — run `cargo run -p sysml-codegen`"
+        "generated.rs is stale — run `cargo run -p sysml-model --features codegen --bin sysml-codegen`"
     );
     // run() rewrites the default path with identical bytes (kept in this
     // test so nothing else reads the file mid-write)
-    let path = sysml_codegen::run();
+    let path = sysml_model::codegen::run();
     assert!(path.ends_with("crates/sysml-model/src/generated.rs"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), committed);
 }
@@ -76,7 +81,7 @@ fn generates_a_minimal_metamodel() {
              <ownedLiteral xmi:id="Color-green" name="green"/>
            </packagedElement>"#,
     );
-    let code = sysml_codegen::generate_source(EMPTY, &xmi);
+    let code = sysml_model::codegen::generate_source(EMPTY, &xmi);
     assert!(code.contains("pub enum ElementKind"));
     assert!(code.contains("Sub,"));
     assert!(code.contains("ElementKind::Sub => &[ElementKind::Thing]"));
@@ -107,7 +112,7 @@ fn rejects_unknown_primitive_types() {
              </ownedAttribute>
            </packagedElement>"#,
     );
-    sysml_codegen::generate_source(EMPTY, &xmi);
+    sysml_model::codegen::generate_source(EMPTY, &xmi);
 }
 
 #[test]
@@ -120,7 +125,7 @@ fn rejects_unresolved_references() {
              </generalization>
            </packagedElement>"#,
     );
-    sysml_codegen::generate_source(EMPTY, &xmi);
+    sysml_model::codegen::generate_source(EMPTY, &xmi);
 }
 
 #[test]
@@ -130,7 +135,7 @@ fn rejects_duplicate_metaclasses() {
         r#"<packagedElement xmi:id="A1" xmi:type="uml:Class" name="Twin"/>
            <packagedElement xmi:id="A2" xmi:type="uml:Class" name="Twin"/>"#,
     );
-    sysml_codegen::generate_source(EMPTY, &xmi);
+    sysml_model::codegen::generate_source(EMPTY, &xmi);
 }
 
 #[test]
@@ -141,7 +146,7 @@ fn rejects_untyped_properties() {
              <ownedAttribute xmi:id="T1-x" xmi:type="uml:Property" name="x"/>
            </packagedElement>"#,
     );
-    sysml_codegen::generate_source(EMPTY, &xmi);
+    sysml_model::codegen::generate_source(EMPTY, &xmi);
 }
 
 #[test]
@@ -155,7 +160,7 @@ fn rejects_generalization_to_non_classes() {
            </packagedElement>
            <packagedElement xmi:id="Hue" xmi:type="uml:Enumeration" name="Hue"/>"#,
     );
-    sysml_codegen::generate_source(EMPTY, &xmi);
+    sysml_model::codegen::generate_source(EMPTY, &xmi);
 }
 
 #[test]
@@ -165,14 +170,14 @@ fn capitalizes_empty_enum_literals() {
              <ownedLiteral xmi:id="W-empty" name=""/>
            </packagedElement>"#,
     );
-    let code = sysml_codegen::generate_source(EMPTY, &xmi);
+    let code = sysml_model::codegen::generate_source(EMPTY, &xmi);
     assert!(code.contains("pub enum Weird"));
 }
 
 #[test]
 #[should_panic(expected = "invalid XMI")]
 fn rejects_invalid_xml() {
-    sysml_codegen::generate_source("not xml", "not xml");
+    sysml_model::codegen::generate_source("not xml", "not xml");
 }
 
 #[test]

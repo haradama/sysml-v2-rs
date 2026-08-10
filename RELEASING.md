@@ -31,9 +31,10 @@ cargo publish -p sysml-mcp
 cargo publish -p sysml-cli
 ```
 
-`sysml-codegen` is `publish = false` (it only regenerates
-`sysml-model/src/generated.rs` from the vendored metamodel and is not
-useful as a dependency).
+The metamodel generator is behind `sysml-model`'s `codegen` feature, so
+a consumer never builds it or its XML parser: it only regenerates
+`sysml-model/src/generated.rs` from the vendored metamodel, which the
+package ships already generated.
 
 Packaged crates do not include `vendor/` — the corpus- and
 metamodel-dependent tests detect the missing directory and skip

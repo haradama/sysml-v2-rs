@@ -12,3 +12,17 @@ categories.workspace = true
 
 [dependencies]
 sysml-syntax.workspace = true
+
+# What writes `src/generated.rs` from `vendor/metamodel/`. It is not part
+# of the library -- reading XMI at run time is no business of a model in
+# memory -- so it and its XML parser are behind a feature, and anyone
+# depending on this crate gets neither.
+roxmltree = { version = "0.20", optional = true }
+
+[features]
+codegen = ["dep:roxmltree"]
+
+[[bin]]
+name = "sysml-codegen"
+path = "src/bin/sysml-codegen.rs"
+required-features = ["codegen"]

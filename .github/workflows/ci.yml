@@ -32,9 +32,12 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      # --all-features reaches the metamodel generator, which is behind
+      # one: it writes `sysml-model/src/generated.rs`, and its test is
+      # what holds the committed file to what it would write
       - name: tests (incl. corpus regressions)
-        run: cargo test --release
+        run: cargo test --release --all-features
 
   # the extension is the language server's only client, so an API change
   # that breaks it would otherwise go unnoticed: nothing else compiles
@@ -68,7 +71,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: measure
-        run: cargo llvm-cov --workspace --summary-only --fail-under-lines 99
+        run: cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 99
       - name: no uncovered lines (C0 = 100%)
         run: |
           missing=$(cargo llvm-cov report --show-missing-lines | sed -n '/Uncovered Lines/,$p' | grep -c '\.rs: [0-9]' || true)

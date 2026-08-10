@@ -36,7 +36,7 @@ the generator, then regenerate — never the file:
 
 | File | Written by |
 | --- | --- |
-| `crates/sysml-model/src/generated.rs` | `cargo run -p sysml-codegen` (from `vendor/metamodel`) |
+| `crates/sysml-model/src/generated.rs` | `cargo run -p sysml-model --features codegen --bin sysml-codegen` (from `vendor/metamodel`) |
 | `examples/order-system/src/generated.rs` | `make demo` |
 | `examples/order-system/model/InventoryStoreApi.sysml` | `make demo` (`sysml import-rust`) |
 
@@ -53,17 +53,18 @@ CI gates all of these, and the coverage one is stricter than most:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings
-cargo test --release
-cargo llvm-cov --workspace --summary-only --fail-under-lines 99
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --release --all-features
+cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 99
 cargo llvm-cov report --show-missing-lines     # must name no file at all
 ```
 
 **Every line must have run.** Adding a branch means adding the test that
 takes it. A branch that cannot be reached is removed by refactoring, not
 covered by a contrived test — see the note in `DESIGN.md`. Generated code
-is held to this too, which is why `sysml-codegen` emits tests alongside
-the accessors it writes.
+is held to this too, which is why the metamodel generator emits tests alongside
+the accessors it writes. It lives behind the `codegen` feature, so the
+gates above pass `--all-features` to reach it.
 
 `make demo` runs the whole Rust → SysML → Rust loop and must keep
 working.

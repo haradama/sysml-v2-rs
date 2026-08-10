@@ -43,14 +43,13 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | Crate | Description |
 | --- | --- |
 | [`sysml-syntax`](crates/sysml-syntax) | Lexer (logos) + recursive-descent parser + lossless CST (rowan) + typed AST |
-| [`sysml-model`](crates/sysml-model) | Element model: 175 metaclasses generated from the official Ecore metamodel, arena storage, AST→model builder |
+| [`sysml-model`](crates/sysml-model) | Element model: 175 metaclasses generated from the official Ecore metamodel, arena storage, AST→model builder; the generator that writes it from [`vendor/metamodel`](vendor/metamodel) is in the same crate behind the `codegen` feature |
 | [`sysml-semantics`](crates/sysml-semantics) | Name resolution (imports, aliases, inheritance, implicit library specializations, connector ends), relationship reification and implied-relationship materialization — the whole standard library resolves |
 | [`sysml-interchange`](crates/sysml-interchange) | Standard JSON interchange: the complete property set of every metaclass, derived ownership/naming/inheritance-closure/import properties, reified memberships down to `ParameterMembership`/`SubjectMembership`/`StateSubactionMembership`/... with visibility and kind, deterministic UUIDs; resolved whole-library round-trip tested |
 | [`sysml-diagram`](crates/sysml-diagram) | Definition/specialization diagrams: layered layout and SVG rendering with no external engine, or PlantUML-style Graphviz layout (`dot` for positions, the drawing stays ours) |
 | [`sysml-rust`](crates/sysml-rust) | The Rust side of a model, both ways. `import` reads an existing crate's rustdoc JSON as a SysML package whose definitions carry `@rust` binding metadata; `generate` writes Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, go-to-definition, find-references, rename, completion, hover, symbols, formatting — with a [VSCode extension](editors/vscode) as its client |
 | [`sysml-mcp`](crates/sysml-mcp) | Model Context Protocol server: lets an AI agent ask whether a model parses and resolves, what names are legal at a point, and what the standard library actually declares |
-| [`sysml-codegen`](crates/sysml-codegen) | Generates `sysml-model`'s metamodel code from [`vendor/metamodel`](vendor/metamodel) |
 | [`sysml-cli`](crates/sysml-cli) | `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`, `diagram`, `import-rust`, `rustgen`, `api`, `corpus`); `api` is the client for the SysML v2 API & Services REST standard, and `api push` sends what `export` writes |
 
 ## Usage
