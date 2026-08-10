@@ -29,7 +29,7 @@
 //! `Default`.
 //!
 //! **Behaviour against existing APIs.** A port typed by a `port def`
-//! carrying a `@rust { ... }` binding (what `sysml-import-api` writes)
+//! carrying a `@rust { ... }` binding (what [`crate::import`] writes)
 //! becomes a generic parameter bound to the real Rust trait, and each
 //! `perform`ed bound action becomes a method delegating through that
 //! port, with the API's own signature: `async`, `Result` and the
@@ -49,8 +49,8 @@ use std::fmt::Write as _;
 
 use sysml_model::{ElementId, ElementKind, Model, Value};
 
-mod expr;
-use expr::{translate, Translated};
+use crate::binding;
+use crate::expr::{self, translate, Translated};
 
 /// What stops code generation outright (a model this generator cannot
 /// write faithfully); everything smaller is a comment in the output.
@@ -693,7 +693,7 @@ impl<'a> Generator<'a> {
         let target = type_of(self.model, usage)
             .or_else(|| type_of(self.model, redefined(self.model, usage)?))?;
         let ty = if let Some(bound) = binding(self.model, target) {
-            FieldType::External(bound.get("path")?.clone())
+            FieldType::External(bound.get(binding::PATH)?.clone())
         } else if matches!(
             self.shapes.get(&target),
             Some(Shape::Struct | Shape::Enum | Shape::Variation)
@@ -1291,7 +1291,7 @@ impl<'a> Generator<'a> {
                 let param = model.name(accept)?;
                 let ty = type_of(model, accept)?;
                 let rust = if let Some(bound) = binding(model, ty) {
-                    bound.get("path")?.clone()
+                    bound.get(binding::PATH)?.clone()
                 } else if self.shapes.contains_key(&ty) {
                     type_ident(model.name(ty)?)
                 } else {
@@ -2354,7 +2354,7 @@ impl<'a> Generator<'a> {
     fn port_of(&self, usage: ElementId) -> Option<Port> {
         let port_def = type_of(self.model, usage)?;
         let bound = binding(self.model, port_def)?;
-        let path = bound.get("path")?.clone();
+        let path = bound.get(binding::PATH)?.clone();
         Some(Port {
             name: self.model.name(usage)?.to_string(),
             type_name: self.model.name(port_def)?.to_string(),
@@ -2402,8 +2402,11 @@ impl<'a> Generator<'a> {
                 model.name(action).unwrap_or("?")
             ));
         };
-        let path = bound.get("path").cloned().unwrap_or_default();
-        let takes_self = bound.get("takesSelf").map(String::as_str).unwrap_or("");
+        let path = bound.get(binding::PATH).cloned().unwrap_or_default();
+        let takes_self = bound
+            .get(binding::TAKES_SELF)
+            .map(String::as_str)
+            .unwrap_or("");
         if takes_self == "self" {
             return Ok(format!(
                 "    // not generated: perform `{usage_name}` -- `{path}` consumes its receiver\n"
@@ -2443,8 +2446,8 @@ impl<'a> Generator<'a> {
             }
         }
 
-        let is_async = bound.get("isAsync").map(String::as_str) == Some("true");
-        let fallible = bound.get("isFallible").map(String::as_str) == Some("true");
+        let is_async = bound.get(binding::IS_ASYNC).map(String::as_str) == Some("true");
+        let fallible = bound.get(binding::IS_FALLIBLE).map(String::as_str) == Some("true");
         // A call that can fail returns a `Result`, and this method has to
         // be declared as returning the same one. Without an `out error`
         // there is no name for its second half, and guessing would put a
@@ -2551,7 +2554,10 @@ impl<'a> Generator<'a> {
         // `[1..*]` of something is a `Vec` of it, not one of it
         let container = multiplicity(self.model, declaring);
         if let Some(bound) = binding(self.model, ty) {
-            return bound.get("path").cloned().map(|path| (path, container));
+            return bound
+                .get(binding::PATH)
+                .cloned()
+                .map(|path| (path, container));
         }
         if self.shapes.contains_key(&ty) {
             return self
@@ -2990,7 +2996,7 @@ fn type_ident(name: &str) -> String {
 /// convention is the one Rust keeps for types; anything Rust cannot
 /// spell in an identifier becomes `_`; and a reserved word is taken raw,
 /// or suffixed where no raw form exists.
-fn ident(name: &str) -> String {
+pub(crate) fn ident(name: &str) -> String {
     /// Everything Rust has taken, including what it has only reserved.
     const RESERVED: [&str; 51] = [
         "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "do",

@@ -157,7 +157,7 @@ fn export_resolves_and_marks_the_library() {
 #[test]
 fn import_rust_writes_a_package_from_rustdoc_json() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../sysml-import-api/tests/fixtures/inventory_store.rustdoc.json");
+        .join("../sysml-rust/tests/fixtures/inventory_store.rustdoc.json");
     let dir = temp_dir("import-rust");
     let out_path = dir.join("api.sysml");
     let out = sysml(&[
@@ -757,4 +757,119 @@ fn json_reports_what_a_program_works_from() {
     let out = sysml(&["--format", "json", "fmt", "--check", ok.to_str().unwrap()]);
     assert!(out.status.success());
     assert_eq!(json(&out)["ok"], true);
+}
+
+/// A one-shot stand-in for a model server: reads the whole request --
+/// headers and any body -- then answers with `body`. Returns the base
+/// URL to point the CLI at.
+fn serve_once(body: &'static str) -> String {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        let mut length = 0usize;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let _ = reader.read_line(&mut line);
+            let header = line.trim_end().to_lowercase();
+            if header.is_empty() {
+                break;
+            }
+            if let Some(value) = header.strip_prefix("content-length: ") {
+                length = value.trim().parse().unwrap();
+            }
+        }
+        let mut request_body = vec![0u8; length];
+        let _ = reader.read_exact(&mut request_body);
+        let mut stream = stream;
+        let _ = stream.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        );
+    });
+    format!("http://{addr}")
+}
+
+/// The model server commands, each against a server that answers once.
+/// `push` is the one that matters: it exports the model the same way
+/// `export` does and sends that, so the two cannot come to mean
+/// different things by a model.
+#[test]
+fn api_talks_to_a_model_server() {
+    let base = serve_once(r#"[{"@id":"p1","@type":"Project","name":"Demo"}]"#);
+    let out = sysml(&["api", "--server", &base, "projects"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("p1 Demo"));
+
+    let base = serve_once(r#"{"@id":"p1","@type":"Project","name":"Demo"}"#);
+    let out = sysml(&[
+        "--format", "json", "api", "--server", &base, "project", "p1",
+    ]);
+    assert!(out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["name"], "Demo");
+
+    let base = serve_once(r#"{"@id":"p2","@type":"Project","name":"Fresh"}"#);
+    let out = sysml(&["api", "--server", &base, "new-project", "Fresh"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("p2 Fresh"));
+
+    let base = serve_once(r#"[{"@id":"c1","@type":"Commit","description":"first"}]"#);
+    let out = sysml(&["api", "--server", &base, "commits", "p1"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("c1 first"));
+
+    let base = serve_once(r#"[{"@id":"e1","@type":"PartDefinition","declaredName":"Vehicle"}]"#);
+    let out = sysml(&["api", "--server", &base, "elements", "p1", "c1"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("e1 PartDefinition Vehicle"));
+
+    let base = serve_once(r#"{"@id":"e1","@type":"PartDefinition","declaredName":"Vehicle"}"#);
+    let out = sysml(&["api", "--server", &base, "element", "p1", "c1", "e1"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Vehicle"));
+
+    // push exports the model and commits it
+    let dir = temp_dir("api-push");
+    let model = write(&dir, "ok.sysml", OK_MODEL);
+    let base = serve_once(r#"{"@id":"c2","@type":"Commit","description":"sysml push"}"#);
+    let out = sysml(&[
+        "api",
+        "--server",
+        &base,
+        "push",
+        model.to_str().unwrap(),
+        "--project",
+        "p1",
+    ]);
+    assert!(
+        out.status.success(),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("element(s) as commit c2"), "{said}");
+
+    // a model that cannot be read is reported before anything is sent
+    let out = sysml(&[
+        "api",
+        "push",
+        dir.join("nowhere.sysml").to_str().unwrap(),
+        "--project",
+        "p1",
+    ]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+
+    // a server that is not there is reported, not swallowed
+    let out = sysml(&["api", "--server", "http://127.0.0.1:1", "projects"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("error:"));
 }

@@ -41,6 +41,8 @@ use std::fmt::Write as _;
 
 use serde_json::Value as Json;
 
+use crate::binding;
+
 /// What can be wrong with a rustdoc JSON input.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportError {
@@ -125,12 +127,10 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
         "\t// how each definition binds to the Rust it came from"
     )
     .unwrap();
-    writeln!(out, "\tmetadata def rust {{").unwrap();
-    writeln!(out, "\t\tattribute path : String;").unwrap();
-    writeln!(out, "\t\tattribute crateName : String;").unwrap();
-    writeln!(out, "\t\tattribute takesSelf : String;").unwrap();
-    writeln!(out, "\t\tattribute isAsync : Boolean;").unwrap();
-    writeln!(out, "\t\tattribute isFallible : Boolean;").unwrap();
+    writeln!(out, "\tmetadata def {} {{", binding::DEF).unwrap();
+    for (name, ty) in binding::ALL {
+        writeln!(out, "\t\tattribute {name} : {ty};").unwrap();
+    }
     writeln!(out, "\t}}").unwrap();
 
     // Which types will end up in the model. A signature may name one
@@ -396,14 +396,20 @@ impl Context<'_> {
         let tabs = "\t".repeat(indent);
         write!(
             out,
-            "{tabs}@rust {{ :>> path = \"{path}\"; :>> crateName = \"{}\";",
+            "{tabs}@{} {{ :>> {} = \"{path}\"; :>> {} = \"{}\";",
+            binding::DEF,
+            binding::PATH,
+            binding::CRATE,
             self.crate_name
         )
         .unwrap();
         if let Some((takes_self, is_async, fallible)) = callable {
             write!(
                 out,
-                " :>> takesSelf = \"{takes_self}\"; :>> isAsync = {is_async}; :>> isFallible = {fallible};"
+                " :>> {} = \"{takes_self}\"; :>> {} = {is_async}; :>> {} = {fallible};",
+                binding::TAKES_SELF,
+                binding::IS_ASYNC,
+                binding::IS_FALLIBLE
             )
             .unwrap();
         }

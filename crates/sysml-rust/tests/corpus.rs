@@ -57,7 +57,7 @@ fn library(root: &Path) -> sysml_semantics::Workspace {
 fn what_the_corpus_generates_compiles() {
     let Some(root) = vendor() else { return };
     let base = library(&root);
-    let out = std::env::temp_dir().join("sysml-rustgen-corpus");
+    let out = std::env::temp_dir().join("sysml-rust-corpus");
     std::fs::create_dir_all(&out).unwrap();
 
     let (mut generated, mut failed) = (0usize, Vec::new());
@@ -72,7 +72,7 @@ fn what_the_corpus_generates_compiles() {
         }
         ws.resolve_files(&[file]);
         let roots = ws.file_roots(file).to_vec();
-        let Ok(rust) = sysml_rustgen::generate(ws.model(), &roots) else {
+        let Ok(rust) = sysml_rust::generate(ws.model(), &roots) else {
             continue; // a model this generator refuses is not a failure to compile
         };
         generated += 1;

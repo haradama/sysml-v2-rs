@@ -4,6 +4,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use sysml_syntax::{Diagnostic, Dialect};
 
+mod api;
+
 fn parse_file(path: &Path, text: &str) -> sysml_syntax::Parse {
     let dialect = path
         .extension()
@@ -142,6 +144,14 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Talk to a SysML v2 API & Services model server
+    Api {
+        #[command(subcommand)]
+        what: ApiCommand,
+        /// Base URL of the model server
+        #[arg(long, default_value = "http://localhost:9000", global = true)]
+        server: String,
+    },
     /// Parse every .sysml/.kerml file under a directory and report the
     /// success rate (used to track grammar coverage against the official
     /// SysML-v2-Release corpus)
@@ -154,6 +164,58 @@ enum Command {
         /// List every failing file
         #[arg(long)]
         failures: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApiCommand {
+    /// List the projects the server holds
+    Projects,
+    /// Show one project
+    Project {
+        /// Project id
+        project: String,
+    },
+    /// Create a project
+    NewProject {
+        /// What to call it
+        name: String,
+    },
+    /// List the commits of one project
+    Commits {
+        /// Project id
+        project: String,
+    },
+    /// List the elements of one commit
+    Elements {
+        /// Project id
+        project: String,
+        /// Commit id
+        commit: String,
+    },
+    /// Show one element of one commit
+    Element {
+        /// Project id
+        project: String,
+        /// Commit id
+        commit: String,
+        /// Element id
+        element: String,
+    },
+    /// Export a model and send it to the server as a new commit
+    Push {
+        /// Files or directories holding the model
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Project to commit to
+        #[arg(long)]
+        project: String,
+        /// What the commit is for
+        #[arg(long, default_value = "sysml push")]
+        message: String,
+        /// Resolve names against these files or directories too
+        #[arg(long)]
+        library: Vec<PathBuf>,
     },
 }
 
@@ -200,6 +262,7 @@ fn main() -> ExitCode {
             library,
             output,
         } => rustgen(&paths, &library, output.as_deref()),
+        Command::Api { what, server } => api_command(&server, &what, format),
         Command::Corpus {
             dir,
             worst,
@@ -248,15 +311,37 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
 }
 
 fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+    let Some((json, elements)) = exported(files, library) else {
+        return ExitCode::FAILURE;
+    };
+    let rendered = serde_json::to_string_pretty(&json).expect("serializable");
+    match output {
+        Some(path) => {
+            if let Err(err) = std::fs::write(path, rendered) {
+                eprintln!("error: cannot write {}: {err}", path.display());
+                return ExitCode::FAILURE;
+            }
+            eprintln!("wrote {elements} element(s) to {}", path.display());
+        }
+        None => println!("{rendered}"),
+    }
+    ExitCode::SUCCESS
+}
+
+/// The model of `files`, resolved against `library`, as interchange JSON
+/// and the number of elements it came from. `sysml export` writes this
+/// out and `sysml api push` sends it, so both mean the same thing by a
+/// model.
+fn exported(files: &[PathBuf], library: &[PathBuf]) -> Option<(serde_json::Value, usize)> {
     // resolve before serializing: the reified typings and specializations
     // are what the interchange derives inheritance and types from
     let mut ws = sysml_semantics::Workspace::new();
     if !load_paths(&mut ws, files) {
-        return ExitCode::FAILURE;
+        return None;
     }
     let own = ws.file_count();
     if !load_paths(&mut ws, library) {
-        return ExitCode::FAILURE;
+        return None;
     }
     // parse diagnostics still get printed while exporting
     for file in 0..own {
@@ -292,19 +377,7 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exit
     }
 
     let model = ws.model();
-    let json = sysml_interchange::to_json_with(model, &extras);
-    let rendered = serde_json::to_string_pretty(&json).expect("serializable");
-    match output {
-        Some(path) => {
-            if let Err(err) = std::fs::write(path, rendered) {
-                eprintln!("error: cannot write {}: {err}", path.display());
-                return ExitCode::FAILURE;
-            }
-            eprintln!("wrote {} element(s) to {}", model.len(), path.display());
-        }
-        None => println!("{rendered}"),
-    }
-    ExitCode::SUCCESS
+    Some((sysml_interchange::to_json_with(model, &extras), model.len()))
 }
 
 fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> ExitCode {
@@ -499,7 +572,7 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
     let roots: Vec<_> = (0..own)
         .flat_map(|file| ws.file_roots(file).to_vec())
         .collect();
-    match sysml_rustgen::generate(ws.model(), &roots) {
+    match sysml_rust::generate(ws.model(), &roots) {
         Ok(rust) => {
             let structs = rust.matches("pub struct ").count();
             let methods =
@@ -525,7 +598,7 @@ fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    match sysml_import_api::rustdoc_to_sysml(&text, package) {
+    match sysml_rust::rustdoc_to_sysml(&text, package) {
         Ok(sysml) => {
             let definitions = sysml.matches(" def ").count();
             emit(&sysml, output, &format!("{definitions} definition(s)"))
@@ -844,4 +917,91 @@ fn line_col(text: &str, offset: usize) -> (usize, usize) {
     let line = prefix.matches('\n').count();
     let col = prefix.rfind('\n').map_or(offset, |i| offset - i - 1);
     (line, col)
+}
+
+/// Talk to a model server. Every answer is the server's own JSON, so
+/// what comes back is what the standard says came back; the text form
+/// lists the one line a person reads it for.
+fn api_command(server: &str, what: &ApiCommand, format: Format) -> ExitCode {
+    let client = api::Client::new(server);
+    let answered = match what {
+        ApiCommand::Projects => client
+            .projects()
+            .map(|ps| (ps.iter().map(project_line).collect(), json_of(&ps))),
+        ApiCommand::Project { project } => client
+            .project(project)
+            .map(|p| (vec![project_line(&p)], json_of(&p))),
+        ApiCommand::NewProject { name } => client
+            .create_project(name)
+            .map(|p| (vec![project_line(&p)], json_of(&p))),
+        ApiCommand::Commits { project } => client
+            .commits(project)
+            .map(|cs| (cs.iter().map(commit_line).collect(), json_of(&cs))),
+        ApiCommand::Elements { project, commit } => client.elements(project, commit).map(|es| {
+            let lines = es.iter().map(element_line).collect();
+            (lines, serde_json::Value::Array(es))
+        }),
+        ApiCommand::Element {
+            project,
+            commit,
+            element,
+        } => client
+            .element(project, commit, element)
+            .map(|e| (vec![element_line(&e)], e)),
+        ApiCommand::Push {
+            paths,
+            project,
+            message,
+            library,
+        } => {
+            let Some((json, elements)) = exported(paths, library) else {
+                return ExitCode::FAILURE;
+            };
+            let changes: Vec<serde_json::Value> = json.as_array().cloned().unwrap_or_default();
+            client.create_commit(project, message, &changes).map(|c| {
+                (
+                    vec![format!("{} element(s) as commit {}", elements, c.id)],
+                    serde_json::to_value(&c).expect("serializable"),
+                )
+            })
+        }
+    };
+    match answered {
+        Ok((lines, json)) => {
+            match format {
+                Format::Text => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                }
+                Format::Json => report(json),
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {server}: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn json_of<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    serde_json::to_value(value).expect("serializable")
+}
+
+fn project_line(project: &api::Project) -> String {
+    format!("{} {}", project.id, project.name.as_deref().unwrap_or(""))
+}
+
+fn commit_line(commit: &api::Commit) -> String {
+    format!(
+        "{} {}",
+        commit.id,
+        commit.description.as_deref().unwrap_or("")
+    )
+}
+
+fn element_line(element: &serde_json::Value) -> String {
+    let at = |key: &str| element[key].as_str().unwrap_or("").to_string();
+    format!("{} {} {}", at("@id"), at("@type"), at("declaredName"))
 }

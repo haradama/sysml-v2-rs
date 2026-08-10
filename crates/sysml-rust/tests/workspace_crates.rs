@@ -60,7 +60,7 @@ fn every_crate_imports_into_a_model_that_resolves() {
         let Ok(json) = std::fs::read_to_string(path) else {
             continue;
         };
-        let made = std::panic::catch_unwind(|| sysml_import_api::rustdoc_to_sysml(&json, None));
+        let made = std::panic::catch_unwind(|| sysml_rust::rustdoc_to_sysml(&json, None));
         let sysml = match made {
             Err(_) => {
                 found.push(format!("PANIC\t{name}"));

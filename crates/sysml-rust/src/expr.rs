@@ -479,7 +479,7 @@ impl Parser<'_> {
                         return None;
                     };
                     self.at += 1;
-                    rust = format!("{rust}.{}", super::ident(&segment));
+                    rust = format!("{rust}.{}", crate::generate::ident(&segment));
                 }
                 Some(Node {
                     rust,

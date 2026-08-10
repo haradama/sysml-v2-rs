@@ -14,7 +14,7 @@ SERVER := target/release/sysml-lsp
 VSIX := $(EXT_DIR)/sysml-v2.vsix
 
 DEMO := examples/order-system
-FIXTURE_JSON := crates/sysml-import-api/tests/fixtures/inventory_store.rustdoc.json
+FIXTURE_JSON := crates/sysml-rust/tests/fixtures/inventory_store.rustdoc.json
 
 .PHONY: help lsp vscode vscode-package vscode-clean demo
 

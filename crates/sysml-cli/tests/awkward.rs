@@ -75,7 +75,7 @@ fn names_the_formats_would_read_as_their_own_syntax() {
 
     // Rust: names become identifiers, docs become `///`, and a doc that
     // ends its own comment or an identifier with a quote in it does not
-    match sysml_rustgen::generate(ws.model(), &roots) {
+    match sysml_rust::generate(ws.model(), &roots) {
         Err(e) => found.push(format!("rustgen\trefused: {e}")),
         Ok(rust) => {
             std::fs::write(std::env::temp_dir().join("awkward.rs"), &rust).ok();
@@ -262,7 +262,7 @@ fn all_of_it(what: &str, text: String) -> Result<(), String> {
             );
             let json = sysml_interchange::to_json(ws.model());
             let back = sysml_interchange::from_json(&json).is_ok();
-            let rust = sysml_rustgen::generate(ws.model(), &roots).is_ok();
+            let rust = sysml_rust::generate(ws.model(), &roots).is_ok();
             let formatted = sysml_syntax::fmt::format(&text, sysml_syntax::Dialect::SysML);
             (
                 parsed,

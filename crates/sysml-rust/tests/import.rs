@@ -22,8 +22,8 @@ const SCALARS: &str = "package ScalarValues {\n\
 
 #[test]
 fn the_generated_package_is_deterministic_and_names_the_api() {
-    let first = sysml_import_api::rustdoc_to_sysml(&fixture(), None).unwrap();
-    let second = sysml_import_api::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let first = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let second = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
     assert_eq!(first, second, "two runs must write identical bytes");
 
     assert!(first.starts_with("// generated from crate `inventory_store`"));
@@ -69,13 +69,13 @@ fn the_generated_package_is_deterministic_and_names_the_api() {
     assert!(first.contains("doc /* What to look up. */"));
 
     // a chosen package name wins over the derived one
-    let named = sysml_import_api::rustdoc_to_sysml(&fixture(), Some("Warehouse")).unwrap();
+    let named = sysml_rust::rustdoc_to_sysml(&fixture(), Some("Warehouse")).unwrap();
     assert!(named.contains("package Warehouse {"));
 }
 
 #[test]
 fn the_generated_package_parses_resolves_and_binds() {
-    let sysml = sysml_import_api::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
     let parse = sysml_syntax::parse(&sysml);
     assert!(
         parse.ok(),
@@ -192,7 +192,7 @@ fn a_clean_crate_has_no_skip_list() {
             "f": { "name": "flag", "inner": { "struct_field": { "primitive": "bool" } } }
         }
     }"#;
-    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
     assert!(sysml.contains("package TinyApi {"));
     assert!(sysml.contains("attribute flag : Boolean;"));
     assert!(!sysml.contains("not imported"));
@@ -227,7 +227,7 @@ fn odd_shapes_are_skipped_not_dropped() {
             "unnamed": { "inner": { "function": {} } }
         }
     }"#;
-    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
     assert!(sysml.contains("//   LIMIT -- constant"));
     assert!(sysml.contains("//   Strange.off -- unmappable type"));
     assert!(sysml.contains("//   half_result -- unsupported signature"));
@@ -264,7 +264,7 @@ fn a_re_exported_type_is_imported_and_can_be_referred_to() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
     assert!(sysml.contains("item def Shape {"), "{sysml}");
     assert!(sysml.contains("in shape : Shape;"), "{sysml}");
     // the glob re-export names the same struct and must not double it
@@ -297,7 +297,7 @@ fn a_signature_never_names_a_type_that_was_refused() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_import_api::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
     assert!(sysml.contains("enum def Mood {"), "{sysml}");
     assert!(sysml.contains("//   Fickle -- not a plain enum"), "{sysml}");
     assert!(
@@ -309,21 +309,21 @@ fn a_signature_never_names_a_type_that_was_refused() {
 
 #[test]
 fn broken_inputs_are_named_errors() {
-    use sysml_import_api::ImportError;
+    use sysml_rust::ImportError;
     assert!(matches!(
-        sysml_import_api::rustdoc_to_sysml("not json", None),
+        sysml_rust::rustdoc_to_sysml("not json", None),
         Err(ImportError::NotJson(_))
     ));
     assert_eq!(
-        sysml_import_api::rustdoc_to_sysml("{}", None),
+        sysml_rust::rustdoc_to_sysml("{}", None),
         Err(ImportError::Malformed("its item index".to_string()))
     );
     assert_eq!(
-        sysml_import_api::rustdoc_to_sysml(r#"{"index":{}}"#, None),
+        sysml_rust::rustdoc_to_sysml(r#"{"index":{}}"#, None),
         Err(ImportError::Malformed("its root module".to_string()))
     );
     assert_eq!(
-        sysml_import_api::rustdoc_to_sysml(r#"{"index":{},"root":0}"#, None),
+        sysml_rust::rustdoc_to_sysml(r#"{"index":{},"root":0}"#, None),
         Err(ImportError::Malformed("the root module item".to_string()))
     );
     for error in [

@@ -15,9 +15,8 @@ fn read(path: &Path) -> String {
 
 /// The pipeline `make demo` runs, without touching the filesystem.
 fn regenerate() -> (String, String) {
-    let json =
-        read(&repo().join("crates/sysml-import-api/tests/fixtures/inventory_store.rustdoc.json"));
-    let api = sysml_import_api::rustdoc_to_sysml(&json, None).unwrap();
+    let json = read(&repo().join("crates/sysml-rust/tests/fixtures/inventory_store.rustdoc.json"));
+    let api = sysml_rust::rustdoc_to_sysml(&json, None).unwrap();
 
     let mut ws = sysml_semantics::Workspace::new();
     let model_dir = repo().join("examples/order-system/model");
@@ -31,7 +30,7 @@ fn regenerate() -> (String, String) {
     assert_eq!(stats.unresolved, 0, "the demo model must resolve fully");
 
     let roots = ws.file_roots(system).to_vec();
-    let rust = sysml_rustgen::generate(ws.model(), &roots).unwrap();
+    let rust = sysml_rust::generate(ws.model(), &roots).unwrap();
     (api, rust)
 }
 

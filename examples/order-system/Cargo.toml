@@ -6,6 +6,6 @@ edition = "2021"
 publish = false
 
 [dependencies]
-inventory-store = { path = "../../crates/sysml-import-api/tests/fixtures/inventory-store" }
+inventory-store = { path = "../../crates/sysml-rust/tests/fixtures/inventory-store" }
 
 [workspace]
