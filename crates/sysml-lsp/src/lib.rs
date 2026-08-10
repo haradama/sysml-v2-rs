@@ -202,23 +202,29 @@ impl Server {
         for (url, file) in &analysis.doc_files {
             let text = &docs[url];
             let index = LineIndex::new(text);
+            // an editor shows both halves: what does not parse yet is
+            // not a reason to stop saying what does not resolve
+            let found = analysis.ws.findings(&[*file]);
             let mut diagnostics = Vec::new();
-            for err in analysis.ws.file_parse(*file).errors() {
-                diagnostics.push(Diagnostic {
-                    range: index.range(text, err.range),
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("sysml".into()),
-                    message: err.message.clone(),
-                    ..Default::default()
-                });
-            }
-            for unresolved in analysis.ws.unresolved() {
-                if unresolved.file == *file {
+            for (findings, severity, say) in [
+                (
+                    &found.syntax,
+                    DiagnosticSeverity::ERROR,
+                    &(|what: &str| what.to_string()) as &dyn Fn(&str) -> String,
+                ),
+                (
+                    &found.names,
+                    DiagnosticSeverity::WARNING,
+                    &(|what: &str| format!("unresolved reference `{what}`"))
+                        as &dyn Fn(&str) -> String,
+                ),
+            ] {
+                for finding in findings {
                     diagnostics.push(Diagnostic {
-                        range: index.range(text, unresolved.range),
-                        severity: Some(DiagnosticSeverity::WARNING),
+                        range: index.range(text, finding.range),
+                        severity: Some(severity),
                         source: Some("sysml".into()),
-                        message: format!("unresolved reference `{}`", unresolved.name),
+                        message: say(&finding.what),
                         ..Default::default()
                     });
                 }

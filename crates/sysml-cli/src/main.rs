@@ -633,26 +633,29 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     // running only `check` -- which is most of the reason it exists --
     // would be told a broken model was fine. Syntax comes first, as it
     // does in the MCP server's tool of the same name.
+    // the file each finding is in, read once and kept: `ws` is borrowed
+    // mutably in between to resolve
+    let mut texts: std::collections::HashMap<usize, String> = Default::default();
+    let mut read = |file: usize, name: &str| -> String {
+        texts
+            .entry(file)
+            .or_insert_with(|| std::fs::read_to_string(name).unwrap_or_default())
+            .clone()
+    };
     let mut broken = Vec::new();
-    for file in 0..ws.file_count() {
-        let parse = ws.file_parse(file);
-        if parse.ok() {
-            continue;
+    for finding in &ws.findings(&[]).syntax {
+        let name = ws.file_name(finding.file).to_string();
+        let text = read(finding.file, &name);
+        let offset = usize::from(finding.range.start()).min(text.len());
+        if format == Format::Text {
+            let (line, col) = line_col(&text, offset);
+            eprintln!("{name}:{}:{}: {}", line + 1, col + 1, finding.what);
         }
-        let name = ws.file_name(file).to_string();
-        let text = std::fs::read_to_string(&name).unwrap_or_default();
-        for error in parse.errors() {
-            let offset = usize::from(error.range.start()).min(text.len());
-            if format == Format::Text {
-                let (line, col) = line_col(&text, offset);
-                eprintln!("{name}:{}:{}: {}", line + 1, col + 1, error.message);
-            }
-            broken.push(at(
-                &text,
-                offset,
-                serde_json::json!({ "path": name.clone(), "message": error.message }),
-            ));
-        }
+        broken.push(at(
+            &text,
+            offset,
+            serde_json::json!({ "path": name, "message": finding.what }),
+        ));
     }
     if !broken.is_empty() {
         if format == Format::Json {
@@ -680,23 +683,23 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     } else {
         show
     };
-    let mut texts: std::collections::HashMap<usize, String> = Default::default();
+    // the names are asked for after resolving, the syntax before it:
+    // there is nothing to resolve in a file that did not parse
+    let names = ws.findings(&[]).names;
     let mut unresolved = Vec::new();
-    for u in ws.unresolved().iter().take(limit) {
+    for u in names.iter().take(limit) {
         let file = ws.file_name(u.file).to_string();
-        let text = texts
-            .entry(u.file)
-            .or_insert_with(|| std::fs::read_to_string(&file).unwrap_or_default());
+        let text = &read(u.file, &file);
         let offset = usize::from(u.range.start()).min(text.len());
         match format {
             Format::Text => {
                 let (line, col) = line_col(text, offset);
-                eprintln!("{file}:{}:{}: unresolved `{}`", line + 1, col + 1, u.name);
+                eprintln!("{file}:{}:{}: unresolved `{}`", line + 1, col + 1, u.what);
             }
             Format::Json => unresolved.push(at(
                 text,
                 offset,
-                serde_json::json!({ "path": file, "name": u.name.clone() }),
+                serde_json::json!({ "path": file, "name": u.what.clone() }),
             )),
         }
     }
@@ -716,8 +719,8 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             ExitCode::FAILURE
         };
     }
-    if ws.unresolved().len() > limit {
-        eprintln!("... and {} more", ws.unresolved().len() - limit);
+    if names.len() > limit {
+        eprintln!("... and {} more", names.len() - limit);
     }
     println!(
         "{} element(s), {}/{total} reference(s) resolved ({rate:.1}%)",

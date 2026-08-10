@@ -49,6 +49,27 @@ pub struct Reference {
     pub target: ElementId,
 }
 
+/// What is wrong with a model. The two are kept apart because a file
+/// that does not parse has no names worth resolving: anything said about
+/// them is about the tree the parser guessed at, not the one written.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Findings {
+    /// What the parser could not read.
+    pub syntax: Vec<Finding>,
+    /// References that resolve to nothing.
+    pub names: Vec<Finding>,
+}
+
+/// One thing wrong, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Finding {
+    /// Index of the file (in insertion order) it is in.
+    pub file: usize,
+    pub range: TextRange,
+    /// The parser's complaint, or the name that resolved to nothing.
+    pub what: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveStats {
     pub resolved: usize,
@@ -259,6 +280,44 @@ impl Workspace {
             .iter()
             .filter(|r| r.file == file && r.range.contains_inclusive(offset))
             .min_by_key(|r| u32::from(r.range.len()))
+    }
+
+    /// Everything wrong with `files` (all of them when empty), kept in
+    /// the two kinds a reader wants apart.
+    ///
+    /// Three front ends ask this -- the command line, the language
+    /// server and the MCP server -- and they used to work it out for
+    /// themselves. One of them forgot the syntax half, so `sysml check`
+    /// reported a file that does not parse as sound. Whether to go on to
+    /// the names when the syntax is broken is a judgement each of them
+    /// makes: an editor shows both while you type, a batch check stops.
+    /// What must not differ is what there is to show.
+    pub fn findings(&self, files: &[usize]) -> Findings {
+        let wanted = |file: usize| files.is_empty() || files.contains(&file);
+        let mut syntax = Vec::new();
+        for file in 0..self.file_count() {
+            if !wanted(file) {
+                continue;
+            }
+            for error in self.file_parse(file).errors() {
+                syntax.push(Finding {
+                    file,
+                    range: error.range,
+                    what: error.message.clone(),
+                });
+            }
+        }
+        let names = self
+            .unresolved()
+            .iter()
+            .filter(|u| wanted(u.file))
+            .map(|u| Finding {
+                file: u.file,
+                range: u.range,
+                what: u.name.clone(),
+            })
+            .collect();
+        Findings { syntax, names }
     }
 
     /// All references resolving to `target`.
@@ -609,6 +668,16 @@ impl Workspace {
     }
 
     fn resolve_ids(&mut self, ids: &[ElementId]) -> ResolveStats {
+        // Resolving the same elements again replaces what was found
+        // about them rather than adding to it: asking twice is a thing
+        // callers do, and it should not double every finding.
+        let touched: HashSet<usize> = ids
+            .iter()
+            .filter_map(|id| self.elem_file.get(id).copied())
+            .collect();
+        self.unresolved.retain(|u| !touched.contains(&u.file));
+        self.references.retain(|r| !touched.contains(&r.file));
+
         let mut stats = ResolveStats::default();
         let began = self.lookups;
         for &id in ids {

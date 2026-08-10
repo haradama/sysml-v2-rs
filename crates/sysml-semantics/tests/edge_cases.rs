@@ -341,6 +341,73 @@ fn a_base_type_behind_a_condition_offers_every_side_of_it() {
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }
 
+/// What is wrong with a model is worked out once, and the command line,
+/// the language server and the MCP server each render that. They used to
+/// work it out for themselves, and one of them left out the syntax half,
+/// so `sysml check` called a file that does not parse sound.
+#[test]
+fn what_is_wrong_is_said_once_and_kept_apart() {
+    let mut ws = ws(&[
+        (
+            "bad.sysml",
+            "package P {\n\tpart def A;\n\tpart b : Missing;\n",
+        ),
+        (
+            "good.sysml",
+            "package Q {\n\tpart def C;\n\tpart d : C;\n}\n",
+        ),
+    ]);
+    // `ws` has resolved once already; asking again must not double what
+    // it found
+    ws.resolve_all();
+
+    let all = ws.findings(&[]);
+    assert_eq!(all.syntax.len(), 1, "{:?}", all.syntax);
+    assert!(all.syntax[0].what.contains("expected"), "{:?}", all.syntax);
+    assert_eq!(all.names.len(), 1, "{:?}", all.names);
+    assert_eq!(all.names[0].what, "Missing");
+
+    // asked about one file, it answers about that file
+    let good = ws.findings(&[1]);
+    assert!(good.syntax.is_empty() && good.names.is_empty(), "{good:?}");
+    let bad = ws.findings(&[0]);
+    assert_eq!(bad.syntax.len(), 1);
+    assert_eq!(bad.names.len(), 1);
+    assert_eq!(bad.syntax[0].file, 0);
+}
+
+/// What is wrong with a model, asked once. Three front ends render this
+/// -- the command line, the language server, the MCP server -- and when
+/// each worked it out for itself one of them forgot the syntax half and
+/// called a file that does not parse sound.
+#[test]
+fn findings_keep_the_syntax_apart_from_the_names() {
+    let mut both = ws(&[
+        ("broken.sysml", "package P {\n\tpart def A;\n"),
+        ("named.sysml", "package Q {\n\tpart b : Missing;\n}\n"),
+    ]);
+    both.resolve_all();
+
+    let all = both.findings(&[]);
+    assert_eq!(all.syntax.len(), 1, "{:?}", all.syntax);
+    assert!(all.syntax[0].what.contains("expected"), "{:?}", all.syntax);
+    assert_eq!(all.syntax[0].file, 0);
+    assert_eq!(all.names.len(), 1, "{:?}", all.names);
+    assert_eq!(all.names[0].what, "Missing");
+    assert_eq!(all.names[0].file, 1);
+
+    // one file at a time is the same answer, narrowed
+    assert_eq!(both.findings(&[0]).syntax, all.syntax);
+    assert!(both.findings(&[0]).names.is_empty());
+    assert!(both.findings(&[1]).syntax.is_empty());
+    assert_eq!(both.findings(&[1]).names, all.names);
+
+    // and a model with nothing wrong says so
+    let mut clean = ws(&[("ok.sysml", "package R {\n\tpart def A;\n\tpart a : A;\n}\n")]);
+    clean.resolve_all();
+    assert_eq!(clean.findings(&[]), Default::default());
+}
+
 #[test]
 fn broken_aliases_and_redefinitions_do_not_block_lookup() {
     let ws = ws(&[(

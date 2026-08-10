@@ -127,16 +127,18 @@ impl Server {
         let file = ws.add_file(name.clone(), &text);
         open.push(file);
 
-        let parse = ws.file_parse(file);
-        if !parse.ok() {
-            let errors: Vec<Value> = parse
-                .errors()
+        // syntax first: a file that does not parse has no names worth
+        // resolving, so what would be said about them is about a tree
+        // the parser guessed at
+        let broken = ws.findings(&[file]).syntax;
+        if !broken.is_empty() {
+            let errors: Vec<Value> = broken
                 .iter()
-                .map(|d| {
+                .map(|f| {
                     at(
                         &text,
-                        usize::from(d.range.start()),
-                        json!({ "message": d.message }),
+                        usize::from(f.range.start()),
+                        json!({ "message": f.what }),
                     )
                 })
                 .collect();
@@ -145,14 +147,14 @@ impl Server {
 
         let stats = ws.resolve_files(&open);
         let unresolved: Vec<Value> = ws
-            .unresolved()
+            .findings(&[file])
+            .names
             .iter()
-            .filter(|u| u.file == file)
-            .map(|u| {
+            .map(|f| {
                 at(
                     &text,
-                    usize::from(u.range.start()),
-                    json!({ "name": u.name }),
+                    usize::from(f.range.start()),
+                    json!({ "name": f.what }),
                 )
             })
             .collect();
