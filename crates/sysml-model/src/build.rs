@@ -191,10 +191,28 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     model.add_owned(owner, range);
     model.set(owner, "multiplicity", Value::Ref(range));
 
-    let bounds: Vec<ElementId> = clause
-        .children_with_tokens()
-        .filter_map(|part| bound_expression(model, range, part))
-        .collect();
+    // How many bounds there are is what the brackets say, not how many
+    // of them we could read. Dropping one changes what the others mean:
+    // `[1..18446744073709551615]` would arrive as a lone `1` and be read
+    // as exactly one, and so would `[-1]`. A bound with no shape here is
+    // kept as the text it was written as, which every consumer already
+    // treats as a bound it does not know.
+    let mut segments: Vec<Vec<sysml_syntax::SyntaxElement>> = vec![Vec::new()];
+    for part in clause.children_with_tokens() {
+        match part.kind() {
+            L_BRACKET | R_BRACKET | WHITESPACE | LINE_NOTE | BLOCK_NOTE => {}
+            DOT_DOT => segments.push(Vec::new()),
+            _ => segments.last_mut().expect("there is always one").push(part),
+        }
+    }
+    let bounds: Vec<ElementId> = if segments.iter().all(Vec::is_empty) {
+        Vec::new() // `[]`, which says nothing
+    } else {
+        segments
+            .iter()
+            .map(|segment| bound_expression(model, range, segment))
+            .collect()
+    };
     match bounds.as_slice() {
         [only] => {
             model.set(range, "bound", Value::Ref(*only));
@@ -207,27 +225,37 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     }
 }
 
-/// One bound of a multiplicity range, as the literal element it denotes.
+/// One bound of a multiplicity range, as the element it denotes. A
+/// bound of one plain token is the literal it spells; anything else --
+/// `count + 1`, a number too large for the model's integers, a minus
+/// sign where a natural belongs, or nothing at all -- is an expression
+/// kept as the text it was written as.
 fn bound_expression(
     model: &mut Model,
     range: ElementId,
-    part: sysml_syntax::SyntaxElement,
-) -> Option<ElementId> {
+    segment: &[sysml_syntax::SyntaxElement],
+) -> ElementId {
     use SyntaxKind::*;
-    let token = part.into_token()?;
-    let (kind, value) = match token.kind() {
-        DECIMAL => (
-            ElementKind::LiteralInteger,
-            Value::Int(token.text().parse().ok()?),
-        ),
-        STAR => (ElementKind::LiteralInfinity, Value::Bool(true)),
+    let written: String = segment.iter().map(|part| part.to_string()).collect();
+    let single = match segment {
+        [only] => only.as_token().map(|token| token.kind()),
+        _ => None,
+    };
+    let (kind, value) = match single {
+        Some(DECIMAL) => match written.parse() {
+            Ok(int) => (ElementKind::LiteralInteger, Value::Int(int)),
+            Err(_) => (
+                ElementKind::FeatureReferenceExpression,
+                Value::String(written.clone()),
+            ),
+        },
+        Some(STAR) => (ElementKind::LiteralInfinity, Value::Bool(true)),
         // `[count]` -- a named bound is an expression, kept as text the
         // way a transition guard is
-        IDENT => (
+        _ => (
             ElementKind::FeatureReferenceExpression,
-            Value::String(token.text().to_string()),
+            Value::String(written.clone()),
         ),
-        _ => return None,
     };
     let bound = model.create(kind);
     model.add_owned(range, bound);
@@ -243,7 +271,7 @@ fn bound_expression(
         // `LiteralInfinity` has no value of its own: being one says it all
         _ => {}
     }
-    Some(bound)
+    bound
 }
 
 /// Reify an `= 1200.0`, `default = x` or `:= "boot"` clause as the
@@ -889,6 +917,46 @@ mod tests {
             model.get(written, "body").and_then(Value::as_str),
             Some("count")
         );
+    }
+
+    /// How many bounds a multiplicity has is what the brackets say. A
+    /// bound this builder cannot read must still take up its place: drop
+    /// it and `[1..18446744073709551615]` arrives as a lone `1`, which
+    /// every consumer reads as exactly one -- a wrong answer with
+    /// nothing to show that anything was lost.
+    #[test]
+    fn a_bound_it_cannot_read_still_takes_up_its_place() {
+        let cases = [
+            // written, lower, upper, single
+            ("[1..10]", Some("1"), Some("10"), None),
+            ("[4]", None, None, Some("4")),
+            // too large for the model's integers, and a sign where a
+            // natural belongs: neither is a number, and neither leaves
+            // the other one alone in the brackets
+            ("[1..18446744073709551615]", Some("1"), Some(""), None),
+            ("[-1]", None, None, Some("")),
+            ("[..3]", Some(""), Some("3"), None),
+            ("[]", None, None, None),
+        ];
+        for (written, lower, upper, single) in cases {
+            let (model, roots) = build_model(&sysml_syntax::parse(&format!(
+                "part def V {{\n\tattribute xs : Real{written};\n}}\n"
+            )));
+            let xs = model.owned(roots[0])[0];
+            let range = reference(&model, xs, "multiplicity").expect(written);
+            let spelled = |name: &str| -> Option<String> {
+                let bound = reference(&model, range, name)?;
+                Some(match model.get(bound, "value") {
+                    Some(Value::Int(int)) => int.to_string(),
+                    // what it could not read is kept as written, and an
+                    // empty answer here means "a bound, but not a number"
+                    _ => String::new(),
+                })
+            };
+            assert_eq!(spelled("lowerBound").as_deref(), lower, "{written}");
+            assert_eq!(spelled("upperBound").as_deref(), upper, "{written}");
+            assert_eq!(spelled("bound").as_deref(), single, "{written}");
+        }
     }
 
     #[test]

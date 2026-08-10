@@ -193,6 +193,154 @@ fn visible_names_through_imports_and_ends() {
     assert!(labels.contains(&"Secret"), "{labels:?}");
 }
 
+/// `import Q::**` reaches what is nested in Q, and lookup has always
+/// followed it there. What may be written at a point is the same
+/// question asked a second way, and it used to stop at Q's own members
+/// -- so a name the model resolves was one the editor never offered.
+#[test]
+fn a_recursive_import_offers_what_is_nested_in_it() {
+    let text = "package Q {\n    class A;\n    package Q2 { class F; }\n}\npackage S {\n    public import Q::**;\n    class Z :> F;\n    class Y :> A;\n}\n";
+    let mut deep = ws(&[("k.kerml", text)]);
+    assert!(deep.unresolved().is_empty(), "{:?}", deep.unresolved());
+    let names = deep.visible_names(0, offset_of(text, "class Z"));
+    let labels: Vec<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(labels.contains(&"A"), "a member of Q: {labels:?}");
+    assert!(labels.contains(&"F"), "nested in Q: {labels:?}");
+    // a plain `::*` still stops at the members it names
+    let shallow = "package Q {\n    class A;\n    package Q2 { class F; }\n}\npackage S {\n    public import Q::*;\n    class Y :> A;\n}\n";
+    let mut only = ws(&[("k.kerml", shallow)]);
+    let names = only.visible_names(0, offset_of(shallow, "class Y"));
+    let labels: Vec<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(labels.contains(&"A"), "{labels:?}");
+    assert!(!labels.contains(&"F"), "{labels:?}");
+}
+
+/// A feature with no name of its own answers to the name of what it
+/// redefines -- which is the very thing being looked up when that
+/// redefinition is resolved. Letting it match itself makes the answer
+/// its own premise, and a model naming something that exists nowhere is
+/// then reported as sound.
+#[test]
+fn a_borrowed_name_cannot_answer_the_question_it_came_from() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n\tpart def D { attribute :>> nowhere; }\n\tpart def E { attribute p4 :> p4; }\n}\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    // nothing anywhere is called `nowhere`, and saying so is the point
+    assert!(names.contains(&"nowhere"), "{names:?}");
+    // a feature that declares its own name may still refer to itself
+    assert!(!names.contains(&"p4"), "{names:?}");
+}
+
+/// `$` is the root of the workspace; `'$'` is a package someone named
+/// `$`. They unquote to the same three characters, so a resolver that
+/// works in strings alone reads the second as the first and quietly
+/// answers about the wrong package.
+#[test]
+fn a_package_named_like_the_root_is_not_the_root() {
+    let ws = ws(&[(
+        "k.kerml",
+        "package Outer {\n    package Objects { class Object { feature here; } }\n    package '$' { class Objects { class Object { feature there; } } }\n    class A :> '$'::Objects::Object { feature :>> there; }\n    class B :> Objects::Object { feature :>> here; }\n}\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}
+
+/// A redefinition replaces what it redefines, so when two supertypes
+/// both answer to a name and one redefines the other's answer, the
+/// redefining one is the member -- whichever order they were written in.
+#[test]
+fn the_most_redefined_supertype_member_wins() {
+    for order in ["A, B", "B, A"] {
+        let ws = ws(&[(
+            "k.kerml",
+            &format!(
+                "package R {{\n    classifier A {{ feature f; }}\n    classifier B specializes A {{ feature redefines f {{ feature g; }} }}\n    classifier C specializes {order} {{ feature subsets f {{ feature redefines g; }} }}\n}}\n"
+            ),
+        )]);
+        assert!(
+            ws.unresolved().is_empty(),
+            "specializes {order}: {:?}",
+            ws.unresolved()
+        );
+    }
+}
+
+/// Five ways a model says "the thing you already have", each of which
+/// this resolver used to miss -- and miss quietly, because the feature
+/// doing the saying answered to the name it was asking about.
+#[test]
+fn what_a_model_means_by_naming_something_it_already_has() {
+    // `include x[0..*]` — the brackets are how many times, not which one
+    let include_ws = ws(&[(
+        "u.sysml",
+        "package U {\n\tuse case def Fuel { actor fueler; }\n\tuse case def Drive { include Fuel[0..*] { actor :>> fueler; } }\n}\n",
+    )]);
+    assert!(
+        include_ws.unresolved().is_empty(),
+        "include: {:?}",
+        include_ws.unresolved()
+    );
+
+    // `render asElementTable` renders by what it names, as `perform` does
+    let render_ws = ws(&[(
+        "v.sysml",
+        "package V {\n\trendering def AsTable { view columnView; }\n\tview v { render AsTable { view :>> columnView; } }\n}\n",
+    )]);
+    assert!(
+        render_ws.unresolved().is_empty(),
+        "render: {:?}",
+        render_ws.unresolved()
+    );
+
+    // a usage has one `objective`, so its own stands for its type's
+    let objective_ws = ws(&[(
+        "w.sysml",
+        "package W {\n\trequirement def Mass;\n\tverification def MassTest { objective o { verify requirement massRequirement : Mass; } }\n\trequirement r : Mass;\n\tverification t : MassTest { objective mine { verify r :>> massRequirement; } }\n}\n",
+    )]);
+    assert!(
+        objective_ws.unresolved().is_empty(),
+        "objective: {:?}",
+        objective_ws.unresolved()
+    );
+
+    // a feature redeclared by naming it the same redefines the inherited one
+    let same_ws = ws(&[(
+        "x.kerml",
+        "package X {\n\tstruct S { feature q; }\n\tbehavior B { in p : S; }\n\tbehavior C specializes B { in p { feature redefines q; } }\n}\n",
+    )]);
+    assert!(
+        same_ws.unresolved().is_empty(),
+        "same name: {:?}",
+        same_ws.unresolved()
+    );
+
+    // `variant x;` names a usage the model already has; `variant part x;`
+    // declares a new one
+    let variant_ws = ws(&[(
+        "y.sysml",
+        "package Y {\n\tpart def Engine;\n\tpart engine : Engine { port autoPort; }\n\tpart big :> engine;\n\tvariation part def Choices :> Engine {\n\t\tvariant big { port :>> autoPort; }\n\t\tvariant part fresh;\n\t}\n}\n",
+    )]);
+    assert!(
+        variant_ws.unresolved().is_empty(),
+        "variant: {:?}",
+        variant_ws.unresolved()
+    );
+}
+
+/// A keyword whose base type is chosen by a condition names both, and
+/// which one an element gets is decided by an expression this resolver
+/// does not evaluate. A name either of them declares is one the model
+/// can mean, so both are taken.
+#[test]
+fn a_base_type_behind_a_condition_offers_every_side_of_it() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n    metadata def SemanticMetadata { attribute baseType; }\n    struct Left { feature onlyLeft; }\n    struct Right { feature onlyRight; }\n    metadata def Either :> SemanticMetadata {\n        :>> baseType = if true ? Left meta X else Right meta X;\n    }\n    #Either part def W { attribute :>> onlyLeft; attribute :>> onlyRight; }\n}\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}
+
 #[test]
 fn broken_aliases_and_redefinitions_do_not_block_lookup() {
     let ws = ws(&[(
@@ -244,9 +392,11 @@ fn implicit_supertypes_of_statement_features() {
 }
 ",
     )]);
-    // the zz redefinitions fall back to self-resolution; what matters here
-    // is that the succession/inv/binding implicit-supertype rows executed
-    assert_eq!(ws.unresolved().len(), 0);
+    // What matters here is that the succession/inv/binding
+    // implicit-supertype rows executed. Nothing is called `zz`, and each
+    // redefinition says so rather than answering to itself.
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["zz", "zz", "zz"], "{:?}", ws.unresolved());
 }
 
 #[test]
@@ -276,10 +426,12 @@ fn degenerate_semantic_metadata_values() {
         "m.sysml",
         "package P {\n    metadata def SemanticMetadata { attribute baseType; }\n    part causes2;\n    metadata def c1 :> SemanticMetadata { :>> baseType = causes2 meta X; }\n    metadata def c2 :> SemanticMetadata { :>> baseType = causes2 meta X; }\n    #c1 #c2 part def Doubly { attribute da; }\n    part dd : Doubly { attribute :>> nowhere; }\n    metadata def selfish :> SemanticMetadata { :>> baseType = target meta X; }\n    part def Base2 { attribute deep; }\n    #selfish part def target :> Base2 { }\n    part tt : target { attribute :>> deep; }\n    metadata def weird :> SemanticMetadata { :>> baseType = 5.?{ }; }\n    #weird part def W { attribute inner; }\n    part w : W { attribute :>> nothere; }\n}\n",
     )]);
-    // the self-referential base is skipped and the degenerate value yields
-    // no base; `nothere` self-resolves via the effective-name fallback.
-    // What matters is that both semantic_base edge branches executed.
-    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    // The self-referential base is skipped and the degenerate value
+    // yields no base, so what those two usages redefine is nowhere to be
+    // found -- which they now say. What matters is that both
+    // semantic_base edge branches executed.
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["nowhere", "nothere"], "{:?}", ws.unresolved());
 }
 
 #[test]

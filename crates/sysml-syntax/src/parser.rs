@@ -50,6 +50,7 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         pos: 0,
         builder: GreenNodeBuilder::new(),
         errors: lex_errors,
+        plain_target: false,
     };
     parser.source_file();
     Parse {
@@ -66,6 +67,11 @@ struct Parser<'t> {
     pos: usize,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<Diagnostic>,
+    /// While reading what a `perform`/`include`/`satisfy` adapts, a `[`
+    /// opens the usage's multiplicity rather than an index into the
+    /// thing being adapted: `include 'add fuel'[0..*]` includes it zero
+    /// or more times.
+    plain_target: bool,
 }
 
 impl Parser<'_> {
@@ -287,8 +293,11 @@ impl Parser<'_> {
             SPECIALIZATION_KW | SUBCLASSIFIER_KW | SUBTYPE_KW | SUBSET_KW | REDEFINITION_KW
             | CONJUGATION_KW | DISJOINING_KW | DISJOINT_KW | INVERTING_KW | INVERSE_KW
             | FEATURING_KW | TYPING_KW => self.lead_stmt(cp, RELATION_STMT),
+            // `render asElementTable { ... }` renders by the rendering it
+            // names, the way `perform` performs by the action it names;
+            // `render rendering r1 : R` declares one instead.
             PERFORM_KW | EXHIBIT_KW | EVENT_KW | INCLUDE_KW | SATISFY_KW | ASSERT_KW
-            | ASSUME_KW | REQUIRE_KW | VERIFY_KW | FRAME_KW => self.adapter_usage(cp),
+            | ASSUME_KW | REQUIRE_KW | VERIFY_KW | FRAME_KW | RENDER_KW => self.adapter_usage(cp),
             NOT_KW
                 if matches!(
                     self.nth(1),
@@ -318,7 +327,7 @@ impl Parser<'_> {
             }
             // `message` declarations may be named (`message messages : M ...`)
             SUBJECT_KW | ACTOR_KW | STAKEHOLDER_KW | OBJECTIVE_KW | RETURN_KW | VARIANT_KW
-            | RENDER_KW | DEFAULT_KW | MESSAGE_KW => self.kw_usage(cp),
+            | DEFAULT_KW | MESSAGE_KW => self.kw_usage(cp),
             k if k.is_modifier_kw() || k.is_def_kind_kw() => self.definition_or_usage(cp),
             // `:>> quantity = isq.L;` — a kind-less usage starting with a
             // feature specialization
@@ -493,6 +502,10 @@ impl Parser<'_> {
             if self.at(L_PAREN) {
                 self.param_list();
             }
+        } else if self.at_expr_start() {
+            self.plain_target = true;
+            self.expression();
+            self.plain_target = false;
         }
         self.element_tail();
         self.finish_node();
@@ -1072,7 +1085,7 @@ impl Parser<'_> {
                     self.finish_node();
                     continue;
                 }
-                L_BRACKET => {
+                L_BRACKET if !self.plain_target => {
                     self.start_node_at(cp, INDEX_EXPR);
                     self.bump();
                     if !self.at(R_BRACKET) {

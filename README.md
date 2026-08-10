@@ -11,11 +11,25 @@ and a CLI. Both are validated against the official
 [SysML-v2-Release](https://github.com/Systems-Modeling/SysML-v2-Release)
 corpus — all 403 `.sysml`/`.kerml` files: the complete standard libraries
 (`sysml.library`) and every official example, training and validation
-model. **All 403 files parse cleanly and every reference resolves**: the
-standard library on its own (12757/12757) and the library together with all
-official examples (17700/17700), counting the operands of `connect`, `bind`,
-`allocate`, `first ... then ...` and `satisfy ... by ...` alongside every
-typing and specialization.
+model. **All 403 files parse cleanly and every reference in any of them
+resolves**: the standard library on its own (12757/12757), the library
+together with all official SysML examples (17700/17700), and the KerML
+examples alongside it (13794/13794), counting the operands of `connect`,
+`bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`
+alongside every typing and specialization.
+
+Eleven of those used to resolve to themselves. A feature that declares
+no name of its own answers to the name of what it redefines -- which is
+the very name being looked up while that redefinition is resolved -- so
+`attribute :>> nothingHere;` was reported as sound. Stopping that showed
+what had never been found, and each was a rule this resolver was
+missing: a name reached through `'$'` rather than the root `$`, a
+redefining member losing to a general one because its supertype was
+written second, `include x[0..*]` reading its multiplicity as an index,
+`render asElementTable` reading the rendering as a name, an `objective`
+standing for the one its type declares, a feature redeclared by naming
+it the same, a `baseType` chosen by a condition, and `variant x;`
+naming a usage the model already has.
 
 To run the corpus tests, fetch the submodule first:
 
@@ -35,7 +49,7 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | [`sysml-diagram`](crates/sysml-diagram) | Definition/specialization diagrams: layered layout and SVG rendering with no external engine, or PlantUML-style Graphviz layout (`dot` for positions, the drawing stays ours) |
 | [`sysml-api-client`](crates/sysml-api-client) | REST client for the SysML v2 API & Services standard (projects/commits/elements) |
 | [`sysml-import-api`](crates/sysml-import-api) | Imports an existing Rust API surface (rustdoc JSON) as a SysML package whose definitions carry `@rust` binding metadata — the bridge from in-house crates into the model |
-| [`sysml-rustgen`](crates/sysml-rustgen) | Generates Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
+| [`sysml-rustgen`](crates/sysml-rustgen) | Generates Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, go-to-definition, find-references, rename, completion, hover, symbols, formatting — with a [VSCode extension](editors/vscode) as its client |
 | [`sysml-mcp`](crates/sysml-mcp) | Model Context Protocol server: lets an AI agent ask whether a model parses and resolves, what names are legal at a point, and what the standard library actually declares |
 | [`sysml-codegen`](crates/sysml-codegen) | Generates `sysml-model`'s metamodel code from [`vendor/metamodel`](vendor/metamodel) |
@@ -209,6 +223,25 @@ SKU-042: 7 in stock (threshold 10) -> replenish
 
 A test regenerates every stage and holds it equal to what is checked in,
 so drift anywhere in the chain fails the build.
+
+### A behaviour the model wires up
+
+[`examples/riscv`](examples/riscv) goes the other way: nothing existing
+to import, a model written first. Its `action def Step` says what one
+turn of a RISC-V instruction cycle is made of and how the pieces are
+wired -- fetch, then decode, then execute, with the word and the
+instruction handed along -- and that wiring is the generated body, with
+the three parts as supertrait bounds. The hand-written half implements
+only the parts.
+
+```console
+$ cd examples/riscv && cargo run
+x1=7 x2=5 x3=12 mem[16]=12
+```
+
+Where a dataflow is short of something -- an input nothing feeds, a
+result nothing produces -- no body is written and the generated
+documentation names the gap, rather than guessing at it.
 
 ### VSCode
 

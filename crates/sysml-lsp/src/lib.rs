@@ -469,6 +469,13 @@ impl Server {
             return Err("there is nothing to rename here".to_string());
         };
         let analysis = self.analysis();
+        // A name reached through `alias X for Y;` resolves to Y, and
+        // nothing records that X was the way in. Renaming X would move
+        // the declaration and leave every use of it behind, so it is
+        // refused rather than half done.
+        if analysis.ws.is_alias(target) {
+            return Err("renaming an alias would leave what uses it behind".to_string());
+        }
         // the declaration must live in an open document — library elements
         // cannot be renamed
         let decl_file = analysis
@@ -493,6 +500,18 @@ impl Server {
                 .references_to(target)
                 .map(|r| (r.file, r.name_range)),
         );
+        // An unnamed redefinition answers to the name it redefines, so
+        // what names it names this too -- `l.component` where `l` holds
+        // a `:>> component`. Renaming the declaration without those is a
+        // model that no longer resolves.
+        for heir in analysis.ws.named_after(target) {
+            edits.extend(
+                analysis
+                    .ws
+                    .references_to(heir)
+                    .map(|r| (r.file, r.name_range)),
+            );
+        }
 
         // a name already visible where the declaration stands would
         // capture, or be captured by, the renamed one

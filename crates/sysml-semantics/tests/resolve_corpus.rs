@@ -49,24 +49,21 @@ fn examples_resolve_completely_against_the_library() {
     );
 }
 
-/// The KerML examples are not there yet: two references need semantics
-/// this resolver does not have -- a feature reachable through the type it
-/// is `featured by`, and an import whose path starts at a name another
-/// import brought in. The count is pinned so that the ten which used to
-/// fail alongside them cannot come back, and so that these two stay
-/// visible rather than being quietly tolerated.
+/// The KerML examples resolve too, which completes the corpus: all 403
+/// files parse and every reference in any of them resolves -- and now
+/// resolves to something other than itself.
 #[test]
-fn kerml_examples_resolve_but_for_two_known_references() {
+fn kerml_examples_resolve_completely_against_the_library() {
     let Some(root) = vendor() else { return };
     let mut ws = Workspace::new();
     ws.load_dir(&root.join("sysml.library")).unwrap();
     ws.load_dir(&root.join("kerml/src")).unwrap();
     let stats = ws.resolve_all();
-    assert!(
-        stats.unresolved <= 2,
-        "KerML example resolution regressed ({} unresolved of {}): {:?}",
+    assert_eq!(
         stats.unresolved,
-        stats.resolved + stats.unresolved,
+        0,
+        "KerML example resolution regressed ({} resolved): {:?}",
+        stats.resolved,
         &ws.unresolved()[..stats.unresolved.min(10)]
     );
 }

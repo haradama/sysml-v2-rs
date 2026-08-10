@@ -53,6 +53,12 @@ pub struct Reference {
 pub struct ResolveStats {
     pub resolved: usize,
     pub unresolved: usize,
+    /// How many times an import or an alias had to be worked out from
+    /// its path rather than recalled. A resolver that remembers does
+    /// this about once per import; one that has stopped remembering does
+    /// it once per import per reference, which is the difference between
+    /// a millisecond and half a minute on a forty-line file.
+    pub lookups: u64,
 }
 
 #[derive(Clone)]
@@ -113,10 +119,38 @@ pub struct Workspace {
     // caches
     supertypes: HashMap<ElementId, Vec<ElementId>>,
     in_progress: HashSet<ElementId>,
+    /// The imports and aliases whose targets are being worked out, from
+    /// the outermost in. An import naturally consults itself while
+    /// resolving its own path, so a guard that turns away the innermost
+    /// entry says nothing; one that turns away an outer entry does.
+    resolving: Vec<ElementId>,
+    /// Bumped when the `in_progress` guard turns away an import or an
+    /// alias other than the one being worked out. Those two answer
+    /// `None` for something they know nothing about yet, so a failure
+    /// computed while this moved is an artifact of the recursion rather
+    /// than the truth. The other guards settle for an incomplete answer
+    /// and cache it, so what they return is at least the same every time.
+    blocked: u64,
+    /// Imports and aliases whose cached failure was reached through such
+    /// a guard. The failure is remembered while the outermost lookup
+    /// runs -- ten unresolved wildcard imports in one package consult
+    /// each other, and without memory that search is exponential -- and
+    /// forgotten once it ends, so a later lookup may still find them.
+    provisional: HashSet<ElementId>,
+    /// Counts what `ResolveStats::lookups` reports.
+    lookups: u64,
+    /// What each segment of the last resolved qualified name landed on.
+    /// `Classes::A` names two things, and an editor asked to rename the
+    /// first of them has to know that it was named here at all.
+    chain: Vec<ElementId>,
+    /// How many `resolve_from` calls are on the stack. One reference is
+    /// one outermost call, and the provisional failures live exactly
+    /// that long.
+    depth: usize,
     imports: HashMap<ElementId, Option<ImportTarget>>,
     aliases: HashMap<ElementId, Option<ElementId>>,
     visibilities: HashMap<ElementId, Vis>,
-    semantic_bases: HashMap<ElementId, Option<ElementId>>,
+    semantic_bases: HashMap<ElementId, Vec<ElementId>>,
     unresolved: Vec<Unresolved>,
     references: Vec<Reference>,
 }
@@ -139,6 +173,12 @@ impl Workspace {
             elem_file: HashMap::new(),
             supertypes: HashMap::new(),
             in_progress: HashSet::new(),
+            resolving: Vec::new(),
+            blocked: 0,
+            provisional: HashSet::new(),
+            lookups: 0,
+            chain: Vec::new(),
+            depth: 0,
             imports: HashMap::new(),
             aliases: HashMap::new(),
             visibilities: HashMap::new(),
@@ -222,6 +262,49 @@ impl Workspace {
     }
 
     /// All references resolving to `target`.
+    /// Whether `elem` is an `alias X for Y;`. A name reached through one
+    /// resolves to what it stands for, so nothing records that the alias
+    /// was the way in -- which is why renaming one cannot be offered.
+    pub fn is_alias(&self, elem: ElementId) -> bool {
+        self.source
+            .get(&elem)
+            .is_some_and(|node| node.kind() == SyntaxKind::ALIAS)
+    }
+
+    /// Everything that answers to the same name as `elem` because it
+    /// redefines (or references) it without declaring a name of its own:
+    /// `part l : Logical { part :>> component; }` gives `component` a
+    /// second home, and `l.component` names that one. A rename that
+    /// stops at the declaration leaves those mentions behind.
+    pub fn named_after(&self, elem: ElementId) -> Vec<ElementId> {
+        let mut found = Vec::new();
+        let mut queue = vec![elem];
+        let mut seen: HashSet<ElementId> = std::iter::once(elem).collect();
+        while let Some(at) = queue.pop() {
+            // Asked of the redefining side, which owns the relationship:
+            // that way there is no side of it to be missing.
+            for heir in self.model.ids() {
+                // one that named itself is its own name from here on
+                if self.model.get(heir, "declaredName").is_some() {
+                    continue;
+                }
+                let borrows = self.model.owned(heir).iter().any(|&rel| {
+                    let to = match self.model.kind(rel) {
+                        ElementKind::Redefinition => "redefinedFeature",
+                        ElementKind::ReferenceSubsetting => "referencedFeature",
+                        _ => return false,
+                    };
+                    self.model.get(rel, to) == Some(&Value::Ref(at))
+                });
+                if borrows && seen.insert(heir) {
+                    found.push(heir);
+                    queue.push(heir);
+                }
+            }
+        }
+        found
+    }
+
     pub fn references_to(&self, target: ElementId) -> impl Iterator<Item = &Reference> {
         self.references.iter().filter(move |r| r.target == target)
     }
@@ -425,6 +508,22 @@ impl Workspace {
                             Access::External
                         };
                         self.collect_visible(imp.target, target_access, out, seen, depth + 1);
+                        // `import Q::**` reaches what is nested in Q as
+                        // well, which is how `class Z :> F;` finds
+                        // `Q::Q2::F`. Offering only Q's own members left
+                        // the modeller typing blind a name the model
+                        // resolves -- lookup has always followed it there.
+                        if imp.scope == ImportScope::Recursive {
+                            for desc in self.model.descendants(imp.target) {
+                                if self.visible(desc, target_access)
+                                    && !self.model.kind(desc).is_a(ElementKind::Relationship)
+                                {
+                                    if let Some(name) = self.model.name(desc) {
+                                        out.push((name.to_string(), self.model.kind(desc)));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -470,6 +569,16 @@ impl Workspace {
         segments.join("::")
     }
 
+    /// A qualified name as it was written, for a message: the root is
+    /// held as an empty segment, and reads as `$`.
+    fn spell(segments: &[String]) -> String {
+        segments
+            .iter()
+            .map(|s| if s.is_empty() { "$" } else { s.as_str() })
+            .collect::<Vec<_>>()
+            .join("::")
+    }
+
     /// The `doc` body attached to an element, if any.
     pub fn documentation_of(&self, elem: ElementId) -> Option<String> {
         self.model
@@ -501,6 +610,7 @@ impl Workspace {
 
     fn resolve_ids(&mut self, ids: &[ElementId]) -> ResolveStats {
         let mut stats = ResolveStats::default();
+        let began = self.lookups;
         for &id in ids {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
@@ -520,6 +630,16 @@ impl Workspace {
                 self.resolve_metadata_typing(id, &node, &mut stats);
                 continue;
             }
+            // `import P1::*;` names P1, and an editor renaming P1 has to
+            // be told so -- otherwise the rename leaves the import
+            // pointing at a package that is no longer there. Imports are
+            // not counted among the resolved references, which are the
+            // explicit relationship targets; this only says where they
+            // were written.
+            if matches!(node.kind(), SyntaxKind::IMPORT | SyntaxKind::EXPOSE) {
+                self.record_import(id, &node);
+                continue;
+            }
             if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
                 continue;
             }
@@ -529,12 +649,8 @@ impl Workspace {
                     match self.resolve_from(id, &t.segments) {
                         Some(target) => {
                             stats.resolved += 1;
-                            self.references.push(Reference {
-                                file: self.elem_file.get(&id).copied().unwrap_or(0),
-                                range: t.range,
-                                name_range: t.name_range,
-                                target,
-                            });
+                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                            self.record(file, t.range, t.name_range, &t.at, target);
                             self.reify(id, is_definition, part_kind, target);
                         }
                         None => {
@@ -542,7 +658,7 @@ impl Workspace {
                             self.unresolved.push(Unresolved {
                                 file: self.elem_file.get(&id).copied().unwrap_or(0),
                                 range: t.range,
-                                name: t.segments.join("::"),
+                                name: Self::spell(&t.segments),
                             });
                         }
                     }
@@ -561,6 +677,7 @@ impl Workspace {
                 self.resolve_satisfaction(id, &node, &mut stats);
             }
         }
+        stats.lookups = self.lookups - began;
         stats
     }
 
@@ -592,7 +709,7 @@ impl Workspace {
                 self.unresolved.push(Unresolved {
                     file: self.elem_file.get(&usage).copied().unwrap_or(0),
                     range: target.range,
-                    name: target.segments.join("::"),
+                    name: Self::spell(&target.segments),
                 });
             }
         }
@@ -605,13 +722,79 @@ impl Workspace {
         if segments.is_empty() {
             return None;
         }
+        self.depth += 1;
         let exclude = Some(elem);
-        if let Some(hit) = self.resolve_segments(elem, segments, exclude) {
-            return Some(hit);
+        let found = self.resolve_segments(elem, segments, exclude).or_else(|| {
+            // A self-reference (`part p4 :> p4;`) is a legal name even
+            // though a declaration cannot shadow the feature it
+            // redefines, so the name is looked up once more with the
+            // declaration itself allowed to answer.
+            let hit = self.resolve_segments(elem, segments, None)?;
+            // But a feature with no name of its own answers to the name
+            // of what it redefines, and that is the very thing being
+            // looked up here. Letting it match itself would make the
+            // answer its own premise: `attribute :>> nothingHere;` would
+            // resolve, and a model naming something that exists nowhere
+            // would be reported as sound.
+            let names_itself = self.model.name(elem) == segments.last().map(String::as_str);
+            (hit != elem || names_itself).then_some(hit)
+        });
+        self.depth -= 1;
+        self.forget_provisional();
+        found
+    }
+
+    /// Record a resolved reference, and with it every earlier segment of
+    /// the qualified name that got there. `Classes::A` names the package
+    /// as well as the class, and an editor renaming the package has to
+    /// be told where it was named -- otherwise it rewrites the
+    /// declaration and leaves the mentions of it behind.
+    /// Where an import's path was written, and what each part of it
+    /// names. The wildcard at the end names nothing.
+    fn record_import(&mut self, import: ElementId, node: &SyntaxNode) {
+        let (mut segments, mut at) = node
+            .children()
+            .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)
+            .map(|qname| (name_segments(&qname), segment_ranges(&qname)))
+            .unwrap_or_default();
+        while matches!(segments.last().map(String::as_str), Some("*" | "**")) {
+            segments.pop();
+            at.pop();
         }
-        // self-references (`part p4 :> p4;`) are legal names even though a
-        // declaration cannot shadow the feature it redefines
-        self.resolve_segments(elem, segments, None)
+        let (Some(last), false) = (at.last().copied(), segments.is_empty()) else {
+            return;
+        };
+        if let Some(target) = self.resolve_from(import, &segments) {
+            let file = self.elem_file.get(&import).copied().unwrap_or(0);
+            self.record(file, last, last, &at, target);
+        }
+    }
+
+    fn record(
+        &mut self,
+        file: usize,
+        range: TextRange,
+        name_range: TextRange,
+        at: &[TextRange],
+        target: ElementId,
+    ) {
+        let walked = std::mem::take(&mut self.chain);
+        self.references.push(Reference {
+            file,
+            range,
+            name_range,
+            target,
+        });
+        // the last segment is the reference just recorded
+        let earlier = walked.len().saturating_sub(1);
+        for (&range, &element) in at.iter().zip(walked.iter()).take(earlier) {
+            self.references.push(Reference {
+                file,
+                range,
+                name_range: range,
+                target: element,
+            });
+        }
     }
 
     fn resolve_segments(
@@ -620,15 +803,22 @@ impl Workspace {
         segments: &[String],
         exclude: Option<ElementId>,
     ) -> Option<ElementId> {
-        let (mut current, rest) = if segments[0] == "$" {
+        let (mut current, rest) = if segments[0].is_empty() {
             (self.root, &segments[1..])
         } else {
             let first = self.resolve_first_segment(elem, &segments[0], exclude);
             (first?, &segments[1..])
         };
+        // Kept per segment, and only handed over once the whole name has
+        // resolved: a walk that gives up halfway named nothing, and one
+        // started from inside this one (an import resolving its own
+        // path) must not be mistaken for it.
+        let mut walked = vec![current];
         for seg in rest {
             current = self.lookup(current, seg, Access::External, true, exclude)?;
+            walked.push(current);
         }
+        self.chain = walked;
         Some(current)
     }
 
@@ -720,11 +910,15 @@ impl Workspace {
         if !guard.insert(ns) {
             return None;
         }
-        // direct members (incl. aliases and features nested in `end` members)
+        // Direct members, aliases, and everything nested under an `end`
+        // member. An end's body can nest further -- an association whose
+        // end holds a feature which itself holds the one being named --
+        // and the whole of it belongs to the connector's scope, so a
+        // subtype naming it inherits the lot.
         let mut candidates = self.model.owned(ns).to_vec();
         for child in self.model.owned(ns).to_vec() {
             if self.is_end_member(child) {
-                candidates.extend_from_slice(self.model.owned(child));
+                candidates.extend(self.model.descendants(child));
             }
         }
         for child in candidates {
@@ -753,12 +947,32 @@ impl Workspace {
                 Access::Internal | Access::Inherited => Access::Inherited,
                 Access::External => Access::External,
             };
+            // Two supertypes may both answer to the name, and one of
+            // their answers may be a refinement of the other's --
+            // `classifier C specializes A, B` where `B` redefines
+            // `A::f`. The refinement is the member, whichever order the
+            // supertypes happen to be written in, so the answer is the
+            // candidate no other candidate specializes.
+            let mut hits = Vec::new();
             for sup in self.supertypes_of(ns) {
                 if let Some(hit) =
                     self.lookup_guarded(sup, name, sub_access, true, false, exclude, guard)
                 {
-                    return Some(hit);
+                    if !hits.contains(&hit) {
+                        hits.push(hit);
+                    }
                 }
+            }
+            if let Some(&most) = hits
+                .iter()
+                .find(|&&hit| {
+                    !hits
+                        .iter()
+                        .any(|&other| other != hit && reaches(&self.model, other, hit))
+                })
+                .or(hits.first())
+            {
+                return Some(most);
             }
         }
         // imported members: all imports apply inside the namespace itself,
@@ -966,8 +1180,62 @@ impl Workspace {
             // the element specialize the keyword's SemanticMetadata baseType
             for segments in prefix_metadata_segments(&node) {
                 if let Some(meta_def) = self.resolve_from(elem, &segments) {
-                    if let Some(base) = self.semantic_base(meta_def) {
+                    for base in self.semantic_bases(meta_def) {
                         push_supertype(&mut supers, elem, base);
+                    }
+                }
+            }
+        }
+        // A feature can redeclare an inherited one by naming it the
+        // same: `in p { ... }` inside a specialization stands for the
+        // `p` its supertype declares, and inherits what that one has.
+        // Only where nothing else was written about it -- an explicit
+        // typing or subsetting is the whole story.
+        if supers.is_empty() {
+            if let (Some(name), Some(owner)) = (
+                self.model.name(elem).map(String::from),
+                self.model.owner(elem),
+            ) {
+                for sup in self.supertypes_of(owner) {
+                    for sibling in self.model.owned(sup).to_vec() {
+                        if self.model.name(sibling) == Some(name.as_str()) {
+                            push_supertype(&mut supers, elem, sibling);
+                        }
+                    }
+                }
+            }
+        }
+        // `variant manualTransmission;` names one of the usages the
+        // model already has; `variant part v;` declares a new one. The
+        // difference is whether a kind keyword was written, and the
+        // reference form has to bring what it names along with it.
+        if supers.is_empty() && self.model.member_role(elem) == Some("variant") {
+            let bare = self.source.get(&elem).is_some_and(|node| {
+                !node
+                    .children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .any(|t| t.kind().is_def_kind_kw())
+            });
+            if let (true, Some(name)) = (bare, self.model.name(elem).map(String::from)) {
+                if let Some(target) = self.resolve_from(elem, &[name]) {
+                    push_supertype(&mut supers, elem, target);
+                }
+            }
+        }
+        // A usage has at most one `subject` and one `objective`, so the
+        // one it writes stands for the one its type declares -- which is
+        // what `objective { verify x :>> massRequirement; }` redefines a
+        // member of. Nothing says so in the text; the roles do.
+        if let Some(role) = self.model.member_role(elem) {
+            if matches!(role, "subject" | "objective") {
+                let owners: Vec<ElementId> = self.model.owner(elem).into_iter().collect();
+                for owner in owners {
+                    for sup in self.supertypes_of(owner) {
+                        for sibling in self.model.owned(sup).to_vec() {
+                            if self.model.member_role(sibling) == Some(role) {
+                                push_supertype(&mut supers, elem, sibling);
+                            }
+                        }
                     }
                 }
             }
@@ -993,34 +1261,44 @@ impl Workspace {
 
     /// The base type referenced by a SemanticMetadata definition's
     /// `:>> baseType = <ref> meta ...` member, if any.
-    fn semantic_base(&mut self, meta_def: ElementId) -> Option<ElementId> {
+    fn semantic_bases(&mut self, meta_def: ElementId) -> Vec<ElementId> {
         if let Some(cached) = self.semantic_bases.get(&meta_def) {
-            return *cached;
+            return cached.clone();
         }
         if !self.in_progress.insert(meta_def) {
-            return None;
+            return Vec::new();
         }
-        let result = (|| {
-            for child in self.model.owned(meta_def).to_vec() {
-                if !self.member_name_matches(child, "baseType") {
-                    continue;
-                }
-                let node = self.source.get(&child)?.clone();
-                let value = node.children().find(|c| c.kind() == SyntaxKind::VALUE)?;
-                let operand = value
-                    .descendants()
-                    .find(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))?;
+        let mut found = Vec::new();
+        for child in self.model.owned(meta_def).to_vec() {
+            if !self.member_name_matches(child, "baseType") {
+                continue;
+            }
+            // `= if p ? A meta T else B meta T` names two bases, and
+            // which one a given element gets is decided by an expression
+            // this resolver does not evaluate. Both are taken: a name
+            // that either of them declares is one the model can mean.
+            let operands: Vec<SyntaxNode> = self
+                .source
+                .get(&child)
+                .cloned()
+                .into_iter()
+                .flat_map(|node| node.children())
+                .filter(|c| c.kind() == SyntaxKind::VALUE)
+                .flat_map(|value| value.descendants())
+                .filter(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
+                .collect();
+            for operand in operands {
                 let segments = operand_segments(&operand);
                 if segments.is_empty() {
-                    return None;
+                    continue;
                 }
-                return self.resolve_from(child, &segments);
+                found.extend(self.resolve_from(child, &segments));
             }
-            None
-        })();
+            break;
+        }
         self.in_progress.remove(&meta_def);
-        self.semantic_bases.insert(meta_def, result);
-        result
+        self.semantic_bases.insert(meta_def, found.clone());
+        found
     }
 
     /// What one import element resolved to: the member a
@@ -1137,7 +1415,7 @@ impl Workspace {
             if let Some(node) = self.source.get(&elem).cloned() {
                 for segments in prefix_metadata_segments(&node) {
                     if let Some(meta_def) = self.resolve_from(elem, &segments) {
-                        if let Some(base) = self.semantic_base(meta_def) {
+                        for base in self.semantic_bases(meta_def) {
                             if base != elem && !bases.contains(&base) {
                                 bases.push(base);
                             }
@@ -1196,8 +1474,14 @@ impl Workspace {
             return cached.clone();
         }
         if !self.in_progress.insert(import) {
+            if self.resolving.last() != Some(&import) {
+                self.blocked += 1;
+            }
             return None; // import cycle
         }
+        self.resolving.push(import);
+        self.lookups += 1;
+        let cut = self.blocked;
         let result = (|| {
             let node = self.source.get(&import)?.clone();
             let qname = node
@@ -1235,9 +1519,32 @@ impl Workspace {
                 all,
             })
         })();
+        self.resolving.pop();
         self.in_progress.remove(&import);
+        // Resolving one import can ask for another -- `import A::B;` then
+        // `import B::c;` -- and the guard above answers `None` for
+        // whichever is already under way. That `None` says nothing about
+        // the import, so remembering it would leave the import dead for
+        // the rest of the session. Every other failure is the real
+        // answer and must be remembered: a name that is genuinely absent
+        // is asked for once per reference, and re-searching every scope
+        // each time costs seconds on a forty-line file.
         self.imports.insert(import, result.clone());
+        if result.is_none() && self.blocked != cut {
+            self.provisional.insert(import);
+        }
         result
+    }
+
+    /// Drop the provisional failures once the reference that prompted
+    /// them has been answered.
+    fn forget_provisional(&mut self) {
+        if self.depth == 0 && self.resolving.is_empty() {
+            for id in std::mem::take(&mut self.provisional) {
+                self.imports.remove(&id);
+                self.aliases.remove(&id);
+            }
+        }
     }
 
     fn alias_target(&mut self, alias: ElementId) -> Option<ElementId> {
@@ -1245,8 +1552,14 @@ impl Workspace {
             return *cached;
         }
         if !self.in_progress.insert(alias) {
+            if self.resolving.last() != Some(&alias) {
+                self.blocked += 1;
+            }
             return None;
         }
+        self.resolving.push(alias);
+        self.lookups += 1;
+        let cut = self.blocked;
         let result = (|| {
             let node = self.source.get(&alias)?.clone();
             let qname = node
@@ -1255,8 +1568,12 @@ impl Workspace {
             let segments = name_segments(&qname);
             self.resolve_from(alias, &segments)
         })();
+        self.resolving.pop();
         self.in_progress.remove(&alias);
         self.aliases.insert(alias, result);
+        if result.is_none() && self.blocked != cut {
+            self.provisional.insert(alias);
+        }
         result
     }
 
@@ -1318,12 +1635,7 @@ impl Workspace {
             match self.resolve_from(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    self.references.push(Reference {
-                        file,
-                        range,
-                        name_range,
-                        target,
-                    });
+                    self.record(file, range, name_range, &operand_ranges(&operand), target);
                     related.push(target);
                     self.reify_end(id, &segments);
                 }
@@ -1332,7 +1644,7 @@ impl Workspace {
                     self.unresolved.push(Unresolved {
                         file,
                         range,
-                        name: segments.join("::"),
+                        name: Self::spell(&segments),
                     });
                 }
             }
@@ -1385,12 +1697,7 @@ impl Workspace {
                 match self.resolve_from(transition, &t.segments) {
                     Some(target) => {
                         stats.resolved += 1;
-                        self.references.push(Reference {
-                            file,
-                            range: t.range,
-                            name_range: t.name_range,
-                            target,
-                        });
+                        self.record(file, t.range, t.name_range, &t.at, target);
                         let typing = self.model.create(ElementKind::FeatureTyping);
                         self.model.add_owned(trigger, typing);
                         self.try_set(typing, "typedFeature", Value::Ref(trigger));
@@ -1401,7 +1708,7 @@ impl Workspace {
                         self.unresolved.push(Unresolved {
                             file,
                             range: t.range,
-                            name: t.segments.join("::"),
+                            name: Self::spell(&t.segments),
                         });
                     }
                 }
@@ -1429,12 +1736,7 @@ impl Workspace {
             match self.resolve_operand(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    self.references.push(Reference {
-                        file,
-                        range,
-                        name_range: range,
-                        target,
-                    });
+                    self.record(file, range, range, &operand_ranges(&operand), target);
                     self.try_set(id, property, Value::Ref(target));
                 }
                 None => {
@@ -1442,7 +1744,7 @@ impl Workspace {
                     self.unresolved.push(Unresolved {
                         file,
                         range,
-                        name: segments.join("::"),
+                        name: Self::spell(&segments),
                     });
                 }
             }
@@ -1584,6 +1886,9 @@ struct Target {
     range: TextRange,
     /// range of the final name segment (what a rename must replace)
     name_range: TextRange,
+    /// range of each segment, in order -- the earlier ones name
+    /// something too
+    at: Vec<TextRange>,
 }
 
 /// The metadata definition an `@name`/`#name` annotation names: the
@@ -1606,6 +1911,7 @@ fn metadata_target(node: &SyntaxNode) -> Option<Target> {
         segments: name_segments(&qname),
         range: qname.text_range(),
         name_range,
+        at: segment_ranges(&qname),
     })
 }
 
@@ -1641,6 +1947,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                         segments: name_segments(&qname),
                         range: qname.text_range(),
                         name_range,
+                        at: segment_ranges(&qname),
                     })
                 })
                 .collect();
@@ -1672,6 +1979,7 @@ fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> {
                     | SyntaxKind::REQUIRE_KW
                     | SyntaxKind::VERIFY_KW
                     | SyntaxKind::FRAME_KW
+                    | SyntaxKind::RENDER_KW
                     | SyntaxKind::NOT_KW
             )
         });
@@ -1795,6 +2103,35 @@ fn prefix_metadata_segments(node: &SyntaxNode) -> Vec<Vec<String>> {
 
 /// Name segments of a `QUALIFIED_NAME` node (quotes stripped; `$` and
 /// wildcards kept as segments).
+/// Where each segment of a qualified name is written, in order.
+fn segment_ranges(qname: &SyntaxNode) -> Vec<TextRange> {
+    qname
+        .children_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::IDENT
+                    | SyntaxKind::UNRESTRICTED_NAME
+                    | SyntaxKind::DOLLAR
+                    | SyntaxKind::STAR
+                    | SyntaxKind::STAR_STAR
+            )
+        })
+        .map(|t| t.text_range())
+        .collect()
+}
+
+/// Where each identifier of an operand is written, in order.
+fn operand_ranges(operand: &SyntaxNode) -> Vec<TextRange> {
+    operand
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+        .map(|t| t.text_range())
+        .collect()
+}
+
 fn name_segments(qname: &SyntaxNode) -> Vec<String> {
     qname
         .children_with_tokens()
@@ -1810,6 +2147,13 @@ fn name_segments(qname: &SyntaxNode) -> Vec<String> {
             )
         })
         .map(|t| {
+            // `$` is the root, and `'$'` is a package someone named `$`.
+            // Both unquote to the same three characters, so the root is
+            // spelled as a segment a declared name cannot be: an empty
+            // one. A NAME token always has text.
+            if t.kind() == SyntaxKind::DOLLAR {
+                return String::new();
+            }
             t.text()
                 .strip_prefix('\'')
                 .and_then(|s| s.strip_suffix('\''))
@@ -1874,14 +2218,7 @@ mod tests {
             ),
         ]);
         let report = format!("unresolved: {:?}", ws.unresolved());
-        assert_eq!(
-            stats,
-            ResolveStats {
-                resolved: 4,
-                unresolved: 0
-            },
-            "{report}"
-        );
+        assert_eq!((stats.resolved, stats.unresolved), (4, 0), "{report}");
         // relationships were reified
         let model = ws.model();
         let count = |k: ElementKind| model.ids().filter(|id| model.kind(*id) == k).count();
