@@ -5,20 +5,21 @@
 // methods, and state definitions state machines. What the model
 // leaves abstract becomes a trait for you to implement -- alongside
 // this file, not in it.
+//
+// An expression is spelled the way the model spells it, and a
+// signature carries the parameters the model declares, so the lints
+// that ask for a different spelling have nothing to say about a file
+// nobody edits.
+#![allow(clippy::manual_range_contains, clippy::too_many_arguments)]
 
 /// SysML: `enum def Urgency`
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Urgency {
     /// SysML: `enum routine`
+    #[default]
     Routine,
     /// SysML: `enum rush`
     Rush,
-}
-
-impl Default for Urgency {
-    fn default() -> Self {
-        Urgency::Routine
-    }
 }
 
 /// SysML: `enum def OrderType`

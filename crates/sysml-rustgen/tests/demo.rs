@@ -64,10 +64,9 @@ fn the_checked_in_demo_matches_what_the_pipeline_generates() {
     assert!(
         rust.contains("// not generated: `replenishment` -- only `enum` values become variants")
     );
-    assert!(rust.contains(
-        "Urgency::Routine
-"
-    ));
+    // the first value is the default, said by an attribute on the
+    // variant rather than an `impl` clippy would ask to be derived
+    assert!(rust.contains("    #[default]\n    Routine,"), "{rust}");
     assert!(rust.contains("amount: 1,"));
     assert!(
         rust.contains("batch: 6 * 4,"),

@@ -50,7 +50,7 @@ use std::fmt::Write as _;
 use sysml_model::{ElementId, ElementKind, Model, Value};
 
 mod expr;
-use expr::translate;
+use expr::{translate, Translated};
 
 /// What stops code generation outright (a model this generator cannot
 /// write faithfully); everything smaller is a comment in the output.
@@ -88,7 +88,13 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenErr
          // existing Rust APIs become generic parameters, `perform`ed actions\n\
          // methods, and state definitions state machines. What the model\n\
          // leaves abstract becomes a trait for you to implement -- alongside\n\
-         // this file, not in it."
+         // this file, not in it.\n\
+         //\n\
+         // An expression is spelled the way the model spells it, and a\n\
+         // signature carries the parameters the model declares, so the lints\n\
+         // that ask for a different spelling have nothing to say about a file\n\
+         // nobody edits.\n\
+         #![allow(clippy::manual_range_contains, clippy::too_many_arguments)]"
     )
     .expect("writing to a String cannot fail");
 
@@ -96,14 +102,10 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenErr
     for &def in &generator.order {
         generator.definition(def, &mut out)?;
     }
-    for &(def, kind) in &generator.skipped {
-        let name = model.name(def).expect("collected named");
-        writeln!(
-            out,
-            "\n// not generated: `{name}` -- {} has no Rust shape",
-            kind.name()
-        )
-        .expect("writing to a String cannot fail");
+    for (def, why) in &generator.skipped {
+        let name = model.name(*def).expect("collected named");
+        writeln!(out, "\n// not generated: `{name}` -- {why}")
+            .expect("writing to a String cannot fail");
     }
     generator.requirements(roots, &mut out);
     Ok(out)
@@ -130,8 +132,9 @@ struct Generator<'a> {
     model: &'a Model,
     order: Vec<ElementId>,
     /// Definitions this generator has no shape for, in declaration
-    /// order, so that the output says so instead of passing over them.
-    skipped: Vec<(ElementId, ElementKind)>,
+    /// order, and why, so that the output says so instead of passing
+    /// over them.
+    skipped: Vec<(ElementId, String)>,
     shapes: HashMap<ElementId, Shape>,
     /// Generated types that can answer `Default::default()`.
     defaultable: HashSet<ElementId>,
@@ -160,7 +163,7 @@ impl<'a> Generator<'a> {
     fn collect(model: &'a Model, roots: &[ElementId]) -> Generator<'a> {
         let mut order = Vec::new();
         let mut shapes = HashMap::new();
-        let mut skipped: Vec<(ElementId, ElementKind)> = Vec::new();
+        let mut skipped: Vec<(ElementId, String)> = Vec::new();
         for &root in roots {
             for id in model.descendants(root) {
                 if model.name(id).is_none() || binding(model, id).is_some() {
@@ -202,8 +205,8 @@ impl<'a> Generator<'a> {
                     kind if kind.is_a(ElementKind::Definition)
                         && kind != ElementKind::RequirementDefinition =>
                     {
-                        if !skipped.iter().any(|&(seen, _)| seen == id) {
-                            skipped.push((id, kind));
+                        if !skipped.iter().any(|(seen, _)| *seen == id) {
+                            skipped.push((id, format!("{} has no Rust shape", kind.name())));
                         }
                         continue;
                     }
@@ -226,6 +229,8 @@ impl<'a> Generator<'a> {
             plans: HashMap::new(),
         };
         generator.break_cycles();
+        generator.settle_unbuildable();
+        generator.settle_collisions();
         generator.settle_plans();
         generator.settle_defaults();
         generator.settle_derives();
@@ -261,9 +266,16 @@ impl<'a> Generator<'a> {
             }
             path.push(def);
             for &child in model.owned(def) {
+                // the same members `fields` makes fields of, or a
+                // composition that closes a circle through one of the
+                // others goes unseen and the struct has no finite size
                 if !matches!(
                     model.kind(child),
-                    ElementKind::PartUsage | ElementKind::ItemUsage
+                    ElementKind::PartUsage
+                        | ElementKind::ItemUsage
+                        | ElementKind::AttributeUsage
+                        | ElementKind::ReferenceUsage
+                        | ElementKind::PortUsage
                 ) {
                     continue;
                 }
@@ -347,7 +359,7 @@ impl<'a> Generator<'a> {
         if self.plans.contains_key(&def) || !visiting.insert(def) {
             return;
         }
-        let def_name = self.model.name(def).expect("collected named").to_string();
+        let def_name = type_ident(self.model.name(def).expect("collected named"));
         let mut plan = Plan::default();
         let mut taken: HashSet<String> = HashSet::new();
 
@@ -422,7 +434,21 @@ impl<'a> Generator<'a> {
     /// point because structs compose each other.
     fn settle_defaults(&mut self) {
         for (&def, &shape) in &self.shapes {
-            if matches!(shape, Shape::Enum | Shape::Variation) {
+            // An enumeration with no variants has no value to be, so
+            // nothing holding one can start either. What counts as a
+            // variant is asked of the same function that writes them,
+            // because two answers to that question is how a field comes
+            // to start at a value its type does not have.
+            let has_values = match shape {
+                Shape::Enum => !self.enum_values(def).is_empty(),
+                Shape::Variation => self
+                    .model
+                    .owned(def)
+                    .iter()
+                    .any(|&child| self.model.member_role(child) == Some("variant")),
+                _ => false,
+            };
+            if has_values {
                 self.defaultable.insert(def);
             }
         }
@@ -453,6 +479,56 @@ impl<'a> Generator<'a> {
             if !grew {
                 break;
             }
+        }
+    }
+
+    /// Two definitions can land on the same Rust name -- one `Driver` in
+    /// a package and another nested in a part, or two names an escaped
+    /// spelling joins up the same way. Only the first can have it; the
+    /// rest are named rather than written twice over.
+    fn settle_collisions(&mut self) {
+        let mut taken: HashMap<String, ElementId> = HashMap::new();
+        let mut clashing = Vec::new();
+        for &def in &self.order {
+            let name = type_ident(self.model.name(def).expect("the unnamed never got a shape"));
+            match taken.get(&name) {
+                Some(&first) => clashing.push((
+                    def,
+                    format!(
+                        "`{}` is already the Rust name of `{}`",
+                        name,
+                        qualified_of(self.model, first)
+                    ),
+                )),
+                None => {
+                    taken.insert(name, def);
+                }
+            }
+        }
+        for (def, why) in clashing {
+            self.shapes.remove(&def);
+            self.order.retain(|&kept| kept != def);
+            self.skipped.push((def, why));
+        }
+    }
+
+    /// A struct whose specializations run in a circle has no fields this
+    /// generator can settle, and so no struct at all. Deciding that here
+    /// rather than when it is written keeps everything that *refers* to
+    /// it honest: a field of a type that was never generated would name
+    /// something the file does not define.
+    fn settle_unbuildable(&mut self) {
+        let unbuildable: Vec<ElementId> = self
+            .order
+            .iter()
+            .copied()
+            .filter(|&def| self.shapes[&def] == Shape::Struct && self.fields(def).is_none())
+            .collect();
+        for def in unbuildable {
+            self.shapes.remove(&def);
+            self.order.retain(|&kept| kept != def);
+            self.skipped
+                .push((def, "its specializations form a circle".to_string()));
         }
     }
 
@@ -509,8 +585,14 @@ impl<'a> Generator<'a> {
         match field.container {
             // a Vec or an Option is empty by default, whatever it holds
             Container::Many | Container::Optional => true,
-            // arrays would need the element to be `Copy` too; not claimed
-            Container::Array(_) => false,
+            // an array is as startable as the element it repeats:
+            // `from_fn` builds one without asking the element to be
+            // `Copy`, which `[T::default(); N]` would
+            Container::Array(_) => match &field.ty {
+                FieldType::Scalar(_) => true,
+                FieldType::Generated(target) => self.defaultable.contains(target),
+                FieldType::External(_) => false,
+            },
             Container::One => match &field.ty {
                 FieldType::Scalar(_) => true,
                 FieldType::Generated(target) => self.defaultable.contains(target),
@@ -544,7 +626,7 @@ impl<'a> Generator<'a> {
                 Ok(())
             }
             Shape::Flattened => {
-                let name = self.model.name(def).expect("collected named");
+                let name = type_ident(self.model.name(def).expect("collected named"));
                 writeln!(
                     out,
                     "\n// `{name}` is abstract: its features flatten into its subtypes."
@@ -649,7 +731,7 @@ impl<'a> Generator<'a> {
     /// and its performed bound actions as methods.
     fn structure(&self, def: ElementId, out: &mut String) -> Result<(), RustgenError> {
         let model = self.model;
-        let def_name = model.name(def).expect("collected named");
+        let def_name = type_ident(model.name(def).expect("collected named"));
         let mut ports: Vec<Port> = Vec::new();
         let mut plain_ports: Vec<Field> = Vec::new();
         let mut performs = Vec::new();
@@ -658,14 +740,7 @@ impl<'a> Generator<'a> {
         let mut states: Vec<(String, String)> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
 
-        let Some(fields) = self.fields(def) else {
-            writeln!(
-                out,
-                "\n// not generated: `{def_name}` -- its specializations form a cycle"
-            )
-            .unwrap();
-            return Ok(());
-        };
+        let fields = self.fields(def).expect("settled as buildable");
         for &child in model.owned(def) {
             if model.kind(child).is_a(ElementKind::Relationship)
                 || model.kind(child) == ElementKind::MetadataUsage
@@ -679,7 +754,7 @@ impl<'a> Generator<'a> {
                 ElementKind::PortUsage => {
                     if let Some(port) = self.port_of(child) {
                         ports.push(port);
-                    } else if let Some(field) = self.plain_port(child) {
+                    } else if let Some(field) = self.plain_port(def, child) {
                         // an unbound port holds the generated struct of
                         // its port definition
                         plain_ports.push(field);
@@ -721,7 +796,7 @@ impl<'a> Generator<'a> {
         }
         let mut methods = Vec::new();
         for usage in performs {
-            methods.push(self.method(def_name, usage, &ports, &fields)?);
+            methods.push(self.method(&def_name, usage, &ports, &fields)?);
         }
         for usage in calcs {
             match self.calc_method(usage, &fields) {
@@ -744,8 +819,20 @@ impl<'a> Generator<'a> {
         for note in &notes {
             writeln!(out, "// not generated: {note}").unwrap();
         }
+        // Where every field would start with `Default::default()`, the
+        // derive says it in one word. Writing the impl out is what
+        // clippy calls `derivable_impls`, and a reader of a file marked
+        // DO NOT EDIT cannot act on that.
+        let derived_default = plan.params.is_empty()
+            && self.defaultable.contains(&def)
+            && plain_ports
+                .iter()
+                .chain(&fields)
+                .all(|field| self.starts_as_its_type_does(field))
+            && states.is_empty();
         if self.derivable.contains(&def) {
-            writeln!(out, "#[derive(Debug, Clone, PartialEq)]").unwrap();
+            let default = if derived_default { ", Default" } else { "" };
+            writeln!(out, "#[derive(Debug, Clone, PartialEq{default})]").unwrap();
         }
         let generics = plan
             .params
@@ -789,7 +876,8 @@ impl<'a> Generator<'a> {
         // from -- the unbound ports among them, or the struct would name
         // fields its `Default` never fills
         let started = !fields.is_empty() || !plain_ports.is_empty() || !states.is_empty();
-        if plan.params.is_empty() && self.defaultable.contains(&def) && started {
+        let spelled_out = !derived_default || !self.derivable.contains(&def);
+        if plan.params.is_empty() && self.defaultable.contains(&def) && started && spelled_out {
             writeln!(out, "\nimpl Default for {def_name} {{").unwrap();
             writeln!(out, "    fn default() -> Self {{").unwrap();
             writeln!(out, "        Self {{").unwrap();
@@ -840,11 +928,7 @@ impl<'a> Generator<'a> {
             FieldType::Scalar(name) => (*name).to_string(),
             FieldType::External(path) => path.clone(),
             FieldType::Generated(target) => {
-                let mut name = self
-                    .model
-                    .name(*target)
-                    .expect("collected named")
-                    .to_string();
+                let mut name = type_ident(self.model.name(*target).expect("collected named"));
                 // a generic part takes the parameters this struct carries
                 // on its behalf
                 if let Some(arguments) = plan.arguments.get(&field.usage) {
@@ -859,26 +943,60 @@ impl<'a> Generator<'a> {
         contained(base, field.container)
     }
 
+    /// Would this field start where its type starts anyway? A declared
+    /// `false` on a `Boolean` is `bool::default()` spelled out, and a
+    /// struct all of whose fields do that needs no `impl` of its own.
+    fn starts_as_its_type_does(&self, field: &Field) -> bool {
+        let written = self.default_value(field);
+        if written == "Default::default()" {
+            return true;
+        }
+        match (&field.ty, field.container) {
+            (FieldType::Scalar(name), Container::One) => matches!(
+                (*name, written.as_str()),
+                ("bool", "false")
+                    | ("i64", "0")
+                    | ("u64", "0")
+                    | ("f64", "0.0")
+                    | ("String", "\"\".to_string()")
+            ),
+            _ => false,
+        }
+    }
+
     fn default_value(&self, field: &Field) -> String {
         match (&field.default, &field.container) {
             (Some(rust), Container::One) if !field.boxed => rust.clone(),
+            // `Default` is implemented for arrays only up to a length the
+            // standard library stops at; `from_fn` has no such limit
+            (_, Container::Array(_)) => "std::array::from_fn(|_| Default::default())".to_string(),
             _ => "Default::default()".to_string(),
         }
     }
 
     /// An `enum def` as an enum, its first value the default.
+    /// The values of an enumeration definition. Asked here and nowhere
+    /// else, so that what is written and what is thought startable
+    /// cannot disagree.
+    fn enum_values(&self, def: ElementId) -> Vec<&str> {
+        self.model
+            .owned(def)
+            .iter()
+            .filter(|&&child| self.model.kind(child) == ElementKind::EnumerationUsage)
+            .filter_map(|&child| self.model.name(child))
+            .collect()
+    }
+
     fn enumeration(&self, def: ElementId, out: &mut String) {
-        let name = self.model.name(def).expect("collected named");
-        let mut values = Vec::new();
+        let name = type_ident(self.model.name(def).expect("collected named"));
+        let values = self.enum_values(def);
         let mut notes = Vec::new();
         for &child in self.model.owned(def) {
             let kind = self.model.kind(child);
             let Some(child_name) = self.model.name(child) else {
                 continue;
             };
-            if kind == ElementKind::EnumerationUsage {
-                values.push(child_name);
-            } else if !kind.is_a(ElementKind::Relationship) {
+            if kind != ElementKind::EnumerationUsage && !kind.is_a(ElementKind::Relationship) {
                 notes.push(format!(
                     "`{child_name}` -- only `enum` values become variants"
                 ));
@@ -892,26 +1010,26 @@ impl<'a> Generator<'a> {
         for note in &notes {
             writeln!(out, "// not generated: {note}").unwrap();
         }
-        writeln!(out, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
+        // the first value is the default, which an attribute on that
+        // variant says in place of an impl -- an enum with no values at
+        // all has nothing to be
+        let default = if values.is_empty() { "" } else { ", Default" };
+        writeln!(out, "#[derive(Clone, Copy, Debug, PartialEq, Eq{default})]").unwrap();
         writeln!(out, "pub enum {name} {{").unwrap();
-        for value in &values {
+        for (at, value) in values.iter().enumerate() {
             writeln!(out, "    /// SysML: `enum {value}`").unwrap();
-            writeln!(out, "    {},", camel(value)).unwrap();
+            if at == 0 {
+                writeln!(out, "    #[default]").unwrap();
+            }
+            writeln!(out, "    {},", type_ident(&camel(value))).unwrap();
         }
         writeln!(out, "}}").unwrap();
-        if let Some(first) = values.first() {
-            writeln!(out, "\nimpl Default for {name} {{").unwrap();
-            writeln!(out, "    fn default() -> Self {{").unwrap();
-            writeln!(out, "        {name}::{}", camel(first)).unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
     }
 
     /// A variation: one enum variant per `variant`, carrying the
     /// variant's type where it has one.
     fn variation(&self, def: ElementId, out: &mut String) {
-        let name = self.model.name(def).expect("collected named");
+        let name = type_ident(self.model.name(def).expect("collected named"));
         writeln!(out).unwrap();
         if let Some(doc) = documentation(self.model, def) {
             doc_comment(&doc, "", out);
@@ -928,10 +1046,12 @@ impl<'a> Generator<'a> {
             writeln!(out, "    /// SysML: `variant {variant}`").unwrap();
             let payload = type_of(self.model, child)
                 .filter(|target| self.shapes.get(target) == Some(&Shape::Struct))
-                .and_then(|target| self.model.name(target));
+                .and_then(|target| self.model.name(target))
+                .map(type_ident);
+            let variant = type_ident(&camel(variant));
             match payload {
-                Some(payload) => writeln!(out, "    {}({payload}),", camel(variant)).unwrap(),
-                None => writeln!(out, "    {},", camel(variant)).unwrap(),
+                Some(payload) => writeln!(out, "    {variant}({payload}),").unwrap(),
+                None => writeln!(out, "    {variant},").unwrap(),
             }
         }
         writeln!(out, "}}").unwrap();
@@ -941,7 +1061,7 @@ impl<'a> Generator<'a> {
     /// `step` over the transition table.
     fn state_machine(&self, def: ElementId, out: &mut String) {
         let model = self.model;
-        let name = model.name(def).expect("collected named");
+        let name = type_ident(model.name(def).expect("collected named"));
         let states: Vec<(ElementId, &str)> = model
             .owned(def)
             .iter()
@@ -1173,7 +1293,7 @@ impl<'a> Generator<'a> {
                 let rust = if let Some(bound) = binding(model, ty) {
                     bound.get("path")?.clone()
                 } else if self.shapes.contains_key(&ty) {
-                    model.name(ty)?.to_string()
+                    type_ident(model.name(ty)?)
                 } else {
                     return None;
                 };
@@ -1210,7 +1330,8 @@ impl<'a> Generator<'a> {
     /// model's own words behind a `todo!`.
     fn calculation(&self, def: ElementId, out: &mut String) {
         let model = self.model;
-        let name = model.name(def).expect("collected named");
+        let spelled = model.name(def).expect("collected named");
+        let name = type_ident(spelled);
         let constraint = model.kind(def) == ElementKind::ConstraintDefinition;
         let keyword = if constraint { "constraint" } else { "calc" };
         let mut params: Vec<(String, String)> = Vec::new();
@@ -1319,7 +1440,7 @@ impl<'a> Generator<'a> {
             )
             .unwrap();
             writeln!(out, "pub trait {name} {{").unwrap();
-            writeln!(out, "    fn {}({signature}) -> {returns};", ident(name)).unwrap();
+            writeln!(out, "    fn {}({signature}) -> {returns};", ident(spelled)).unwrap();
             writeln!(out, "}}").unwrap();
             return;
         }
@@ -1327,7 +1448,9 @@ impl<'a> Generator<'a> {
         let (body, unfit) = match (&clause, translated) {
             (_, Some(translated)) => (translated.rust, false),
             (Some(ValueClause::Literal(rust)), None) => (rust.clone(), false),
-            (Some(ValueClause::Text(text)), None) => (format!("todo!({text:?})"), true),
+            // the model's own words, and `{` in them is the model's, not
+            // a placeholder for `todo!` to fill
+            (Some(ValueClause::Text(text)), None) => (format!("todo!(\"{{}}\", {text:?})"), true),
             (None, None) => ("todo!()".to_string(), false),
         };
 
@@ -1346,8 +1469,21 @@ impl<'a> Generator<'a> {
         if body.starts_with("todo!") {
             writeln!(out, "#[allow(unused_variables)]").unwrap();
         }
+        // A formula over a `Real` and a `Natural` is a formula Rust will
+        // not have: the numeric literals were kept as written rather than
+        // coerced, so the mixing surfaces as a type error. Saying which
+        // parameters disagree puts that where it can be acted on -- in
+        // the model -- and not only in a file marked DO NOT EDIT.
+        if let Some(mixed) = mixed_numerics(&params) {
+            writeln!(out, "/// {mixed}").unwrap();
+        }
         let arguments = arguments.join(", ");
-        writeln!(out, "pub fn {}({arguments}) -> {returns} {{", ident(name)).unwrap();
+        writeln!(
+            out,
+            "pub fn {}({arguments}) -> {returns} {{",
+            ident(spelled)
+        )
+        .unwrap();
         writeln!(out, "    {body}").unwrap();
         writeln!(out, "}}").unwrap();
     }
@@ -1406,7 +1542,9 @@ impl<'a> Generator<'a> {
         let (body, unfit) = match (&clause, translated) {
             (_, Some(translated)) => (translated.rust, false),
             (Some(ValueClause::Literal(rust)), None) => (rust.clone(), false),
-            (Some(ValueClause::Text(text)), None) => (format!("todo!({text:?})"), true),
+            // the model's own words, and `{` in them is the model's, not
+            // a placeholder for `todo!` to fill
+            (Some(ValueClause::Text(text)), None) => (format!("todo!(\"{{}}\", {text:?})"), true),
             (None, None) => ("todo!()".to_string(), false),
         };
 
@@ -1508,6 +1646,311 @@ impl<'a> Generator<'a> {
         out
     }
 
+    /// An action definition's body, compiled out of what the model says
+    /// its parts are and how they are wired: the subactions in the order
+    /// the successions put them in, each called with what the flows and
+    /// bindings feed it, and the result read off the flows into the
+    /// definition's own `out` parameters.
+    ///
+    /// It is all-or-nothing. A dataflow with a gap in it -- an input
+    /// nothing feeds, a result nothing produces, an order that does not
+    /// exist -- is not written half-way; the trait method stays open,
+    /// and what stopped it is named, because a modeller who is one flow
+    /// short should not have to guess which one.
+    fn action_body(&self, def: ElementId) -> Result<Body, String> {
+        let model = self.model;
+        let mut steps: Vec<(ElementId, ElementId)> = Vec::new();
+        for &child in model.owned(def) {
+            if !matches!(
+                model.kind(child),
+                ElementKind::ActionUsage | ElementKind::PerformActionUsage
+            ) {
+                continue;
+            }
+            let named = model.name(child).ok_or("a subaction with no name")?;
+            let performed =
+                type_of(model, child).ok_or_else(|| format!("`{named}` performs nothing"))?;
+            if self.shapes.get(&performed) != Some(&Shape::Action) {
+                return Err(format!("`{named}` performs no generated action"));
+            }
+            steps.push((child, performed));
+        }
+        if steps.is_empty() {
+            // a leaf behaviour is not a dataflow with a gap in it; there
+            // was never anything here to perform, and saying so on every
+            // one of them is noise
+            return Err(String::new());
+        }
+
+        // `first a then b` is an edge, and the order they make is the
+        // order the calls go in
+        let mut after: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
+        for &child in model.owned(def) {
+            if !model.kind(child).is_a(ElementKind::SuccessionAsUsage) {
+                continue;
+            }
+            let (from, to) = self
+                .end_chains(child)
+                .ok_or("a succession whose ends did not resolve")?;
+            // `end_chains` answers only for two ends that resolved, so
+            // each has at least the one segment it resolved from
+            after
+                .entry(*from.first().expect("a resolved end has a segment"))
+                .or_default()
+                .push(*to.first().expect("a resolved end has a segment"));
+        }
+        let order = ordered(&steps.iter().map(|&(u, _)| u).collect::<Vec<_>>(), &after)
+            .ok_or("its subactions follow one another in a circle")?;
+
+        // every flow, by the (subaction, parameter) it arrives at
+        let mut into: HashMap<(Option<ElementId>, ElementId), (ElementId, ElementId)> =
+            HashMap::new();
+        for &child in model.owned(def) {
+            if !model.kind(child).is_a(ElementKind::FlowUsage) {
+                continue;
+            }
+            let (from, to) = self
+                .end_chains(child)
+                .ok_or("a flow whose ends did not resolve")?;
+            let [source, out] = from.as_slice() else {
+                return Err("a flow that does not come out of a subaction".to_string());
+            };
+            // `subaction.parameter` arrives at that subaction; anything
+            // else names the definition's own parameter, which is where
+            // a result comes from
+            let target = if let [usage, parameter] = to.as_slice() {
+                (Some(*usage), *parameter)
+            } else {
+                (None, *to.last().expect("a resolved end has a segment"))
+            };
+            into.insert(target, (*source, *out));
+        }
+        let mut fanout: HashMap<(ElementId, ElementId), usize> = HashMap::new();
+        for &source in into.values() {
+            *fanout.entry(source).or_default() += 1;
+        }
+
+        // how many subactions each enclosing parameter is fed to
+        let mut remaining: HashMap<String, usize> = HashMap::new();
+        for parameter in self.in_parameters(def) {
+            if let Some(name) = model.name(parameter) {
+                remaining.insert(ident(name), self.bindings_naming(def, name));
+            }
+        }
+
+        let mut lines = Vec::new();
+        for &usage in &order {
+            let (_, performed) = *steps
+                .iter()
+                .find(|&&(u, _)| u == usage)
+                .expect("ordered from the steps");
+            let mine = model.name(usage).unwrap_or("?");
+            let mut arguments = Vec::new();
+            for parameter in self.in_parameters(performed) {
+                let named = model.name(parameter).unwrap_or("?");
+                arguments.push(
+                    self.fed_by(def, usage, parameter, &into, &mut fanout, &mut remaining)
+                        .ok_or_else(|| format!("nothing feeds `{mine}.{named}`"))?,
+                );
+            }
+            lines.push(format!(
+                "let {} = self.{}({});",
+                ident(mine),
+                ident(model.name(performed).unwrap_or("?")),
+                arguments.join(", ")
+            ));
+        }
+
+        // the result is whatever flows into the definition's own outs
+        let mut results = Vec::new();
+        for out in model.owned(def).iter().copied() {
+            if model.direction(out) != Some("out") {
+                continue;
+            }
+            let named = model.name(out).unwrap_or("?");
+            let &(source, parameter) = into
+                .get(&(None, out))
+                .ok_or_else(|| format!("nothing produces `{named}`"))?;
+            results.push(
+                self.read_out(source, parameter, &mut fanout)
+                    .ok_or_else(|| format!("what flows into `{named}` is no result of its own"))?,
+            );
+        }
+        match results.len() {
+            0 => {}
+            1 => lines.push(results.join("")),
+            _ => lines.push(format!("({})", results.join(", "))),
+        }
+
+        let mut supertraits: Vec<String> = Vec::new();
+        for &(_, performed) in &steps {
+            if performed == def {
+                // a behaviour made of itself is not a supertrait of
+                // itself, and Rust reads that as a circle
+                return Err("it is made of itself".to_string());
+            }
+            let name = type_ident(
+                model
+                    .name(performed)
+                    .ok_or("a subaction performs something unnamed")?,
+            );
+            if !supertraits.contains(&name) {
+                supertraits.push(name);
+            }
+        }
+        Ok(Body { supertraits, lines })
+    }
+
+    /// The `in` parameters of an action definition, in declaration order.
+    fn in_parameters(&self, def: ElementId) -> Vec<ElementId> {
+        self.model
+            .owned(def)
+            .iter()
+            .copied()
+            .filter(|&child| self.model.direction(child) == Some("in"))
+            .filter(|&child| self.model.name(child).is_some())
+            .collect()
+    }
+
+    /// What feeds one parameter of one subaction: a flow out of another,
+    /// or a value the usage bound it to.
+    fn fed_by(
+        &self,
+        def: ElementId,
+        usage: ElementId,
+        parameter: ElementId,
+        into: &HashMap<(Option<ElementId>, ElementId), (ElementId, ElementId)>,
+        fanout: &mut HashMap<(ElementId, ElementId), usize>,
+        remaining: &mut HashMap<String, usize>,
+    ) -> Option<String> {
+        if let Some(&(source, out)) = into.get(&(Some(usage), parameter)) {
+            return self.read_out(source, out, fanout);
+        }
+        // `action wash : Washout { in stream = TrainingRun::stream; }`
+        let name = self.model.name(parameter)?;
+        let bound = self
+            .model
+            .owned(usage)
+            .iter()
+            .copied()
+            .find(|&child| self.model.name(child) == Some(name))
+            .and_then(|child| value_clause(self.model, child))?;
+        let parameters = self.in_parameters(def);
+        let resolve = |leading: &str| {
+            parameters
+                .iter()
+                .find(|&&p| self.model.name(p) == Some(leading))
+                .map(|_| ident(leading))
+        };
+        let read = match bound {
+            // `TrainingRun::stream` names the enclosing action's own
+            // parameter, and the argument is what Rust calls it
+            ValueClause::Text(text) => {
+                let tail = text.rsplit("::").next()?.trim().to_string();
+                translate(&tail, &resolve, &|name| self.callable(name))?.rust
+            }
+            ValueClause::Literal(rust) => rust,
+        };
+        // a parameter fed to more than one subaction is cloned until the
+        // last of them, which may take it -- unless it is a scalar, which
+        // every call copies anyway
+        let left = remaining.entry(read.clone()).or_insert(0);
+        *left = left.saturating_sub(1);
+        let copyable = self
+            .parameter_shape(parameter)
+            .is_some_and(|(base, _)| matches!(base.as_str(), "f64" | "i64" | "u64" | "bool"));
+        Some(if *left > 0 && !copyable {
+            format!("{read}.clone()")
+        } else {
+            read
+        })
+    }
+
+    /// How many of the subactions bind one of the enclosing parameters.
+    fn bindings_naming(&self, def: ElementId, name: &str) -> usize {
+        self.model
+            .owned(def)
+            .iter()
+            .filter(|&&child| {
+                matches!(
+                    self.model.kind(child),
+                    ElementKind::ActionUsage | ElementKind::PerformActionUsage
+                )
+            })
+            .flat_map(|&child| self.model.owned(child).iter().copied())
+            .filter(|&bound| match value_clause(self.model, bound) {
+                Some(ValueClause::Text(text)) => {
+                    text.rsplit("::").next().map(str::trim) == Some(name)
+                }
+                _ => false,
+            })
+            .count()
+    }
+
+    /// One `out` of an earlier subaction: the call answered with a tuple
+    /// where its definition declares several, in declaration order.
+    fn read_out(
+        &self,
+        source: ElementId,
+        parameter: ElementId,
+        fanout: &mut HashMap<(ElementId, ElementId), usize>,
+    ) -> Option<String> {
+        let performed = type_of(self.model, source)?;
+        let outs: Vec<ElementId> = self
+            .model
+            .owned(performed)
+            .iter()
+            .copied()
+            .filter(|&child| self.model.direction(child) == Some("out"))
+            .collect();
+        // A flow comes out of what it names, so where the end resolved to
+        // an `in` of the same name -- which an action that transforms its
+        // input has -- the `out` is what was meant.
+        let at = outs.iter().position(|&out| out == parameter).or_else(|| {
+            let named = self.model.name(parameter)?;
+            outs.iter()
+                .position(|&out| self.model.name(out) == Some(named))
+        });
+        let read = match outs.len() {
+            // a flow comes out of an `out`, so there is at least one
+            1 => ident(self.model.name(source)?),
+            _ => format!("{}.{}", ident(self.model.name(source)?), at?),
+        };
+        // one output feeding two consumers is read by clone until the
+        // last of them, which may take it -- and a scalar is copied by
+        // every call anyway
+        let copyable = self
+            .parameter_shape(parameter)
+            .is_some_and(|(base, _)| matches!(base.as_str(), "f64" | "i64" | "u64" | "bool"));
+        let left = fanout.entry((source, parameter)).or_insert(0);
+        *left = left.saturating_sub(1);
+        Some(if !copyable && *left > 0 {
+            format!("{read}.clone()")
+        } else {
+            read
+        })
+    }
+
+    /// The two ends of a connector, each as the chain its operand
+    /// resolved to: `wash.washedState` is `[wash, washedState]`, and a
+    /// bare `weights` is `[weights]`. The final target alone cannot say
+    /// which subaction an end belongs to, which is exactly what wiring a
+    /// dataflow needs to know.
+    fn end_chains(&self, usage: ElementId) -> Option<(Vec<ElementId>, Vec<ElementId>)> {
+        let chains: Vec<Vec<ElementId>> = self
+            .model
+            .owned(usage)
+            .iter()
+            .filter(|&&child| self.model.kind(child) == ElementKind::Feature)
+            .map(|&child| self.model.chaining_feature(child).to_vec())
+            .filter(|chain| !chain.is_empty())
+            .collect();
+        match chains.as_slice() {
+            [from, to] => Some((from.clone(), to.clone())),
+            _ => None,
+        }
+    }
+
     /// The two ends of a succession or a flow, as the model resolved
     /// them -- `relatedFeature` is where the semantics pass records what
     /// the operands of `first ... then ...` and `flow ... to ...` point
@@ -1546,7 +1989,8 @@ impl<'a> Generator<'a> {
     /// asks for it the way it asks for an abstract calculation.
     fn action(&self, def: ElementId, out: &mut String) {
         let model = self.model;
-        let name = model.name(def).expect("collected named");
+        let spelled = model.name(def).expect("collected named");
+        let name = type_ident(spelled);
         let mut inputs: Vec<String> = Vec::new();
         for &child in model.owned(def) {
             if model.direction(child) != Some("in") {
@@ -1597,14 +2041,43 @@ impl<'a> Generator<'a> {
         for step in self.decomposition(def) {
             writeln!(out, "/// {step}").unwrap();
         }
-        writeln!(out, "pub trait {name} {{").unwrap();
-        writeln!(
-            out,
-            "    fn {}({signature}){};",
-            ident(name),
-            returns_clause(&returns)
-        )
-        .unwrap();
+        // Where the model wired its parts up completely, that wiring is
+        // the body: the implementation owes the parts, not the whole.
+        let body = self.action_body(def);
+        if let Err(why) = &body {
+            if !why.is_empty() {
+                writeln!(out, "/// Not performed here: {why}.").unwrap();
+            }
+        }
+        let supertraits = body
+            .as_ref()
+            .ok()
+            .filter(|body| !body.supertraits.is_empty())
+            .map(|body| format!(": {}", body.supertraits.join(" + ")))
+            .unwrap_or_default();
+        writeln!(out, "pub trait {name}{supertraits} {{").unwrap();
+        match &body {
+            Ok(body) => {
+                writeln!(
+                    out,
+                    "    fn {}({signature}){} {{",
+                    ident(spelled),
+                    returns_clause(&returns)
+                )
+                .unwrap();
+                for line in &body.lines {
+                    writeln!(out, "        {line}").unwrap();
+                }
+                writeln!(out, "    }}").unwrap();
+            }
+            Err(_) => writeln!(
+                out,
+                "    fn {}({signature}){};",
+                ident(spelled),
+                returns_clause(&returns)
+            )
+            .unwrap(),
+        }
         writeln!(out, "}}").unwrap();
     }
 
@@ -1621,7 +2094,7 @@ impl<'a> Generator<'a> {
     ) -> Result<String, String> {
         let model = self.model;
         let name = model.name(usage).expect("named, or it was skipped");
-        let def_name = model.name(def).expect("collected named");
+        let def_name = type_ident(model.name(def).expect("collected named"));
         let returns = model
             .owned(def)
             .iter()
@@ -1655,7 +2128,8 @@ impl<'a> Generator<'a> {
     ) -> Result<String, String> {
         let model = self.model;
         let name = model.name(usage).expect("named, or it was skipped");
-        let def_name = model.name(def).expect("collected named");
+        let spelled = model.name(def).expect("collected named");
+        let def_name = type_ident(spelled);
         let resolve = |leading: &str| {
             fields
                 .iter()
@@ -1691,8 +2165,17 @@ impl<'a> Generator<'a> {
             };
             let read = match clause {
                 ValueClause::Literal(rust) => rust,
+                // A parameter bound to a feature of the very part that
+                // owns it has to be spelled `Part::feature`, since the
+                // bare name would be the parameter itself. What Rust
+                // reads is the feature, so the qualifier is dropped where
+                // the tail is one this part has.
                 ValueClause::Text(text) => {
-                    match translate(&text, &resolve, &|name| self.callable(name)) {
+                    let tail = text.rsplit("::").next().unwrap_or(&text).trim();
+                    let read = resolve(tail)
+                        .map(Translated::plain)
+                        .or_else(|| translate(&text, &resolve, &|name| self.callable(name)));
+                    match read {
                         Some(translated) => translated.rust,
                         None => {
                             return Err(format!(
@@ -1726,9 +2209,9 @@ impl<'a> Generator<'a> {
         }
         let arguments = arguments.join(", ");
         let call = if performer {
-            format!("{provider}.{}({arguments})", ident(def_name))
+            format!("{provider}.{}({arguments})", ident(spelled))
         } else {
-            format!("{}({arguments})", ident(def_name))
+            format!("{}({arguments})", ident(spelled))
         };
 
         let mut method = String::new();
@@ -1762,17 +2245,22 @@ impl<'a> Generator<'a> {
     }
 
     /// An unbound port as a plain field of its generated port struct.
-    fn plain_port(&self, usage: ElementId) -> Option<Field> {
+    fn plain_port(&self, def: ElementId, usage: ElementId) -> Option<Field> {
         let target = type_of(self.model, usage)?;
         if self.shapes.get(&target) != Some(&Shape::Struct) || self.has_api_ports(target) {
             return None;
         }
+        let container = multiplicity(self.model, usage);
         Some(Field {
             name: self.model.name(usage)?.to_string(),
             usage,
             ty: FieldType::Generated(target),
-            container: multiplicity(self.model, usage),
-            boxed: false,
+            // a port of the definition's own type composes it as surely
+            // as a part does, and needs the same `Box` at the edge that
+            // closes the circle
+            boxed: container != Container::Many
+                && (target == def || self.boxed.contains(&(def, target))),
+            container,
             default: None,
         })
     }
@@ -1785,7 +2273,7 @@ impl<'a> Generator<'a> {
             .owned(def)
             .iter()
             .filter(|&&child| self.model.kind(child) == ElementKind::PortUsage)
-            .filter_map(|&child| self.plain_port(child))
+            .filter_map(|&child| self.plain_port(def, child))
             .collect()
     }
 
@@ -1957,6 +2445,15 @@ impl<'a> Generator<'a> {
 
         let is_async = bound.get("isAsync").map(String::as_str) == Some("true");
         let fallible = bound.get("isFallible").map(String::as_str) == Some("true");
+        // A call that can fail returns a `Result`, and this method has to
+        // be declared as returning the same one. Without an `out error`
+        // there is no name for its second half, and guessing would put a
+        // type in the signature that the real function does not return.
+        if fallible && error.is_none() {
+            return Ok(format!(
+                "    // not generated: perform `{usage_name}` -- it can fail, but the model does not say with what\n"
+            ));
+        }
         let receiver = if takes_self == "&mut self" {
             "&mut self"
         } else {
@@ -2060,7 +2557,7 @@ impl<'a> Generator<'a> {
             return self
                 .model
                 .name(ty)
-                .map(|name| (name.to_string(), container));
+                .map(|name| (type_ident(name), container));
         }
         let scalar = match self.model.name(ty)? {
             "Real" => "f64",
@@ -2130,6 +2627,59 @@ struct Transition {
 }
 
 /// The declared multiplicity of a usage, as the container it implies.
+/// A compiled action body: the traits its parts demand of whoever
+/// implements it, and the statements that perform them in order.
+struct Body {
+    supertraits: Vec<String>,
+    lines: Vec<String>,
+}
+
+/// The subactions in an order the successions allow, or nothing where
+/// they lead in a circle.
+fn ordered(
+    steps: &[ElementId],
+    after: &HashMap<ElementId, Vec<ElementId>>,
+) -> Option<Vec<ElementId>> {
+    let mut order: Vec<ElementId> = Vec::new();
+    let mut left: Vec<ElementId> = steps.to_vec();
+    while !left.is_empty() {
+        // whatever nothing left is waiting on can go next
+        let next = left.iter().position(|&step| {
+            !left
+                .iter()
+                .any(|&other| after.get(&other).is_some_and(|nexts| nexts.contains(&step)))
+        })?;
+        order.push(left.remove(next));
+    }
+    Some(order)
+}
+
+/// Which numeric types a calculation's parameters disagree over, if they
+/// do. Rust combines none of them without a cast, and this generator
+/// writes no cast, so a formula over two of them will not compile.
+fn mixed_numerics(params: &[(String, String)]) -> Option<String> {
+    let numeric: Vec<&(String, String)> = params
+        .iter()
+        .filter(|(_, ty)| matches!(ty.as_str(), "f64" | "i64" | "u64"))
+        .collect();
+    let mut kinds: Vec<&str> = numeric.iter().map(|(_, ty)| ty.as_str()).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    if kinds.len() < 2 {
+        return None;
+    }
+    let named: Vec<String> = numeric
+        .iter()
+        .map(|(name, ty)| format!("`{name}` is {ty}"))
+        .collect();
+    Some(format!(
+        "Mixed numeric parameters ({}). Rust combines none of these without a cast \
+         and none is written, so a formula over more than one of them will not \
+         compile: say them in one type in the model.",
+        named.join(", ")
+    ))
+}
+
 /// The return clause of a signature -- nothing at all where there is
 /// nothing to return, since `-> ()` is noise, and noise clippy objects to.
 fn returns_clause(returns: &str) -> String {
@@ -2389,6 +2939,48 @@ fn camel(name: &str) -> String {
         } else {
             out.push(ch);
         }
+    }
+    out
+}
+
+/// A definition's name with what owns it in front, for saying which of
+/// two things with one name is meant.
+fn qualified_of(model: &Model, def: ElementId) -> String {
+    let mut parts = Vec::new();
+    let mut at = Some(def);
+    while let Some(id) = at {
+        if let Some(name) = model.name(id) {
+            parts.push(name.to_string());
+        }
+        at = model.owner(id);
+    }
+    parts.reverse();
+    parts.join("::")
+}
+
+/// A SysML name as the name of a Rust *type*. An escaped name holds
+/// whatever the modeller wrote -- `'Ideal Gas Parcel'` is one name in
+/// SysML -- and Rust spells type names out of a much smaller alphabet,
+/// so anything it cannot use joins the words up instead of ending the
+/// name early.
+fn type_ident(name: &str) -> String {
+    let mut out = String::new();
+    let mut upper = false;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() {
+            if upper {
+                out.extend(ch.to_uppercase());
+                upper = false;
+            } else {
+                out.push(ch);
+            }
+        } else {
+            // a space or a hyphen joins two words rather than cutting one
+            upper = !out.is_empty();
+        }
+    }
+    if out.is_empty() || out.starts_with(|ch: char| ch.is_ascii_digit()) {
+        out.insert(0, '_');
     }
     out
 }

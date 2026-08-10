@@ -22,12 +22,25 @@ pub(crate) struct Callee {
 }
 
 /// A translated expression and what the caller may want to know of it.
+#[derive(Debug)]
 pub(crate) struct Translated {
     pub rust: String,
     /// The top of the expression yields a boolean.
     pub boolean: bool,
     /// The leading name of every reference chain, in order of first use.
     pub references: Vec<String>,
+}
+
+impl Translated {
+    /// Rust the caller worked out for itself, with nothing to say about
+    /// it: no references gathered, no claim that it is a boolean.
+    pub(crate) fn plain(rust: String) -> Translated {
+        Translated {
+            rust,
+            boolean: false,
+            references: Vec::new(),
+        }
+    }
 }
 
 /// `text` as a Rust expression, or `None` where any part of it falls

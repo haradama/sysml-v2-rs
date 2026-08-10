@@ -29,6 +29,7 @@ const API: &str = "package Api {\n\
     \taction def Fuzzy { @rust { :>> path = \"fake::Store::fuzzy\"; :>> takesSelf = \"&self\"; } in blob : Plain; }\n\
     \taction def Purge { @rust { :>> path = \"fake::Store::purge\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out error : String; }\n\
     \taction def Shuffle { @rust { :>> path = \"fake::Store::shuffle\"; :>> takesSelf = \"&self\"; } inout buffer : String; }\n\
+    \taction def Vanish { @rust { :>> path = \"fake::Store::vanish\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out result : String; }\n\
     \titem def Payload { @rust { :>> path = \"fake::Payload\"; } }\n\
     \tport def Plain;\n}\n";
 
@@ -87,6 +88,7 @@ fn signatures_follow_the_binding_not_guesswork() {
          \t\tperform action purge : Purge;\n\
          \t\tperform action fuzz : Fuzzy;\n\
          \t\tperform action shuffle : Shuffle;\n\
+         \t\tperform action vanish : Vanish;\n\
          \t}\n\
          \tpart def Ledger {\n\
          \t\tref;\n\
@@ -98,6 +100,12 @@ fn signatures_follow_the_binding_not_guesswork() {
     .unwrap();
     // an error-only fallible call returns Result<(), _>
     assert!(rust.contains("pub fn purge(&self) -> Result<(), String>"));
+    // but one that says it can fail without saying with what would have
+    // to be declared as returning something the real function does not
+    assert!(rust.contains(
+        "// not generated: perform `vanish` -- it can fail, but the model does not say with what"
+    ));
+    assert!(!rust.contains("fn vanish"));
     // an unmappable parameter and an inout parameter degrade to comments
     assert!(rust.contains("parameter `blob` has no Rust type"));
     assert!(
@@ -150,7 +158,7 @@ fn data_definitions_flatten_compose_and_recurse() {
     .unwrap();
     // enums, with the first value as the default
     assert!(rust.contains("pub enum Color {"));
-    assert!(rust.contains("Color::Red\n"));
+    assert!(rust.contains("    #[default]\n    Red,"));
     // the abstract base flattens into the subtype and gets no struct
     assert!(rust.contains("// `Asset` is abstract"));
     assert!(!rust.contains("pub struct Asset"));
@@ -177,8 +185,10 @@ fn data_definitions_flatten_compose_and_recurse() {
     assert!(rust.contains("pub enum Wheel {"));
     assert!(rust.contains("Steel(Machine),"));
     assert!(rust.contains("    Alloy,"));
-    // an array keeps its struct out of Default; empty containers do not
-    assert!(!rust.contains("impl Default for Rack"));
+    // an array is as startable as what it repeats, built without asking
+    // the element to be `Copy`; empty containers start empty
+    assert!(rust.contains("impl Default for Rack"));
+    assert!(rust.contains("slots: std::array::from_fn(|_| Default::default()),"));
     assert!(rust.contains("impl Default for Chain"));
 }
 
@@ -524,9 +534,9 @@ fn a_calculation_calls_another_only_where_it_can_name_the_function() {
     assert!(rust.contains("(twice(a) < 10.0) && (zero() >= 0.0)"));
     // an abstract one generated a trait, and a trait method is not
     // callable out of nowhere -- so the formula stays the model's own
-    assert!(rust.contains("todo!(\"Opaque(a) < 1.0\")"));
+    assert!(rust.contains("todo!(\"{}\", \"Opaque(a) < 1.0\")"));
     // and neither is something that is no calculation at all
-    assert!(rust.contains("todo!(\"Thing(a) < 1.0\")"));
+    assert!(rust.contains("todo!(\"{}\", \"Thing(a) < 1.0\")"));
 }
 
 #[test]
@@ -573,8 +583,8 @@ fn the_long_tail_of_shapes_and_signatures() {
     assert!(rust.contains("/// one of these"));
     assert!(rust.contains("/// the meter"));
     // a mutual specialization cannot flatten and says so
-    assert!(rust.contains("// not generated: `A2` -- its specializations form a cycle"));
-    assert!(rust.contains("// not generated: `B2` -- its specializations form a cycle"));
+    assert!(rust.contains("// not generated: `A2` -- its specializations form a circle"));
+    assert!(rust.contains("// not generated: `B2` -- its specializations form a circle"));
     // externals as fields; state machines are not value types
     assert!(rust.contains("pub external_item: fake::Payload,"));
     assert!(rust.contains("// not generated: `machinelike` -- no Rust type for its SysML type"));
@@ -920,7 +930,7 @@ fn calculations_translate_where_the_simple_subset_allows() {
     // beyond the subset: the formula stays in the model's words
     assert!(rust.contains("/// The formula is beyond the simple subset"));
     assert!(rust.contains(
-        "#[allow(unused_variables)]\npub fn weird(x: f64) -> f64 {\n    todo!(\"x[1]\")\n}"
+        "#[allow(unused_variables)]\npub fn weird(x: f64) -> f64 {\n    todo!(\"{}\", \"x[1]\")\n}"
     ));
     // typed but formula-less: an honest empty todo
     assert!(rust.contains("pub fn blank(a: f64) -> f64 {\n    todo!()\n}"));
@@ -977,7 +987,7 @@ fn calculations_note_what_they_cannot_type() {
     // literal clauses and untranslated formulas on calc usages
     assert!(rust.contains("    pub fn fixed(&self) -> f64 {\n        9.8\n    }"));
     assert!(rust.contains("    /// The formula is beyond the simple subset"));
-    assert!(rust.contains("        todo!(\"reach[1]\")"));
+    assert!(rust.contains("        todo!(\"{}\", \"reach[1]\")"));
     assert!(rust.contains("    pub fn alone(&self) -> f64 {\n        4.0\n    }"));
 }
 
@@ -1030,4 +1040,369 @@ fn what_the_model_is_made_of_is_said_even_where_it_cannot_be_written() {
     // digit
     assert!(rust.contains("pub cross_section: f64,"));
     assert!(rust.contains("pub _2nd_reading: f64,"));
+}
+
+#[test]
+fn a_dataflow_the_model_wired_completely_becomes_the_body() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Wash {\n\t\tin stream : Real;\n\t\tin steps : Integer;\n\t\tout washed : Real;\n\t}\n\
+         \taction def Reap {\n\t\tin stream : Real;\n\t\tin start : Real;\n\
+         \t\tout rows : Real;\n\t\tout teacher : Real;\n\t}\n\
+         \taction def Fit {\n\t\tin rows : Real;\n\t\tin teacher : Real;\n\t\tout weights : Real;\n\t}\n\
+         \taction def Session {\n\
+         \t\tin stream : Real;\n\t\tin washout : Integer;\n\t\tout weights : Real;\n\
+         \t\taction wash : Wash {\n\t\t\tin stream = Session::stream;\n\t\t\tin steps = Session::washout;\n\t\t}\n\
+         \t\taction reap : Reap {\n\t\t\tin stream = Session::stream;\n\t\t}\n\
+         \t\taction fit : Fit;\n\
+         \t\tfirst wash then reap;\n\
+         \t\tflow from wash.washed to reap.start;\n\
+         \t\tfirst reap then fit;\n\
+         \t\tflow from reap.rows to fit.rows;\n\
+         \t\tflow from reap.teacher to fit.teacher;\n\
+         \t\tflow from fit.weights to weights;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // the parts it is made of are what it demands of its implementor,
+    // and the wiring is the body -- the order from the successions, the
+    // arguments from the flows and the bindings, the result from the
+    // flow into its own `out`
+    assert!(
+        rust.contains(concat!(
+            "pub trait Session: Wash + Reap + Fit {\n",
+            "    fn session(&mut self, stream: f64, washout: i64) -> f64 {\n",
+            "        let wash = self.wash(stream, washout);\n",
+            "        let reap = self.reap(stream, wash);\n",
+            "        let fit = self.fit(reap.0, reap.1);\n",
+            "        fit\n",
+            "    }\n",
+            "}\n",
+        )),
+        "{rust}"
+    );
+}
+
+#[test]
+fn a_dataflow_with_a_gap_in_it_is_not_written_half_way() {
+    // the same shape, with nothing feeding `fit.teacher` and nothing
+    // producing the result: an implementation that guessed at either
+    // would be worse than one that asks
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Reap {\n\t\tin stream : Real;\n\t\tout rows : Real;\n\t}\n\
+         \taction def Fit {\n\t\tin rows : Real;\n\t\tin teacher : Real;\n\t\tout weights : Real;\n\t}\n\
+         \taction def Session {\n\
+         \t\tin stream : Real;\n\t\tout weights : Real;\n\
+         \t\taction reap : Reap {\n\t\t\tin stream = Session::stream;\n\t\t}\n\
+         \t\taction fit : Fit;\n\
+         \t\tfirst reap then fit;\n\
+         \t\tflow from reap.rows to fit.rows;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub trait Session {\n    fn session(&mut self, stream: f64) -> f64;\n}"));
+    // and what the model did say is still handed to whoever writes it,
+    // along with which gap stopped the rest -- a modeller one flow short
+    // should not have to guess which one
+    assert!(rust.contains("/// Made of `reap : Reap`, `fit : Fit`."));
+    assert!(rust.contains("/// then: `reap` -> `fit`"));
+    assert!(rust.contains("/// Not performed here: nothing feeds `fit.teacher`."));
+    // a leaf behaviour is not a dataflow with a gap in it, and is not
+    // told off for having no parts
+    assert!(
+        rust.contains(
+            "/// SysML: `action def Reap`\n\
+             /// The model names this behaviour without saying how it runs; \
+             the implementation is yours.\n\
+             pub trait Reap {"
+        ),
+        "{rust}"
+    );
+}
+
+#[test]
+fn a_dataflow_is_refused_by_name_for_each_way_it_can_be_short() {
+    // an array of a struct, a result made of several outs, a flow whose
+    // end names the `in` of the same name, a literal bound to an input,
+    // and one parameter fed to two subactions: the shapes an emulator
+    // written this way actually has
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Word {\n\t\tattribute bits : Natural;\n\t}\n\
+         \tpart def Regs {\n\t\tattribute x : Word[8] ordered;\n\t}\n\
+         \taction def Fetch {\n\t\tin pc : Word;\n\t\tin bias : Natural;\n\t\tout word : Word;\n\t}\n\
+         \taction def Run {\n\
+         \t\tin regs : Regs;\n\t\tin pc : Word;\n\
+         \t\tout regs : Regs;\n\t\tout pc : Word;\n\t}\n\
+         \taction def Cycle {\n\
+         \t\tin regs : Regs;\n\t\tin pc : Word;\n\
+         \t\tout nextRegs : Regs;\n\t\tout nextPc : Word;\n\
+         \t\taction fetch : Fetch {\n\t\t\tin pc = Cycle::pc;\n\t\t\tin bias = 4;\n\t\t}\n\
+         \t\taction run : Run {\n\t\t\tin regs = Cycle::regs;\n\t\t\tin pc = Cycle::pc;\n\t\t}\n\
+         \t\tfirst fetch then run;\n\
+         \t\tflow from run.regs to nextRegs;\n\
+         \t\tflow from run.pc to nextPc;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // an array of a struct starts without asking the struct to be `Copy`
+    assert!(rust.contains("x: std::array::from_fn(|_| Default::default()),"));
+    // `pc` goes to two subactions, so the first takes a copy; a literal
+    // bound to an input is passed as written; and `run.regs` names the
+    // `in` of that name, which the `out` is what was meant by
+    assert!(
+        rust.contains(concat!(
+            "        let fetch = self.fetch(pc.clone(), 4);\n",
+            "        let run = self.run(regs, pc);\n",
+            "        (run.0, run.1)\n",
+        )),
+        "{rust}"
+    );
+}
+
+#[test]
+fn a_behaviour_performing_what_was_never_generated_says_so() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Outer {\n\
+         \t\tin a : Real;\n\t\tout b : Real;\n\
+         \t\taction bound : Ping;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("/// Not performed here: `bound` performs no generated action."),
+        "{rust}"
+    );
+}
+
+#[test]
+fn a_flow_that_does_not_join_two_subactions_is_named_as_the_gap() {
+    // a flow out of the definition's own parameter rather than out of a
+    // subaction: there is no earlier call to read it from
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Pair {\n\t\tattribute rows : Real;\n\t}\n\
+         \taction def Reap {\n\t\tin stream : Pair;\n\t\tout rows : Real;\n\t}\n\
+         \taction def Fit {\n\t\tin rows : Real;\n\t\tout weights : Real;\n\t}\n\
+         \taction def Session {\n\
+         \t\tin stream : Pair;\n\t\tout weights : Real;\n\
+         \t\taction reap : Reap {\n\t\t\tin stream = Session::stream;\n\t\t}\n\
+         \t\taction fit : Fit;\n\
+         \t\tfirst reap then fit;\n\
+         \t\tflow from stream to fit.rows;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("/// Not performed here: a flow that does not come out of a subaction."),
+        "{rust}"
+    );
+}
+
+#[test]
+fn a_behaviour_that_produces_nothing_performs_its_parts_for_their_effect() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Log {\n\t\tin line : String;\n\t}\n\
+         \taction def Twice {\n\
+         \t\tin line : String;\n\
+         \t\taction first_ : Log {\n\t\t\tin line = Twice::line;\n\t\t}\n\
+         \t\taction second : Log {\n\t\t\tin line = Twice::line;\n\t\t}\n\
+         \t\tfirst first_ then second;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // nothing to return, so nothing is returned -- and the line fed to
+    // both is cloned for the first of them
+    assert!(
+        rust.contains(concat!(
+            "    fn twice(&mut self, line: String) {\n",
+            "        let first_ = self.log(line.clone());\n",
+            "        let second = self.log(line);\n",
+            "    }\n",
+        )),
+        "{rust}"
+    );
+}
+
+#[test]
+fn one_output_read_by_two_subactions_is_read_twice() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Rows {\n\t\tattribute n : Natural;\n\t}\n\
+         \taction def Reap {\n\t\tin seed : Natural;\n\t\tout rows : Rows;\n\t}\n\
+         \taction def Score {\n\t\tin rows : Rows;\n\t\tout score : Natural;\n\t}\n\
+         \taction def Keep {\n\t\tin rows : Rows;\n\t\tout kept : Natural;\n\t}\n\
+         \taction def Both {\n\
+         \t\tin seed : Natural;\n\t\tout total : Natural;\n\t\tout kept : Natural;\n\
+         \t\taction reap : Reap {\n\t\t\tin seed = Both::seed;\n\t\t}\n\
+         \t\taction scoring : Score;\n\
+         \t\taction keeping : Keep;\n\
+         \t\tfirst reap then scoring;\n\
+         \t\tfirst scoring then keeping;\n\
+         \t\tflow from reap.rows to scoring.rows;\n\
+         \t\tflow from reap.rows to keeping.rows;\n\
+         \t\tflow from scoring.score to total;\n\
+         \t\tflow from keeping.kept to kept;\n\
+         \t}\n\
+         \tpart def Held {\n\t\tport store : Store;\n\t\tattribute seats : Natural[4] ordered;\n\t}\n\
+         }\n",
+    )
+    .unwrap();
+    // one producer, two consumers: the first of them takes a copy. Only
+    // one flow arrives at each, so the second may take it
+    assert!(
+        rust.contains("let scoring = self.score(reap.clone());"),
+        "{rust}"
+    );
+    assert!(rust.contains("let keeping = self.keep(reap);"), "{rust}");
+    // an array of something bound to an API type cannot be started, so
+    // the struct holding it gets no `Default`
+    assert!(!rust.contains("impl Default for Held"), "{rust}");
+}
+
+#[test]
+fn a_formula_over_two_numeric_types_says_so_where_the_error_will_be() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tcalc def Mean {\n\t\tin sum : Real;\n\t\tin count : Natural;\n\
+         \t\treturn : Real = sum / count;\n\t}\n\
+         \tcalc def Half {\n\t\tin sum : Real;\n\t\tin count : Real;\n\
+         \t\treturn : Real = sum / count;\n\t}\n\
+         }\n",
+    )
+    .unwrap();
+    // the literals were kept as written rather than coerced, so this one
+    // will not compile -- and the reason belongs where the reader of the
+    // error will be looking
+    assert!(
+        rust.contains("/// Mixed numeric parameters (`sum` is f64, `count` is u64)."),
+        "{rust}"
+    );
+    // and one that agrees with itself is not told off
+    assert!(
+        rust.contains("pub fn half(sum: f64, count: f64) -> f64 {"),
+        "{rust}"
+    );
+    assert_eq!(
+        rust.matches("Mixed numeric parameters").count(),
+        1,
+        "{rust}"
+    );
+}
+
+/// SysML names an escaped name anything at all -- `'Ideal Gas Parcel'`
+/// is one name -- and Rust spells type names out of a much smaller
+/// alphabet. Two names that differ only in what Rust cannot spell arrive
+/// at the same type, and only one of them can have it.
+#[test]
+fn names_rust_cannot_spell_are_joined_up_and_never_collide() {
+    let rust = generate(
+        "package S {\n\
+         \tpart def 'Ideal Gas Parcel';\n\
+         \tpart def '2nd Stage';\n\
+         \tpart def '+/-';\n\
+         \tpart def IdealGasParcel;\n\
+         \tpackage Inner {\n\t\tpart def 'Ideal-Gas-Parcel';\n\t}\n\
+         }\n",
+    )
+    .unwrap();
+    // the words join up rather than the name ending at the first space,
+    // a leading digit gets out of Rust's way, and a name with nothing
+    // Rust can use still has to be called something
+    assert!(rust.contains("pub struct IdealGasParcel"), "{rust}");
+    assert!(rust.contains("pub struct _2ndStage"), "{rust}");
+    assert!(rust.contains("pub struct _ "), "{rust}");
+    // three names arrive at `IdealGasParcel`; the first keeps it and the
+    // others are named by where they came from, not written twice over
+    assert_eq!(
+        rust.matches("pub struct IdealGasParcel").count(),
+        1,
+        "{rust}"
+    );
+    assert!(
+        rust.contains(
+            "// not generated: `IdealGasParcel` -- `IdealGasParcel` is already the Rust name of `S::Ideal Gas Parcel`"
+        ),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("// not generated: `Ideal-Gas-Parcel` -- `IdealGasParcel` is already the Rust name of `S::Ideal Gas Parcel`"),
+        "{rust}"
+    );
+}
+
+/// A behaviour that performs itself would have to be its own supertrait,
+/// which Rust reads as a circle and refuses.
+#[test]
+fn a_behaviour_made_of_itself_is_refused_by_name() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Prep {\n\t\tin whole : Real;\n\t\tout ready : Real;\n\t}\n\
+         \taction def Grind {\n\
+         \t\tin bean : Real;\n\t\tout dust : Real;\n\
+         \t\taction prep : Prep {\n\t\t\tin whole = Grind::bean;\n\t\t}\n\
+         \t\taction again : Grind;\n\
+         \t\tfirst prep then again;\n\
+         \t\tflow from prep.ready to again.bean;\n\
+         \t\tflow from again.dust to dust;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("/// Not performed here: it is made of itself."),
+        "{rust}"
+    );
+    assert!(!rust.contains("pub trait Grind: Grind"), "{rust}");
+}
+
+/// Two shapes a model reaches that a signature cannot: a succession with
+/// one end, and a repeated field of a type that lives in someone else's
+/// crate.
+#[test]
+fn a_one_ended_succession_and_an_array_of_a_bound_type() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \taction def Prep {\n\t\tin whole : Real;\n\t\tout ready : Real;\n\t}\n\
+         \taction def Once {\n\
+         \t\tin bean : Real;\n\t\tout dust : Real;\n\
+         \t\taction prep : Prep {\n\t\t\tin whole = Once::bean;\n\t\t}\n\
+         \t\tfirst prep;\n\
+         \t\tflow from prep.ready to dust;\n\
+         \t}\n\
+         \tpart def Crate {\n\t\titem batch : Payload[3];\n\t}\n\
+         }\n",
+    )
+    .unwrap();
+    // `first prep;` names one end, and an order cannot be read off it
+    assert!(
+        rust.contains("/// Not performed here: a succession whose ends did not resolve."),
+        "{rust}"
+    );
+    // three of someone else's type is an array, and nothing here knows
+    // how to start one
+    assert!(rust.contains("pub batch: [fake::Payload; 3],"), "{rust}");
+    assert!(!rust.contains("impl Default for Crate"), "{rust}");
 }
