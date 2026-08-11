@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sysml_model::{build_into, ElementId, ElementKind, Model, Value};
+use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value};
 use sysml_syntax::{parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange};
 
 /// An unresolved reference, for reporting.
@@ -1315,7 +1315,7 @@ impl Workspace {
         // model already has; `variant part v;` declares a new one. The
         // difference is whether a kind keyword was written, and the
         // reference form has to bring what it names along with it.
-        if supers.is_empty() && self.model.member_role(elem) == Some("variant") {
+        if supers.is_empty() && self.model.member_role(elem) == Some(Role::Variant) {
             let bare = self.source.get(&elem).is_some_and(|node| {
                 !node
                     .children_with_tokens()
@@ -1333,7 +1333,7 @@ impl Workspace {
         // what `objective { verify x :>> massRequirement; }` redefines a
         // member of. Nothing says so in the text; the roles do.
         if let Some(role) = self.model.member_role(elem) {
-            if matches!(role, "subject" | "objective") {
+            if matches!(role, Role::Subject | Role::Objective) {
                 let owners: Vec<ElementId> = self.model.owner(elem).into_iter().collect();
                 for owner in owners {
                     for sup in self.supertypes_of(owner) {

@@ -30,6 +30,45 @@ pub mod codegen;
 #[rustfmt::skip]
 pub mod generated;
 
+/// What a membership makes of the element it owns.
+///
+/// The keyword that declared the member decides it here, and two other
+/// crates read it back: the resolver, to know which members stand for
+/// the ones their type declares, and the interchange, to write the
+/// membership metaclass the standard names for each. It is an enum
+/// rather than a string so that adding one is a compile error in both
+/// until they say what it means -- the three used to spell the same
+/// dozen words separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// `subject x;` -- what a requirement, use case or verification is about
+    Subject,
+    /// `actor a;`
+    Actor,
+    /// `stakeholder s;`
+    Stakeholder,
+    /// `objective o;` -- what a case is trying to establish
+    Objective,
+    /// `variant v;` -- one alternative of a variation
+    Variant,
+    /// `return x;` -- a behaviour's result parameter
+    Return,
+    /// the trailing expression of a calculation body
+    Result,
+    /// `entry action a;`
+    Entry,
+    /// `do action a;`
+    Do,
+    /// `exit action a;`
+    Exit,
+    /// `assume constraint c;`
+    Assume,
+    /// `require constraint c;`
+    Require,
+    /// `frame concern c;`
+    Frame,
+}
+
 pub use build::{build_into, build_model, Built};
 pub use generated::{ElementKind, EnumType, FeatureMeta, FeatureType, PrimitiveType};
 
@@ -88,7 +127,7 @@ struct MemberSide {
     visibility: Option<&'static str>,
     /// The syntactic role that picks the membership's metaclass:
     /// `subject`, `actor`, `stakeholder`, `objective`, `variant`, `return`.
-    role: Option<&'static str>,
+    role: Option<Role>,
 }
 
 /// Arena holding every element of one model.
@@ -131,12 +170,12 @@ impl Model {
     /// Record the syntactic role `id` was declared in (`subject`, `actor`,
     /// `stakeholder`, `objective`, `variant`, `return`), which decides the
     /// metaclass of the membership owning it.
-    pub fn set_member_role(&mut self, id: ElementId, role: &'static str) {
+    pub fn set_member_role(&mut self, id: ElementId, role: Role) {
         self.elements[id.index()].membership.role = Some(role);
     }
 
     /// The declared role of `id`, when it has one.
-    pub fn member_role(&self, id: ElementId) -> Option<&'static str> {
+    pub fn member_role(&self, id: ElementId) -> Option<Role> {
         self.elements[id.index()].membership.role
     }
 

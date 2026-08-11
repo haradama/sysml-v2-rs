@@ -68,7 +68,7 @@
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value as Json};
-use sysml_model::{ElementId, ElementKind, FeatureType, Model, PrimitiveType, Value};
+use sysml_model::{ElementId, ElementKind, FeatureType, Model, PrimitiveType, Role, Value};
 use uuid::Uuid;
 
 /// Errors produced when reading interchange JSON.
@@ -194,31 +194,31 @@ const SYNTHESIZED: [&str; 38] = [
 /// picked the membership's metaclass survives the round trip. A state
 /// subaction's and a requirement constraint's metaclass alone does not
 /// say which role it was: their `kind` does.
-fn folded_role(bridge: &Json) -> Option<&'static str> {
-    let roles: [(ElementKind, &str); 7] = [
-        (ElementKind::SubjectMembership, "subject"),
-        (ElementKind::ActorMembership, "actor"),
-        (ElementKind::StakeholderMembership, "stakeholder"),
-        (ElementKind::ObjectiveMembership, "objective"),
-        (ElementKind::VariantMembership, "variant"),
-        (ElementKind::ReturnParameterMembership, "return"),
-        (ElementKind::ResultExpressionMembership, "result"),
+fn folded_role(bridge: &Json) -> Option<Role> {
+    let roles: [(ElementKind, Role); 7] = [
+        (ElementKind::SubjectMembership, Role::Subject),
+        (ElementKind::ActorMembership, Role::Actor),
+        (ElementKind::StakeholderMembership, Role::Stakeholder),
+        (ElementKind::ObjectiveMembership, Role::Objective),
+        (ElementKind::VariantMembership, Role::Variant),
+        (ElementKind::ReturnParameterMembership, Role::Return),
+        (ElementKind::ResultExpressionMembership, Role::Result),
     ];
     let written = bridge["@type"].as_str();
     if let Some((_, role)) = roles.iter().find(|(kind, _)| Some(kind.name()) == written) {
-        return Some(role);
+        return Some(*role);
     }
     match written {
         Some("StateSubactionMembership") => match bridge["kind"].as_str() {
-            Some("entry") => Some("entry"),
-            Some("do") => Some("do"),
-            Some("exit") => Some("exit"),
+            Some("entry") => Some(Role::Entry),
+            Some("do") => Some(Role::Do),
+            Some("exit") => Some(Role::Exit),
             _ => None,
         },
-        Some("FramedConcernMembership") => Some("frame"),
+        Some("FramedConcernMembership") => Some(Role::Frame),
         Some("RequirementConstraintMembership") => match bridge["kind"].as_str() {
-            Some("assumption") => Some("assume"),
-            _ => Some("require"),
+            Some("assumption") => Some(Role::Assume),
+            _ => Some(Role::Require),
         },
         _ => None,
     }
@@ -369,18 +369,19 @@ fn bridged(model: &Model, owned: ElementId) -> bool {
 /// else behind a plain `OwningMembership`.
 fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     if let Some(role) = model.member_role(owned) {
+        // no catch-all: a role added to the model is a compile error
+        // here until it says which membership the standard names for it
         return match role {
-            "subject" => ElementKind::SubjectMembership,
-            "actor" => ElementKind::ActorMembership,
-            "stakeholder" => ElementKind::StakeholderMembership,
-            "objective" => ElementKind::ObjectiveMembership,
-            "variant" => ElementKind::VariantMembership,
-            "return" => ElementKind::ReturnParameterMembership,
-            "result" => ElementKind::ResultExpressionMembership,
-            "entry" | "do" | "exit" => ElementKind::StateSubactionMembership,
-            "assume" | "require" => ElementKind::RequirementConstraintMembership,
-            "frame" => ElementKind::FramedConcernMembership,
-            _ => ElementKind::OwningMembership,
+            Role::Subject => ElementKind::SubjectMembership,
+            Role::Actor => ElementKind::ActorMembership,
+            Role::Stakeholder => ElementKind::StakeholderMembership,
+            Role::Objective => ElementKind::ObjectiveMembership,
+            Role::Variant => ElementKind::VariantMembership,
+            Role::Return => ElementKind::ReturnParameterMembership,
+            Role::Result => ElementKind::ResultExpressionMembership,
+            Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
+            Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
+            Role::Frame => ElementKind::FramedConcernMembership,
         };
     }
     let owner_kind = match model.owner(owned) {
@@ -985,13 +986,20 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 "kind" if kind == ElementKind::TransitionFeatureMembership => {
                     transition_role(model, id).map_or(Json::Null, Json::from)
                 }
-                "kind" if kind == ElementKind::StateSubactionMembership => {
-                    model.member_role(id).map_or(Json::Null, Json::from)
-                }
+                // the standard spells a state subaction's kind with the
+                // keyword that declared it
+                "kind" if kind == ElementKind::StateSubactionMembership => [
+                    (Role::Entry, "entry"),
+                    (Role::Do, "do"),
+                    (Role::Exit, "exit"),
+                ]
+                .iter()
+                .find(|(role, _)| Some(*role) == model.member_role(id))
+                .map_or(Json::Null, |(_, word)| Json::from(*word)),
                 "kind" if kind.is_a(ElementKind::RequirementConstraintMembership) => {
                     // an assumption says so; a required constraint and a
                     // framed concern are both requirements
-                    if model.member_role(id) == Some("assume") {
+                    if model.member_role(id) == Some(Role::Assume) {
                         "assumption".into()
                     } else {
                         "requirement".into()
@@ -1843,15 +1851,17 @@ mod tests {
         assert_eq!(to_json(&rebuilt), json);
     }
 
+    /// There is no longer a role this crate does not know: `Role` is an
+    /// enum and the match over it has no catch-all, so one added to the
+    /// model does not fall through to plain ownership -- it stops the
+    /// build until this says which membership the standard names for it.
+    /// What is left to check is the element that has no role at all.
     #[test]
-    fn an_unheard_of_role_is_owned_like_any_member() {
-        // a role this crate does not know keeps plain ownership rather
-        // than inventing a membership for it
+    fn a_member_with_no_role_is_owned_plainly() {
         let mut model = Model::new();
         let package = model.create(ElementKind::Package);
         let part = model.create(ElementKind::PartUsage);
         model.add_owned(package, part);
-        model.set_member_role(part, "mystery");
         assert_eq!(membership_kind(&model, part), ElementKind::OwningMembership);
         // and an element with no owner at all needs no membership either
         let loose = model.create(ElementKind::PartUsage);

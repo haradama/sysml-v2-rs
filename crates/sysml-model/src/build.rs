@@ -8,7 +8,7 @@
 
 use sysml_syntax::{Parse, SyntaxKind, SyntaxNode};
 
-use crate::{ElementId, ElementKind, Model, Value};
+use crate::{ElementId, ElementKind, Model, Role, Value};
 
 /// Result of building one file into a model: the file's root elements and a
 /// map from each created element back to the syntax node it came from.
@@ -120,7 +120,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         }
     }
     if kind == ElementKind::Expression && node.kind() == EXPR_STMT {
-        model.set_member_role(id, "result");
+        model.set_member_role(id, Role::Result);
         if let Some(written) = node.children().next() {
             represent_textually(model, id, written.text().to_string().trim());
         }
@@ -755,7 +755,7 @@ fn member_visibility(node: &SyntaxNode) -> Option<&'static str> {
 
 /// The syntactic role a member was declared in, when it has one: what
 /// makes `subject veh : Vehicle;` a subject rather than a plain feature.
-fn member_role(node: &SyntaxNode) -> Option<&'static str> {
+fn member_role(node: &SyntaxNode) -> Option<Role> {
     use SyntaxKind::*;
     // `entry action a;` puts its keyword before the usage, not inside it
     let mut before = node.prev_sibling_or_token();
@@ -766,9 +766,9 @@ fn member_role(node: &SyntaxNode) -> Option<&'static str> {
             }
             sysml_syntax::SyntaxElement::Token(token) => {
                 let role = match token.kind() {
-                    ENTRY_KW => Some("entry"),
-                    DO_KW => Some("do"),
-                    EXIT_KW => Some("exit"),
+                    ENTRY_KW => Some(Role::Entry),
+                    DO_KW => Some(Role::Do),
+                    EXIT_KW => Some(Role::Exit),
                     _ => None,
                 };
                 if role.is_some() {
@@ -781,18 +781,18 @@ fn member_role(node: &SyntaxNode) -> Option<&'static str> {
     }
     with_wrapper(node).find_map(|scope| {
         tokens(&scope).find_map(|token| match token {
-            SUBJECT_KW => Some("subject"),
-            ACTOR_KW => Some("actor"),
-            STAKEHOLDER_KW => Some("stakeholder"),
-            OBJECTIVE_KW => Some("objective"),
-            VARIANT_KW => Some("variant"),
-            RETURN_KW => Some("return"),
+            SUBJECT_KW => Some(Role::Subject),
+            ACTOR_KW => Some(Role::Actor),
+            STAKEHOLDER_KW => Some(Role::Stakeholder),
+            OBJECTIVE_KW => Some(Role::Objective),
+            VARIANT_KW => Some(Role::Variant),
+            RETURN_KW => Some(Role::Return),
             // a requirement's constraints and concerns; a state's
             // subactions never reach here -- their keyword sits before
             // the usage and is caught above
-            ASSUME_KW => Some("assume"),
-            REQUIRE_KW => Some("require"),
-            FRAME_KW => Some("frame"),
+            ASSUME_KW => Some(Role::Assume),
+            REQUIRE_KW => Some(Role::Require),
+            FRAME_KW => Some(Role::Frame),
             _ => None,
         })
     })
@@ -966,7 +966,7 @@ mod tests {
         ));
         let result = *model.owned(roots[0]).last().unwrap();
         assert_eq!(model.kind(result), ElementKind::Expression);
-        assert_eq!(model.member_role(result), Some("result"));
+        assert_eq!(model.member_role(result), Some(Role::Result));
         let written = model.owned(result)[0];
         assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
         assert_eq!(

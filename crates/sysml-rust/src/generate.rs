@@ -47,7 +47,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
-use sysml_model::{ElementId, ElementKind, Model, Value};
+use sysml_model::{ElementId, ElementKind, Model, Role, Value};
 
 use crate::binding;
 use crate::expr::{self, translate, Translated};
@@ -187,7 +187,7 @@ impl<'a> Generator<'a> {
                         if model
                             .owned(id)
                             .iter()
-                            .any(|&child| model.member_role(child) == Some("variant"))
+                            .any(|&child| model.member_role(child) == Some(Role::Variant))
                         {
                             Shape::Variation
                         } else if model.is_abstract(id) {
@@ -445,7 +445,7 @@ impl<'a> Generator<'a> {
                     .model
                     .owned(def)
                     .iter()
-                    .any(|&child| self.model.member_role(child) == Some("variant")),
+                    .any(|&child| self.model.member_role(child) == Some(Role::Variant)),
                 _ => false,
             };
             if has_values {
@@ -1037,7 +1037,7 @@ impl<'a> Generator<'a> {
         writeln!(out, "/// SysML: variation `{name}`").unwrap();
         writeln!(out, "pub enum {name} {{").unwrap();
         for &child in self.model.owned(def) {
-            if self.model.member_role(child) != Some("variant") {
+            if self.model.member_role(child) != Some(Role::Variant) {
                 continue;
             }
             let Some(variant) = self.model.name(child) else {
@@ -1340,7 +1340,7 @@ impl<'a> Generator<'a> {
         let mut declared = constraint.then(|| "bool".to_string());
         let mut clause = None;
         for &child in model.owned(def) {
-            if model.member_role(child) == Some("return") {
+            if model.member_role(child) == Some(Role::Return) {
                 match self.parameter_type(child) {
                     Some(ty) => declared = Some(ty),
                     None => {
@@ -2099,7 +2099,7 @@ impl<'a> Generator<'a> {
             .owned(def)
             .iter()
             .copied()
-            .find(|&child| model.member_role(child) == Some("return"))
+            .find(|&child| model.member_role(child) == Some(Role::Return))
             .and_then(|child| self.parameter_type(child));
         let Some(returns) = returns else {
             return Err(format!(
@@ -2758,7 +2758,7 @@ fn result_clause(model: &Model, element: ElementId) -> Option<ValueClause> {
     let mut clause = None;
     for &child in model.owned(element) {
         if model.kind(child) == ElementKind::Expression
-            && model.member_role(child) == Some("result")
+            && model.member_role(child) == Some(Role::Result)
         {
             if let Some(text) = expression_text(model, child) {
                 clause = Some(ValueClause::Text(text));
