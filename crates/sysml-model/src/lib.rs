@@ -39,6 +39,23 @@ pub mod generated;
 /// rather than a string so that adding one is a compile error in both
 /// until they say what it means -- the three used to spell the same
 /// dozen words separately.
+/// How visible a member is from outside what owns it.
+///
+/// Written from the keyword that declared it, so that the resolver and
+/// the interchange read one answer rather than each working it out from
+/// the syntax again -- they used to, and looked at different parts of
+/// it: one saw a `private` on the wrapper of a declaration, the other
+/// only on the declaration itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Vis {
+    /// `public`, and what nothing written means for a member
+    Public,
+    /// `protected` -- inherited, but not reachable from outside
+    Protected,
+    /// `private`, and what nothing written means for an import
+    Private,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     /// `subject x;` -- what a requirement, use case or verification is about
@@ -123,8 +140,8 @@ struct ElementData {
 /// The membership-borne facts about one owned element.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct MemberSide {
-    /// `private` or `protected`; `None` is the default, `public`.
-    visibility: Option<&'static str>,
+    /// What the member was declared with; `None` is nothing written.
+    visibility: Option<Vis>,
     /// The syntactic role that picks the membership's metaclass:
     /// `subject`, `actor`, `stakeholder`, `objective`, `variant`, `return`.
     role: Option<Role>,
@@ -158,12 +175,12 @@ impl Model {
     }
 
     /// Record that the membership owning `id` is not public.
-    pub fn set_member_visibility(&mut self, id: ElementId, visibility: &'static str) {
+    pub fn set_member_visibility(&mut self, id: ElementId, visibility: Vis) {
         self.elements[id.index()].membership.visibility = Some(visibility);
     }
 
     /// The visibility of the membership owning `id`, when one was declared.
-    pub fn member_visibility(&self, id: ElementId) -> Option<&'static str> {
+    pub fn member_visibility(&self, id: ElementId) -> Option<Vis> {
         self.elements[id.index()].membership.visibility
     }
 

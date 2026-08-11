@@ -438,6 +438,26 @@ fn a_search_puts_what_was_asked_for_first() {
     assert!(names("nothing here", 10).is_empty());
 }
 
+/// How visible a member is was worked out twice from the same syntax:
+/// once into the model, once again by the resolver -- and they looked at
+/// different parts of it. The model saw a `private` written on the
+/// wrapper of a declaration; the resolver, which only read the
+/// declaration's own first few tokens, did not. Now the resolver reads
+/// what the model recorded, and adds only the rule that is its own: an
+/// import with nothing written keeps to itself.
+#[test]
+fn how_visible_a_member_is_is_decided_once() {
+    let ws = ws(&[(
+        "v.sysml",
+        "package Outer {\n\tpackage Lib {\n\t\tprivate part def Hidden;\n\t\tpart def Open;\n\t}\n\tpackage User {\n\t\tprivate import Lib::*;\n\t\tpart a : Open;\n\t}\n\tpackage Stranger {\n\t\tpart b : Lib::Hidden;\n\t}\n}\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    // what the library keeps to itself is not reachable from outside it
+    assert!(names.contains(&"Lib::Hidden"), "{names:?}");
+    // what it publishes is, through an import
+    assert!(!names.contains(&"Open"), "{names:?}");
+}
+
 #[test]
 fn broken_aliases_and_redefinitions_do_not_block_lookup() {
     let ws = ws(&[(

@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value};
+use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value, Vis};
 use sysml_syntax::{parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange};
 
 /// An unresolved reference, for reporting.
@@ -98,14 +98,6 @@ enum Access {
     Inherited,
     /// Through a qualified path or an import: public members only.
     External,
-}
-
-/// Declared visibility of a member.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Vis {
-    Public,
-    Protected,
-    Private,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1154,23 +1146,10 @@ impl Workspace {
         if let Some(cached) = self.visibilities.get(&elem) {
             return *cached;
         }
-        let vis = (|| {
-            let node = self.source.get(&elem)?;
-            for token in node
-                .children_with_tokens()
-                .filter_map(|e| e.into_token())
-                .take(4)
-            {
-                match token.kind() {
-                    SyntaxKind::PRIVATE_KW => return Some(Vis::Private),
-                    SyntaxKind::PROTECTED_KW => return Some(Vis::Protected),
-                    SyntaxKind::PUBLIC_KW => return Some(Vis::Public),
-                    _ => {}
-                }
-            }
-            None
-        })()
-        .unwrap_or_else(|| {
+        // what the member was declared with, read from the model rather
+        // than worked out from the syntax a second time
+        let vis = self.model.member_visibility(elem).unwrap_or_else(|| {
+            // nothing written: an import keeps to itself, a member does not
             if self.model.kind(elem).is_a(ElementKind::Import) {
                 Vis::Private
             } else {

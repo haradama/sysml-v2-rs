@@ -68,7 +68,7 @@
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value as Json};
-use sysml_model::{ElementId, ElementKind, FeatureType, Model, PrimitiveType, Role, Value};
+use sysml_model::{ElementId, ElementKind, FeatureType, Model, PrimitiveType, Role, Value, Vis};
 use uuid::Uuid;
 
 /// Errors produced when reading interchange JSON.
@@ -979,7 +979,13 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     effective_short_name(model, id).map_or(Json::Null, Json::from)
                 }
                 "owningType" => reference(&owner),
-                "visibility" => model.member_visibility(id).unwrap_or("public").into(),
+                // the standard spells it out even where nothing was written
+                "visibility" => match model.member_visibility(id).unwrap_or(Vis::Public) {
+                    Vis::Public => "public",
+                    Vis::Protected => "protected",
+                    Vis::Private => "private",
+                }
+                .into(),
                 // a transition feature's membership says which it is,
                 // and so do a state's subactions and a requirement's
                 // constraints, in their own vocabularies
@@ -1086,8 +1092,8 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
             .collect::<Result<_, _>>()?;
         for &member in &members {
             match bridge["visibility"].as_str() {
-                Some("private") => model.set_member_visibility(member, "private"),
-                Some("protected") => model.set_member_visibility(member, "protected"),
+                Some("private") => model.set_member_visibility(member, Vis::Private),
+                Some("protected") => model.set_member_visibility(member, Vis::Protected),
                 _ => {}
             }
             if let Some(role) = folded_role(bridge) {
@@ -1496,7 +1502,7 @@ mod tests {
             .ids()
             .find(|&id| rebuilt.name(id) == Some("Hidden"))
             .unwrap();
-        assert_eq!(rebuilt.member_visibility(hidden), Some("private"));
+        assert_eq!(rebuilt.member_visibility(hidden), Some(Vis::Private));
         assert_eq!(to_json(&rebuilt), json);
     }
 

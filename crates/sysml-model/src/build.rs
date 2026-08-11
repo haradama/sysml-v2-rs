@@ -8,7 +8,7 @@
 
 use sysml_syntax::{Parse, SyntaxKind, SyntaxNode};
 
-use crate::{ElementId, ElementKind, Model, Role, Value};
+use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 
 /// Result of building one file into a model: the file's root elements and a
 /// map from each created element back to the syntax node it came from.
@@ -742,12 +742,13 @@ fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> + '_ {
 }
 
 /// The visibility written before a member, when the default was overridden.
-fn member_visibility(node: &SyntaxNode) -> Option<&'static str> {
+fn member_visibility(node: &SyntaxNode) -> Option<Vis> {
     use SyntaxKind::*;
     with_wrapper(node).find_map(|scope| {
         tokens(&scope).find_map(|token| match token {
-            PRIVATE_KW => Some("private"),
-            PROTECTED_KW => Some("protected"),
+            PRIVATE_KW => Some(Vis::Private),
+            PROTECTED_KW => Some(Vis::Protected),
+            PUBLIC_KW => Some(Vis::Public),
             _ => None,
         })
     })
