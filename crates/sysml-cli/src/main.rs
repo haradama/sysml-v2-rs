@@ -648,8 +648,8 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
         let text = read(finding.file, &name);
         let offset = usize::from(finding.range.start()).min(text.len());
         if format == Format::Text {
-            let (line, col) = line_col(&text, offset);
-            eprintln!("{name}:{}:{}: {}", line + 1, col + 1, finding.what);
+            let (line, col) = sysml_syntax::line_col(&text, offset);
+            eprintln!("{name}:{line}:{col}: {}", finding.what);
         }
         broken.push(at(
             &text,
@@ -693,8 +693,8 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
         let offset = usize::from(u.range.start()).min(text.len());
         match format {
             Format::Text => {
-                let (line, col) = line_col(text, offset);
-                eprintln!("{file}:{}:{}: unresolved `{}`", line + 1, col + 1, u.what);
+                let (line, col) = sysml_syntax::line_col(text, offset);
+                eprintln!("{file}:{line}:{col}: unresolved `{}`", u.what);
             }
             Format::Json => unresolved.push(at(
                 text,
@@ -883,11 +883,11 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
 /// A finding with its place in the file: byte offset as the model sees
 /// it, line and column as an editor counts them (from one).
 fn at(text: &str, offset: usize, mut value: serde_json::Value) -> serde_json::Value {
-    let (line, column) = line_col(text, offset);
+    let (line, column) = sysml_syntax::line_col(text, offset);
     let map = value.as_object_mut().expect("built as an object");
     map.insert("offset".into(), offset.into());
-    map.insert("line".into(), (line + 1).into());
-    map.insert("column".into(), (column + 1).into());
+    map.insert("line".into(), line.into());
+    map.insert("column".into(), column.into());
     value
 }
 
@@ -901,25 +901,16 @@ fn report(value: serde_json::Value) {
 
 fn print_diagnostic(path: &Path, text: &str, diagnostic: &Diagnostic) {
     let offset = usize::from(diagnostic.range.start());
-    let (line_idx, col) = line_col(text, offset);
+    let (line, col) = sysml_syntax::line_col(text, offset);
     eprintln!(
-        "{}:{}:{}: error: {}",
+        "{}:{line}:{col}: error: {}",
         path.display(),
-        line_idx + 1,
-        col + 1,
         diagnostic.message
     );
-    if let Some(line) = text.lines().nth(line_idx) {
-        eprintln!("    | {line}");
-        eprintln!("    | {}^", " ".repeat(col));
+    if let Some(written) = text.lines().nth(line - 1) {
+        eprintln!("    | {written}");
+        eprintln!("    | {}^", " ".repeat(col - 1));
     }
-}
-
-fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let prefix = &text[..offset.min(text.len())];
-    let line = prefix.matches('\n').count();
-    let col = prefix.rfind('\n').map_or(offset, |i| offset - i - 1);
-    (line, col)
 }
 
 /// Talk to a model server. Every answer is the server's own JSON, so

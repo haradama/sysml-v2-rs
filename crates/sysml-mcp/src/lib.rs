@@ -272,9 +272,7 @@ fn number(arguments: &Value, key: &str) -> Result<usize, String> {
 /// and the line and column an editor counts, both from one.
 fn at(text: &str, offset: usize, mut value: Value) -> Value {
     let offset = offset.min(text.len());
-    let prefix = &text[..offset];
-    let line = prefix.matches('\n').count() + 1;
-    let column = prefix.rfind('\n').map_or(offset, |at| offset - at - 1) + 1;
+    let (line, column) = sysml_syntax::line_col(text, offset);
     let map = value.as_object_mut().expect("built as an object");
     map.insert("offset".into(), offset.into());
     map.insert("line".into(), line.into());

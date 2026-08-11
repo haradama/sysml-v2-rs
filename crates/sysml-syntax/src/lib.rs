@@ -79,3 +79,35 @@ impl Diagnostic {
         }
     }
 }
+
+/// Where a byte offset falls, counting lines and columns from one and
+/// measuring the column in bytes.
+///
+/// The command line prints this and the MCP server puts it in its
+/// answers; they had a copy each, identical but for whether they counted
+/// from zero. A language server needs a different measure -- the
+/// protocol counts a column in UTF-16 code units -- and keeps its own.
+pub fn line_col(text: &str, offset: usize) -> (usize, usize) {
+    let prefix = &text[..offset.min(text.len())];
+    let line = prefix.matches('\n').count() + 1;
+    let column = prefix
+        .rfind('\n')
+        .map_or(prefix.len(), |at| prefix.len() - at - 1)
+        + 1;
+    (line, column)
+}
+
+#[cfg(test)]
+mod line_col_tests {
+    #[test]
+    fn a_byte_offset_is_a_line_and_a_column_counting_from_one() {
+        let text = "ab\ncd\n";
+        assert_eq!(super::line_col(text, 0), (1, 1));
+        assert_eq!(super::line_col(text, 2), (1, 3));
+        assert_eq!(super::line_col(text, 3), (2, 1));
+        // a column is bytes, so a wide character is more than one
+        assert_eq!(super::line_col("あb", 3), (1, 4));
+        // past the end is the end
+        assert_eq!(super::line_col(text, 99), (3, 1));
+    }
+}
