@@ -9,8 +9,9 @@
         "--manifest-path",
         "${CLAUDE_PROJECT_DIR}/Cargo.toml",
         "-p",
-        "sysml-mcp",
+        "sysml-cli",
         "--",
+        "mcp",
         "--library",
         "${CLAUDE_PROJECT_DIR}/vendor/sysml-v2-release/sysml.library"
       ]

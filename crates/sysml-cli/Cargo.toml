@@ -10,6 +10,10 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "sysml"
 path = "src/main.rs"

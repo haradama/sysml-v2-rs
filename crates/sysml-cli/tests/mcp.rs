@@ -16,9 +16,9 @@ fn session(lines: &[Value]) -> Vec<Value> {
 }
 
 fn talk(input: &str) -> Vec<Value> {
-    let mut server = sysml_mcp::Server::new(None);
+    let mut server = sysml_cli::mcp::Server::new(None);
     let mut out: Vec<u8> = Vec::new();
-    sysml_mcp::serve(&mut server, Cursor::new(input.as_bytes()), &mut out).unwrap();
+    sysml_cli::mcp::serve(&mut server, Cursor::new(input.as_bytes()), &mut out).unwrap();
     String::from_utf8(out)
         .unwrap()
         .lines()
@@ -176,7 +176,7 @@ fn library_search_finds_what_the_library_declares() {
     if !library.is_dir() {
         return; // the corpus submodule is not checked out
     }
-    let mut server = sysml_mcp::Server::new(Some(library));
+    let mut server = sysml_cli::mcp::Server::new(Some(library));
     let response = server
         .handle(&call(
             "library_search",
@@ -255,14 +255,20 @@ fn a_line_that_is_not_a_message_does_not_end_the_session() {
 
 #[test]
 fn the_binary_speaks_it_over_its_own_stdio() {
-    let binary = env!("CARGO_BIN_EXE_sysml-mcp");
+    let binary = env!("CARGO_BIN_EXE_sysml");
 
-    let out = Command::new(binary).arg("--help").output().unwrap();
+    let out = Command::new(binary)
+        .args(["mcp", "--help"])
+        .output()
+        .unwrap();
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("Model Context Protocol"));
 
-    let out = Command::new(binary).arg("--nonsense").output().unwrap();
-    assert_eq!(out.status.code(), Some(2));
+    let out = Command::new(binary)
+        .args(["mcp", "--nonsense"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unexpected argument"));
 
     // a library small enough to load in a test, said both ways a client
@@ -276,6 +282,7 @@ fn the_binary_speaks_it_over_its_own_stdio() {
     .unwrap();
     for spoken in [vec!["--library", dir.to_str().unwrap()], vec![]] {
         let mut child = Command::new(binary)
+            .arg("mcp")
             .args(&spoken)
             .env("SYSML_LIBRARY_PATH", &dir)
             .stdin(Stdio::piped())

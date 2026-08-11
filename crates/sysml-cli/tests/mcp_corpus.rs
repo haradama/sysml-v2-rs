@@ -45,22 +45,23 @@ fn files(root: &Path) -> Vec<PathBuf> {
 #[ignore = "two minutes of tool calls; run with --ignored"]
 fn every_tool_over_the_corpus() {
     let Some(root) = vendor() else { return };
-    let mut server = sysml_mcp::Server::new(Some(&root.join("sysml.library")));
+    let mut server = sysml_cli::mcp::Server::new(Some(&root.join("sysml.library")));
     let mut found: Vec<String> = Vec::new();
     let all = files(&root);
     eprintln!("{} files", all.len());
 
     let mut id = 0;
-    let mut ask = |server: &mut sysml_mcp::Server, name: &str, arguments: Value| -> Option<Value> {
-        id += 1;
-        let request = json!({
-            "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": { "name": name, "arguments": arguments },
-        });
-        catch_unwind(AssertUnwindSafe(|| server.handle(&request)))
-            .ok()
-            .flatten()
-    };
+    let mut ask =
+        |server: &mut sysml_cli::mcp::Server, name: &str, arguments: Value| -> Option<Value> {
+            id += 1;
+            let request = json!({
+                "jsonrpc": "2.0", "id": id, "method": "tools/call",
+                "params": { "name": name, "arguments": arguments },
+            });
+            catch_unwind(AssertUnwindSafe(|| server.handle(&request)))
+                .ok()
+                .flatten()
+        };
 
     for path in &all {
         let Ok(text) = std::fs::read_to_string(path) else {

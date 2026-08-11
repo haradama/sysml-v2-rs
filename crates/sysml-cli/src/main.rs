@@ -144,6 +144,15 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Speak the Model Context Protocol over stdin and stdout, so an
+    /// agent can ask whether a model parses and resolves, what names are
+    /// legal at a point, and what the standard library declares
+    Mcp {
+        /// The standard library, so that references into it resolve;
+        /// `SYSML_LIBRARY_PATH` says the same thing
+        #[arg(long)]
+        library: Option<PathBuf>,
+    },
     /// Talk to a SysML v2 API & Services model server
     Api {
         #[command(subcommand)]
@@ -262,6 +271,22 @@ fn main() -> ExitCode {
             library,
             output,
         } => rustgen(&paths, &library, output.as_deref()),
+        Command::Mcp { library } => {
+            // an agent's launcher often has nowhere to put a flag, so the
+            // environment says it too -- the language server reads the
+            // same variable
+            let library =
+                library.or_else(|| std::env::var_os("SYSML_LIBRARY_PATH").map(Into::into));
+            // there is nowhere to report a failure to write: the only
+            // way this ends badly is the client going away mid-answer,
+            // and the exit code is what its launcher reads
+            sysml_cli::mcp::serve(
+                &mut sysml_cli::mcp::Server::new(library.as_deref()),
+                std::io::BufReader::new(std::io::stdin()),
+                std::io::stdout(),
+            )
+            .map_or(ExitCode::FAILURE, |()| ExitCode::SUCCESS)
+        }
         Command::Api { what, server } => api_command(&server, &what, format),
         Command::Corpus {
             dir,
