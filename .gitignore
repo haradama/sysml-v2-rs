@@ -69,6 +69,10 @@ Cargo.lock
 /crates/sysml-rust/tests/fixtures/*/target/
 /crates/sysml-rust/tests/fixtures/*/Cargo.lock
 
+# the example crate builds standalone
+/examples/arduino-uno/target/
+/examples/arduino-uno/Cargo.lock
+
 # the project's own Claude Code configuration is shared with the team,
 # even where a global ignore excludes `.claude` (a directory has to be
 # un-ignored before anything in it can be)

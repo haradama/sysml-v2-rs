@@ -93,8 +93,14 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenErr
          // An expression is spelled the way the model spells it, and a\n\
          // signature carries the parameters the model declares, so the lints\n\
          // that ask for a different spelling have nothing to say about a file\n\
-         // nobody edits.\n\
-         #![allow(clippy::manual_range_contains, clippy::too_many_arguments)]"
+         // nobody edits. What the model declares is written whether or not\n\
+         // the caller reaches for it, which is the other thing a lint would\n\
+         // otherwise ask about.\n\
+         #![allow(\n\
+         \x20   dead_code,\n\
+         \x20   clippy::manual_range_contains,\n\
+         \x20   clippy::too_many_arguments\n\
+         )]"
     )
     .expect("writing to a String cannot fail");
 

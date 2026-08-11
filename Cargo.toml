@@ -15,6 +15,7 @@ members = [
 exclude = [
     "tools/render",
     "crates/sysml-rust/tests/fixtures/inventory-store",
+    "examples/arduino-uno",
 ]
 
 [workspace.package]
