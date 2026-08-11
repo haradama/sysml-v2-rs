@@ -190,18 +190,27 @@ fn import_rust_writes_a_package_from_rustdoc_json() {
 }
 
 #[test]
-fn rustgen_generates_from_the_demo_model() {
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let model = repo.join("examples/order-system/model");
+fn rustgen_generates_and_says_what_stopped_it() {
     let dir = temp_dir("rustgen");
     let out_path = dir.join("generated.rs");
+    let scalars_lib = write(
+        &dir,
+        "scalars0.kerml",
+        "package ScalarValues {\n\tabstract datatype Real;\n}\n",
+    );
+    let model = write(
+        &dir,
+        "planner.sysml",
+        "package Planner {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def OrderPlanner {\n\t\tattribute threshold : Real;\n\t}\n\
+         }\n",
+    );
     let out = sysml(&[
         "rustgen",
-        model.join("order_system.sysml").to_str().unwrap(),
+        model.to_str().unwrap(),
         "--library",
-        model.join("InventoryStoreApi.sysml").to_str().unwrap(),
-        "--library",
-        model.join("scalars.kerml").to_str().unwrap(),
+        scalars_lib.to_str().unwrap(),
         "-o",
         out_path.to_str().unwrap(),
     ]);
@@ -210,7 +219,7 @@ fn rustgen_generates_from_the_demo_model() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("3 struct(s) and 6 method(s)"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("1 struct(s)"));
     assert!(std::fs::read_to_string(&out_path)
         .unwrap()
         .contains("pub struct OrderPlanner"));
@@ -231,7 +240,7 @@ fn rustgen_generates_from_the_demo_model() {
     assert!(!out.status.success());
     let out = sysml(&[
         "rustgen",
-        model.join("order_system.sysml").to_str().unwrap(),
+        model.to_str().unwrap(),
         "--library",
         dir.join("absent.sysml").to_str().unwrap(),
     ]);

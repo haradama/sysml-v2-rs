@@ -37,8 +37,6 @@ the generator, then regenerate — never the file:
 | File | Written by |
 | --- | --- |
 | `crates/sysml-model/src/generated.rs` | `cargo run -p sysml-model --features codegen --bin sysml-codegen` (from `vendor/metamodel`) |
-| `examples/order-system/src/generated.rs` | `make demo` |
-| `examples/order-system/model/InventoryStoreApi.sysml` | `make demo` (`sysml import-rust`) |
 
 Each carries a `DO NOT EDIT` header, and a test regenerates it and holds
 it equal to what is checked in, so an edit fails the build rather than
@@ -66,9 +64,6 @@ is held to this too, which is why the metamodel generator emits tests alongside
 the accessors it writes. It lives behind the `codegen` feature, so the
 gates above pass `--all-features` to reach it.
 
-`make demo` runs the whole Rust → SysML → Rust loop and must keep
-working.
-
 ## Prose
 
 Comments and documentation explain why, in plain sentences, and are
@@ -78,11 +73,9 @@ decision, not the mechanics of the code under it.
 
 ## Things that are true and easy to get wrong
 
-- `sysml fmt` uses four spaces. `examples/order-system/model/` is written
-  with tabs and is not fmt-clean; leave it as it is.
+- `sysml fmt` uses four spaces.
 - The standard library lives in a submodule
   (`git submodule update --init --depth 1`). Corpus-dependent tests
   detect its absence and skip rather than fail.
-- `tools/render` and `examples/order-system` are excluded from the
-  workspace, so `cargo test` does not build them. `make demo` covers the
-  latter; nothing covers the former.
+- `tools/render` is excluded from the workspace, so `cargo test` does not
+  build it, and nothing else covers it.

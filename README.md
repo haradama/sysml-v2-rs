@@ -54,12 +54,12 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 ## Usage
 
 ```console
-$ cargo run -p sysml-cli -- parse examples/vehicle.sysml
-examples/vehicle.sysml: ok (0 error(s))
+$ cargo run -p sysml-cli -- parse vehicle.sysml
+vehicle.sysml: ok (0 error(s))
 
-$ cargo run -p sysml-cli -- parse --tree examples/vehicle.sysml   # dump the syntax tree
+$ cargo run -p sysml-cli -- parse --tree vehicle.sysml   # dump the syntax tree
 
-$ cargo run -p sysml-cli -- diagram examples/vehicle.sysml -o vehicle.svg
+$ cargo run -p sysml-cli -- diagram vehicle.sysml -o vehicle.svg
 wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
 ```
 
@@ -126,7 +126,7 @@ itself: the membership hierarchy, as an indented tree with one row per named
 element.
 
 ```console
-$ cargo run -p sysml-cli -- diagram examples/vehicle.sysml --browser -o tree.svg
+$ cargo run -p sysml-cli -- diagram vehicle.sysml --browser -o tree.svg
 wrote 14 row(s) to tree.svg
 ```
 
@@ -136,7 +136,7 @@ model gets its library types labelled while staying a diagram of its own
 definitions:
 
 ```console
-$ cargo run -p sysml-cli -- diagram examples/vehicle.sysml \
+$ cargo run -p sysml-cli -- diagram vehicle.sysml \
     --library vendor/sysml-v2-release/sysml.library -o vehicle.svg
 wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
 ```
@@ -148,7 +148,7 @@ command) and trades the built-in layout's reproducible bytes for `dot`'s
 crossing minimization:
 
 ```console
-$ cargo run -p sysml-cli -- diagram examples/vehicle.sysml --graphviz -o vehicle.svg
+$ cargo run -p sysml-cli -- diagram vehicle.sysml --graphviz -o vehicle.svg
 ```
 
 Without it the compartment reads `attribute mass`; with it, `attribute mass
@@ -193,52 +193,6 @@ monomorphic SysML shape -- generics, tuple structs, data-carrying enum
 variants -- is listed at the end of the package rather than dropped
 silently. Regenerating in CI and diffing detects API drift.
 
-### The round trip, end to end
-
-[`examples/order-system`](examples/order-system) closes the loop:
-
-```console
-$ make demo
-...
-SKU-042: 7 in stock (threshold 10) -> replenish
-```
-
-1. `sysml import-rust` turns the in-house crate's rustdoc JSON into
-   `model/InventoryStoreApi.sysml`
-2. `model/order_system.sysml` -- the hand-written system model -- imports
-   it, types a port with the API's trait and `perform`s its actions
-3. `sysml check` proves every reference resolves (an API change that
-   breaks the model fails right here)
-4. `sysml rustgen` writes `src/generated.rs`: the part as a struct generic
-   over the real `inventory_store::InventoryStore` trait, each performed
-   action a method with the API's own signature (`async`, `Result` and
-   receivers included), the model's `calc def` as a plain function and
-   the state machine's guard translated into its hook's default body
-5. `cargo run` compiles the generated code against the real crate and runs
-   it with a stub implementation
-
-A test regenerates every stage and holds it equal to what is checked in,
-so drift anywhere in the chain fails the build.
-
-### A behaviour the model wires up
-
-[`examples/riscv`](examples/riscv) goes the other way: nothing existing
-to import, a model written first. Its `action def Step` says what one
-turn of a RISC-V instruction cycle is made of and how the pieces are
-wired -- fetch, then decode, then execute, with the word and the
-instruction handed along -- and that wiring is the generated body, with
-the three parts as supertrait bounds. The hand-written half implements
-only the parts.
-
-```console
-$ cd examples/riscv && cargo run
-x1=7 x2=5 x3=12 mem[16]=12
-```
-
-Where a dataflow is short of something -- an input nothing feeds, a
-result nothing produces -- no body is written and the generated
-documentation names the gap, rather than guessing at it.
-
 ### VSCode
 
 [`editors/vscode`](editors/vscode) packages the language server for Visual
@@ -273,7 +227,7 @@ rasterizes one so it can be looked at -- in a review, or by a tool that reads
 images but not SVG:
 
 ```sh
-cargo run -p sysml-cli -- diagram examples/vehicle.sysml -o vehicle.svg
+cargo run -p sysml-cli -- diagram vehicle.sysml -o vehicle.svg
 cargo run --manifest-path tools/render/Cargo.toml -- vehicle.svg vehicle.png 2
 ```
 

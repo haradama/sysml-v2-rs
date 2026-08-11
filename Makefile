@@ -13,29 +13,13 @@ LIBRARY := vendor/sysml-v2-release/sysml.library
 SERVER := target/release/sysml-lsp
 VSIX := $(EXT_DIR)/sysml-v2.vsix
 
-DEMO := examples/order-system
-FIXTURE_JSON := crates/sysml-rust/tests/fixtures/inventory_store.rustdoc.json
-
-.PHONY: help lsp vscode vscode-package vscode-clean demo
+.PHONY: help lsp vscode vscode-package vscode-clean
 
 help:
-	@echo "make demo            Rust API -> SysML -> model -> Rust -> run, end to end"
 	@echo "make vscode          build, package and install the VSCode extension"
 	@echo "make vscode-package  build the .vsix without installing it"
 	@echo "make lsp             build the language server only"
 	@echo "make vscode-clean    remove the extension's build artifacts"
-
-# the whole loop: import the existing API, resolve the model against it,
-# generate the calling code, compile and run it against a stub
-demo:
-	$(CARGO) build --release -p sysml-cli
-	target/release/sysml import-rust $(FIXTURE_JSON) -o $(DEMO)/model/InventoryStoreApi.sysml
-	target/release/sysml check $(DEMO)/model
-	target/release/sysml rustgen $(DEMO)/model/order_system.sysml \
-		--library $(DEMO)/model/InventoryStoreApi.sysml \
-		--library $(DEMO)/model/scalars.kerml \
-		-o $(DEMO)/src/generated.rs
-	cd $(DEMO) && $(CARGO) run --quiet
 
 lsp:
 	$(CARGO) build --release -p sysml-lsp

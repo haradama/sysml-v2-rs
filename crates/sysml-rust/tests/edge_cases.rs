@@ -30,6 +30,8 @@ const API: &str = "package Api {\n\
     \taction def Purge { @rust { :>> path = \"fake::Store::purge\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out error : String; }\n\
     \taction def Shuffle { @rust { :>> path = \"fake::Store::shuffle\"; :>> takesSelf = \"&self\"; } inout buffer : String; }\n\
     \taction def Vanish { @rust { :>> path = \"fake::Store::vanish\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out result : String; }\n\
+    \taction def Count { @rust { :>> path = \"fake::Store::count\"; :>> takesSelf = \"&self\"; :>> isFallible = false; } out result : Real; }\n\
+    \taction def Watch { @rust { :>> path = \"fake::Store::watch\"; :>> takesSelf = \"&mut self\"; :>> isAsync = true; :>> isFallible = true; } in sku : String; out result : Payload; out error : String; }\n\
     \titem def Payload { @rust { :>> path = \"fake::Payload\"; } }\n\
     \tport def Plain;\n}\n";
 
@@ -1405,4 +1407,53 @@ fn a_one_ended_succession_and_an_array_of_a_bound_type() {
     // how to start one
     assert!(rust.contains("pub batch: [fake::Payload; 3],"), "{rust}");
     assert!(!rust.contains("impl Default for Crate"), "{rust}");
+}
+
+/// The shapes an API binding can ask for that a model written by hand
+/// rarely does: a receiver that mutates, a call to await, a `Result` of
+/// both halves, and a parameter typed by the API's own item. Their
+/// documentation comes along, and a calculation whose result is a
+/// comparison is a `bool`.
+#[test]
+fn a_binding_says_how_the_call_is_made_and_the_signature_follows() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \tdoc /* what the package is for */\n\
+         \tpart def Cellar {\n\
+         \t\tdoc /* where the store is kept */\n\
+         \t\tport main_store : Store;\n\
+         \t\tperform action watch : Watch;\n\
+         \t\tperform action count : Count;\n\
+         \t\tcalc def Cold {\n\
+         \t\t\tdoc /* whether it is cold enough */\n\
+         \t\t\tin t : Real;\n\t\t\tt < 4.0\n\t\t}\n\
+         \t}\n\
+         \tstate def Cooling {\n\
+         \t\tdoc /* how the cellar behaves */\n\
+         \t\tstate warm;\n\t\tstate cold;\n\
+         \t\ttransition chill first warm then cold;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // the receiver, the await and both halves of the Result are the
+    // binding's, not a guess
+    assert!(
+        rust.contains(
+            "pub async fn watch(&mut self, sku: String) \
+             -> Result<fake::Payload, String> {"
+        ),
+        "{rust}"
+    );
+    assert!(rust.contains(".watch(sku).await"), "{rust}");
+    // one that cannot fail returns its result plainly
+    assert!(rust.contains("pub fn count(&self) -> f64 {"), "{rust}");
+    // a comparison is a `bool`
+    assert!(rust.contains("pub fn cold(t: f64) -> bool {"), "{rust}");
+    // and what the model documents, the Rust documents
+    assert!(rust.contains("/// where the store is kept"), "{rust}");
+    assert!(rust.contains("/// whether it is cold enough"), "{rust}");
+    assert!(rust.contains("/// how the cellar behaves"), "{rust}");
 }
