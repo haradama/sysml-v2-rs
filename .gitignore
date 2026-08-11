@@ -66,12 +66,8 @@ Cargo.lock
 /editors/vscode/library/
 
 # the importer fixture is a standalone crate; only its source is tracked
-/crates/sysml-import-api/tests/fixtures/*/target/
-/crates/sysml-import-api/tests/fixtures/*/Cargo.lock
-
-# the demo crate builds standalone
-/examples/order-system/target/
-/examples/order-system/Cargo.lock
+/crates/sysml-rust/tests/fixtures/*/target/
+/crates/sysml-rust/tests/fixtures/*/Cargo.lock
 
 # the project's own Claude Code configuration is shared with the team,
 # even where a global ignore excludes `.claude` (a directory has to be
