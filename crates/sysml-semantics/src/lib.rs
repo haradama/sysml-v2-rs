@@ -485,6 +485,43 @@ impl Workspace {
             .filter_map(|id| self.model.name(id).map(|n| (id, n)))
     }
 
+    /// The named elements `query` finds, best first: what was asked for
+    /// exactly, then what starts with it, then what merely contains it,
+    /// and within each the shorter name before the longer. Searching for
+    /// `Natural` and being handed two SI units before
+    /// `ScalarValues::Natural` is the difference between a useful answer
+    /// and one that has to be read through.
+    ///
+    /// An empty query finds everything, which is what a symbol picker
+    /// opens with. Asked twice, it answers the same: names that tie are
+    /// left in the order the model holds them.
+    ///
+    /// Both the language server's symbol search and the MCP server's
+    /// library search are this; they used to sort differently, and only
+    /// one of them put an exact match first.
+    pub fn search_names(&self, query: &str, limit: usize) -> Vec<ElementId> {
+        let needle = query.to_lowercase();
+        let mut found: Vec<(u8, usize, ElementId)> = self
+            .named_elements()
+            .filter_map(|(id, name)| {
+                let lowered = name.to_lowercase();
+                let rank = if lowered == needle {
+                    0
+                } else if lowered.starts_with(&needle) {
+                    1
+                } else if lowered.contains(&needle) {
+                    2
+                } else {
+                    return None;
+                };
+                Some((rank, name.len(), id))
+            })
+            .collect();
+        found.sort_by_key(|&(rank, length, _)| (rank, length));
+        found.truncate(limit);
+        found.into_iter().map(|(_, _, id)| id).collect()
+    }
+
     pub fn visible_names(
         &mut self,
         file: usize,

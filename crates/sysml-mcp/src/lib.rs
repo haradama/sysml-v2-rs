@@ -20,7 +20,7 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 use serde_json::{json, Value};
-use sysml_model::ElementId;
+
 use sysml_semantics::Workspace;
 
 /// What this server answers to. Newer clients may ask for a later
@@ -201,38 +201,14 @@ impl Server {
         let query = arguments
             .get("query")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_lowercase();
+            .unwrap_or_default();
         let limit = arguments
             .get("limit")
             .and_then(Value::as_u64)
             .unwrap_or(20)
             .min(200) as usize;
-        // Exactly what was asked for first, then what starts with it,
-        // then the rest. Searching for `Natural` and being handed two SI
-        // units before `ScalarValues::Natural` is the difference between
-        // a useful answer and one that has to be read through.
-        let mut matched: Vec<(u8, ElementId)> = Vec::new();
-        for (elem, name) in self.base.named_elements() {
-            let lowered = name.to_lowercase();
-            let rank = if lowered == query {
-                0
-            } else if lowered.starts_with(&query) {
-                1
-            } else if lowered.contains(&query) {
-                2
-            } else {
-                continue;
-            };
-            matched.push((rank, elem));
-        }
-        matched.sort_by_key(|&(rank, elem)| (rank, elem.index()));
-
         let mut found: Vec<Value> = Vec::new();
-        for (_, elem) in matched {
-            if found.len() == limit {
-                break;
-            }
+        for elem in self.base.search_names(query, limit) {
             let mut entry = json!({
                 "name": self.base.qualified_name_of(elem),
                 "kind": self.base.model().kind(elem).name(),

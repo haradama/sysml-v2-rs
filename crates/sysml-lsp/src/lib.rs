@@ -633,18 +633,19 @@ impl Server {
     }
 
     fn workspace_symbols(&mut self, query: &str) -> Option<WorkspaceSymbolResponse> {
-        let needle = query.to_lowercase();
+        // the same search the MCP server's `library_search` runs, so an
+        // exact match comes first here too
         let matches: Vec<(sysml_model::ElementId, String, sysml_model::ElementKind)> = {
             let analysis = self.analysis();
-            let mut found: Vec<_> = analysis
+            analysis
                 .ws
-                .named_elements()
-                .filter(|(_, name)| needle.is_empty() || name.to_lowercase().contains(&needle))
-                .map(|(id, name)| (id, name.to_string(), analysis.ws.model().kind(id)))
-                .collect();
-            found.sort_by(|a, b| a.1.len().cmp(&b.1.len()).then(a.1.cmp(&b.1)));
-            found.truncate(128);
-            found
+                .search_names(query, 128)
+                .into_iter()
+                .map(|id| {
+                    let name = analysis.ws.model().name(id).unwrap_or_default().to_string();
+                    (id, name, analysis.ws.model().kind(id))
+                })
+                .collect()
         };
         let mut symbols = Vec::new();
         for (id, name, kind) in matches {

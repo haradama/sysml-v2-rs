@@ -408,6 +408,36 @@ fn findings_keep_the_syntax_apart_from_the_names() {
     assert_eq!(clean.findings(&[]), Default::default());
 }
 
+/// Finding a name is worked out once, so the language server's symbol
+/// search and the MCP server's library search answer the same. They used
+/// to sort differently, and only one of them put an exact match first --
+/// asking for `Natural` and being handed two SI units before
+/// `ScalarValues::Natural` is the difference between a useful answer and
+/// one that has to be read through.
+#[test]
+fn a_search_puts_what_was_asked_for_first() {
+    let ws = ws(&[(
+        "s.sysml",
+        "package P {\n\tpart def NaturalCapacity;\n\tpart def UnnaturalThing;\n\tpart def Natural;\n\tpart def NaturalX;\n}\n",
+    )]);
+    let names = |query: &str, limit: usize| -> Vec<String> {
+        ws.search_names(query, limit)
+            .into_iter()
+            .map(|id| ws.model().name(id).unwrap_or_default().to_string())
+            .collect()
+    };
+    // exact, then what starts with it (shorter first), then the rest
+    assert_eq!(
+        names("natural", 10),
+        ["Natural", "NaturalX", "NaturalCapacity", "UnnaturalThing"]
+    );
+    // the limit takes the best, not the first the model happens to hold
+    assert_eq!(names("natural", 2), ["Natural", "NaturalX"]);
+    // an empty query is everything, which is what a symbol picker opens with
+    assert_eq!(names("", 10).len(), 5);
+    assert!(names("nothing here", 10).is_empty());
+}
+
 #[test]
 fn broken_aliases_and_redefinitions_do_not_block_lookup() {
     let ws = ws(&[(
