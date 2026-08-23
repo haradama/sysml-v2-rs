@@ -128,7 +128,7 @@ pub fn element_uuid(model: &Model, id: ElementId) -> Uuid {
 /// a role or a visibility the owned element keeps -- so they fold into
 /// edges on import and are synthesized back on export. `FeatureValue` and
 /// friends stay real elements: they carry state of their own.
-const FOLDED: [ElementKind; 15] = [
+const FOLDED: [ElementKind; 16] = [
     ElementKind::OwningMembership,
     ElementKind::FeatureMembership,
     ElementKind::EndFeatureMembership,
@@ -143,6 +143,7 @@ const FOLDED: [ElementKind; 15] = [
     ElementKind::TransitionFeatureMembership,
     ElementKind::StateSubactionMembership,
     ElementKind::RequirementConstraintMembership,
+    ElementKind::RequirementVerificationMembership,
     ElementKind::FramedConcernMembership,
 ];
 
@@ -216,6 +217,7 @@ fn folded_role(bridge: &Json) -> Option<Role> {
             _ => None,
         },
         Some("FramedConcernMembership") => Some(Role::Frame),
+        Some("RequirementVerificationMembership") => Some(Role::Verify),
         Some("RequirementConstraintMembership") => match bridge["kind"].as_str() {
             Some("assumption") => Some(Role::Assume),
             _ => Some(Role::Require),
@@ -382,6 +384,7 @@ fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
             Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
             Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
             Role::Frame => ElementKind::FramedConcernMembership,
+            Role::Verify => ElementKind::RequirementVerificationMembership,
         };
     }
     let owner_kind = match model.owner(owned) {

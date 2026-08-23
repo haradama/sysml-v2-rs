@@ -468,9 +468,11 @@ impl<'a> Generator<'a> {
                 if self.shapes[&def] != Shape::Struct || self.defaultable.contains(&def) {
                     continue;
                 }
-                if self.generic(def) {
-                    continue;
-                }
+                // a port bound to someone else's trait becomes a
+                // generic parameter, and the `Default` impl asks that
+                // parameter for a `Default` of its own -- so it is no
+                // reason for the definition to have none
+                //
                 // an unbound port is a field of the struct like any
                 // other, so `Default` has to be able to start it too
                 let ports_fine = self
@@ -903,10 +905,41 @@ impl<'a> Generator<'a> {
         // fields its `Default` never fills
         let started = !fields.is_empty() || !plain_ports.is_empty() || !states.is_empty();
         let spelled_out = !derived_default || !self.derivable.contains(&def);
-        if plan.params.is_empty() && self.defaultable.contains(&def) && started && spelled_out {
-            writeln!(out, "\nimpl Default for {def_name} {{").unwrap();
+        if self.defaultable.contains(&def) && started && spelled_out {
+            // A generic parameter stands for a port bound to someone
+            // else's trait, and nothing says that trait's implementors
+            // know where to start. The impl asks for it rather than
+            // assuming it, so that what the model declared a field
+            // starts as reaches Rust even where a port does not.
+            let bounded = plan
+                .params
+                .iter()
+                .map(|(parameter, bound)| format!("{parameter}: {bound} + Default"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let named = plan
+                .params
+                .iter()
+                .map(|(parameter, _)| parameter.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(
+                out,
+                "\nimpl{} Default for {def_name}{} {{",
+                angle(&bounded),
+                angle(&named)
+            )
+            .unwrap();
             writeln!(out, "    fn default() -> Self {{").unwrap();
             writeln!(out, "        Self {{").unwrap();
+            for port in &ports {
+                writeln!(
+                    out,
+                    "            {}: Default::default(),",
+                    ident(&port.name)
+                )
+                .unwrap();
+            }
             for field in plain_ports.iter().chain(&fields) {
                 writeln!(
                     out,
@@ -2318,20 +2351,30 @@ impl<'a> Generator<'a> {
         })
     }
 
-    /// The model's requirements, as ignored test stubs: each names what
-    /// the model says satisfies it, and waits for a real verification.
+    /// The model's requirements, as tests.
+    ///
+    /// Each names what the model says satisfies it. A requirement a
+    /// verification case answers for becomes a test that runs that
+    /// case's Rust; one with no verification becomes an ignored stub
+    /// that says so, which is a list of what has been promised and not
+    /// yet kept.
     fn requirements(&self, roots: &[ElementId], out: &mut String) {
         let model = self.model;
         let mut stubs = Vec::new();
         let mut named = HashSet::new();
         for &root in roots {
             for id in model.descendants(root) {
-                if !matches!(
-                    model.kind(id),
-                    ElementKind::RequirementDefinition | ElementKind::RequirementUsage
-                ) {
-                    continue;
-                }
+                let keyword = match model.kind(id) {
+                    ElementKind::RequirementDefinition => "requirement def",
+                    // A requirement can be stated as a usage and never
+                    // defined -- `requirement transportRequirements;` --
+                    // and then it is its own. One typed by a definition
+                    // only restates it, under another name and for
+                    // another subject, so verifying the definition is
+                    // what verifies it.
+                    ElementKind::RequirementUsage if model.type_of(id).is_none() => "requirement",
+                    _ => continue,
+                };
                 let Some(name) = model.name(id) else {
                     continue;
                 };
@@ -2352,7 +2395,16 @@ impl<'a> Generator<'a> {
                         model.name(feature).map(str::to_string)
                     })
                     .collect();
-                stubs.push((name.to_string(), documentation(model, id), satisfiers));
+                // and what the model says verifies it: a verification
+                // case naming the Rust that runs it is a test that runs
+                stubs.push((
+                    keyword,
+                    name.to_string(),
+                    documentation(model, id),
+                    satisfiers,
+                    self.verifications(id),
+                    declared_values(model, id),
+                ));
             }
         }
         if stubs.is_empty() {
@@ -2360,28 +2412,61 @@ impl<'a> Generator<'a> {
         }
         writeln!(
             out,
-            "\n/// The model's requirements: one ignored test per requirement,\n\
-             /// waiting for its verification to be written.\n\
+            "\n/// The model's requirements: one test per requirement, running\n\
+             /// the verification the model names for it, or ignored and\n\
+             /// saying so where it names none.\n\
              #[cfg(test)]\n\
              mod requirements {{"
         )
         .unwrap();
-        for (at, (name, doc, satisfiers)) in stubs.iter().enumerate() {
+        for (at, (keyword, name, doc, satisfiers, verifications, values)) in
+            stubs.iter().enumerate()
+        {
             if at > 0 {
                 writeln!(out).unwrap();
             }
-            writeln!(out, "    /// SysML: `requirement def {name}`").unwrap();
+            writeln!(out, "    /// SysML: `{keyword} {name}`").unwrap();
             if let Some(doc) = doc {
                 doc_comment(doc, "    ", out);
             }
             for satisfier in satisfiers {
                 writeln!(out, "    /// Satisfied by `{satisfier}`.").unwrap();
             }
+            for (case, _) in verifications {
+                writeln!(out, "    /// Verified by `{case}`.").unwrap();
+            }
             writeln!(out, "    #[test]").unwrap();
-            writeln!(out, "    #[ignore = \"verification not written yet\"]").unwrap();
-            writeln!(out, "    fn {}() {{}}", ident(name)).unwrap();
+            match verifications.iter().find_map(|(_, path)| path.as_ref()) {
+                Some(path) => {
+                    writeln!(out, "    fn {}() {{", ident(name)).unwrap();
+                    writeln!(out, "        {path}({});", values.join(", ")).unwrap();
+                    writeln!(out, "    }}").unwrap();
+                }
+                None => {
+                    writeln!(out, "    #[ignore = \"verification not written yet\"]").unwrap();
+                    writeln!(out, "    fn {}() {{}}", ident(name)).unwrap();
+                }
+            }
         }
         writeln!(out, "}}").unwrap();
+    }
+
+    /// The verification cases the model says answer for a requirement,
+    /// each with the Rust its `@rust` binding names, where it names one.
+    fn verifications(&self, requirement: ElementId) -> Vec<(String, Option<String>)> {
+        let model = self.model;
+        model
+            .ids()
+            .filter(|&case| match model.get(case, "verifiedRequirement") {
+                Some(Value::RefList(verified)) => verified.contains(&requirement),
+                _ => false,
+            })
+            .filter_map(|case| {
+                let name = model.name(case)?.to_string();
+                let path = binding(model, case).and_then(|bound| bound.get(binding::PATH).cloned());
+                Some((name, path))
+            })
+            .collect()
     }
 
     fn port_of(&self, usage: ElementId) -> Option<Port> {
@@ -2778,13 +2863,54 @@ enum BoundKind {
 
 /// The `= value` a usage declared, as far as Rust can start from it: a
 /// literal as itself, a closed simple expression (`2.0 * 3.0`) as
-/// written -- an expression over other features has no place in
+/// written, a name as whatever the feature it refers to starts from --
+/// any other expression over other features has no place in
 /// `Default::default()`.
 fn default_of(model: &Model, usage: ElementId) -> Option<String> {
     match value_clause(model, usage)? {
         ValueClause::Literal(rust) => Some(rust),
-        ValueClause::Text(text) => Some(translate(&text, &|_| None, &|_| None)?.rust),
+        ValueClause::Text(text) => match translate(&text, &|_| None, &|_| None) {
+            Some(translated) => Some(translated.rust),
+            // A value that is only a name refers to a feature, and name
+            // resolution wrote down which one, so the value to start
+            // from is that feature's own. One step: what the feature it
+            // names starts from has to be a value in itself, or there
+            // is nothing here to write.
+            None => match value_clause(model, referent_of(model, usage)?)? {
+                ValueClause::Literal(rust) => Some(rust),
+                ValueClause::Text(_) => None,
+            },
+        },
     }
+}
+
+/// The numbers a requirement states about itself, in the order it
+/// states them -- the bounds of `attribute lowerBound : Millis = 100;`
+/// and its like.
+///
+/// A verification is handed these rather than repeating them, so that
+/// the requirement stays the only place they are written. Changing one
+/// in the model changes the call, and a verification that no longer
+/// fits it stops compiling, which is the point.
+fn declared_values(model: &Model, requirement: ElementId) -> Vec<String> {
+    model
+        .owned(requirement)
+        .iter()
+        .filter(|&&child| model.kind(child) == ElementKind::AttributeUsage)
+        .filter_map(|&child| default_of(model, child))
+        .collect()
+}
+
+/// The feature a usage's value refers to, where the whole value is a
+/// name -- `attribute pin : PinNumber = ledPinNumber;`.
+fn referent_of(model: &Model, usage: ElementId) -> Option<ElementId> {
+    let membership = model
+        .owned(usage)
+        .iter()
+        .copied()
+        .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
+    let expression = model.get(membership, "value")?.as_id()?;
+    model.get(expression, "referent").and_then(Value::as_id)
 }
 
 /// The trailing result expression of a calculation body, where one was

@@ -12,11 +12,13 @@ and a CLI. Both are validated against the official
 corpus — all 403 `.sysml`/`.kerml` files: the complete standard libraries
 (`sysml.library`) and every official example, training and validation
 model. **All 403 files parse cleanly and every reference in any of them
-resolves**: the standard library on its own (12757/12757), the library
-together with all official SysML examples (17700/17700), and the KerML
-examples alongside it (13794/13794), counting the operands of `connect`,
-`bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`
-alongside every typing and specialization.
+resolves**: the standard library on its own (16173/16173), the library
+together with all official SysML examples (22611/22611), and the KerML
+examples alongside it (17323/17323), counting the operands of `connect`,
+`bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`, and
+the names written inside expressions -- a constraint body, the result of
+a `calc`, the value after `=` -- alongside every typing and
+specialization.
 
 Eleven of those used to resolve to themselves. A feature that declares
 no name of its own answers to the name of what it redefines -- which is
@@ -44,7 +46,7 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | --- | --- |
 | [`sysml-syntax`](crates/sysml-syntax) | Lexer (logos) + recursive-descent parser + lossless CST (rowan) + typed AST |
 | [`sysml-model`](crates/sysml-model) | Element model: 175 metaclasses generated from the official Ecore metamodel, arena storage, AST→model builder; the generator that writes it from [`vendor/metamodel`](vendor/metamodel) is in the same crate behind the `codegen` feature |
-| [`sysml-semantics`](crates/sysml-semantics) | Name resolution (imports, aliases, inheritance, implicit library specializations, connector ends), relationship reification and implied-relationship materialization — the whole standard library resolves |
+| [`sysml-semantics`](crates/sysml-semantics) | Name resolution (imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions), relationship reification and implied-relationship materialization — the whole standard library resolves |
 | [`sysml-interchange`](crates/sysml-interchange) | Standard JSON interchange: the complete property set of every metaclass, derived ownership/naming/inheritance-closure/import properties, reified memberships down to `ParameterMembership`/`SubjectMembership`/`StateSubactionMembership`/... with visibility and kind, deterministic UUIDs; resolved whole-library round-trip tested |
 | [`sysml-diagram`](crates/sysml-diagram) | Definition/specialization diagrams: layered layout and SVG rendering with no external engine, or PlantUML-style Graphviz layout (`dot` for positions, the drawing stays ours) |
 | [`sysml-rust`](crates/sysml-rust) | The Rust side of a model, both ways. `import` reads an existing crate's rustdoc JSON as a SysML package whose definitions carry `@rust` binding metadata; `generate` writes Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |

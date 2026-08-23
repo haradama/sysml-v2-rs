@@ -9,7 +9,7 @@ package Blink {
 
     private import ScalarValues::*;
     private import ArduinoHal::*;
-    private import ArduinoUnoHardware::ledPinNumber;
+    private import ArduinoCompatibleHardware::ledPinNumber;
 
     part def BlinkApp {
         doc /* What runs on the board. */

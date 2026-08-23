@@ -879,6 +879,12 @@ impl Parser<'_> {
                     | FEATURED_KW
                     | CONJUGATES_KW
                     | CONJUGATE_KW
+                    // `connection k connect a to b;` -- the same trap: a
+                    // named connector whose name is read as a reference
+                    // is a connector nothing can name
+                    | CONNECT_KW
+                    | BIND_KW
+                    | ALLOCATE_KW
             )
         {
             self.opt_name();

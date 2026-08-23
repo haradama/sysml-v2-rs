@@ -277,6 +277,28 @@ trait HasToken: AstNode {
 
 impl<N: AstNode> HasToken for N {}
 
+/// Whether an expression is nothing but a name: `x`, `A::B`, `a.b.c`.
+///
+/// Both what the model builds from an expression and what resolves the
+/// names in it need this answer, and they must not answer it
+/// differently: the model reifies exactly this shape as a
+/// `FeatureReferenceExpression`, whose `referent` is what resolution
+/// then fills in. A step into a body (`x.?{in p; ...}`) or off a call
+/// (`f(x).b`) is not one -- there is no single feature it names.
+pub fn is_name_chain(node: &SyntaxNode) -> bool {
+    match node.kind() {
+        SyntaxKind::NAME_REF => true,
+        SyntaxKind::PATH_EXPR => {
+            let mut children = node.children();
+            match (children.next(), children.next()) {
+                (Some(first), None) => is_name_chain(&first),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

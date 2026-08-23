@@ -508,8 +508,9 @@ impl SyntaxKind {
                 self,
                 // not in the official RESERVED_KEYWORD list of either notation
                 ASSUMPTION_KW | EFFECT_KW | GUARD_KW | TRIGGER_KW
-                // SysML-only keywords
-                | NEW_KW
+                // SysML-only keywords. `new` is not among them: KerML
+                // writes `new A(x)` too, and reading it as a name makes
+                // the constructor an unresolvable reference.
                 | UNTIL_KW
                 | ACCEPT_KW
                     | ACTION_KW

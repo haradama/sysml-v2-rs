@@ -312,7 +312,17 @@ fn value_expression(model: &mut Model, membership: ElementId, written: &SyntaxNo
         model.set(literal, "value", value);
         return literal;
     }
-    let expression = model.create(ElementKind::Expression);
+    // `= ledPinNumber` refers to a feature rather than computing
+    // anything, and the standard has an expression kind for exactly
+    // that. Name resolution fills in the `referent`, which is how a
+    // reader of the model can follow the name to what it stands for
+    // without resolving it again.
+    let kind = if sysml_syntax::is_name_chain(written) {
+        ElementKind::FeatureReferenceExpression
+    } else {
+        ElementKind::Expression
+    };
+    let expression = model.create(kind);
     model.add_owned(membership, expression);
     represent_textually(model, expression, written.text().to_string().trim());
     expression
@@ -794,6 +804,7 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
             ASSUME_KW => Some(Role::Assume),
             REQUIRE_KW => Some(Role::Require),
             FRAME_KW => Some(Role::Frame),
+            VERIFY_KW => Some(Role::Verify),
             _ => None,
         })
     })

@@ -10,6 +10,13 @@
 //! [`ElementKind::Redefinition`], [`ElementKind::ReferenceSubsetting`]) into
 //! the model, with resolved element references as properties.
 //!
+//! It resolves the names written inside expressions too -- the body of a
+//! `require constraint { ... }`, the result of a `calc`, the value after
+//! `=`. The model keeps an expression as the text the author wrote rather
+//! than as a tree of elements, so those names are read off the syntax and
+//! looked up from the element the expression belongs to, which is the
+//! scope the language gives them.
+//!
 //! Lookup handles: member names and short names, ownership-scope walking,
 //! visibility (members default public, imports default private; only
 //! `public import` re-exports; `import all` overrides), imports (`A::B`,
@@ -27,7 +34,9 @@
 use std::collections::{HashMap, HashSet};
 
 use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value, Vis};
-use sysml_syntax::{parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange};
+use sysml_syntax::{
+    is_name_chain, parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange,
+};
 
 /// An unresolved reference, for reporting.
 #[derive(Clone, Debug)]
@@ -738,8 +747,31 @@ impl Workspace {
                 self.record_import(id, &node);
                 continue;
             }
+            // `mass * speed` ending a calculation body, or the body of
+            // `require constraint { ... }`: an expression standing on
+            // its own, whose names are as much references as a typing's
+            if node.kind() == SyntaxKind::EXPR_STMT {
+                if let Some(written) = node.children().next() {
+                    self.resolve_expression(id, &written, &mut stats);
+                }
+                continue;
+            }
             if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
                 continue;
+            }
+            // `attribute pin : PinNumber = ledPinNumber;` -- the value is
+            // an expression like any other, and the name in it is a
+            // reference like any other
+            for clause in node
+                .children()
+                .filter(|child| child.kind() == SyntaxKind::VALUE)
+            {
+                for written in clause
+                    .children()
+                    .filter(|child| child.kind() != SyntaxKind::BODY)
+                {
+                    self.resolve_expression(id, &written, &mut stats);
+                }
             }
             let is_definition = node.kind() == SyntaxKind::DEFINITION;
             for (part_kind, targets) in relationship_parts(&node) {
@@ -773,6 +805,9 @@ impl Workspace {
                 .is_a(ElementKind::SatisfyRequirementUsage)
             {
                 self.resolve_satisfaction(id, &node, &mut stats);
+            }
+            if self.model.member_role(id) == Some(Role::Verify) {
+                self.resolve_verification(id, &node, &mut stats);
             }
         }
         stats.lookups = self.lookups - began;
@@ -1850,6 +1885,114 @@ impl Workspace {
     /// Resolve an operand that may be the implicit `self` or `that` rather
     /// than a declared name -- `satisfy requirement r by that;` means the
     /// type the assertion is written in satisfies it.
+    /// Resolve what `verify r;` names, and hang it on the case.
+    ///
+    /// The requirement a verification case answers for is written inside
+    /// its objective, several levels down from the case itself, and
+    /// `verifiedRequirement` is the case's own property. Recording it
+    /// there is what lets a reader of the model ask what verifies a
+    /// requirement without walking back down through the objective.
+    fn resolve_verification(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
+        let Some(operand) = operand_after(node, SyntaxKind::VERIFY_KW) else {
+            return;
+        };
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let segments = operand_segments(&operand);
+        let range = operand.text_range();
+        let Some(target) = self.resolve_operand(id, &segments) else {
+            stats.unresolved += 1;
+            self.unresolved.push(Unresolved {
+                file,
+                range,
+                name: Self::spell(&segments),
+            });
+            return;
+        };
+        stats.resolved += 1;
+        self.record(file, range, range, &operand_ranges(&operand), target);
+
+        let mut scope = self.model.owner(id);
+        while let Some(current) = scope {
+            if matches!(
+                self.model.kind(current),
+                ElementKind::VerificationCaseDefinition | ElementKind::VerificationCaseUsage
+            ) {
+                let mut verified = match self.model.get(current, "verifiedRequirement") {
+                    Some(Value::RefList(already)) => already.clone(),
+                    _ => Vec::new(),
+                };
+                if !verified.contains(&target) {
+                    verified.push(target);
+                }
+                self.try_set(current, "verifiedRequirement", Value::RefList(verified));
+                return;
+            }
+            scope = self.model.owner(current);
+        }
+    }
+
+    /// Resolve every name written in an expression, from `owner`.
+    ///
+    /// An expression is not reified as a tree of elements -- the model
+    /// keeps it as the text the author wrote -- so the names in it are
+    /// read off the syntax and looked up from the element the expression
+    /// belongs to. That is the scope the language gives them: the
+    /// constraint of a requirement sees the requirement's subject, the
+    /// result of a `calc` sees its parameters.
+    fn resolve_expression(
+        &mut self,
+        owner: ElementId,
+        expr: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let file = self.elem_file.get(&owner).copied().unwrap_or(0);
+        let mut chains = Vec::new();
+        name_chains(expr, &mut chains);
+        for chain in chains {
+            let segments = operand_segments(&chain);
+            let at = operand_ranges(&chain);
+            let name_range = *at.last().expect("a name chain spells a name");
+            let range = chain.text_range();
+            match self.resolve_operand(owner, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.record(file, range, name_range, &at, target);
+                    // where the whole expression is that one name, the
+                    // model reified it as a reference to a feature and
+                    // this is the feature
+                    if chain == *expr {
+                        if let Some(reference) = self.reference_expression(owner) {
+                            self.try_set(reference, "referent", Value::Ref(target));
+                        }
+                    }
+                }
+                None => {
+                    stats.unresolved += 1;
+                    self.unresolved.push(Unresolved {
+                        file,
+                        range,
+                        name: Self::spell(&segments),
+                    });
+                }
+            }
+        }
+    }
+
+    /// The `FeatureReferenceExpression` an element's value was built
+    /// into, where the model made one -- which it does exactly when the
+    /// whole value is a name.
+    fn reference_expression(&self, owner: ElementId) -> Option<ElementId> {
+        let membership = self
+            .model
+            .owned(owner)
+            .iter()
+            .copied()
+            .find(|&child| self.model.kind(child) == ElementKind::FeatureValue)?;
+        let expression = self.model.get(membership, "value")?.as_id()?;
+        (self.model.kind(expression) == ElementKind::FeatureReferenceExpression)
+            .then_some(expression)
+    }
+
     fn resolve_operand(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
         if !matches!(segments, [only] if only == "self" || only == "that") {
             return self.resolve_from(elem, segments);
@@ -2090,6 +2233,54 @@ fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> {
 }
 
 /// All identifier segments within a reference operand (`a.b`, `A::B.c`).
+/// The names written in an expression, each as far as it can be
+/// followed.
+///
+/// A dotted name is taken whole -- `a.b.c` looks `a` up in scope and
+/// then each step among the members of the last one's type -- so a
+/// `PATH_EXPR` counts only when what it walks from is itself a name.
+/// `f(x).b` gives `f` and `x` and stops: nothing in the model says what
+/// `f` returns, so there is no namespace for `b` to be a member of.
+fn name_chains(node: &SyntaxNode, out: &mut Vec<SyntaxNode>) {
+    match node.kind() {
+        // `list->select { in i; i > 2 }` declares `i` inside a body that
+        // is not built into the model, so the names there have a scope
+        // nothing here can see. Reporting them would be a false alarm.
+        SyntaxKind::BODY_EXPR => return,
+        SyntaxKind::NAME_REF => {
+            out.push(node.clone());
+            return;
+        }
+        SyntaxKind::PATH_EXPR if is_name_chain(node) => {
+            out.push(node.clone());
+            return;
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        // `f(b = 1)` names a parameter of `f`, not anything in scope here
+        if node.kind() == SyntaxKind::ARG_LIST && followed_by_eq(node, &child) {
+            continue;
+        }
+        name_chains(&child, out);
+    }
+}
+
+/// Whether `=` is the next thing after `child` -- the `b` of `f(b = 1)`.
+fn followed_by_eq(parent: &SyntaxNode, child: &SyntaxNode) -> bool {
+    let mut after = false;
+    for element in parent.children_with_tokens() {
+        if element.kind().is_trivia() {
+            continue;
+        }
+        if after {
+            return element.kind() == SyntaxKind::EQ;
+        }
+        after = element.as_node() == Some(child);
+    }
+    false
+}
+
 fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
     operand
         .descendants_with_tokens()

@@ -641,10 +641,40 @@ fn generic_parts_compose_with_their_parameters_carried_along() {
 }
 
 #[test]
+fn a_declared_value_that_is_a_name_is_the_value_it_names() {
+    // `= pinNumber` says where the number lives rather than repeating
+    // it, and `Default` has to start from the same place the model
+    // does -- through the port that became a generic parameter too.
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute pinNumber : Integer = 13;\n\
+         \tattribute computed : Integer = pinNumber + 1;\n\
+         \tpart def Board {\n\
+         \t\tport store : Store;\n\
+         \t\tattribute pin : Integer = pinNumber;\n\
+         \t\tattribute derivedPin : Integer = computed;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("impl<Store: fake::Store + Default> Default for Board<Store>"),
+        "{rust}"
+    );
+    assert!(rust.contains("pin: 13,"), "{rust}");
+    // a name whose own value is an expression leaves nothing to start
+    // from, and `Default` says so the only way it can
+    assert!(rust.contains("derived_pin: Default::default(),"), "{rust}");
+}
+
+#[test]
 fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
     let rust = generate(
         "package S {\n\
          \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
          \tpart def Probe {\n\
          \t\tport store : Store;\n\
          \t\tperform action ping : Ping;\n\
@@ -656,7 +686,21 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
          \trequirement def Latency {\n\t\tdoc /* under 100ms */\n\t}\n\
          \trequirement def Coverage;\n\
          \trequirement def Untested;\n\
+         \trequirement def Bounded {\n\
+         \t\tattribute lower : Integer = 1;\n\
+         \t\tattribute upper : Integer = 9;\n\
+         \t}\n\
+         \tverification def CheckBounded {\n\
+         \t\t@rust { :>> path = \"crate::checks::bounded\"; }\n\
+         \t\tobjective { verify Bounded; }\n\
+         \t}\n\
+         \tverification def CheckUntested {\n\
+         \t\tobjective { verify Untested; }\n\
+         \t}\n\
          \trequirement : Latency;\n\
+         \trequirement <'G.1'> vehicleSpecification {\n\
+         \t\trequirement restated : Latency;\n\
+         \t}\n\
          \tsatisfy Latency by Probe;\n\
          \tsatisfy requirement covered : Coverage by Rig;\n\
          \tsatisfy Untested;\n\
@@ -676,8 +720,18 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
     // the declaring form names its requirement by typing, not after the
     // keyword, and traces through all the same
     assert!(rust.contains("/// Satisfied by `Rig`."));
-    // a requirement nothing answers for is still on the list
+    // a requirement a verification case answers for runs it, and is
+    // handed the numbers the requirement states about itself
+    assert!(rust.contains("/// Verified by `CheckBounded`."));
+    assert!(rust.contains("crate::checks::bounded(1, 9);"), "{rust}");
+    // one whose case names no Rust stays on the list of what is owed
+    assert!(rust.contains("/// Verified by `CheckUntested`."));
     assert!(rust.contains("fn untested() {}"));
+    // a requirement stated only as a usage is its own, and says so
+    assert!(rust.contains("/// SysML: `requirement vehicleSpecification`"));
+    // one typed by a definition only restates it -- verifying `Latency`
+    // is what verifies it, so it is not a second thing to verify
+    assert!(!rust.contains("fn restated()"), "{rust}");
 }
 
 #[test]

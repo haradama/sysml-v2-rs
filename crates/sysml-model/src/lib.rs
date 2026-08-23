@@ -84,6 +84,8 @@ pub enum Role {
     Require,
     /// `frame concern c;`
     Frame,
+    /// `verify r;` -- the requirement a verification case answers for
+    Verify,
 }
 
 pub use build::{build_into, build_model, Built};

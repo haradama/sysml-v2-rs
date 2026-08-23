@@ -336,7 +336,7 @@ fn what_a_model_means_by_naming_something_it_already_has() {
 fn a_base_type_behind_a_condition_offers_every_side_of_it() {
     let ws = ws(&[(
         "m.sysml",
-        "package P {\n    metadata def SemanticMetadata { attribute baseType; }\n    struct Left { feature onlyLeft; }\n    struct Right { feature onlyRight; }\n    metadata def Either :> SemanticMetadata {\n        :>> baseType = if true ? Left meta X else Right meta X;\n    }\n    #Either part def W { attribute :>> onlyLeft; attribute :>> onlyRight; }\n}\n",
+        "package P {\n    metadata def SemanticMetadata { attribute baseType; }\n    part def Left { attribute onlyLeft; }\n    part def Right { attribute onlyRight; }\n    metadata def Either :> SemanticMetadata {\n        :>> baseType = if true ? Left else Right;\n    }\n    #Either part def W { attribute :>> onlyLeft; attribute :>> onlyRight; }\n}\n",
     )]);
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }

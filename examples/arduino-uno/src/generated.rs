@@ -27,6 +27,16 @@ pub struct BlinkApp<Board: crate::hal::Gpio> {
     pub half_period_millis: u16,
 }
 
+impl<Board: crate::hal::Gpio + Default> Default for BlinkApp<Board> {
+    fn default() -> Self {
+        Self {
+            board: Default::default(),
+            pin: 13,
+            half_period_millis: 500,
+        }
+    }
+}
+
 impl<Board: crate::hal::Gpio> BlinkApp<Board> {
     /// SysML: `perform action light : SetPin` -> `crate::hal::Gpio::set_pin`
     pub fn light(&mut self, pin: u8, high: bool) {
@@ -112,51 +122,107 @@ pub struct Tick {
     pub elapsed: u16,
 }
 
-/// An Uno with the sketch on it, and what that promises.
-/// SysML: `part def BlinkingUno`
-// not generated: `visibleIndication` -- SatisfyRequirementUsage not generated
-// not generated: `onBoardLedOnly` -- SatisfyRequirementUsage not generated
-// not generated: `perceptiblePeriod` -- SatisfyRequirementUsage not generated
-// not generated: `equalDutyCycle` -- SatisfyRequirementUsage not generated
-pub struct BlinkingUno<AppBoard: crate::hal::Gpio> {
+/// An Arduino-compatible board with the sketch on it.
+/// SysML: `part def BlinkingBoard`
+// not generated: `indication` -- SatisfyRequirementUsage not generated
+// not generated: `ledPin` -- SatisfyRequirementUsage not generated
+// not generated: `logicLevel` -- SatisfyRequirementUsage not generated
+// not generated: `room` -- SatisfyRequirementUsage not generated
+// not generated: `onBoardLed` -- SatisfyRequirementUsage not generated
+// not generated: `period` -- SatisfyRequirementUsage not generated
+// not generated: `duty` -- SatisfyRequirementUsage not generated
+pub struct BlinkingBoard<AppBoard: crate::hal::Gpio> {
     pub app: BlinkApp<AppBoard>,
+    pub status_led_pin: i64,
 }
 
-/// The model's requirements: one ignored test per requirement,
-/// waiting for its verification to be written.
+impl<AppBoard: crate::hal::Gpio + Default> Default for BlinkingBoard<AppBoard> {
+    fn default() -> Self {
+        Self {
+            app: Default::default(),
+            status_led_pin: 13,
+        }
+    }
+}
+
+/// The model's requirements: one test per requirement, running
+/// the verification the model names for it, or ignored and
+/// saying so where it names none.
 #[cfg(test)]
 mod requirements {
     /// SysML: `requirement def VisibleIndication`
     /// The board shall show, without instruments, that it is running.
     /// Satisfied by `statusLed`.
+    /// Verified by `VerifyVisibleIndication`.
+    #[test]
+    fn visible_indication() {
+        crate::verification::visible_indication();
+    }
+
+    /// SysML: `requirement def LedOnTheSketchesPin`
+    /// The status LED shall sit on the pin the sketch writes to. This
+    /// is the one requirement that is about neither side alone: the
+    /// board decides where the LED is, the sketch decides where it
+    /// writes, and the two are only the same by agreement.
+    /// Satisfied by `statusLed`.
     #[test]
     #[ignore = "verification not written yet"]
-    fn visible_indication() {}
+    fn led_on_the_sketches_pin() {}
+
+    /// SysML: `requirement def FiveVoltLogic`
+    /// The microcontroller shall drive 5 V logic. A 3.3 V board takes
+    /// the same sketch and lights the same LED more dimly, which is
+    /// why this is written down rather than assumed from the fact
+    /// that it works.
+    /// Satisfied by `mcu`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn five_volt_logic() {}
+
+    /// SysML: `requirement def RoomForTheSketch`
+    /// The flash shall hold the sketch, with the bootloader still in it.
+    /// Satisfied by `mcu`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn room_for_the_sketch() {}
 
     /// SysML: `requirement def OnBoardLedOnly`
     /// The indication shall use the LED already on the board, so that
-    /// a bare Uno with nothing wired to it still shows life.
+    /// a bare board with nothing wired to it still shows life.
     /// Satisfied by `app`.
+    /// Verified by `VerifyOnBoardLedOnly`.
     #[test]
-    #[ignore = "verification not written yet"]
-    fn on_board_led_only() {}
+    fn on_board_led_only() {
+        crate::verification::on_board_led_only();
+    }
 
     /// SysML: `requirement def PerceptiblePeriod`
     /// A half-period between a tenth of a second and two seconds:
     /// faster reads as a flicker, slower as a fault.
     /// Satisfied by `app`.
+    /// Verified by `VerifyPerceptiblePeriod`.
     #[test]
-    #[ignore = "verification not written yet"]
-    fn perceptible_period() {}
+    fn perceptible_period() {
+        crate::verification::perceptible_period(100, 2000);
+    }
 
     /// SysML: `requirement def EqualDutyCycle`
     /// Lit and dark shall last the same, so the blink reads as even.
     /// This one carries no constraint on purpose: it is a property of
     /// the state machine rather than of any number, and the model has
-    /// no number to compare. It is on the list all the same -- the
-    /// generated stub is what says it has not been verified.
+    /// no two numbers to compare. What answers for it is a run of the
+    /// machine rather than an inspection of it, which is what
+    /// `T.4` in `verification.sysml` does.
     /// Satisfied by `app`.
+    /// Verified by `VerifyEqualDutyCycle`.
+    #[test]
+    fn equal_duty_cycle() {
+        crate::verification::equal_duty_cycle();
+    }
+
+    /// SysML: `requirement blinkingBoardSpecification`
+    /// What a compatible board plus this sketch has to be.
     #[test]
     #[ignore = "verification not written yet"]
-    fn equal_duty_cycle() {}
+    fn blinking_board_specification() {}
 }
