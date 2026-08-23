@@ -23,30 +23,30 @@
 pub struct BlinkApp<Board: crate::hal::Gpio> {
     /// SysML: `port board : Gpio`
     pub board: Board,
-    pub pin: i64,
-    pub half_period_millis: i64,
+    pub pin: u8,
+    pub half_period_millis: u16,
 }
 
 impl<Board: crate::hal::Gpio> BlinkApp<Board> {
     /// SysML: `perform action light : SetPin` -> `crate::hal::Gpio::set_pin`
-    pub fn light(&mut self, pin: i64, high: bool) {
+    pub fn light(&mut self, pin: u8, high: bool) {
         self.board.set_pin(pin, high)
     }
 
     /// SysML: `perform action wait : Wait` -> `crate::hal::Gpio::wait_millis`
-    pub fn wait(&mut self, millis: i64) {
+    pub fn wait(&mut self, millis: u16) {
         self.board.wait_millis(millis)
     }
 
     /// SysML: `perform action since : Uptime` -> `crate::hal::Gpio::uptime_millis`
-    pub fn since(&self) -> i64 {
+    pub fn since(&self) -> u16 {
         self.board.uptime_millis()
     }
 }
 
 /// How long the current half-period has run.
 /// SysML: `calc def Elapsed`
-pub fn elapsed(now: i64, started_at: i64) -> i64 {
+pub fn elapsed(now: u16, started_at: u16) -> u16 {
     now - started_at
 }
 
@@ -109,5 +109,5 @@ impl BlinkingState {
 /// SysML: `part def Tick`
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Tick {
-    pub elapsed: i64,
+    pub elapsed: u16,
 }

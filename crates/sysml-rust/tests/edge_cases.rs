@@ -19,6 +19,7 @@ const API: &str = "package Api {\n\
     \t\tattribute takesSelf : String;\n\
     \t\tattribute isAsync : Boolean;\n\
     \t\tattribute isFallible : Boolean;\n\
+    \t\tattribute derives : String;\n\
     \t}\n\
     \tport def Store { @rust { :>> path = \"fake::Store\"; } }\n\
     \tport def Metrics { @rust { :>> path = \"fake::Metrics\"; } }\n\
@@ -1456,4 +1457,48 @@ fn a_binding_says_how_the_call_is_made_and_the_signature_follows() {
     assert!(rust.contains("/// where the store is kept"), "{rust}");
     assert!(rust.contains("/// whether it is cold enough"), "{rust}");
     assert!(rust.contains("/// how the cellar behaves"), "{rust}");
+}
+
+/// A model can say which Rust type it means -- `u16` rather than the
+/// `i64` an unbounded `Integer` gets -- and a struct holding one is no
+/// longer left without derives for it: the binding says what that type
+/// can do, since only the model knows.
+#[test]
+fn a_bound_type_is_the_type_the_model_names() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Millis :> Integer { @rust { :>> path = \"u16\"; :>> derives = \"Debug, Clone, PartialEq\"; } }\n\
+         \tattribute def Ticks :> Integer { @rust { :>> path = \"u8\"; } }\n\
+         \tpart def Timer {\n\
+         \t\tattribute period : Millis = 500;\n\
+         \t\tattribute plain : Integer = 7;\n\
+         \t\tcalc def Left { in now : Millis; in started : Millis; now - started }\n\
+         \t}\n\
+         \tattribute def Volts :> Real { @rust { :>> path = \"f32\"; :>> derives = \"Debug, Clone, PartialEq, Default\"; } }\n\
+    \tpart def Counter { attribute seen : Ticks; }\n\
+    \tpart def Rail { attribute level : Volts; }\n\
+         }\n",
+    )
+    .unwrap();
+    // the width the model named, everywhere the type is used
+    assert!(rust.contains("pub period: u16,"), "{rust}");
+    assert!(rust.contains("pub plain: i64,"), "{rust}");
+    assert!(
+        rust.contains("pub fn left(now: u16, started: u16) -> u16 {"),
+        "{rust}"
+    );
+    // what the binding claims, the struct may derive
+    assert!(
+        rust.contains("#[derive(Debug, Clone, PartialEq)]\npub struct Timer"),
+        "{rust}"
+    );
+    // and what it claims nothing about, it may not: this generator says
+    // nothing about a type it did not write
+    assert!(rust.contains("pub struct Counter"), "{rust}");
+    assert!(
+        !rust.contains("#[derive(Debug, Clone, PartialEq)]\npub struct Counter"),
+        "{rust}"
+    );
 }

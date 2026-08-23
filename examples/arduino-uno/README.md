@@ -21,7 +21,12 @@ Nothing is generated from it -- it is the part a reader consults to see
 why the application writes to that pin rather than another.
 
 `model/middleware.sysml` is the board as the sketch may touch it: set a
-pin, wait, read the clock. Each definition carries a `@rust { ... }`
+pin, wait, read the clock. It also says how wide the numbers are: an
+unbounded `Integer` becomes an `i64`, and sixty-four bits of arithmetic
+on an eight-bit microcontroller costs both flash and time, so the model
+names `u8` for a pin and `u16` for a duration rather than leaving the
+width to be assumed. Measured on the real target, the same arithmetic is
+464 bytes as `i64` and 226 as `u16`. Each definition carries a `@rust { ... }`
 usage naming the item it stands for, so the generated code calls the
 real trait in `src/hal.rs` instead of a parallel one invented for it.
 This is the shape `sysml import-rust` writes from a crate's rustdoc

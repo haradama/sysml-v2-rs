@@ -16,8 +16,8 @@ package Blink {
 
         port board : Gpio;
 
-        attribute pin : Integer = ledPinNumber;
-        attribute halfPeriodMillis : Integer = 500;
+        attribute pin : PinNumber = ledPinNumber;
+        attribute halfPeriodMillis : Millis = 500;
 
         perform action light : SetPin;
         perform action wait : Wait;
@@ -25,8 +25,8 @@ package Blink {
 
         calc def Elapsed {
             doc /* How long the current half-period has run. */
-            in now : Integer;
-            in startedAt : Integer;
+            in now : Millis;
+            in startedAt : Millis;
             now - startedAt
         }
 
@@ -50,6 +50,6 @@ package Blink {
 
     item def Tick {
         doc /* A half-period has passed; how long it took is the payload. */
-        attribute elapsed : Integer;
+        attribute elapsed : Millis;
     }
 }

@@ -50,6 +50,10 @@ use std::fmt::Write as _;
 use sysml_model::{ElementId, ElementKind, Model, Role, Value};
 
 use crate::binding;
+
+/// What every generated struct and enum derives, where its fields let
+/// it. `Default` joins them when the model gave every field a value.
+const DERIVED: [&str; 3] = ["Debug", "Clone", "PartialEq"];
 use crate::expr::{self, translate, Translated};
 
 /// What stops code generation outright (a model this generator cannot
@@ -541,6 +545,15 @@ impl<'a> Generator<'a> {
     /// Which structs can carry `#[derive(Debug, Clone, PartialEq)]`:
     /// those whose fields are scalars or other such structs and enums --
     /// nothing is claimed of external API types.
+    /// Whether the type of `field` says it already has `trait_name`.
+    /// Only a bound type is asked: what this generator wrote, it knows.
+    fn field_type_claims(&self, field: &Field, trait_name: &str) -> bool {
+        type_of(self.model, field.usage)
+            .or_else(|| type_of(self.model, redefined(self.model, field.usage)?))
+            .and_then(|ty| binding(self.model, ty))
+            .is_some_and(|bound| binding::claims(&bound, trait_name))
+    }
+
     fn settle_derives(&mut self) {
         for (&def, &shape) in &self.shapes {
             if matches!(shape, Shape::Enum) {
@@ -562,7 +575,11 @@ impl<'a> Generator<'a> {
                     fields.iter().all(|field| match &field.ty {
                         FieldType::Scalar(_) => true,
                         FieldType::Generated(target) => self.derivable.contains(target),
-                        FieldType::External(_) => false,
+                        // a type this generator did not write says for
+                        // itself what it can do, or nothing is claimed
+                        FieldType::External(_) => DERIVED
+                            .iter()
+                            .all(|wanted| self.field_type_claims(field, wanted)),
                     })
                 });
                 if !ports && !self.generic(def) && fields_fine {
@@ -597,12 +614,12 @@ impl<'a> Generator<'a> {
             Container::Array(_) => match &field.ty {
                 FieldType::Scalar(_) => true,
                 FieldType::Generated(target) => self.defaultable.contains(target),
-                FieldType::External(_) => false,
+                FieldType::External(_) => self.field_type_claims(field, "Default"),
             },
             Container::One => match &field.ty {
                 FieldType::Scalar(_) => true,
                 FieldType::Generated(target) => self.defaultable.contains(target),
-                FieldType::External(_) => false,
+                FieldType::External(_) => self.field_type_claims(field, "Default"),
             },
         }
     }
@@ -838,7 +855,7 @@ impl<'a> Generator<'a> {
             && states.is_empty();
         if self.derivable.contains(&def) {
             let default = if derived_default { ", Default" } else { "" };
-            writeln!(out, "#[derive(Debug, Clone, PartialEq{default})]").unwrap();
+            writeln!(out, "#[derive({}{default})]", DERIVED.join(", ")).unwrap();
         }
         let generics = plan
             .params

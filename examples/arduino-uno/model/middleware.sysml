@@ -19,6 +19,23 @@ package ArduinoHal {
         attribute takesSelf : String;
         attribute isAsync : Boolean;
         attribute isFallible : Boolean;
+        attribute derives : String;
+    }
+
+    attribute def PinNumber :> Integer {
+        doc
+        /*
+         * Which of the fourteen pins. An unbounded `Integer` would be an
+         * `i64`, and sixty-four bits of arithmetic on an eight-bit
+         * microcontroller costs both flash and time, so the model says
+         * the width it means rather than leaving it to be assumed.
+         */
+        @rust { :>> path = "u8"; :>> derives = "Debug, Clone, PartialEq, Default"; }
+    }
+
+    attribute def Millis :> Integer {
+        doc /* A duration in milliseconds; a minute of them fits in u16. */
+        @rust { :>> path = "u16"; :>> derives = "Debug, Clone, PartialEq, Default"; }
     }
 
     port def Gpio {
@@ -35,7 +52,7 @@ package ArduinoHal {
             :>> isAsync = false;
             :>> isFallible = false;
         }
-        in pin : Integer;
+        in pin : PinNumber;
         in high : Boolean;
     }
 
@@ -48,7 +65,7 @@ package ArduinoHal {
             :>> isAsync = false;
             :>> isFallible = false;
         }
-        in millis : Integer;
+        in millis : Millis;
     }
 
     action def Uptime {
@@ -60,6 +77,6 @@ package ArduinoHal {
             :>> isAsync = false;
             :>> isFallible = false;
         }
-        out result : Integer;
+        out result : Millis;
     }
 }

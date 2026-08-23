@@ -25,6 +25,13 @@ pub const IS_ASYNC: &str = "isAsync";
 /// Whether the call returns a `Result`.
 pub const IS_FALLIBLE: &str = "isFallible";
 
+/// The traits the bound type already has, comma-separated:
+/// `"Debug, Clone, PartialEq"`. The generator writes nothing about a
+/// type it did not write, so a struct holding one derives nothing --
+/// unless the model says what that type can do, which only the model
+/// knows.
+pub const DERIVES: &str = "derives";
+
 /// Every property, in the order the metadata definition declares them.
 pub const ALL: &[(&str, &str)] = &[
     (PATH, "String"),
@@ -32,4 +39,14 @@ pub const ALL: &[(&str, &str)] = &[
     (TAKES_SELF, "String"),
     (IS_ASYNC, "Boolean"),
     (IS_FALLIBLE, "Boolean"),
+    (DERIVES, "String"),
 ];
+
+/// Whether the binding claims the bound type has `trait_name`.
+pub fn claims(bound: &std::collections::HashMap<String, String>, trait_name: &str) -> bool {
+    bound
+        .get(DERIVES)
+        .into_iter()
+        .flat_map(|list| list.split(','))
+        .any(|claimed| claimed.trim() == trait_name)
+}

@@ -9,11 +9,11 @@
 /// What the application is given to reach the board with.
 pub trait Gpio {
     /// Drive one digital pin high or low.
-    fn set_pin(&mut self, pin: i64, high: bool);
+    fn set_pin(&mut self, pin: u8, high: bool);
     /// Block for that many milliseconds.
-    fn wait_millis(&mut self, millis: i64);
+    fn wait_millis(&mut self, millis: u16);
     /// Milliseconds since the board came up.
-    fn uptime_millis(&self) -> i64;
+    fn uptime_millis(&self) -> u16;
 }
 
 /// A board that exists only in memory, so the sketch can be watched.
@@ -22,24 +22,24 @@ pub struct Simulated {
     /// High or low, for each of the fourteen digital pins.
     pub pins: [bool; 14],
     /// What `wait_millis` advances instead of sleeping.
-    pub clock: i64,
+    pub clock: u16,
     /// Every `set_pin`, in order, for a test to read back.
-    pub written: Vec<(i64, bool)>,
+    pub written: Vec<(u8, bool)>,
 }
 
 impl Gpio for Simulated {
-    fn set_pin(&mut self, pin: i64, high: bool) {
-        if let Some(slot) = usize::try_from(pin).ok().and_then(|p| self.pins.get_mut(p)) {
+    fn set_pin(&mut self, pin: u8, high: bool) {
+        if let Some(slot) = self.pins.get_mut(usize::from(pin)) {
             *slot = high;
         }
         self.written.push((pin, high));
     }
 
-    fn wait_millis(&mut self, millis: i64) {
-        self.clock += millis;
+    fn wait_millis(&mut self, millis: u16) {
+        self.clock = self.clock.wrapping_add(millis);
     }
 
-    fn uptime_millis(&self) -> i64 {
+    fn uptime_millis(&self) -> u16 {
         self.clock
     }
 }
