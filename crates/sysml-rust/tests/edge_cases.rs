@@ -655,9 +655,11 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
          \t}\n\
          \trequirement def Latency {\n\t\tdoc /* under 100ms */\n\t}\n\
          \trequirement def Coverage;\n\
+         \trequirement def Untested;\n\
          \trequirement : Latency;\n\
          \tsatisfy Latency by Probe;\n\
-         \tsatisfy Coverage;\n\
+         \tsatisfy requirement covered : Coverage by Rig;\n\
+         \tsatisfy Untested;\n\
          \tpackage Inner {\n\
          \t\trequirement def Latency;\n\
          \t}\n\
@@ -671,7 +673,11 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
     assert_eq!(rust.matches("fn latency()").count(), 1);
     assert!(rust.contains("/// under 100ms"));
     assert!(rust.contains("/// Satisfied by `Probe`."));
-    assert!(rust.contains("fn coverage() {}"));
+    // the declaring form names its requirement by typing, not after the
+    // keyword, and traces through all the same
+    assert!(rust.contains("/// Satisfied by `Rig`."));
+    // a requirement nothing answers for is still on the list
+    assert!(rust.contains("fn untested() {}"));
 }
 
 #[test]

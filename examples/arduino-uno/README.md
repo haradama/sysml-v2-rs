@@ -1,7 +1,8 @@
 # Arduino Uno
 
-An Arduino Uno as three layers of one model, and the blink sketch that
-falls out of it.
+An Arduino Uno as four layers of one model -- the board, what an
+application may touch it with, the sketch, and what the sketch has to be
+right about -- and the Rust that falls out of them.
 
 ```console
 $ cargo run
@@ -12,7 +13,7 @@ pin 13 every 500 ms
 6 writes, 3 of them high
 ```
 
-## The three layers
+## The layers
 
 `model/hardware.sysml` is the board: the ATmega328P and its clock and
 operating voltage, the fourteen digital pins, the LED marked `L` and the
@@ -39,15 +40,34 @@ says what blinking is. The half-period is not in the machine -- when a
 half-period has passed is the loop's business, and saying it in both
 places is how the two come to disagree.
 
+`model/requirements.sysml` is what the sketch has to be right about, and
+who answers for each: an Uno with the sketch on it satisfies four
+requirements, three of them with a constraint the model can state in
+full. A `satisfy` is not a comment. It names a part, so renaming that
+part away makes `sysml check` fail, and it is what puts the
+`Satisfied by` line in the generated stubs -- the trace from a promise
+to the thing that keeps it.
+
+The corpus writes a satisfaction as `satisfy requirement s : Req by p;`,
+and the `: Req` is the part that names the requirement -- `s` is the
+satisfaction's own name. Leave the typing out and `satisfy requirement s
+by p;` still parses and still checks, but it satisfies nothing in
+particular and traces nowhere.
+
 ## What is generated and what is not
 
 ```sh
-sysml rustgen model/blink.sysml \
+sysml rustgen model/blink.sysml model/requirements.sysml \
     --library model/hardware.sysml \
     --library model/middleware.sysml \
     --library ../../vendor/sysml-v2-release/sysml.library \
     -o src/generated.rs
 ```
+
+The board and the HAL are `--library`: names in them resolve, but no
+Rust is written for them. The board is documentation, and the HAL
+already exists as `src/hal.rs` -- generating either would be writing a
+second copy of something that is already there.
 
 `src/generated.rs` holds what the model already decided:
 
@@ -59,6 +79,21 @@ sysml rustgen model/blink.sysml \
 - `BlinkingState`, `BlinkingEvent`, `BlinkingHooks`, `step` -- the state
   machine, with every open decision a hook that has a default
 - `elapsed` -- the `calc def`, translated as written
+- `BlinkingUno` -- the Uno with the sketch on it, from the part the
+  requirements are satisfied by
+- `mod requirements` -- one ignored test per requirement, carrying the
+  documentation and the parts that answer for it:
+
+  ```console
+  $ cargo test
+  test generated::requirements::equal_duty_cycle ... ignored, verification not written yet
+  test generated::requirements::on_board_led_only ... ignored, verification not written yet
+  test generated::requirements::perceptible_period ... ignored, verification not written yet
+  test generated::requirements::visible_indication ... ignored, verification not written yet
+  ```
+
+  A requirement that nobody has verified is a test that says so, rather
+  than a line in a document nobody runs.
 
 `src/main.rs` holds what the model left open: what the two states mean
 at the pin, and the loop that decides when a half-period has passed.
@@ -67,3 +102,14 @@ only in memory, so the sketch runs anywhere.
 
 Change the model and regenerate: the parts that were decided move, and
 the parts that were left open do not.
+
+## Seeing it
+
+```sh
+sysml diagram model/*.sysml \
+    --library ../../vendor/sysml-v2-release/sysml.library \
+    --internal ArduinoUno -o board.svg
+```
+
+`--internal BlinkingUno` draws the other half instead: the application
+and the requirements it answers for, with an edge per `satisfy`.

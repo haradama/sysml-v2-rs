@@ -120,6 +120,14 @@ impl Value {
             _ => None,
         }
     }
+
+    /// The element a single reference points at.
+    pub fn as_id(&self) -> Option<ElementId> {
+        match self {
+            Value::Ref(id) => Some(*id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +261,27 @@ impl Model {
         self.elements[id.index()].props.iter().map(|(n, v)| (*n, v))
     }
 
+    /// What a feature is typed by, in the order the typings were
+    /// written.
+    ///
+    /// A typing is not a property on the feature: parsing reifies each
+    /// one as an owned [`ElementKind::FeatureTyping`] whose `type` is
+    /// filled in once the name resolves, which is where every reader of
+    /// a type has to look. A typing that never resolved is skipped, so
+    /// this yields fewer answers than the model wrote.
+    pub fn types_of(&self, feature: ElementId) -> impl Iterator<Item = ElementId> + '_ {
+        self.owned(feature)
+            .iter()
+            .filter(|&&child| self.kind(child) == ElementKind::FeatureTyping)
+            .filter_map(|&child| self.get(child, "type").and_then(Value::as_id))
+    }
+
+    /// The first of [`Model::types_of`], which is the only one for
+    /// every feature that names a single type.
+    pub fn type_of(&self, feature: ElementId) -> Option<ElementId> {
+        self.types_of(feature).next()
+    }
+
     /// `declaredName`, the primary name of an element (if any).
     pub fn name(&self, id: ElementId) -> Option<&str> {
         self.get(id, "declaredName").and_then(Value::as_str)
@@ -302,6 +331,29 @@ mod tests {
         let f = Namespace.feature("ownedMembership").unwrap();
         assert!(f.many);
         assert!(f.derived);
+    }
+
+    #[test]
+    fn a_type_is_read_off_the_typing_that_resolved() {
+        let mut model = Model::new();
+        let part = model.create(ElementKind::PartUsage);
+        let definition = model.create(ElementKind::PartDefinition);
+        assert_eq!(model.type_of(part), None);
+
+        // a typing whose name never resolved has no answer to give
+        let unresolved = model.create(ElementKind::FeatureTyping);
+        model.add_owned(part, unresolved);
+        assert_eq!(model.type_of(part), None);
+
+        let typing = model.create(ElementKind::FeatureTyping);
+        model.set(typing, "type", Value::Ref(definition));
+        model.add_owned(part, typing);
+        assert_eq!(model.type_of(part), Some(definition));
+        assert_eq!(model.types_of(part).count(), 1);
+
+        // only a reference names an element
+        assert_eq!(Value::Ref(definition).as_id(), Some(definition));
+        assert_eq!(Value::Bool(true).as_id(), None);
     }
 
     #[test]

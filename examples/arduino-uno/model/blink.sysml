@@ -38,7 +38,8 @@ package Blink {
              * is the loop's business, and saying so twice is how the two
              * come to disagree.
              */
-            entry; then dark;
+            entry;
+            then dark;
 
             state dark;
             state lit;

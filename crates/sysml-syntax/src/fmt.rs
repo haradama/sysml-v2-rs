@@ -94,6 +94,13 @@ impl Formatter {
                     self.pending_newlines = self.pending_newlines.max(1);
                 }
             }
+            // A block comment spanning lines keeps a line of its own. Its
+            // interior is part of one token's text, which re-indenting
+            // never reaches, so pulling `/*` up after `doc` leaves the
+            // body standing in a column that no longer means anything.
+            if kind == COMMENT_BODY && token.text().contains('\n') {
+                self.pending_newlines = self.pending_newlines.max(1);
+            }
             if self.pending_newlines > 0 {
                 self.break_line(gap);
             } else if !self.line_empty {
@@ -271,6 +278,14 @@ mod tests {
     fn empty_bodies_stay_on_one_line() {
         assert_eq!(fmt("part def A {}"), "part def A {}\n");
         assert_eq!(fmt("part def A {  }"), "part def A {}\n");
+    }
+
+    #[test]
+    fn a_doc_spanning_lines_keeps_its_own_line() {
+        // its interior lines are one token's text, so moving where the
+        // `/*` sits moves the body out from under itself
+        let input = "package P {\n    doc\n    /*\n     * about P\n     */\n}\n";
+        assert_eq!(fmt(input), input);
     }
 
     #[test]

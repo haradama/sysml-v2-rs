@@ -111,3 +111,52 @@ impl BlinkingState {
 pub struct Tick {
     pub elapsed: u16,
 }
+
+/// An Uno with the sketch on it, and what that promises.
+/// SysML: `part def BlinkingUno`
+// not generated: `visibleIndication` -- SatisfyRequirementUsage not generated
+// not generated: `onBoardLedOnly` -- SatisfyRequirementUsage not generated
+// not generated: `perceptiblePeriod` -- SatisfyRequirementUsage not generated
+// not generated: `equalDutyCycle` -- SatisfyRequirementUsage not generated
+pub struct BlinkingUno<AppBoard: crate::hal::Gpio> {
+    pub app: BlinkApp<AppBoard>,
+}
+
+/// The model's requirements: one ignored test per requirement,
+/// waiting for its verification to be written.
+#[cfg(test)]
+mod requirements {
+    /// SysML: `requirement def VisibleIndication`
+    /// The board shall show, without instruments, that it is running.
+    /// Satisfied by `statusLed`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn visible_indication() {}
+
+    /// SysML: `requirement def OnBoardLedOnly`
+    /// The indication shall use the LED already on the board, so that
+    /// a bare Uno with nothing wired to it still shows life.
+    /// Satisfied by `app`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn on_board_led_only() {}
+
+    /// SysML: `requirement def PerceptiblePeriod`
+    /// A half-period between a tenth of a second and two seconds:
+    /// faster reads as a flicker, slower as a fault.
+    /// Satisfied by `app`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn perceptible_period() {}
+
+    /// SysML: `requirement def EqualDutyCycle`
+    /// Lit and dark shall last the same, so the blink reads as even.
+    /// This one carries no constraint on purpose: it is a property of
+    /// the state machine rather than of any number, and the model has
+    /// no number to compare. It is on the list all the same -- the
+    /// generated stub is what says it has not been verified.
+    /// Satisfied by `app`.
+    #[test]
+    #[ignore = "verification not written yet"]
+    fn equal_duty_cycle() {}
+}

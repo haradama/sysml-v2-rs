@@ -30,17 +30,26 @@ package ArduinoHal {
          * microcontroller costs both flash and time, so the model says
          * the width it means rather than leaving it to be assumed.
          */
-        @rust { :>> path = "u8"; :>> derives = "Debug, Clone, PartialEq, Default"; }
+        @rust {
+            :>> path = "u8";
+            :>> derives = "Debug, Clone, PartialEq, Default";
+        }
     }
 
     attribute def Millis :> Integer {
         doc /* A duration in milliseconds; a minute of them fits in u16. */
-        @rust { :>> path = "u16"; :>> derives = "Debug, Clone, PartialEq, Default"; }
+        @rust {
+            :>> path = "u16";
+            :>> derives = "Debug, Clone, PartialEq, Default";
+        }
     }
 
     port def Gpio {
         doc /* What the application is given to reach the board with. */
-        @rust { :>> path = "crate::hal::Gpio"; :>> crateName = "arduino_uno"; }
+        @rust {
+            :>> path = "crate::hal::Gpio";
+            :>> crateName = "arduino_uno";
+        }
     }
 
     action def SetPin {

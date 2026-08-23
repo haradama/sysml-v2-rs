@@ -758,13 +758,8 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             // a feature is typed by what its reified typings resolved to
             "type" if kind.is_a(ElementKind::Feature) => Some(Json::Array(
                 model
-                    .owned(id)
-                    .iter()
-                    .filter(|&&child| model.kind(child) == ElementKind::FeatureTyping)
-                    .filter_map(|&child| match model.get(child, "type") {
-                        Some(Value::Ref(target)) => Some(reference(target)),
-                        _ => None,
-                    })
+                    .types_of(id)
+                    .map(|target| reference(&target))
                     .collect(),
             )),
             "owningType" if kind.is_a(ElementKind::Feature) => Some(

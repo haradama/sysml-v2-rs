@@ -212,7 +212,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             continue;
         };
         // a part is read as `role : Type`, unlike a definition's bare name
-        let label = match type_of(model, child) {
+        let label = match type_name(model, child) {
             Some(ty) => format!("{name} : {ty}"),
             None => name.to_string(),
         };
@@ -330,7 +330,7 @@ fn transition_label(model: &Model, transition: ElementId) -> Option<String> {
     }
     if let Some(trigger) = first_reference(model, transition, "triggerAction") {
         let payload = model.name(trigger).unwrap_or_default();
-        let typed = type_of(model, trigger)
+        let typed = type_name(model, trigger)
             .map(|ty| format!(" : {ty}"))
             .unwrap_or_default();
         head.push(format!("accept {payload}{typed}"));
@@ -376,9 +376,13 @@ fn push_satisfaction(
     index: &HashMap<ElementId, usize>,
     edges: &mut Vec<Edge>,
 ) {
-    // in the declaring form the assertion is the requirement
-    let requirement =
-        single_reference(model, assertion, "satisfiedRequirement").unwrap_or(assertion);
+    // the assertion has a box of its own only where nothing else on the
+    // canvas stands for the requirement, so where a requirement is both
+    // named and drawn, that is what the edge points at
+    let requirement = match single_reference(model, assertion, "satisfiedRequirement") {
+        Some(named) if !is_box(model, assertion) => named,
+        _ => assertion,
+    };
     let Some(satisfier) = single_reference(model, assertion, "satisfyingFeature") else {
         return;
     };
@@ -411,19 +415,22 @@ fn typed_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
     if !matches!(model.get(end, "isEnd"), Some(Value::Bool(true))) {
         return None;
     }
-    let target = type_reference(model, end)?;
+    let target = model.type_of(end)?;
     Some((target, model.name(end).unwrap_or_default().to_string()))
 }
 
 /// Whether an element gets a box of its own in an interconnection view.
 ///
-/// A satisfy assertion is normally only an edge, but `satisfy requirement
-/// r : R by p;` declares the requirement rather than naming one, so there
-/// the assertion is what the edge has to point at.
+/// A satisfy assertion is normally only an edge, drawn from the satisfier
+/// to the requirement it names. Two forms have nothing to point at and so
+/// stand for the requirement themselves: `satisfy requirement r : R by p;`,
+/// which declares a requirement of its own rather than naming one already
+/// on the canvas, and `satisfy requirement r by p;`, which names none.
 fn is_box(model: &Model, element: ElementId) -> bool {
     let kind = model.kind(element);
     if kind.is_a(ElementKind::SatisfyRequirementUsage) {
-        return single_reference(model, element, "satisfiedRequirement").is_none();
+        return model.type_of(element).is_some()
+            || single_reference(model, element, "satisfiedRequirement").is_none();
     }
     is_structure_box(kind)
 }
@@ -513,7 +520,7 @@ fn compositions_of(
         if !model.kind(child).is_a(ElementKind::PartUsage) || !is_structure_box(model.kind(child)) {
             continue;
         }
-        let Some(&to) = type_reference(model, child).and_then(|ty| index.get(&ty)) else {
+        let Some(&to) = model.type_of(child).and_then(|ty| index.get(&ty)) else {
             continue;
         };
         if to == from || linked.contains(&to) {
@@ -528,19 +535,6 @@ fn compositions_of(
             label: None,
         });
     }
-}
-
-/// The element a usage's reified `FeatureTyping` points at.
-fn type_reference(model: &Model, usage: ElementId) -> Option<ElementId> {
-    model.owned(usage).iter().find_map(|&rel| {
-        if model.kind(rel) != ElementKind::FeatureTyping {
-            return None;
-        }
-        match model.get(rel, "type") {
-            Some(Value::Ref(target)) => Some(*target),
-            _ => None,
-        }
-    })
 }
 
 /// The SysML keyword a metaclass is written with: `PartDefinition` becomes
@@ -581,7 +575,7 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
 /// `Wheel`. Nesting stops here -- one level is what a box has room for.
 fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
-    let owners = [Some(usage), type_reference(model, usage)];
+    let owners = [Some(usage), model.type_of(usage)];
     for owner in owners.into_iter().flatten() {
         for &part in model.owned(owner) {
             if !model.kind(part).is_a(ElementKind::PartUsage) || !is_structure_box(model.kind(part))
@@ -591,7 +585,7 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
             let Some(name) = model.name(part) else {
                 continue;
             };
-            let label = match type_of(model, part) {
+            let label = match type_name(model, part) {
                 Some(ty) => format!("{name} : {ty}"),
                 None => name.to_string(),
             };
@@ -621,7 +615,7 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
 /// usage redefines keeps the usage's own entry.
 fn features_with_type(model: &Model, usage: ElementId) -> Vec<Feature> {
     let mut out = features_of(model, usage);
-    let Some(ty) = type_reference(model, usage) else {
+    let Some(ty) = model.type_of(usage) else {
         return out;
     };
     for inherited in features_of(model, ty) {
@@ -645,7 +639,7 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<Feature> {
         out.push(Feature {
             keyword: keyword(model.kind(child)),
             name: name.to_string(),
-            ty: type_of(model, child),
+            ty: type_name(model, child),
             multiplicity: multiplicity_of(model, child),
             value: value_of(model, child),
         });
@@ -724,8 +718,8 @@ fn expression_text(model: &Model, expression: ElementId) -> String {
 
 /// The type name of a usage, read off the `FeatureTyping` that name
 /// resolution reified for its `:` clause.
-fn type_of(model: &Model, usage: ElementId) -> Option<String> {
-    let target = type_reference(model, usage)?;
+fn type_name(model: &Model, usage: ElementId) -> Option<String> {
+    let target = model.type_of(usage)?;
     model.name(target).map(str::to_string)
 }
 

@@ -293,7 +293,7 @@ impl<'a> Generator<'a> {
                 if multiplicity(model, child) == Container::Many {
                     continue;
                 }
-                let Some(target) = type_of(model, child) else {
+                let Some(target) = model.type_of(child) else {
                     continue;
                 };
                 if shapes.get(&target) != Some(&Shape::Struct) {
@@ -548,8 +548,9 @@ impl<'a> Generator<'a> {
     /// Whether the type of `field` says it already has `trait_name`.
     /// Only a bound type is asked: what this generator wrote, it knows.
     fn field_type_claims(&self, field: &Field, trait_name: &str) -> bool {
-        type_of(self.model, field.usage)
-            .or_else(|| type_of(self.model, redefined(self.model, field.usage)?))
+        self.model
+            .type_of(field.usage)
+            .or_else(|| self.model.type_of(redefined(self.model, field.usage)?))
             .and_then(|ty| binding(self.model, ty))
             .is_some_and(|bound| binding::claims(&bound, trait_name))
     }
@@ -713,8 +714,10 @@ impl<'a> Generator<'a> {
                 .name(redefined(self.model, usage)?)
                 .map(str::to_string)
         })?;
-        let target = type_of(self.model, usage)
-            .or_else(|| type_of(self.model, redefined(self.model, usage)?))?;
+        let target = self
+            .model
+            .type_of(usage)
+            .or_else(|| self.model.type_of(redefined(self.model, usage)?))?;
         let ty = if let Some(bound) = binding(self.model, target) {
             FieldType::External(bound.get(binding::PATH)?.clone())
         } else if matches!(
@@ -1067,7 +1070,9 @@ impl<'a> Generator<'a> {
                 continue;
             };
             writeln!(out, "    /// SysML: `variant {variant}`").unwrap();
-            let payload = type_of(self.model, child)
+            let payload = self
+                .model
+                .type_of(child)
                 .filter(|target| self.shapes.get(target) == Some(&Shape::Struct))
                 .and_then(|target| self.model.name(target))
                 .map(type_ident);
@@ -1312,7 +1317,7 @@ impl<'a> Generator<'a> {
         let payload = match model.get(usage, "triggerAction") {
             Some(Value::RefList(triggers)) => triggers.first().and_then(|&accept| {
                 let param = model.name(accept)?;
-                let ty = type_of(model, accept)?;
+                let ty = model.type_of(accept)?;
                 let rust = if let Some(bound) = binding(model, ty) {
                     bound.get(binding::PATH)?.clone()
                 } else if self.shapes.contains_key(&ty) {
@@ -1520,7 +1525,7 @@ impl<'a> Generator<'a> {
         // typed by a calculation definition and carrying no formula of
         // its own, the usage performs that definition rather than being
         // one: what it says is which of the parameters come off the part
-        if let Some(def) = type_of(model, usage) {
+        if let Some(def) = model.type_of(usage) {
             if self.shapes.get(&def) == Some(&Shape::Calculation)
                 && result_clause(model, usage).is_none()
                 && value_clause(model, usage).is_none()
@@ -1602,7 +1607,7 @@ impl<'a> Generator<'a> {
     /// A `state` usage of a part: the state its machine is in, as the
     /// generated enum, under the name the model gave the usage.
     fn state_field(&self, usage: ElementId) -> Option<(String, String)> {
-        let def = type_of(self.model, usage)?;
+        let def = self.model.type_of(usage)?;
         if self.shapes.get(&def) != Some(&Shape::StateMachine) {
             return None;
         }
@@ -1616,7 +1621,7 @@ impl<'a> Generator<'a> {
     fn assertion(&self, usage: ElementId, fields: &[Field]) -> Result<String, String> {
         let model = self.model;
         let name = model.name(usage).expect("named, or it was skipped");
-        let Some(def) = type_of(model, usage) else {
+        let Some(def) = model.type_of(usage) else {
             return Err(format!("assert `{name}` -- its constraint did not resolve"));
         };
         if self.shapes.get(&def) != Some(&Shape::Calculation) {
@@ -1641,7 +1646,8 @@ impl<'a> Generator<'a> {
             match model.kind(child) {
                 ElementKind::ActionUsage | ElementKind::PerformActionUsage => {
                     if let Some(name) = model.name(child) {
-                        let of = type_of(model, child)
+                        let of = model
+                            .type_of(child)
                             .and_then(|ty| model.name(ty))
                             .map(|ty| format!(" : {ty}"))
                             .unwrap_or_default();
@@ -1691,8 +1697,9 @@ impl<'a> Generator<'a> {
                 continue;
             }
             let named = model.name(child).ok_or("a subaction with no name")?;
-            let performed =
-                type_of(model, child).ok_or_else(|| format!("`{named}` performs nothing"))?;
+            let performed = model
+                .type_of(child)
+                .ok_or_else(|| format!("`{named}` performs nothing"))?;
             if self.shapes.get(&performed) != Some(&Shape::Action) {
                 return Err(format!("`{named}` performs no generated action"));
             }
@@ -1918,7 +1925,7 @@ impl<'a> Generator<'a> {
         parameter: ElementId,
         fanout: &mut HashMap<(ElementId, ElementId), usize>,
     ) -> Option<String> {
-        let performed = type_of(self.model, source)?;
+        let performed = self.model.type_of(source)?;
         let outs: Vec<ElementId> = self
             .model
             .owned(performed)
@@ -2263,13 +2270,16 @@ impl<'a> Generator<'a> {
             return Some(read);
         }
         let clonable = ty == "String"
-            || type_of(self.model, param).is_some_and(|target| self.derivable.contains(&target));
+            || self
+                .model
+                .type_of(param)
+                .is_some_and(|target| self.derivable.contains(&target));
         clonable.then(|| format!("{read}.clone()"))
     }
 
     /// An unbound port as a plain field of its generated port struct.
     fn plain_port(&self, def: ElementId, usage: ElementId) -> Option<Field> {
-        let target = type_of(self.model, usage)?;
+        let target = self.model.type_of(usage)?;
         if self.shapes.get(&target) != Some(&Shape::Struct) || self.has_api_ports(target) {
             return None;
         }
@@ -2337,9 +2347,9 @@ impl<'a> Generator<'a> {
                             .is_a(ElementKind::SatisfyRequirementUsage)
                             && model.get(satisfy, "satisfiedRequirement") == Some(&Value::Ref(id))
                     })
-                    .filter_map(|satisfy| match model.get(satisfy, "satisfyingFeature") {
-                        Some(Value::Ref(feature)) => model.name(*feature).map(str::to_string),
-                        _ => None,
+                    .filter_map(|satisfy| {
+                        let feature = model.get(satisfy, "satisfyingFeature")?.as_id()?;
+                        model.name(feature).map(str::to_string)
                     })
                     .collect();
                 stubs.push((name.to_string(), documentation(model, id), satisfiers));
@@ -2375,7 +2385,7 @@ impl<'a> Generator<'a> {
     }
 
     fn port_of(&self, usage: ElementId) -> Option<Port> {
-        let port_def = type_of(self.model, usage)?;
+        let port_def = self.model.type_of(usage)?;
         let bound = binding(self.model, port_def)?;
         let path = bound.get(binding::PATH)?.clone();
         Some(Port {
@@ -2396,7 +2406,7 @@ impl<'a> Generator<'a> {
     ) -> Result<String, RustgenError> {
         let model = self.model;
         let usage_name = model.name(usage).expect("named, or it was skipped");
-        let Some(action) = type_of(model, usage) else {
+        let Some(action) = model.type_of(usage) else {
             return Ok(format!(
                 "    // not generated: perform `{usage_name}` -- its action did not resolve\n"
             ));
@@ -2569,10 +2579,12 @@ impl<'a> Generator<'a> {
     fn parameter_shape(&self, usage: ElementId) -> Option<(String, Container)> {
         // a parameter bound by a usage -- `in previous = stateVector` --
         // declares no type of its own; it keeps the one it redefines
-        let declaring = type_of(self.model, usage)
+        let declaring = self
+            .model
+            .type_of(usage)
             .map(|_| usage)
             .or_else(|| redefined(self.model, usage))?;
-        let ty = type_of(self.model, declaring)?;
+        let ty = self.model.type_of(declaring)?;
         // a parameter carries its multiplicity the way a field does: a
         // `[1..*]` of something is a `Vec` of it, not one of it
         let container = multiplicity(self.model, declaring);
@@ -2833,18 +2845,6 @@ fn redefined(model: &Model, usage: ElementId) -> Option<ElementId> {
 }
 
 /// The resolved type of a usage, off its reified typing.
-fn type_of(model: &Model, usage: ElementId) -> Option<ElementId> {
-    model.owned(usage).iter().find_map(|&child| {
-        if model.kind(child) != ElementKind::FeatureTyping {
-            return None;
-        }
-        match model.get(child, "type") {
-            Some(Value::Ref(target)) => Some(*target),
-            _ => None,
-        }
-    })
-}
-
 /// The `@rust { :>> name = value; ... }` pairs of one element, if it
 /// carries a binding.
 fn binding(model: &Model, element: ElementId) -> Option<HashMap<String, String>> {

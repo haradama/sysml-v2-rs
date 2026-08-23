@@ -1814,6 +1814,17 @@ impl Workspace {
             (SyntaxKind::BY_KW, "satisfyingFeature"),
         ] {
             let Some(operand) = operand_after(node, keyword) else {
+                // `satisfy requirement req1 : Req1 by system;` declares
+                // the satisfaction rather than writing the requirement
+                // after the keyword, and names what is satisfied by
+                // typing it. That typing is reified by now, so the
+                // answer is already in the model. Where the keyword is
+                // there but the typing is not, nothing is satisfied.
+                if property == "satisfiedRequirement" {
+                    if let Some(typed) = self.model.type_of(id) {
+                        self.try_set(id, property, Value::Ref(typed));
+                    }
+                }
                 continue;
             };
             let segments = operand_segments(&operand);

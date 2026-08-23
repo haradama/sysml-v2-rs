@@ -789,6 +789,58 @@ fn a_satisfaction_resolves_both_of_its_sides() {
 }
 
 #[test]
+fn a_satisfaction_that_declares_its_requirement_still_names_one() {
+    // `satisfy requirement r : R by p;` is what the corpus writes. The
+    // requirement is not after the keyword there -- `r` is the name the
+    // assertion is given -- so it has to be read off the typing, or the
+    // model records what satisfies without recording what is satisfied.
+    let ws = ws(&[(
+        "s.sysml",
+        "requirement def R;\n\
+         part def P;\n\
+         package K {\n\
+         \tpart p : P;\n\
+         \tsatisfy requirement r : R by p;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let assertion = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::SatisfyRequirementUsage)
+        .unwrap();
+    for (property, expected) in [("satisfiedRequirement", "R"), ("satisfyingFeature", "p")] {
+        let Some(sysml_model::Value::Ref(target)) = model.get(assertion, property) else {
+            panic!("{property} was not recorded");
+        };
+        assert_eq!(model.name(*target), Some(expected));
+    }
+}
+
+#[test]
+fn a_satisfaction_that_declares_nothing_satisfies_nothing() {
+    // `satisfy requirement viewpointConformance by that;`, from the
+    // standard library: the name is the assertion's own, and no
+    // requirement is named at all. Reading it as a reference would
+    // report the library as broken.
+    let ws = ws(&[(
+        "s.sysml",
+        "part def P {\n\
+         \tsatisfy requirement conformance by that;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let assertion = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::SatisfyRequirementUsage)
+        .unwrap();
+    assert_eq!(model.get(assertion, "satisfiedRequirement"), None);
+}
+
+#[test]
 fn an_unresolvable_satisfaction_is_reported() {
     // a single name would match the assertion's own effective name, which
     // `resolve_from` allows for legal self-references; `that` outside any
