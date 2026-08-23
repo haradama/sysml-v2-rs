@@ -211,6 +211,12 @@ layout when it is not.
 make vscode   # build server, bundle it with the standard library, package, install
 ```
 
+The whole workspace is the model: every `.sysml`/`.kerml` file under the
+open folders resolves against every other, whether or not it is in a tab,
+so a file that imports a sibling is not reported as broken for having been
+opened alone. `sysml.workspace.exclude` leaves out directories that are not
+yours to edit -- a vendored corpus, someone else's model.
+
 The packaged extension carries the server and `sysml.library` inside it, so
 nothing needs configuring; `sysml.server.path` / `sysml.library.path`
 override the bundled copies when set. For extension development,

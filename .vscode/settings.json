@@ -1,0 +1,8 @@
+{
+  // `vendor/` is the official corpus, consulted as ground truth rather
+  // than edited here, and `sysml check` is how this repository consults
+  // it. Loading its 403 files into the language server would cost a
+  // couple of seconds every time a document is opened, for names nobody
+  // is editing.
+  "sysml.workspace.exclude": ["vendor"]
+}

@@ -55,11 +55,15 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
   const dot = vscode.workspace
     .getConfiguration("sysml")
     .get<string>("diagram.dot", "dot");
+  const exclude = vscode.workspace
+    .getConfiguration("sysml")
+    .get<string[]>("workspace.exclude", []);
   return {
     // no scheme filter: untitled buffers get language support too
     documentSelector: [{ language: "sysml" }, { language: "kerml" }],
     initializationOptions: {
       ...(library ? { libraryPath: library } : {}),
+      ...(exclude.length > 0 ? { excludePaths: exclude } : {}),
       dotCommand: dot,
     },
   };

@@ -7,9 +7,15 @@
 //! environment variable) so references into the library resolve and
 //! definitions inside it can be jumped to.
 //!
-//! The whole workspace is re-analyzed per change — parsing and resolving the
-//! standard library plus open documents takes well under a second in release
-//! builds, which keeps the server simple and always consistent.
+//! Analysis is three layers, each rebuilt by a rarer event than the one
+//! above it. The standard library is parsed and resolved once at startup.
+//! On top of it sit the project's own files -- every `.sysml`/`.kerml`
+//! under the workspace folders -- rebuilt when a document is opened or
+//! closed, since a file open in the editor is read from its buffer rather
+//! than from disk. On top of those sit the open buffers, rebuilt on every
+//! keystroke. A model is written across several files that import each
+//! other, so without the middle layer a file would resolve only against
+//! whatever else happened to be open in a tab.
 //!
 //! Run the binary (`sysml-lsp`) over stdio, or drive [`run`] with an
 //! in-memory [`Connection`] for testing.
@@ -75,7 +81,42 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
     };
     let library_path = option("libraryPath").or_else(|| std::env::var("SYSML_LIBRARY_PATH").ok());
 
-    let mut server = Server::new(library_path);
+    // `workspaceFolders` is what a modern client sends; `rootUri` is what
+    // an older one sends and what a client with no folder open sends
+    let roots: Vec<std::path::PathBuf> = init
+        .workspace_folders
+        .iter()
+        .flatten()
+        .map(|folder| &folder.uri)
+        .chain(init.root_uri.iter())
+        .filter_map(|uri| uri.to_file_path().ok())
+        .collect();
+
+    // a workspace may contain models that are not the project's own --
+    // a vendored corpus, a copy of someone else's model -- and loading
+    // them costs time on every open for names nobody is editing
+    let excluded: Vec<std::path::PathBuf> = init
+        .initialization_options
+        .as_ref()
+        .and_then(|o| o.get("excludePaths"))
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|entry| entry.as_str())
+        .flat_map(|entry| {
+            let path = std::path::Path::new(entry);
+            if path.is_absolute() {
+                vec![path.to_path_buf()]
+            } else {
+                // a relative entry is one per workspace folder, the way a
+                // client writes `"vendor"` and means its own `vendor`
+                roots.iter().map(|root| root.join(path)).collect()
+            }
+        })
+        .collect();
+
+    let mut server = Server::new(library_path, &roots, &excluded);
     if let Some(command) = option("dotCommand") {
         server.dot_command = command;
     }
@@ -83,10 +124,15 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
 }
 
 pub struct Server {
-    /// library workspace, parsed and fully resolved once at startup; each
-    /// re-analysis clones it (including all resolution caches) and only
-    /// adds + resolves the open documents
-    base: Workspace,
+    /// library workspace, parsed and fully resolved once at startup; the
+    /// layers above clone it, resolution caches and all
+    library: Workspace,
+    /// every model file in the workspace folders, the library's own
+    /// excluded -- it is already in `library`
+    project_files: Vec<std::path::PathBuf>,
+    /// library + the project files that are not open, resolved; rebuilt
+    /// when a document is opened or closed
+    project: Option<Workspace>,
     /// open documents
     docs: HashMap<Url, String>,
     /// cached analysis, invalidated on document changes
@@ -95,36 +141,83 @@ pub struct Server {
     dot_command: String,
 }
 
-/// One analysis pass over the library + all open documents.
+/// One analysis pass over the library + the project + all open documents.
 struct Analysis {
     ws: Workspace,
     doc_files: HashMap<Url, usize>,
 }
 
 impl Server {
-    fn new(library_path: Option<String>) -> Server {
-        let mut base = Workspace::new();
-        if let Some(dir) = library_path {
+    fn new(
+        library_path: Option<String>,
+        roots: &[std::path::PathBuf],
+        excluded: &[std::path::PathBuf],
+    ) -> Server {
+        let mut library = Workspace::new();
+        let library_dir = library_path.map(std::path::PathBuf::from);
+        if let Some(dir) = &library_dir {
             // a missing or unreadable library directory degrades gracefully
             // to an empty library
-            let _ = base.load_dir(std::path::Path::new(&dir));
+            let _ = library.load_dir(dir);
             // resolve the library once; the caches are cloned into every
-            // per-change analysis, so this cost is paid only at startup
-            base.resolve_all();
+            // layer above, so this cost is paid only at startup
+            library.resolve_all();
         }
+        // the library is already loaded, so its own files are never part
+        // of the project even when the workspace folder contains them
+        let skip: Vec<&std::path::Path> = library_dir
+            .as_deref()
+            .into_iter()
+            .chain(excluded.iter().map(std::path::PathBuf::as_path))
+            .collect();
+        let mut project_files: Vec<std::path::PathBuf> = roots
+            .iter()
+            .flat_map(|root| sysml_semantics::model_files(root))
+            .filter(|path| !skip.iter().any(|dir| path.starts_with(dir)))
+            .collect();
+        project_files.sort();
+        project_files.dedup();
         Server {
-            base,
+            library,
+            project_files,
+            project: None,
             docs: HashMap::new(),
             analysis: None,
             dot_command: "dot".to_string(),
         }
     }
 
-    /// Cached analysis of library + open documents (recomputed lazily
-    /// after a document change).
+    /// Library + every project file that is not open in a buffer.
+    ///
+    /// An open file is left out here and added by [`Server::analysis`] from
+    /// its buffer instead, so that what the editor shows is what resolves
+    /// -- and so that nothing is declared twice.
+    fn project(&mut self) -> &Workspace {
+        if self.project.is_none() {
+            let mut ws = self.library.clone();
+            let mut added = Vec::new();
+            for path in &self.project_files {
+                if Url::from_file_path(path).is_ok_and(|url| self.docs.contains_key(&url)) {
+                    continue;
+                }
+                // a listed file can still be unreadable: gone since the
+                // scan, or never text in the first place
+                let Ok(text) = std::fs::read_to_string(path) else {
+                    continue;
+                };
+                added.push(ws.add_file(path.to_string_lossy(), &text));
+            }
+            ws.resolve_files(&added);
+            self.project = Some(ws);
+        }
+        self.project.as_ref().expect("just built")
+    }
+
+    /// Cached analysis of library + project + open documents (recomputed
+    /// lazily after a document change).
     fn analysis(&mut self) -> &mut Analysis {
         if self.analysis.is_none() {
-            let mut ws = self.base.clone();
+            let mut ws = self.project().clone();
             let mut doc_files = HashMap::new();
             for (url, text) in &self.docs {
                 let idx = ws.add_file(url.to_string(), text);
@@ -168,6 +261,8 @@ impl Server {
                     serde_json::from_value(note.params)?;
                 self.docs
                     .insert(params.text_document.uri.clone(), params.text_document.text);
+                // that file now comes from its buffer rather than from disk
+                self.project = None;
                 self.analysis = None;
                 self.publish_diagnostics(connection)?;
             }
@@ -186,6 +281,7 @@ impl Server {
                 let params: lsp_types::DidCloseTextDocumentParams =
                     serde_json::from_value(note.params)?;
                 self.docs.remove(&params.text_document.uri);
+                self.project = None;
                 self.analysis = None;
             }
             _ => {}
@@ -386,24 +482,40 @@ impl Server {
         Some(GotoDefinitionResponse::Scalar(location))
     }
 
-    /// Location of a range within any workspace file (open doc or library).
-    fn location(&mut self, file: usize, range: sysml_syntax::TextRange) -> Option<Location> {
+    /// The document a file stands for: its URL and its text as it is now,
+    /// from the buffer where one is open and from disk otherwise.
+    fn document(&mut self, file: usize) -> Option<(Url, String)> {
         let name = self.analysis().ws.file_name(file).to_string();
-        let open_doc = Url::parse(&name)
+        // an open document is named by its URL, anything else by its path
+        let open = Url::parse(&name)
             .ok()
             .and_then(|url| self.docs.get(&url).map(|text| (url, text.clone())));
-        if let Some((url, text)) = open_doc {
-            let index = LineIndex::new(&text);
-            return Some(Location {
-                uri: url,
-                range: index.range(&text, range),
-            });
+        open.or_else(|| {
+            let path = std::path::Path::new(&name).canonicalize().ok()?;
+            let text = std::fs::read_to_string(&path).ok()?;
+            Some((Url::from_file_path(path).ok()?, text))
+        })
+    }
+
+    /// Whether an edit may be written to the file. The project's own
+    /// files may be, open or not; the standard library may not.
+    fn writable(&mut self, file: usize) -> bool {
+        let name = self.analysis().ws.file_name(file).to_string();
+        if Url::parse(&name).is_ok_and(|url| self.docs.contains_key(&url)) {
+            return true;
         }
-        let url = Url::from_file_path(std::path::Path::new(&name).canonicalize().ok()?).ok()?;
-        let text = std::fs::read_to_string(&name).ok()?;
+        self.project_files
+            .iter()
+            .any(|path| path.to_string_lossy() == name)
+    }
+
+    /// Location of a range within any workspace file (open doc, project
+    /// file or library).
+    fn location(&mut self, file: usize, range: sysml_syntax::TextRange) -> Option<Location> {
+        let (uri, text) = self.document(file)?;
         let index = LineIndex::new(&text);
         Some(Location {
-            uri: url,
+            uri,
             range: index.range(&text, range),
         })
     }
@@ -451,8 +563,8 @@ impl Server {
     /// Renaming touches every file the workspace knows, so what makes it
     /// safe is checked across all of them before a single edit is
     /// offered: the new name has to be a name, nothing already visible
-    /// where the declaration stands may answer to it, and every file
-    /// holding a reference has to be one the editor can write.
+    /// where the declaration stands may answer to it, and what is being
+    /// renamed has to be the project's rather than the library's.
     fn rename(
         &mut self,
         uri: &Url,
@@ -482,19 +594,10 @@ impl Server {
         if analysis.ws.is_alias(target) {
             return Err("renaming an alias would leave what uses it behind".to_string());
         }
-        // the declaration must live in an open document — library elements
-        // cannot be renamed
         let decl_file = analysis
             .ws
             .element_file(target)
             .ok_or("that element belongs to no file".to_string())?;
-        let decl_name = analysis.ws.file_name(decl_file).to_string();
-        let editable = Url::parse(&decl_name)
-            .ok()
-            .filter(|url| analysis.doc_files.contains_key(url));
-        if editable.is_none() {
-            return Err("that element is declared outside the open documents".to_string());
-        }
         let (_, decl_range) = analysis
             .ws
             .element_ranges(target)
@@ -519,6 +622,12 @@ impl Server {
             );
         }
 
+        // the declaration must be somewhere the editor may write --
+        // library elements are not
+        if !self.writable(decl_file) {
+            return Err("that element is declared outside the project".to_string());
+        }
+
         // a name already visible where the declaration stands would
         // capture, or be captured by, the renamed one
         let start = decl_range.start();
@@ -534,15 +643,14 @@ impl Server {
 
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for (file, range) in edits {
+            // Every one of these is writable without being asked: what
+            // holds a reference to a project element is a project file
+            // or an open buffer, never the library, which resolves
+            // before any of them exists and so cannot name one.
             let name = self.analysis().ws.file_name(file).to_string();
-            let url = Url::parse(&name).map_err(|_| format!("`{name}` is no document"))?;
-            // a partial rename is worse than none: every file holding a
-            // reference has to be open for the edit to reach it
-            let text = self
-                .docs
-                .get(&url)
-                .ok_or_else(|| format!("`{name}` refers to it and is not open"))?
-                .clone();
+            let (url, text) = self
+                .document(file)
+                .ok_or_else(|| format!("`{name}` cannot be read"))?;
             let index = LineIndex::new(&text);
             changes.entry(url).or_default().push(TextEdit {
                 range: index.range(&text, range),

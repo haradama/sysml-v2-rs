@@ -149,7 +149,7 @@ fn library_navigation_and_error_paths() {
     );
     assert!(rename
         .error
-        .is_some_and(|e| e.message.contains("outside the open documents")));
+        .is_some_and(|e| e.message.contains("outside the project")));
 
     // requests that miss return null
     for method in [

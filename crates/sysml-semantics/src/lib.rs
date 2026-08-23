@@ -239,9 +239,7 @@ impl Workspace {
 
     /// Recursively load every `.sysml`/`.kerml` file under `dir`.
     pub fn load_dir(&mut self, dir: &std::path::Path) -> std::io::Result<usize> {
-        let mut paths = Vec::new();
-        collect_files(dir, &mut paths);
-        paths.sort();
+        let paths = model_files(dir);
         let count = paths.len();
         for path in paths {
             let text = std::fs::read_to_string(&path)?;
@@ -2448,6 +2446,18 @@ fn name_segments(qname: &SyntaxNode) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+/// Every `.sysml`/`.kerml` file under `dir`, in a stable order.
+///
+/// Separate from [`Workspace::load_dir`] because an editor has to know
+/// which files a project has before deciding which of them to load: the
+/// ones open in a buffer are read from the buffer, not from disk.
+pub fn model_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    collect_files(dir, &mut paths);
+    paths.sort();
+    paths
 }
 
 fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

@@ -24,6 +24,16 @@ Manual override, when wanted: `sysml.server.path` points at another server
 binary, `sysml.library.path` at another standard library (else
 `SYSML_LIBRARY_PATH` is honoured).
 
+## What resolves against what
+
+Every `.sysml`/`.kerml` file in the workspace folders is part of the
+model, whether or not it is open in a tab -- a file that imports a
+sibling resolves against it as it sits on disk, and against the buffer
+once you open it. `sysml.workspace.exclude` lists directories that are
+not yours to edit (a vendored corpus, someone else's model): their names
+do not resolve and are not offered in completion, and the server does not
+pay to load them.
+
 ## Development
 
 ```sh

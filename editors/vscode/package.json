@@ -68,6 +68,14 @@
           "default": "",
           "description": "Path to a SysML standard library. Empty uses the copy bundled into the extension, falling back to SYSML_LIBRARY_PATH."
         },
+        "sysml.workspace.exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Directories in the workspace whose models are not part of this project -- a vendored corpus, someone else's model. Their names do not resolve and are not offered in completion. Relative paths are taken from each workspace folder."
+        },
         "sysml.diagram.layout": {
           "type": "string",
           "enum": [
