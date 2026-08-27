@@ -702,6 +702,8 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
          \t\trequirement restated : Latency;\n\
          \t}\n\
          \tsatisfy Latency by Probe;\n\
+         \trequirement def Denied;\n\
+         \tnot satisfy Denied by Probe;\n\
          \tsatisfy requirement covered : Coverage by Rig;\n\
          \tsatisfy Untested;\n\
          \tpackage Inner {\n\
@@ -717,6 +719,9 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
     assert_eq!(rust.matches("fn latency()").count(), 1);
     assert!(rust.contains("/// under 100ms"));
     assert!(rust.contains("/// Satisfied by `Probe`."));
+    // `not satisfy Denied by Probe;` says the opposite, so nothing
+    // answers for `Denied` and its stub names no one
+    assert!(rust.contains("fn denied() {}"), "{rust}");
     // the declaring form names its requirement by typing, not after the
     // keyword, and traces through all the same
     assert!(rust.contains("/// Satisfied by `Rig`."));

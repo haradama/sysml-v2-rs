@@ -2389,6 +2389,10 @@ impl<'a> Generator<'a> {
                             .kind(satisfy)
                             .is_a(ElementKind::SatisfyRequirementUsage)
                             && model.get(satisfy, "satisfiedRequirement") == Some(&Value::Ref(id))
+                            // `not satisfy r by p;` says p does not, so
+                            // naming it as what answers for `r` would
+                            // put the opposite of the model in the doc
+                            && model.get(satisfy, "isNegated") != Some(&Value::Bool(true))
                     })
                     .filter_map(|satisfy| {
                         let feature = model.get(satisfy, "satisfyingFeature")?.as_id()?;

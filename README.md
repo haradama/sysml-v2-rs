@@ -48,7 +48,7 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | [`sysml-model`](crates/sysml-model) | Element model: 175 metaclasses generated from the official Ecore metamodel, arena storage, AST→model builder; the generator that writes it from [`vendor/metamodel`](vendor/metamodel) is in the same crate behind the `codegen` feature |
 | [`sysml-semantics`](crates/sysml-semantics) | Name resolution (imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions), relationship reification and implied-relationship materialization — the whole standard library resolves |
 | [`sysml-interchange`](crates/sysml-interchange) | Standard JSON interchange: the complete property set of every metaclass, derived ownership/naming/inheritance-closure/import properties, reified memberships down to `ParameterMembership`/`SubjectMembership`/`StateSubactionMembership`/... with visibility and kind, deterministic UUIDs; resolved whole-library round-trip tested |
-| [`sysml-diagram`](crates/sysml-diagram) | Definition/specialization diagrams: layered layout and SVG rendering with no external engine, or PlantUML-style Graphviz layout (`dot` for positions, the drawing stays ours) |
+| [`sysml-diagram`](crates/sysml-diagram) | Definition/interconnection diagrams in the standard's own notation — labelled compartment stacks, ports on the border, composite and reference memberships told apart by the diamond the specification draws — laid out here or by the Eclipse Layout Kernel (`elkrs` for the arrangement and the routes) |
 | [`sysml-rust`](crates/sysml-rust) | The Rust side of a model, both ways. `import` reads an existing crate's rustdoc JSON as a SysML package whose definitions carry `@rust` binding metadata; `generate` writes Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, go-to-definition, find-references, rename, completion, hover, symbols, formatting — with a [VSCode extension](editors/vscode) as its client |
 | [`sysml-cli`](crates/sysml-cli) | `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`, `diagram`, `import-rust`, `rustgen`, `api`, `mcp`, `corpus`); `mcp` speaks the Model Context Protocol over stdio, so an AI agent can ask whether a model parses and resolves, what names are legal at a point, and what the standard library actually declares; `api` is the client for the SysML v2 API & Services REST standard, and `api push` sends what `export` writes |
@@ -113,11 +113,14 @@ from the satisfying feature to the requirement, and an n-ary
 `connection { end ::> a; end ::> b; end ::> c; }` -- how a derivation is
 written -- fans out from the end written first.
 
-Connector ends are matched by the feature chain name resolution records, so
-`connect w.hub to a.mount` links the boxes for `w` and `a` even when several
-parts share one type. Each end is drawn the SysML way -- a small square
-straddling the box border -- with the port's name beside it, and the two
-names of one connection land on opposite sides of the line. Connections
+Every port a box declares is drawn on its border, the way the standard has
+it (`part-def = part-def-name-compartment interconnection-view
+compartment-stack port-l* port-r* port-t* port-b*`): a small square
+straddling the border with `name : Type` beside it, on the side facing
+whatever it is connected to. Connector ends are matched by the feature chain
+name resolution records, so `connect w.hub to a.mount` links the boxes for
+`w` and `a` even when several parts share one type, and the line arrives at
+the port rather than drawing a second square of its own. Connections
 sharing a pair of boxes are spread apart so they stay separate lines, closing
 up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
@@ -143,14 +146,16 @@ $ cargo run -p sysml-cli -- diagram vehicle.sysml \
 wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
 ```
 
-`--graphviz` hands the positions to Graphviz `dot` the way PlantUML does --
-the boxes, edges and labels are still drawn here, in the same style, so only
-the arrangement changes. It needs Graphviz installed (`--dot` names the
-command) and trades the built-in layout's reproducible bytes for `dot`'s
-crossing minimization:
+`--elk` hands the arrangement to the Eclipse Layout Kernel -- the boxes,
+edges and labels are still drawn here, in the same style, so only where they
+sit changes. ELK picks the positions and the orthogonal routes between them
+together, and both are drawn; it trades the built-in layout's reproducible
+bytes for ELK's crossing minimization, and needs one Rust binary on the path
+(`--elk-command` names it):
 
 ```console
-$ cargo run -p sysml-cli -- diagram vehicle.sysml --graphviz -o vehicle.svg
+$ cargo install elkrs
+$ cargo run -p sysml-cli -- diagram vehicle.sysml --elk -o vehicle.svg
 ```
 
 Without it the compartment reads `attribute mass`; with it, `attribute mass
@@ -203,13 +208,17 @@ navigation, rename, hover, symbols, formatting, TextMate highlighting
 generated from the lexer's own keyword table, and a live diagram preview
 (definitions, internal structure or membership tree) served by the language
 server over a custom `sysml/diagram` request, so it follows unsaved edits.
-The preview asks Graphviz for the layout when `dot` is installed
-(`sysml.diagram.layout`, `sysml.diagram.dot`) and falls back to the built-in
+The preview asks ELK for the layout when `elkrs` is installed
+(`sysml.diagram.layout`, `sysml.diagram.elk`) and falls back to the built-in
 layout when it is not.
 
 ```sh
 make vscode   # build server, bundle it with the standard library, package, install
 ```
+
+The preview opens beside the editor when a model file is opened and
+follows what you edit; closing it keeps it closed
+(`sysml.preview.openAutomatically`).
 
 The whole workspace is the model: every `.sysml`/`.kerml` file under the
 open folders resolves against every other, whether or not it is in a tab,

@@ -19,6 +19,10 @@ package ArduinoCompatibleHardware {
         attribute number : Integer;
     }
 
+    port def SerialPort {
+        doc /* The pair of pins a sketch is uploaded over. */
+    }
+
     part def Led {
         attribute forwardVoltage : ElectricPotentialValue;
     }
@@ -39,6 +43,7 @@ package ArduinoCompatibleHardware {
         attribute flashBytes : Integer;
         attribute sramBytes : Integer;
         port digital : DigitalPin[14];
+        port serial : SerialPort;
     }
 
     part def Atmega328p :> Microcontroller {
@@ -68,7 +73,14 @@ package ArduinoCompatibleHardware {
             attribute :>> resistance = 1000.0;
         }
 
-        connect mcu.digital to statusLed;
+        // The LED is not on the pin directly: the resistor is in series
+        // with it, and that is what keeps the current inside what the
+        // pin and the LED can each take.
+        connect mcu.digital to statusLedResistor;
+        connect statusLedResistor to statusLed;
+        // The bridge is on the serial pins, which is how a sketch gets
+        // onto the board in the first place.
+        connect usb to mcu.serial;
     }
 
     part def ArduinoUno :> ArduinoCompatibleBoard {
