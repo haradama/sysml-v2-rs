@@ -622,7 +622,15 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     }
     // a `part big :> engine` whose `engine` is not one of the boxes says
     // it in words, the same way a definition does
+    let performed = performers(model);
     for node in &mut nodes {
+        let lines = performed_by(&performed, node.id);
+        if !lines.is_empty() {
+            node.compartments.push(Compartment {
+                label: "performed by",
+                lines,
+            });
+        }
         let lines = unlisted_relationships(model, node.id, &index);
         if !lines.is_empty() {
             node.compartments.push(Compartment {
@@ -1605,6 +1613,56 @@ fn condition_compartment(model: &Model, member: ElementId) -> Option<&'static st
         ElementKind::ForLoopActionUsage => Some("for iterator"),
         _ => None,
     }
+}
+
+/// Who performs each action, by the actions they say they perform.
+///
+/// `part torqueGenerator { perform providePower.generateTorque; }` is how
+/// a model says which part carries out a step of a flow, and the standard
+/// keeps a `performed-by-compartment` for exactly that. The performer is
+/// whatever owns the `perform`, and it is rarely inside the action being
+/// drawn, so the whole model is asked.
+fn performers(model: &Model) -> HashMap<ElementId, Vec<String>> {
+    let mut out: HashMap<ElementId, Vec<String>> = HashMap::new();
+    let performances = model.ids().filter_map(|id| {
+        (model.kind(id) == ElementKind::PerformActionUsage).then_some(())?;
+        // only the form that names an action already declared elsewhere:
+        // `perform action a;` declares the action it performs, and a box
+        // saying it is performed by its own owner says nothing
+        let performed = model.owned(id).iter().find_map(|&rel| {
+            (model.kind(rel) == ElementKind::ReferenceSubsetting)
+                .then(|| model.get(rel, "referencedFeature")?.as_id())
+                .flatten()
+        })?;
+        Some((performed, effective_name(model, model.owner(id)?)?))
+    });
+    for (performed, name) in performances {
+        let listed = out.entry(performed).or_default();
+        if !listed.iter().any(|drawn| drawn == name) {
+            listed.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// The `performed-by-compartment` of one box, when anything says it
+/// performs what the box stands for. Only an interconnection view has
+/// one: a `perform` names a feature, never a definition, so a definition
+/// diagram has no box for it to belong to.
+fn performed_by(performers: &HashMap<ElementId, Vec<String>>, node: ElementId) -> Vec<Feature> {
+    performers
+        .get(&node)
+        .into_iter()
+        .flatten()
+        .map(|name| Feature {
+            keyword: String::new(),
+            name: name.clone(),
+            ty: None,
+            multiplicity: None,
+            value: None,
+            direction: None,
+        })
+        .collect()
 }
 
 /// The relationships of a definition whose other end is not drawn, in the
@@ -3564,6 +3622,52 @@ mod interconnection_tests {
                 .collect::<Vec<_>>(),
             ["occurrences", "individuals", "snapshots", "timeslices"]
         );
+    }
+
+    #[test]
+    fn an_action_says_who_carries_it_out() {
+        // `performed-by-compartment-contents = QualifiedName* '\u{2026}'?`:
+        // `part p { perform flow.step; }` is how a model says which part
+        // carries out a step, and the step said nothing about it
+        let ws = resolved(
+            "action def Generate;\n\
+             action providePower {\n\
+             \taction generateTorque : Generate;\n\
+             }\n\
+             part def Logical { perform providePower.generateTorque; }\n\
+             part def Physical { perform providePower.generateTorque; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "providePower"));
+        assert_eq!(
+            diagram.nodes[0]
+                .compartments
+                .iter()
+                .map(|compartment| (
+                    compartment.label,
+                    compartment
+                        .lines
+                        .iter()
+                        .map(Feature::label)
+                        .collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                "performed by",
+                vec!["Logical".to_string(), "Physical".to_string()]
+            )]
+        );
+    }
+
+    #[test]
+    fn an_action_that_declares_what_it_performs_says_nothing_twice() {
+        // `perform action a;` declares the action it performs, so the
+        // owner performing it is not news
+        let ws = resolved(
+            "action def Generate;\n\
+             part def Logical { perform action generateTorque : Generate; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Logical"));
+        assert!(diagram.nodes[0].compartments.is_empty());
     }
 
     #[test]

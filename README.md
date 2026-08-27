@@ -172,6 +172,11 @@ up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
 two features of the same part, are left undrawn.
 
+An action says who carries it out: `part p { perform flow.step; }` is how
+a model says which part performs a step, and the standard keeps a
+`performed-by-compartment` for it. The step itself said nothing about it
+before.
+
 What a definition relates to that is not on the canvas is said in words
 rather than left unsaid: the standard's `relationships-compartment`
 (`el-prefix? relationship-name QualifiedName`) holds `specializes
