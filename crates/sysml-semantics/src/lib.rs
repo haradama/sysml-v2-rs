@@ -817,7 +817,13 @@ impl Workspace {
                 }
                 continue;
             }
-            if !matches!(node.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE) {
+            // a payload carries a typing of its own -- `flow f of Fuel`
+            // -- and is an element the builder made, so it resolves like
+            // any declaration
+            if !matches!(
+                node.kind(),
+                SyntaxKind::DEFINITION | SyntaxKind::USAGE | SyntaxKind::PAYLOAD
+            ) {
                 continue;
             }
             // `attribute pin : PinNumber = ledPinNumber;` -- the value is

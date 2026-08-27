@@ -51,6 +51,7 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         builder: GreenNodeBuilder::new(),
         errors: lex_errors,
         plain_target: false,
+        carries_payload: false,
     };
     parser.source_file();
     Parse {
@@ -72,6 +73,11 @@ struct Parser<'t> {
     /// thing being adapted: `include 'add fuel'[0..*]` includes it zero
     /// or more times.
     plain_target: bool,
+    /// While reading a `flow`, `succession flow` or `message`, what
+    /// follows `of` is the payload -- even when an `=` comes after it.
+    /// KerML's `binding ab of a = b` writes the same shape and means a
+    /// connector end, so which statement it is decides which it means.
+    carries_payload: bool,
 }
 
 impl Parser<'_> {
@@ -526,6 +532,7 @@ impl Parser<'_> {
     fn def_kind_keywords(&mut self) {
         while self.current().is_def_kind_kw() {
             let k = self.current();
+            self.carries_payload |= matches!(k, FLOW_KW | MESSAGE_KW);
             self.bump();
             if k == USE_KW {
                 self.eat(CASE_KW);
@@ -559,6 +566,7 @@ impl Parser<'_> {
         }
         // `abstract message messages : M ...` — message declarations after
         // modifiers behave like a usage kind
+        self.carries_payload = self.at(MESSAGE_KW);
         self.eat(MESSAGE_KW);
         let is_classifier = matches!(
             self.current(),
@@ -595,7 +603,12 @@ impl Parser<'_> {
         if self.at(L_PAREN) {
             self.param_list();
         }
+        // a nested declaration inside the body is a statement of its own,
+        // and what it means by `of` is its own business
+        let carries = std::mem::take(&mut self.carries_payload);
+        self.carries_payload = carries;
         self.element_tail();
+        self.carries_payload = false;
         self.finish_node();
     }
 
@@ -638,6 +651,13 @@ impl Parser<'_> {
                 L_PAREN if self.at_param_list() => self.param_list(),
                 L_PAREN => self.expression(),
                 // statement continuation keywords and misc glue
+                // `flow f of Fuel from a to b` carries a payload; KerML's
+                // `binding b of a = c` names a connector end with the same
+                // keyword, and the `=` after it is what tells them apart
+                // KerML also writes `binding instant[n] of [0..1] a = ...`,
+                // where what follows `of` is a multiplicity rather than the
+                // payload's type
+                OF_KW if self.nth_is_name(1) => self.payload_part(),
                 OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | ACCEPT_KW
                 | AT_KW | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
                 | PARALLEL_KW | GUARD_KW | EFFECT_KW | ASSIGN_KW | SEND_KW | TRIGGER_KW
@@ -725,6 +745,59 @@ impl Parser<'_> {
             self.bump();
             self.type_ref();
         }
+        self.finish_node();
+    }
+
+    /// `of Fuel` / `of fuelCommand : FuelCommand` -- what a flow, a
+    /// succession flow or a message carries.
+    ///
+    /// The payload may be written either way: `PayloadFeature =
+    /// Identification PayloadFeatureSpecializationPart ValuePart? | ...
+    /// ownedRelationship += OwnedFeatureTyping ...`, so a bare name after
+    /// `of` is the payload's *type* unless what follows declares it.
+    ///
+    /// KerML writes `binding ab of a = b` with the same keyword, where
+    /// what follows `of` is a connector end; the `=` after it is what
+    /// tells the two apart, so the node is only wrapped once that is known.
+    fn payload_part(&mut self) {
+        let cp = self.checkpoint();
+        self.bump(); // `of`
+                     // `of CallGiveItems[1]` is the shorthand with a multiplicity on
+                     // it, not a payload named `CallGiveItems`: a declaration must say
+                     // what the payload specializes -- or, in a flow, give it a value,
+                     // which is `PayloadFeature = Identification ValuePart`.
+        let declared = matches!(
+            self.nth(1),
+            COLON | COLON_GT | COLON_GT_GT | TYPED_KW | DEFINED_KW
+        ) || (self.carries_payload
+            && matches!(self.nth(1), EQ | COLON_EQ | DEFAULT_KW));
+        if declared {
+            self.opt_name();
+            loop {
+                match self.current() {
+                    COLON | TYPED_KW | DEFINED_KW => self.typing_part(),
+                    COLON_GT | SPECIALIZES_KW | SUBSETS_KW => self.relationship_part(SUBSETTING),
+                    COLON_GT_GT | REDEFINES_KW => self.relationship_part(REDEFINITION),
+                    L_BRACKET => self.multiplicity(),
+                    EQ | COLON_EQ | DEFAULT_KW => self.value_part(),
+                    _ => break,
+                }
+            }
+        } else {
+            let typing = self.checkpoint();
+            self.type_ref();
+            if self.at(EQ) && !self.carries_payload {
+                return; // a KerML connector end, not a payload
+            }
+            self.start_node_at(typing, TYPING);
+            self.finish_node();
+            // `flow f of CallGiveItems[1]` -- the multiplicity counts the
+            // payload, not the flow
+            if self.at(L_BRACKET) {
+                self.multiplicity();
+            }
+        }
+        self.start_node_at(cp, PAYLOAD);
         self.finish_node();
     }
 

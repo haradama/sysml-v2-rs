@@ -314,6 +314,10 @@ pub enum SyntaxKind {
     MULTIPLICITY,
     /// `= expr` / `:= expr` / `default expr`
     VALUE,
+    /// `of Fuel` -- what a flow, succession flow or message carries.
+    /// `FlowDeclaration : FlowUsage = ... ( 'of' ownedRelationship +=
+    /// FlowPayloadFeatureMember )? ...`
+    PAYLOAD,
     /// `connect a to b;`, `bind x = y;`, `message ... from a to b;`, ...
     CONNECTOR_STMT,
     /// `first a then b;`, `if c then t;`, `send x via p;`, `entry; do a;`, ...

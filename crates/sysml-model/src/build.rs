@@ -46,6 +46,9 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         CONNECTOR_STMT => connector_kind(node),
         CONTROL_STMT => control_kind(node),
         IMPORT | EXPOSE => Some(import_kind(node)),
+        // `flow f of Fuel from a to b` -- what the flow carries, which the
+        // standard owns from the flow as a feature of its own
+        PAYLOAD => Some(ElementKind::PayloadFeature),
         // an alias is a Membership whose memberElement is resolved later
         ALIAS => Some(ElementKind::Membership),
         DOCUMENTATION => Some(ElementKind::Documentation),
@@ -108,6 +111,11 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     // is not a variation.
     for (keyword, flag) in [
         (ABSTRACT_KW, "isAbstract"),
+        // `Message : FlowUsage = OccurrenceUsagePrefix 'message' ...
+        // { isAbstract = true }` -- the specification has no metaclass of
+        // its own for a message, and marks it this way instead. It is what
+        // tells `message m from a to b` from `flow f from a to b`.
+        (MESSAGE_KW, "isAbstract"),
         (CONSTANT_KW, "isConstant"),
         (CONST_KW, "isConstant"),
         (DERIVED_KW, "isDerived"),
@@ -122,6 +130,12 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         if has_token(node, keyword) && kind.feature(flag).is_some() {
             model.set(id, flag, Value::Bool(true));
         }
+    }
+    // `nonunique` is the only one of these that turns a flag off: the
+    // standard's default is that a feature's values are unique, and a
+    // model saying they are not must not arrive saying they are.
+    if has_token(node, NONUNIQUE_KW) && kind.feature("isUnique").is_some() {
+        model.set(id, "isUnique", Value::Bool(false));
     }
     // `not satisfy r by p;` asserts that it does not, which is the
     // opposite of what the drawing and the generated stub would say of
@@ -192,6 +206,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
                     build_node(model, &member, Some(id), built);
                 }
             }
+            PAYLOAD => build_node(model, &child, Some(id), built),
             // Two shapes wrap the declaration the author wrote in an
             // element of their own: `then action b;` (a succession) and
             // `in event occurrence ieo;` (an anonymous direction/adapter
@@ -559,6 +574,10 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     declaration.or_else(|| {
         tokens(node).find_map(|token| match token {
             SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
+            // `terminate c1;` -- unlike `merge m`, the name of a terminate
+            // node comes before the keyword, so it is not one of the
+            // declaring keywords a name is looked for after
+            SyntaxKind::TERMINATE_KW => Some(ElementKind::TerminateActionUsage),
             SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW => Some(ElementKind::SuccessionAsUsage),
             _ => None,
         })
@@ -735,6 +754,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             SATISFY_KW => Some("SatisfyRequirementUsage"),
             ASSERT_KW => Some("AssertConstraintUsage"),
             MESSAGE_KW => Some("FlowUsage"),
+            // `action stop terminate;` -- `TerminateNode :
+            // TerminateActionUsage = ... 'terminate' ...`, so the keyword
+            // fixes the metaclass however the action was introduced
+            TERMINATE_KW => Some("TerminateActionUsage"),
             // `action publish send ... via p` carries the library's payload
             // parameters (sentMessage, acceptedMessage)
             SEND_KW => Some("SendActionUsage"),
@@ -776,6 +799,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
         Some(ANALYSIS_KW) => "AnalysisCaseUsage",
         Some(VERIFICATION_KW) => "VerificationCaseUsage",
         Some(FLOW_KW) => "FlowUsage",
+        // `succession flow x from a to b` is a SuccessionFlowUsage; a
+        // bare `succession a then b` is a SuccessionAsUsage. The keyword
+        // that follows is what tells them apart.
+        Some(SUCCESSION_KW) if kws.get(1) == Some(&FLOW_KW) => "SuccessionFlowUsage",
         Some(SUCCESSION_KW) => "SuccessionAsUsage",
         // KerML features
         Some(FEATURE_KW) => "Feature",
