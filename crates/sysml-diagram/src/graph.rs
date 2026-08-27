@@ -221,13 +221,15 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
         (ElementKind::SatisfyRequirementUsage, "satisfy requirements"),
         (ElementKind::IncludeUseCaseUsage, "include use cases"),
         (ElementKind::ConcernUsage, "concerns"),
+        // a viewpoint is a requirement in the metamodel and has a
+        // compartment of its own in the notation, so it comes first
+        (ElementKind::ViewpointUsage, "viewpoints"),
         (ElementKind::RequirementUsage, "requirements"),
         (ElementKind::ConstraintUsage, "constraints"),
         (ElementKind::VerificationCaseUsage, "verifications"),
         (ElementKind::AnalysisCaseUsage, "analyses"),
         (ElementKind::UseCaseUsage, "use cases"),
         (ElementKind::ViewUsage, "views"),
-        (ElementKind::ViewpointUsage, "viewpoints"),
         (ElementKind::RenderingUsage, "rendering"),
         (ElementKind::ActionUsage, "actions"),
         (ElementKind::PortUsage, "ports"),
@@ -1501,6 +1503,15 @@ fn features_with_type(model: &Model, usage: ElementId) -> Vec<(&'static str, Fea
 fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Feature)> {
     let mut out = Vec::new();
     for &child in model.owned(definition) {
+        // A view says what it exposes and what it filters by, and
+        // neither is a feature: `exposes-compartment-element =
+        // MembershipExpose | NamespaceExpose` and
+        // `filters-compartment-element = el-prefix? MemberPrefix
+        // OwnedExpression`.
+        if let Some(line) = shown_relationship(model, child) {
+            out.push(line);
+            continue;
+        }
         // A transition is a line and nothing else: the states clause has
         // `state-transition-compartment` for the view and no compartment
         // to list one in, and listing it says the state owns an action by
@@ -1526,6 +1537,44 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
         ));
     }
     out
+}
+
+/// A member the standard lists that is a relationship rather than a
+/// feature: what a view exposes, and the expression a package filters by.
+fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str, Feature)> {
+    let (compartment, keyword) = match model.kind(member) {
+        ElementKind::MembershipExpose | ElementKind::NamespaceExpose => ("exposes", "expose"),
+        ElementKind::ElementFilterMembership => ("filters", "filter"),
+        _ => return None,
+    };
+    // neither names an element: what each says is the text it was
+    // written as -- the name exposed, or the expression filtered by
+    let named = written_text(model, member)?;
+    Some((
+        compartment,
+        Feature {
+            keyword: keyword.to_string(),
+            name: named,
+            ty: None,
+            multiplicity: None,
+            value: None,
+            direction: None,
+        },
+    ))
+}
+
+/// The text an element was written as, where the build kept one -- on the
+/// element itself, or on the expression it owns.
+fn written_text(model: &Model, element: ElementId) -> Option<String> {
+    std::iter::once(element)
+        .chain(model.owned(element).iter().copied())
+        .find_map(|holder| {
+            model
+                .owned(holder)
+                .iter()
+                .filter(|&&rep| model.kind(rep) == ElementKind::TextualRepresentation)
+                .find_map(|&rep| model.get(rep, "body")?.as_str().map(str::to_string))
+        })
 }
 
 /// Was the element declared `abstract`? A definition that is has no
@@ -2482,6 +2531,49 @@ mod tests {
                 // and without `from`, the first name is a client
                 ("Z".to_string(), "A".to_string(), None),
                 ("Z".to_string(), "B".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_view_says_what_it_exposes_and_what_it_filters_by() {
+        // `exposes-compartment`, `filters-compartment`,
+        // `viewpoints-compartment` and `rendering-compartment`: neither an
+        // expose nor a filter is a feature, and a view listing neither
+        // says only that it exposes and filters something
+        let ws = resolved(
+            "package P {\n\
+             \tpart def Thing;\n\
+             \tviewpoint def Concerned;\n\
+             \trendering def Tree;\n\
+             \tview def Overview {\n\
+             \t\tviewpoint c : Concerned;\n\
+             \t\texpose P::Thing;\n\
+             \t\tfilter @Safety;\n\
+             \t\trendering asTree : Tree;\n\
+             \t}\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let overview = diagram.nodes.iter().find(|n| n.name == "Overview").unwrap();
+        assert_eq!(
+            overview
+                .compartments
+                .iter()
+                .flat_map(|compartment| {
+                    compartment
+                        .lines
+                        .iter()
+                        .map(move |line| (compartment.label, line.label()))
+                })
+                .collect::<Vec<_>>(),
+            [
+                // a viewpoint is a requirement in the metamodel, and has
+                // a compartment of its own in the notation
+                ("viewpoints", "viewpoint c : Concerned".to_string()),
+                ("exposes", "expose P::Thing".to_string()),
+                ("filters", "filter @Safety".to_string()),
+                ("rendering", "rendering asTree : Tree".to_string()),
             ]
         );
     }

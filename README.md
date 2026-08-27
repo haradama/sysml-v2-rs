@@ -169,6 +169,11 @@ up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
 two features of the same part, are left undrawn.
 
+A view says what it exposes and what it filters by:
+`exposes-compartment` and `filters-compartment` hold what `expose
+P::Thing;` and `filter @Safety;` wrote, neither of which is a feature and
+neither of which was drawn at all.
+
 `--browser` draws the other standard view that needs nothing but the model
 itself: the membership hierarchy, as an indented tree with one row per named
 element.

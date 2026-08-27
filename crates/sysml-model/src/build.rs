@@ -55,6 +55,11 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         PAYLOAD => Some(ElementKind::PayloadFeature),
         // an alias is a Membership whose memberElement is resolved later
         ALIAS => Some(ElementKind::Membership),
+        // `ElementFilterMember : ElementFilterMembership = MemberPrefix
+        // 'filter' ownedRelatedElement += OwnedExpression ';'` -- a
+        // package that filters its members said so, and the model was
+        // arriving with no sign of it
+        FILTER => Some(ElementKind::ElementFilterMembership),
         DOCUMENTATION => Some(ElementKind::Documentation),
         COMMENT_ELEM => Some(ElementKind::Comment),
         REP => Some(ElementKind::TextualRepresentation),
@@ -182,6 +187,25 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if kind == ElementKind::TextualRepresentation {
         if let Some(lang) = string_token(node) {
             model.set(id, "language", Value::String(lang));
+        }
+    }
+    // `expose P::Thing;` says what it exposes and `filter @Safety;` what
+    // it filters by, and a view listing neither says only that it exposes
+    // and filters something. Both are kept as the text the author wrote,
+    // which is what the compartment shows.
+    if kind.is_a(ElementKind::Expose) {
+        if let Some(qname) = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
+        {
+            represent_textually(model, id, qname.text().to_string().trim());
+        }
+    }
+    if kind == ElementKind::ElementFilterMembership {
+        if let Some(written) = node.children().find(|child| child.kind() != BODY) {
+            let condition = model.create(ElementKind::Expression);
+            model.add_owned(id, condition);
+            represent_textually(model, condition, written.text().to_string().trim());
         }
     }
     if kind == ElementKind::Expression && node.kind() == EXPR_STMT {
@@ -707,10 +731,14 @@ fn import_kind(node: &SyntaxNode) -> ElementKind {
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .any(|t| matches!(t.kind(), STAR | STAR_STAR));
-    if wildcard {
-        ElementKind::NamespaceImport
-    } else {
-        ElementKind::MembershipImport
+    // `expose` is not an import: a view exposes what it shows, and the
+    // standard has metaclasses of its own for it
+    // (`exposes-compartment-element = MembershipExpose | NamespaceExpose`).
+    match (node.kind() == EXPOSE, wildcard) {
+        (true, true) => ElementKind::NamespaceExpose,
+        (true, false) => ElementKind::MembershipExpose,
+        (false, true) => ElementKind::NamespaceImport,
+        (false, false) => ElementKind::MembershipImport,
     }
 }
 
@@ -794,6 +822,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             // their own: an actor or stakeholder is a part, an objective
             // a requirement
             ACTOR_KW | STAKEHOLDER_KW => Some("PartUsage"),
+            // `render asTree : Tree;` is a rendering usage; without the
+            // keyword it arrives as the bare reference a usage with no
+            // kind keyword would
+            RENDER_KW => Some("RenderingUsage"),
             // `PortionUsage : OccurrenceUsage = ... portionKind =
             // PortionKind ...` -- the portion keyword stands where a kind
             // keyword would, and without it `snapshot s : O;` arrives as
