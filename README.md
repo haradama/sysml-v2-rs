@@ -188,6 +188,21 @@ A view says what it exposes and what it filters by:
 P::Thing;` and `filter @Safety;` wrote, neither of which is a feature and
 neither of which was drawn at all.
 
+`--sequence <NAME>` draws the interaction a definition declares as the
+standard's sequence view: a head node per participant across the top, a
+dashed lifeline under each, and one arrow per message or succession
+between them. The participant a lifeline stands for is the feature chain
+a message reaches through without the event it ends at, so
+`vehicle.cruiseController.setSpeedReceived` belongs to
+`vehicle.cruiseController`. An arrow has to reach an event, which is
+what tells `first m1 then m2` -- an ordering of two messages -- from a
+succession that joins two lifelines.
+
+```console
+$ cargo run -p sysml-cli -- diagram interaction.sysml --sequence CruiseControlInteraction -o seq.svg
+wrote 4 lifeline(s) and 3 message(s) to seq.svg
+```
+
 `--browser` draws the other standard view that needs nothing but the model
 itself: the membership hierarchy, as an indented tree with one row per named
 element.

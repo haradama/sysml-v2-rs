@@ -641,7 +641,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
 /// 8.2.3.16 -- and drawing them all as one plain line loses what the
 /// source said: that `a` is *bound* to `b`, or *allocated* to it, rather
 /// than merely wired to it.
-fn connector_relation(model: &Model, connector: ElementId) -> Relation {
+pub(crate) fn connector_relation(model: &Model, connector: ElementId) -> Relation {
     match model.kind(connector) {
         ElementKind::BindingConnector | ElementKind::BindingConnectorAsUsage => Relation::Binding,
         ElementKind::InterfaceUsage => Relation::Interface,
@@ -721,7 +721,11 @@ fn rolename(model: &Model, end: &End) -> Option<String> {
 /// `binding-connection` writes `=`, `allocate-relationship` writes
 /// `«allocate»`, a flow writes what it carries -- and without them one
 /// plain line would stand for six different statements.
-fn connector_label(model: &Model, child: ElementId, relation: Relation) -> Option<String> {
+pub(crate) fn connector_label(
+    model: &Model,
+    child: ElementId,
+    relation: Relation,
+) -> Option<String> {
     let written = match relation {
         Relation::Transition => return transition_label(model, child),
         Relation::Binding => "=".to_string(),
@@ -1266,7 +1270,7 @@ fn specializations_of(
 /// the redeclaration is the nearer one and the one that says the type.
 /// Reading only declared names skips it and draws the inherited part
 /// instead, which is the same box under a vaguer type.
-fn effective_name(model: &Model, member: ElementId) -> Option<&str> {
+pub(crate) fn effective_name(model: &Model, member: ElementId) -> Option<&str> {
     if let Some(name) = model.name(member) {
         return Some(name);
     }

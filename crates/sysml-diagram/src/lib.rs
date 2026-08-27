@@ -35,6 +35,7 @@ mod browser;
 mod elk;
 mod graph;
 mod layout;
+mod sequence;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
@@ -44,6 +45,7 @@ pub use graph::{
     Relation, Shape,
 };
 pub use layout::{layout, Layout, Placed};
+pub use sequence::{sequence_view, Lifeline, Moment, Sequence};
 pub use svg::to_svg;
 
 /// Sizes and spacing shared by the layout and the renderer.
@@ -115,6 +117,11 @@ pub fn render_with_elk(
 /// Render a browser view as a standalone SVG document.
 pub fn render_browser(browser: &Browser, style: &Style) -> String {
     browser::to_svg(browser, style)
+}
+
+/// Render a sequence view as a standalone SVG document.
+pub fn render_sequence(sequence: &Sequence, style: &Style) -> String {
+    sequence::to_svg(sequence, style)
 }
 
 #[cfg(test)]

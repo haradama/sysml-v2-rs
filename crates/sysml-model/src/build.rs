@@ -911,7 +911,7 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
     use SyntaxKind::*;
     // adapter keywords take precedence: `perform action a` is a
     // PerformActionUsage, not an ActionUsage
-    for token in tokens(node) {
+    for token in tokens(node).chain(leading_keywords(node)) {
         let candidate = match token {
             PERFORM_KW => Some("PerformActionUsage"),
             EXHIBIT_KW => Some("ExhibitStateUsage"),
@@ -1114,6 +1114,35 @@ fn declared_direction(node: &SyntaxNode) -> Option<&'static str> {
             _ => None,
         })
     })
+}
+
+/// The keywords a statement wrote immediately before the declaration it
+/// wraps.
+///
+/// `then event occurrence b;` leaves `event` on the succession and
+/// `occurrence b` one level in, so the declaration cannot see the keyword
+/// that says what it is. Only the run directly before it counts: in
+/// `accept x then send y;` what precedes `y` is `send`, not `accept`.
+fn leading_keywords(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
+    let mut leading = Vec::new();
+    if let Some(parent) = node
+        .parent()
+        .filter(|p| p.kind() == SyntaxKind::CONTROL_STMT)
+    {
+        for part in parent.children_with_tokens() {
+            if part.as_node() == Some(node) {
+                break;
+            }
+            match part {
+                sysml_syntax::SyntaxElement::Node(_) => leading.clear(),
+                sysml_syntax::SyntaxElement::Token(token) if !token.kind().is_trivia() => {
+                    leading.push(token.kind())
+                }
+                _ => {}
+            }
+        }
+    }
+    leading.into_iter()
 }
 
 /// The node and, when the node was hoisted out of an anonymous wrapper

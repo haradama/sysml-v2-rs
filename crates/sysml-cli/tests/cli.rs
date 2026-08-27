@@ -498,6 +498,48 @@ fn diagram_draws_the_internal_structure_of_one_definition() {
 }
 
 #[test]
+fn diagram_draws_an_interaction_as_a_sequence_view() {
+    let dir = temp_dir("diagram-sequence");
+    let model = write(
+        &dir,
+        "talk.sysml",
+        "item def Ask;\n\
+         part def A { event occurrence sent; }\n\
+         part def B { event occurrence got; }\n\
+         occurrence def Talk {\n\
+         \tref part a : A;\n\
+         \tref part b : B;\n\
+         \tmessage ask of Ask from a.sent to b.got;\n\
+         }\n",
+    );
+
+    let svg = dir.join("talk.svg");
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--sequence",
+        "Talk",
+        "-o",
+        svg.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("2 lifeline(s) and 1 message(s)"));
+    let drawn = std::fs::read_to_string(&svg).unwrap();
+    assert_eq!(drawn.matches("class=\"lifeline\"").count(), 2);
+    assert!(drawn.contains(">ask of Ask</text>"), "{drawn}");
+
+    // a definition that declares no interaction has none to draw
+    let out = sysml(&["diagram", model.to_str().unwrap(), "--sequence", "A"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("declares no interaction"));
+
+    // and a name nothing answers to is reported the way `--internal` is
+    let out = sysml(&["diagram", model.to_str().unwrap(), "--sequence", "NoSuch"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no element named `NoSuch`"));
+}
+
+#[test]
 fn diagram_draws_the_membership_tree() {
     let dir = temp_dir("diagram-browser");
     let model = write(

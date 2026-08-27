@@ -32,48 +32,56 @@ const CSS: &str = "\
 .guide { stroke: var(--muted); stroke-width: 1; opacity: 0.4; }\n\
 .dependency { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
 .succession { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 4 3; }\n\
+.lifeline { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 3 4; }\n\
 .name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
 .keyword, .feature { fill: var(--muted); }\n\
 .compartment { fill: var(--muted); font-style: italic; }\n";
 
-/// Render a laid-out diagram. The output is a complete SVG document: it can
-/// be written to a `.svg` file or inlined into HTML as-is.
-pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
+/// The arrowheads and diamonds every view draws with, defined once so a
+/// document that uses one carries it.
+pub(crate) fn markers() -> String {
     let mut out = String::new();
     writeln!(
         out,
         "<defs>\
-         <marker id=\"specialization\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
-         markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
-         <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
-         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
-         <marker id=\"subsetting\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
-         markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"hollow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
-         <marker id=\"redefinition\" viewBox=\"0 0 16 10\" refX=\"16\" refY=\"5\" \
-         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"hollow\" d=\"M4,0 L16,5 L4,10 z\"/>\
-         <path class=\"tip\" d=\"M2,0 L2,10\"/></marker>\
-         <marker id=\"reference\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
-         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-         <path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
-         <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
-         markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
-         <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker>\
-         <marker id=\"flow\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
-         markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
-         <path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/></marker>\
-         <marker id=\"message\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
-         markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
-         <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker>\
-         <marker id=\"portion\" viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" \
-         markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\">\
-         <circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/></marker></defs>"
+             <marker id=\"specialization\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
+             markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
+             <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
+             <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
+             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+             <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
+             <marker id=\"subsetting\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
+             markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
+             <path class=\"hollow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
+             <marker id=\"redefinition\" viewBox=\"0 0 16 10\" refX=\"16\" refY=\"5\" \
+             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+             <path class=\"hollow\" d=\"M4,0 L16,5 L4,10 z\"/>\
+             <path class=\"tip\" d=\"M2,0 L2,10\"/></marker>\
+             <marker id=\"reference\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
+             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+             <path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
+             <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
+             markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
+             <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker>\
+             <marker id=\"flow\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
+             markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
+             <path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/></marker>\
+             <marker id=\"message\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
+             markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
+             <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker>\
+             <marker id=\"portion\" viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" \
+             markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\">\
+             <circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/></marker></defs>"
     )
     .unwrap();
+    out
+}
+
+/// Render a laid-out diagram. The output is a complete SVG document: it can
+/// be written to a `.svg` file or inlined into HTML as-is.
+pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
+    let mut out = markers();
 
     // edges first, so the boxes paint over the line ends. Ports sit on
     // those borders and must survive, so they are held back until after.

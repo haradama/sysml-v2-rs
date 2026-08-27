@@ -106,6 +106,10 @@ enum Command {
         /// diagram of relationships
         #[arg(long, conflicts_with = "internal")]
         browser: bool,
+        /// Draw the interaction this definition declares as a sequence
+        /// view: a lifeline per participant and the messages between them
+        #[arg(long, value_name = "NAME", conflicts_with_all = ["internal", "browser"])]
+        sequence: Option<String>,
         /// Let the Eclipse Layout Kernel arrange and route it (the
         /// drawing itself stays the same); needs `cargo install elkrs`
         #[arg(long)]
@@ -250,6 +254,7 @@ fn main() -> ExitCode {
             library,
             internal,
             browser,
+            sequence,
             elk,
             elk_command,
             output,
@@ -258,6 +263,7 @@ fn main() -> ExitCode {
             &library,
             internal.as_deref(),
             browser,
+            sequence.as_deref(),
             elk.then_some(elk_command.as_str()),
             output.as_deref(),
         ),
@@ -491,11 +497,25 @@ fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> bool {
     true
 }
 
+/// The element a `--internal`/`--sequence` argument names, or a message
+/// saying there is none.
+fn named(ws: &sysml_semantics::Workspace, name: &str) -> Option<sysml_model::ElementId> {
+    let found = ws
+        .named_elements()
+        .find(|(_, declared)| *declared == name)
+        .map(|(id, _)| id);
+    if found.is_none() {
+        eprintln!("error: no element named `{name}`");
+    }
+    found
+}
+
 fn diagram(
     paths: &[PathBuf],
     library: &[PathBuf],
     internal: Option<&str>,
     browser: bool,
+    sequence: Option<&str>,
     elk: Option<&str>,
     output: Option<&Path>,
 ) -> ExitCode {
@@ -525,14 +545,29 @@ fn diagram(
         let svg = sysml_diagram::render_browser(&view, &sysml_diagram::Style::default());
         return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
     }
+    if let Some(name) = sequence {
+        let Some(target) = named(&ws, name) else {
+            return ExitCode::FAILURE;
+        };
+        let view = sysml_diagram::sequence_view(ws.model(), target);
+        if view.lifelines.is_empty() {
+            eprintln!("error: `{name}` declares no interaction to draw");
+            return ExitCode::FAILURE;
+        }
+        let svg = sysml_diagram::render_sequence(&view, &sysml_diagram::Style::default());
+        return emit(
+            &svg,
+            output,
+            &format!(
+                "{} lifeline(s) and {} message(s)",
+                view.lifelines.len(),
+                view.moments.len()
+            ),
+        );
+    }
     let diagram = match internal {
         Some(name) => {
-            let Some(target) = ws
-                .named_elements()
-                .find(|(_, declared)| *declared == name)
-                .map(|(id, _)| id)
-            else {
-                eprintln!("error: no element named `{name}`");
+            let Some(target) = named(&ws, name) else {
                 return ExitCode::FAILURE;
             };
             sysml_diagram::interconnection_diagram(ws.model(), target)
