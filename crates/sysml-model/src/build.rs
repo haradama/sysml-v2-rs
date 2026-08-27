@@ -135,6 +135,15 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
             model.set(id, flag, Value::Bool(true));
         }
     }
+    // `PortionUsage : OccurrenceUsage = ... portionKind = PortionKind ...
+    // { isPortion = true }` -- `snapshot s : O;` says both which portion
+    // it is and that it is one, and neither was arriving.
+    for (keyword, portion) in [(SNAPSHOT_KW, "snapshot"), (TIMESLICE_KW, "timeslice")] {
+        if has_token(node, keyword) && kind.feature("portionKind").is_some() {
+            model.set(id, "portionKind", Value::EnumLit(portion));
+            model.set(id, "isPortion", Value::Bool(true));
+        }
+    }
     // `nonunique` is the only one of these that turns a flag off: the
     // standard's default is that a feature's values are unique, and a
     // model saying they are not must not arrive saying they are.
@@ -785,6 +794,13 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             // their own: an actor or stakeholder is a part, an objective
             // a requirement
             ACTOR_KW | STAKEHOLDER_KW => Some("PartUsage"),
+            // `PortionUsage : OccurrenceUsage = ... portionKind =
+            // PortionKind ...` -- the portion keyword stands where a kind
+            // keyword would, and without it `snapshot s : O;` arrives as
+            // the bare reference a usage with no keyword at all would
+            // `IndividualUsage : OccurrenceUsage = ... isIndividual ?=
+            // 'individual' ...` the same way
+            SNAPSHOT_KW | TIMESLICE_KW | INDIVIDUAL_KW => Some("OccurrenceUsage"),
             OBJECTIVE_KW => Some("RequirementUsage"),
             _ => None,
         };

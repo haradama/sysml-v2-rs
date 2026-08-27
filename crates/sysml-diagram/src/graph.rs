@@ -171,11 +171,38 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
         };
     }
     let kind = model.kind(member);
+    // `end [1] part bead : TireBead;` goes in `ends-compartment`, whatever
+    // the feature it declares happens to be
+    if model.get(member, "isEnd") == Some(&Value::Bool(true)) {
+        return "ends";
+    }
     // A directed port is still a port: the standard keeps it in the ports
     // compartment and draws its direction as an arrow in the square on the
     // border, rather than moving it in with the parameters.
+    //
+    // The standard has two compartments for a directed feature and picks
+    // by what owns it: a behaviour's are its `parameters`, and anything
+    // else's are `directed features`.
     if model.get(member, "direction").is_some() && !kind.is_a(ElementKind::PortUsage) {
-        return "parameters";
+        let behaviour = model
+            .owner(member)
+            .is_some_and(|owner| model.kind(owner).is_a(ElementKind::Behavior));
+        return if behaviour {
+            "parameters"
+        } else {
+            "directed features"
+        };
+    }
+    // `individuals-compartment` and the two portion compartments come
+    // from the flags the notation writes, not from a metaclass of their
+    // own: `individual`, `snapshot` and `timeslice` are all occurrences.
+    if model.get(member, "isIndividual") == Some(&Value::Bool(true)) {
+        return "individuals";
+    }
+    match model.get(member, "portionKind") {
+        Some(Value::EnumLit("snapshot")) => return "snapshots",
+        Some(Value::EnumLit("timeslice")) => return "timeslices",
+        _ => {}
     }
     for (metaclass, label) in [
         // `successions-compartment` is the standard's own; a transition
@@ -188,8 +215,12 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
         (ElementKind::FlowUsage, "flows"),
         (ElementKind::ExhibitStateUsage, "exhibit states"),
         (ElementKind::StateUsage, "states"),
-        (ElementKind::CalculationUsage, "calculations"),
+        // `calcs-compartment ='calcs'`, not the metaclass spelled out
+        (ElementKind::CalculationUsage, "calcs"),
         (ElementKind::AssertConstraintUsage, "assert constraints"),
+        (ElementKind::SatisfyRequirementUsage, "satisfy requirements"),
+        (ElementKind::IncludeUseCaseUsage, "include use cases"),
+        (ElementKind::ConcernUsage, "concerns"),
         (ElementKind::RequirementUsage, "requirements"),
         (ElementKind::ConstraintUsage, "constraints"),
         (ElementKind::VerificationCaseUsage, "verifications"),
@@ -2090,8 +2121,9 @@ mod tests {
             ]
         );
 
-        // and a directed port stays a port rather than joining the
-        // parameters, because it is still drawn on the border
+        // a part's directed features are `directed features`; only a
+        // behaviour's are its `parameters`, which is how the standard
+        // picks between its two compartments for them
         let where_each: Vec<(&str, &str)> = engine
             .compartments
             .iter()
@@ -2105,8 +2137,10 @@ mod tests {
         assert_eq!(
             where_each,
             [
-                ("parameters", "supply"),
-                ("parameters", "spent"),
+                ("directed features", "supply"),
+                ("directed features", "spent"),
+                // and a directed port stays a port either way, because it
+                // is still drawn on the border
                 ("ports", "fuelIn"),
             ]
         );
@@ -3107,6 +3141,52 @@ mod interconnection_tests {
                 .map(|edge| edge.relation)
                 .collect::<Vec<_>>(),
             [Relation::Transition, Relation::Succession]
+        );
+    }
+
+    #[test]
+    fn a_behaviour_calls_its_directed_features_parameters() {
+        let ws = resolved(
+            "item def Fuel;\n\
+             action def Burn {\n\
+             \tin item supply : Fuel;\n\
+             \tout item spent : Fuel;\n\
+             }\n\
+             part def Engine { action b : Burn; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Engine"));
+        assert_eq!(
+            diagram.nodes[0]
+                .compartments
+                .iter()
+                .map(|compartment| compartment.label)
+                .collect::<Vec<_>>(),
+            ["parameters"]
+        );
+    }
+
+    #[test]
+    fn a_portion_and_an_individual_have_compartments_of_their_own() {
+        // `individuals-compartment`, `snapshots-compartment` and
+        // `timeslices-compartment` come from the flags the notation
+        // writes, and all three are occurrences
+        let ws = resolved(
+            "occurrence def O;\n\
+             part def P {\n\
+             \toccurrence o : O;\n\
+             \tindividual i : O;\n\
+             \tsnapshot s : O;\n\
+             \ttimeslice t : O;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let part = diagram.nodes.iter().find(|n| n.name == "P").unwrap();
+        assert_eq!(
+            part.compartments
+                .iter()
+                .map(|compartment| compartment.label)
+                .collect::<Vec<_>>(),
+            ["occurrences", "individuals", "snapshots", "timeslices"]
         );
     }
 
