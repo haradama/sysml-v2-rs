@@ -356,9 +356,10 @@ pub struct Diagram {
 /// Collect every named definition owned (directly or transitively) by one of
 /// `roots`, plus the specializations that run between two collected ones.
 ///
-/// Specializations pointing outside the collected set are dropped rather than
-/// drawn as dangling stubs: with the standard library loaded, most of them
-/// would leave the diagram anyway.
+/// A specialization pointing outside the collected set is not drawn as a
+/// dangling stub -- with the standard library loaded, most of them would
+/// leave the diagram anyway -- but it is not lost either: the standard's
+/// `relationships-compartment` says it in words instead.
 pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
     let mut nodes: Vec<Node> = Vec::new();
     let mut index: HashMap<ElementId, usize> = HashMap::new();
@@ -437,6 +438,18 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
     for &root in roots {
         for id in model.descendants(root) {
             dependencies_of(model, id, &index, &mut edges);
+        }
+    }
+    // What a definition relates to that is not on the canvas is said in
+    // words rather than left unsaid: `relationships-compartment-element =
+    // el-prefix? relationship-name QualifiedName`.
+    for node in &mut nodes {
+        let lines = unlisted_relationships(model, node.id, &index);
+        if !lines.is_empty() {
+            node.compartments.push(Compartment {
+                label: "relationships",
+                lines,
+            });
         }
     }
 
@@ -591,6 +604,17 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 // `off_to_on / send action`, after the UML convention of
                 // naming the step and then what it does
                 label: connector_label(model, child, relation),
+            });
+        }
+    }
+    // a `part big :> engine` whose `engine` is not one of the boxes says
+    // it in words, the same way a definition does
+    for node in &mut nodes {
+        let lines = unlisted_relationships(model, node.id, &index);
+        if !lines.is_empty() {
+            node.compartments.push(Compartment {
+                label: "relationships",
+                lines,
             });
         }
     }
@@ -1543,6 +1567,46 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
     out
 }
 
+/// The relationships of a definition whose other end is not drawn, in the
+/// words the standard writes them with (`relationship-name = 'defines' |
+/// 'defined by' | 'specializes' | ... | 'subsets' | ...`).
+///
+/// A specialization of something outside the drawing was simply dropped,
+/// which leaves `part def Millis :> Integer` reading as a definition that
+/// specializes nothing.
+fn unlisted_relationships(
+    model: &Model,
+    definition: ElementId,
+    index: &HashMap<ElementId, usize>,
+) -> Vec<Feature> {
+    let mut out = Vec::new();
+    for &rel in model.owned(definition) {
+        let (written, property) = match model.kind(rel) {
+            ElementKind::Subclassification => ("specializes", "superclassifier"),
+            ElementKind::Subsetting => ("subsets", "subsettedFeature"),
+            _ => continue,
+        };
+        let Some(target) = model.get(rel, property).and_then(Value::as_id) else {
+            continue;
+        };
+        let Some(name) = model.name(target).filter(|_| !index.contains_key(&target)) else {
+            continue;
+        };
+        let line = Feature {
+            keyword: written.to_string(),
+            name: name.to_string(),
+            ty: None,
+            multiplicity: None,
+            value: None,
+            direction: None,
+        };
+        if !out.contains(&line) {
+            out.push(line);
+        }
+    }
+    out
+}
+
 /// A member the standard lists that is a relationship rather than a
 /// feature: what a view exposes, and the expression a package filters by.
 fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str, Feature)> {
@@ -1584,12 +1648,15 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
 /// line would set the width of the box it is in.
 fn one_line(text: &str) -> String {
     const ROOM: usize = 60;
-    let first = text.lines().next().unwrap_or_default().trim();
-    let short = first.char_indices().nth(ROOM).map(|(at, _)| at);
-    match (short, first.len() < text.trim().len()) {
+    // the `*` margin of a block comment is decoration, not what it says
+    let said = |line: &str| line.trim().trim_start_matches('*').trim().to_string();
+    let mut lines = text.lines().map(said).filter(|line| !line.is_empty());
+    let first = lines.next().unwrap_or_default();
+    let cut = first.char_indices().nth(ROOM).map(|(at, _)| at);
+    match (cut, lines.next().is_some()) {
         (Some(at), _) => format!("{}\u{2026}", &first[..at]),
         (None, true) => format!("{first}\u{2026}"),
-        (None, false) => first.to_string(),
+        (None, false) => first,
     }
 }
 
@@ -2605,9 +2672,52 @@ mod tests {
     fn a_long_line_of_prose_is_cut_where_the_standard_cuts_one() {
         assert_eq!(one_line("short"), "short");
         assert_eq!(one_line("first\nsecond"), "first\u{2026}");
+        // the `*` margin of a block comment is decoration
+        assert_eq!(one_line("\n * said\n * and more\n"), "said\u{2026}");
+        assert_eq!(one_line("\n * only this\n"), "only this");
         let long = "x".repeat(80);
         assert_eq!(one_line(&long).chars().count(), 61);
         assert!(one_line(&long).ends_with('\u{2026}'));
+    }
+
+    #[test]
+    fn what_leaves_the_drawing_is_said_in_words() {
+        // `relationships-compartment-element = el-prefix? relationship-name
+        // QualifiedName` -- a specialization of something not drawn was
+        // dropped, leaving the box reading as one that specializes nothing
+        let ws = resolved(
+            "part def Base;\n\
+             package Shown {\n\
+             \tpart def Here :> Shown::Also;\n\
+             \tpart def Also;\n\
+             \tpart def Away :> Base;\n\
+             }\n",
+        );
+        let package = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Shown")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = definition_diagram(ws.model(), &[package]);
+        // `Also` is on the canvas, so that one is a line and not a word
+        let away = diagram.nodes.iter().find(|n| n.name == "Away").unwrap();
+        assert_eq!(
+            away.compartments
+                .iter()
+                .map(|compartment| (compartment.label, compartment.lines[0].label()))
+                .collect::<Vec<_>>(),
+            [("relationships", "specializes Base".to_string())]
+        );
+        let here = diagram.nodes.iter().find(|n| n.name == "Here").unwrap();
+        assert!(here.compartments.is_empty());
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Specialization)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3398,6 +3508,24 @@ mod interconnection_tests {
                 .map(|compartment| compartment.label)
                 .collect::<Vec<_>>(),
             ["occurrences", "individuals", "snapshots", "timeslices"]
+        );
+    }
+
+    #[test]
+    fn a_subsetting_that_leaves_the_view_is_said_in_words_too() {
+        let ws = resolved(
+            "part def Engine;\n\
+             part def Car { part engine : Engine; }\n\
+             part def Truck { part huge :> Car::engine; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Truck"));
+        assert_eq!(
+            diagram.nodes[0]
+                .compartments
+                .iter()
+                .map(|compartment| (compartment.label, compartment.lines[0].label()))
+                .collect::<Vec<_>>(),
+            [("relationships", "subsets engine".to_string())]
         );
     }
 

@@ -169,6 +169,12 @@ up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
 two features of the same part, are left undrawn.
 
+What a definition relates to that is not on the canvas is said in words
+rather than left unsaid: the standard's `relationships-compartment`
+(`el-prefix? relationship-name QualifiedName`) holds `specializes
+Integer` for a definition whose supertype is in the library and so has
+no box to point at.
+
 What a definition documents about itself is drawn: the standard's
 `documentation-compartment` holds the prose of a `doc`, and a `rep` says
 which language it is in and what it says in it. A line longer than the
