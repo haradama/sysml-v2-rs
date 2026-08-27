@@ -68,7 +68,10 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
          <path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/></marker>\
          <marker id=\"message\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
          markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
-         <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker></defs>"
+         <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker>\
+         <marker id=\"portion\" viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" \
+         markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\">\
+         <circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/></marker></defs>"
     )
     .unwrap();
 
@@ -188,7 +191,9 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Require
             | Relation::Perform
             | Relation::Exhibit
-            | Relation::Dependency => {
+            | Relation::Dependency
+            | Relation::Portion
+            | Relation::Event => {
                 // a connection ends at the port it names, where the
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
@@ -607,7 +612,11 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         | Relation::Assume
         | Relation::Require
         | Relation::Perform
-        | Relation::Exhibit => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        | Relation::Exhibit
+        | Relation::Event => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // `portion-relationship` marks the whole the way a composition
+        // does, with a filled glyph of its own
+        Relation::Portion => (" marker-start=\"url(#portion)\"", " class=\"edge\""),
         // what flows has the filled head; a message has the open dart the
         // standard keeps for it
         Relation::Flow | Relation::SuccessionFlow => {
@@ -1782,6 +1791,20 @@ mod tests {
                 "{name} at {x} is outside the box it belongs to"
             );
         }
+    }
+
+    #[test]
+    fn a_portion_carries_its_own_filled_marker() {
+        let ws = resolved(
+            "occurrence def O;\n\
+             part def P { snapshot s : O; }\n",
+        );
+        let svg = render(
+            &definition_diagram(ws.model(), &[ws.root()]),
+            &Style::default(),
+        );
+        assert!(svg.contains("url(#portion)"), "{svg}");
+        assert!(!svg.contains("url(#composition)"), "{svg}");
     }
 
     #[test]

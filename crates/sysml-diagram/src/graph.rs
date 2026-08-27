@@ -313,6 +313,13 @@ pub enum Relation {
     /// dashed line in the notation (`binary-dependency`), with an open
     /// arrowhead and the dependency's own name on it.
     Dependency,
+    /// `to` is a portion of `from` (`snapshot s : O`, `timeslice t : O`).
+    /// The `portion-relationship`: a plain line with the filled marker at
+    /// the whole, the way a composition carries its diamond.
+    Portion,
+    /// `from` is an event of `to` (`event occurrence ev;`), keyworded
+    /// `\u{ab}event\u{bb}` (`event-edge`).
+    Event,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -1083,6 +1090,7 @@ fn annotation_relation(model: &Model, member: ElementId) -> Option<Relation> {
         ElementKind::AssertConstraintUsage => Some(Relation::Assert),
         ElementKind::PerformActionUsage => Some(Relation::Perform),
         ElementKind::ExhibitStateUsage => Some(Relation::Exhibit),
+        ElementKind::EventOccurrenceUsage => Some(Relation::Event),
         _ => None,
     }
 }
@@ -1090,6 +1098,7 @@ fn annotation_relation(model: &Model, member: ElementId) -> Option<Relation> {
 /// The keyword the standard writes on each of those lines.
 fn annotation_keyword(relation: Relation) -> &'static str {
     match relation {
+        Relation::Event => "event",
         Relation::Assume => "assume",
         Relation::Require => "require",
         Relation::Perform => "perform",
@@ -1135,10 +1144,17 @@ fn compositions_of(
         {
             continue;
         }
-        let relation = match model.get(child, "isComposite") {
-            Some(&Value::Bool(true)) => Relation::Composition,
-            Some(&Value::Bool(false)) => Relation::Reference,
-            _ => continue,
+        // A portion is composite too, and the standard draws it
+        // differently: `portion-relationship` carries its own marker,
+        // because a timeslice is part of an occurrence in a way a wheel
+        // is not part of a car.
+        let relation = match model.get(child, "isPortion") {
+            Some(&Value::Bool(true)) => Relation::Portion,
+            _ => match model.get(child, "isComposite") {
+                Some(&Value::Bool(true)) => Relation::Composition,
+                Some(&Value::Bool(false)) => Relation::Reference,
+                _ => continue,
+            },
         };
         let Some(&to) = model.type_of(child).and_then(|ty| index.get(&ty)) else {
             continue;
@@ -2468,6 +2484,34 @@ mod tests {
                 ("Z".to_string(), "B".to_string(), None),
             ]
         );
+    }
+
+    #[test]
+    fn a_portion_is_not_drawn_as_an_ordinary_composition() {
+        // `portion-relationship` carries a marker of its own: a timeslice
+        // is part of an occurrence in a way a wheel is not part of a car,
+        // and an `\u{ab}event\u{bb}` line says what an event is an event of
+        let ws = resolved(
+            "occurrence def O;\n\
+             part def P {\n\
+             \toccurrence o : O;\n\
+             \tsnapshot s : O;\n\
+             \tevent occurrence ev : O;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let mut drawn: Vec<Relation> = diagram.edges.iter().map(|edge| edge.relation).collect();
+        drawn.sort_by_key(|relation| format!("{relation:?}"));
+        assert_eq!(
+            drawn,
+            [Relation::Composition, Relation::Event, Relation::Portion]
+        );
+        let event = diagram
+            .edges
+            .iter()
+            .find(|edge| edge.relation == Relation::Event)
+            .unwrap();
+        assert_eq!(event.label.as_deref(), Some("\u{ab}event\u{bb}"));
     }
 
     #[test]

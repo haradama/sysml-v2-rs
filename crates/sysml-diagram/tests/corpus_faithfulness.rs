@@ -148,12 +148,17 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             "{where_}: an edge leaves the diagram"
         );
         // A membership may land back on the box it left -- `part
-        // subparts : Assembly;` inside `Assembly` -- and only a
-        // membership may: a specialization of itself, a connection to
-        // itself or a transition to itself is a model saying nothing.
+        // subparts : Assembly;` inside `Assembly`, and `portion
+        // focusedState : Camera` inside `Camera`, where a portion of a
+        // thing really is typed by the thing -- and only a membership
+        // may: a specialization of itself, a connection to itself or a
+        // transition to itself is a model saying nothing.
         if edge.from == edge.to {
             assert!(
-                matches!(edge.relation, Relation::Composition | Relation::Reference),
+                matches!(
+                    edge.relation,
+                    Relation::Composition | Relation::Reference | Relation::Portion
+                ),
                 "{where_}: a {:?} onto itself",
                 edge.relation
             );

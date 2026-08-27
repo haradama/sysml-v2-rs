@@ -69,7 +69,11 @@ wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subset
 it declares — and two kinds of edge between them: a hollow triangle pointing
 from each subtype at the supertype it specializes (`part def Engine :>
 PowerSource`), and a filled diamond on the whole of each composition
-(`part def Vehicle { part eng : Engine; }`). An `abstract` definition has
+(`part def Vehicle { part eng : Engine; }`). A portion is a composite
+membership too, and the standard draws it differently -- a timeslice is
+part of an occurrence in a way a wheel is not part of a car -- so
+`snapshot s : O;` gets the filled marker `portion-relationship` carries
+instead. An `abstract` definition has
 its name set in italic, the UML way. Only specializations order the layers,
 since a whole is not a subtype of its parts — but a whole and its parts are
 kept side by side within a layer, so an unrelated definition declared
@@ -120,7 +124,8 @@ wrote 3 box(es), 0 specialization(s), 0 composition(s), 0 reference(s), 0 subset
 
 What a definition answers for is drawn rather than only listed:
 `satisfy r by p;`, `assert c;`, `assume constraint c;`, `require c;`,
-`perform a;` and `exhibit s;` each become the line the standard gives them
+`perform a;`, `exhibit s;` and `event occurrence ev;` each become the line
+the standard gives them
 -- a plain one with an open arrowhead, keyworded «satisfy»,
 «assert» and so on. `dependency use from A to B;` is the one dashed
 line in the notation, drawn from each client to each supplier. And an n-ary

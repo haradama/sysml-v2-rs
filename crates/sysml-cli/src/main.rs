@@ -568,7 +568,9 @@ fn diagram(
          {} transition(s), {} dependency(ies) and {} satisfaction(s)",
         diagram.nodes.len(),
         count(Relation::Specialization),
-        count(Relation::Composition),
+        // a portion is a composite membership the standard draws with a
+        // marker of its own
+        count(Relation::Composition) + count(Relation::Portion),
         count(Relation::Reference),
         count(Relation::Subsetting) + count(Relation::Redefinition),
         // an interface and a binding are connections too -- what each is,
@@ -584,7 +586,8 @@ fn diagram(
             + count(Relation::Assume)
             + count(Relation::Require)
             + count(Relation::Perform)
-            + count(Relation::Exhibit),
+            + count(Relation::Exhibit)
+            + count(Relation::Event),
         count(Relation::Satisfy),
     );
     emit(&svg, output, &summary)
