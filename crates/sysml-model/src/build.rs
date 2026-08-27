@@ -101,13 +101,51 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if let Some(short) = declared_short_name(node) {
         model.set(id, "declaredShortName", Value::String(short));
     }
-    if has_token(node, ABSTRACT_KW) && kind.feature("isAbstract").is_some() {
-        model.set(id, "isAbstract", Value::Bool(true));
+    // The flags the notation writes as a keyword, and the standard
+    // keeps as a property. Every one of these is a fact the source
+    // stated: dropping it does not leave the model silent, it leaves it
+    // saying `false` -- `variation part def` interchanged as one that
+    // is not a variation.
+    for (keyword, flag) in [
+        (ABSTRACT_KW, "isAbstract"),
+        (CONSTANT_KW, "isConstant"),
+        (CONST_KW, "isConstant"),
+        (DERIVED_KW, "isDerived"),
+        (INDIVIDUAL_KW, "isIndividual"),
+        (ORDERED_KW, "isOrdered"),
+        (PARALLEL_KW, "isParallel"),
+        (PORTION_KW, "isPortion"),
+        (STANDARD_KW, "isStandard"),
+        (VAR_KW, "isVariable"),
+        (VARIATION_KW, "isVariation"),
+    ] {
+        if has_token(node, keyword) && kind.feature(flag).is_some() {
+            model.set(id, flag, Value::Bool(true));
+        }
+    }
+    // `not satisfy r by p;` asserts that it does not, which is the
+    // opposite of what the drawing and the generated stub would say of
+    // it otherwise. `assert not` negates in the same way.
+    if has_token(node, NOT_KW) && kind.feature("isNegated").is_some() {
+        model.set(id, "isNegated", Value::Bool(true));
     }
     // `end #original r1 : Req1;` -- what a connector relates, as opposed to
     // an ordinary feature it happens to own
     if has_token(node, END_KW) && kind.feature("isEnd").is_some() {
         model.set(id, "isEnd", Value::Bool(true));
+    }
+    // `part driver : Driver;` is something the owner is made of and
+    // `ref part driver : Driver;` one it only refers to. The standard
+    // keeps that on `isComposite`, with `isReference = not isComposite`
+    // (KerML), and the graphical notation draws the two with the same
+    // diamond -- filled for a composite feature membership, hollow for
+    // a noncomposite one.
+    if kind.feature("isComposite").is_some() {
+        model.set(
+            id,
+            "isComposite",
+            Value::Bool(is_composite(node, kind, owner, model)),
+        );
     }
     if kind.is_a(ElementKind::Comment) {
         if let Some(body) = comment_body(node) {
@@ -138,7 +176,10 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id);
     }
-    if kind.is_a(ElementKind::Usage) {
+    // every feature, not only the usages SysML layers on them: the
+    // standard puts a `FeatureValue` on `Feature`, and KerML writes
+    // `feature x = 5;` as readily as SysML writes `attribute x = 5;`
+    if kind.is_a(ElementKind::Feature) {
         reify_feature_value(model, node, id);
     }
 
@@ -570,6 +611,14 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
     // `then merge continue;` names the node it declares, so the leading
     // `then` does not end the search -- the declaration keyword restarts it
     let declares = tokens(node).any(|t| control_node_kind(t).is_some());
+    // `a then b` takes an operand on each side of the keyword, unlike
+    // `first`, `accept` and the rest, which take only what follows. So
+    // the reference at the front of a bare `then` is where the flow
+    // comes from, and reading it as a name leaves the statement saying
+    // nothing about what it joins. A `first` puts the source after
+    // itself and leaves the front for a name again.
+    let bare_then =
+        !declares && has_token(node, SyntaxKind::THEN_KW) && !has_token(node, SyntaxKind::FIRST_KW);
     let mut reached_declaration = !declares;
     for element in node.children_with_tokens() {
         if let Some(token) = element.as_token() {
@@ -585,6 +634,9 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
         }
         let child = element.into_node().expect("checked for a token above");
         if reached_declaration && child.kind() == SyntaxKind::NAME_REF {
+            if bare_then {
+                return None;
+            }
             return Some(unquote(child.first_token()?.text()));
         }
     }
@@ -810,6 +862,43 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
     })
 }
 
+/// Whether a feature is part of what its owner is, rather than
+/// something the owner only refers to.
+///
+/// The rules are the standard's own. `ref` says reference outright
+/// (`BasicUsagePrefix : ( isReference ?= 'ref' )?`), and KerML makes a
+/// reference of anything with a direction, anything that is a connector
+/// end, and anything with no featuring type: `direction <> null or
+/// isEnd or featuringType->isEmpty() implies isReference`. SysML adds
+/// that a port owns nothing composite but its nested ports:
+/// `ownedUsage->reject(oclIsKindOf(PortUsage))->forAll(not
+/// isComposite)`. Everything else a type owns is composite.
+fn is_composite(
+    node: &SyntaxNode,
+    kind: ElementKind,
+    owner: Option<ElementId>,
+    model: &Model,
+) -> bool {
+    if has_token(node, SyntaxKind::REF_KW)
+        || kind == ElementKind::ReferenceUsage
+        || has_token(node, SyntaxKind::END_KW)
+        || declared_direction(node).is_some()
+    {
+        return false;
+    }
+    let Some(owner) = owner else {
+        return false;
+    };
+    let owning = model.kind(owner);
+    if !owning.is_a(ElementKind::Type) {
+        return false;
+    }
+    if owning.is_a(ElementKind::PortDefinition) || owning.is_a(ElementKind::PortUsage) {
+        return kind.is_a(ElementKind::PortUsage);
+    }
+    true
+}
+
 /// The direction a feature was declared with (`in`, `out`, `inout`).
 fn declared_direction(node: &SyntaxNode) -> Option<&'static str> {
     use SyntaxKind::*;
@@ -994,6 +1083,51 @@ mod tests {
             .owned(roots[0])
             .iter()
             .all(|&child| model.kind(child) != ElementKind::Expression));
+    }
+
+    #[test]
+    fn the_keywords_the_notation_writes_are_kept() {
+        // Every one of these is a fact the source stated, and the
+        // standard keeps each on a property of its own. Dropping one
+        // does not leave the model silent about it -- the interchange
+        // writes the default, so a `variation part def` goes out as one
+        // that is not a variation.
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "package P {\n\
+             \tvariation part def Choice;\n\
+             \tindividual part def Serial1;\n\
+             \tabstract part def Shape;\n\
+             \tpart def Car { derived attribute d; constant attribute k = 1; }\n\
+             \trequirement def R;\n\
+             \tpart def Rig { part c : Car; not satisfy R by c; }\n\
+             }\n",
+        ));
+        let flag = |name: &str, property: &str| {
+            let id = model
+                .ids()
+                .find(|&id| model.name(id) == Some(name))
+                .unwrap_or_else(|| panic!("`{name}` is declared"));
+            model.get(id, property).cloned()
+        };
+        for (name, property) in [
+            ("Choice", "isVariation"),
+            ("Serial1", "isIndividual"),
+            ("Shape", "isAbstract"),
+            ("d", "isDerived"),
+            ("k", "isConstant"),
+        ] {
+            assert_eq!(
+                flag(name, property),
+                Some(Value::Bool(true)),
+                "`{name}` lost `{property}`"
+            );
+        }
+        // `not satisfy` asserts the opposite of what it names
+        let negated = model
+            .ids()
+            .find(|&id| model.kind(id) == ElementKind::SatisfyRequirementUsage)
+            .expect("the assertion is built");
+        assert_eq!(model.get(negated, "isNegated"), Some(&Value::Bool(true)));
     }
 
     #[test]
