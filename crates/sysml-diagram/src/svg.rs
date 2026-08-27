@@ -841,12 +841,13 @@ fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize,
             Some(ty) => format!("{} : {ty}", place.feature.name),
             None => place.feature.name.clone(),
         };
-        port(
+        marked(
             out,
             place.at,
             place.toward,
             &label,
             place.feature.direction,
+            place.rounded,
             style,
         );
     }
@@ -876,6 +877,9 @@ struct Placement<'a> {
     feature: &'a Feature,
     at: (f64, f64),
     toward: (f64, f64),
+    /// A parameter, drawn as the rounded rectangle `param-l` has rather
+    /// than the square of a port.
+    rounded: bool,
 }
 
 /// Where each of a box's ports sits on its border, and which way its
@@ -888,11 +892,20 @@ struct Placement<'a> {
 fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Placement<'a>> {
     let placed = &layout.placed[at];
     let node = &diagram.nodes[placed.node];
-    let listed: Vec<&Feature> = node
+    // An action's parameters sit on its border exactly as a part's ports
+    // do -- `param-l | param-r | param-t | param-b` against `port-l ...`
+    // -- and are drawn rounded rather than square.
+    let listed: Vec<(&Feature, bool)> = node
         .compartments
         .iter()
-        .filter(|compartment| compartment.label == "ports")
-        .flat_map(|compartment| compartment.lines.iter())
+        .filter_map(|compartment| match compartment.label {
+            "ports" => Some((compartment, false)),
+            "parameters" => Some((compartment, true)),
+            _ => None,
+        })
+        .flat_map(|(compartment, rounded)| {
+            compartment.lines.iter().map(move |line| (line, rounded))
+        })
         .collect();
 
     // A port faces whatever it is connected to -- the standard puts one
@@ -901,7 +914,7 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
     // sides a name has room to grow out of.
     let mut placements = Vec::new();
     let mut spare = 0usize;
-    for feature in listed {
+    for (feature, rounded) in listed {
         let peer = diagram.edges.iter().find_map(|edge| {
             let (mine, theirs) = match (edge.from == at, edge.to == at) {
                 (true, _) => (0, edge.to),
@@ -935,6 +948,7 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
             feature,
             at: point,
             toward: (point.0 + away.0 * 8.0, point.1 + away.1 * 8.0),
+            rounded,
         });
     }
     placements
@@ -962,10 +976,28 @@ fn port(
     direction: Option<&str>,
     style: &Style,
 ) {
+    marked(out, at, toward, name, direction, false, style)
+}
+
+/// The glyph straddling a border and the name beside it: `port-l` draws a
+/// square, `param-l` the same rounded, and the direction arrow goes inside
+/// either.
+#[allow(clippy::too_many_arguments)]
+fn marked(
+    out: &mut String,
+    at: (f64, f64),
+    toward: (f64, f64),
+    name: &str,
+    direction: Option<&str>,
+    rounded: bool,
+    style: &Style,
+) {
     let side = 0.6 * style.line_height;
+    let corner = if rounded { side / 3.0 } else { 0.0 };
     writeln!(
         out,
-        "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\" width=\"{side:.1}\" height=\"{side:.1}\"/>",
+        "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\" width=\"{side:.1}\" \
+         height=\"{side:.1}\" rx=\"{corner:.1}\"/>",
         at.0 - side / 2.0,
         at.1 - side / 2.0
     )
@@ -1555,6 +1587,39 @@ mod tests {
                 x[2] - x[0]
             })
             .collect()
+    }
+
+    #[test]
+    fn a_parameter_sits_on_the_border_rounded() {
+        // `param-l | param-r | param-t | param-b` against `port-l ...`:
+        // an action's parameters are drawn on its border the way a part's
+        // ports are, and rounded rather than square
+        let ws = resolved(
+            "attribute def Temp;\n\
+             action def Heat {\n\
+             \tin item cold : Temp;\n\
+             \tout item hot : Temp;\n\
+             }\n\
+             part def Kettle { action h : Heat; }\n",
+        );
+        let kettle = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Kettle")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), kettle);
+        let svg = render(&diagram, &Style::default());
+        let glyphs: Vec<&str> = svg
+            .lines()
+            .filter(|line| line.contains("class=\"port\""))
+            .collect();
+        assert_eq!(glyphs.len(), 2, "{svg}");
+        assert!(
+            glyphs.iter().all(|glyph| !glyph.contains("rx=\"0.0\"")),
+            "a parameter is not square: {glyphs:?}"
+        );
+        assert!(svg.contains(">cold : Temp</text>"), "{svg}");
+        assert!(svg.contains(">hot : Temp</text>"), "{svg}");
     }
 
     #[test]

@@ -129,6 +129,12 @@ segment out to each end and the connection's own name beside the dot.
 Each end is written the way `connection-graphical` writes it, `rolename
 multiplicity c-adornment`: `bead [1] in ordered`, `rim redefines seat`.
 
+The keyword above a box's name is the one the standard's name compartment
+writes, which is not always the metaclass name spelled out: `«analysis
+def»` rather than `«analysis case def»`, `«calc»`, `«enum»`, `«assign»`,
+`«if»`, and `«loop»` for a loop of either kind. A state's entry, do and
+exit actions say which of the three they are.
+
 A two-ended statement is drawn the way its own production draws it, since
 the standard gives each a different line: `bind a = b` is a plain line
 written `=`, `interface i connect a to b` one keyworded `«interface»`,
@@ -144,7 +150,11 @@ straddling the border with `name : Type` beside it, on the side facing
 whatever it is connected to. Connector ends are matched by the feature chain
 name resolution records, so `connect w.hub to a.mount` links the boxes for
 `w` and `a` even when several parts share one type, and the line arrives at
-the port rather than drawing a second square of its own. An end that reaches
+the port rather than drawing a second square of its own. An action's
+parameters go on its border the same way (`param-l | param-r | param-t |
+param-b`), drawn rounded rather than square, and a port or parameter with
+a declared direction carries the arrow the standard puts inside it: one
+head for `in` or `out`, one at each end for `inout`. An end that reaches
 the whole of a part has no rolename to write, so no square is drawn for it.
 Connections
 sharing a pair of boxes are spread apart so they stay separate lines, closing

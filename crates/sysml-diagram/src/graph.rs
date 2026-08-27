@@ -439,7 +439,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         nodes.push(Node {
             id: child,
             name: label,
-            keyword: keyword(model.kind(child)),
+            keyword: box_keyword(model, child),
             compartments: into_compartments(features),
             is_abstract: is_abstract(model, child),
             rounded: model.kind(child).is_a(ElementKind::Usage),
@@ -1239,6 +1239,20 @@ fn itself_and_supertypes(model: &Model, ty: ElementId) -> Vec<ElementId> {
     out
 }
 
+/// The keyword a box writes above its name, with the role the membership
+/// gave it: `entry-action-name-comp = '\u{ab}' 'entry' OccurrenceUsagePrefix
+/// 'action' '\u{bb}'`, so a state's entry action says which of the three it
+/// is rather than reading as any other action.
+fn box_keyword(model: &Model, element: ElementId) -> String {
+    let written = keyword(model.kind(element));
+    match model.member_role(element) {
+        Some(Role::Entry) => format!("entry {written}"),
+        Some(Role::Do) => format!("do {written}"),
+        Some(Role::Exit) => format!("exit {written}"),
+        _ => written,
+    }
+}
+
 /// The SysML keyword a metaclass is written with: `PartDefinition` becomes
 /// `part def`, `AttributeUsage` becomes `attribute`, and a multi-word
 /// metaclass such as `AnalysisCaseDefinition` becomes `analysis case def`.
@@ -1250,6 +1264,26 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
         ElementKind::Association => return "assoc".to_string(),
         ElementKind::AssociationStructure => return "assoc struct".to_string(),
         _ => {}
+    }
+    // And so does SysML: the name compartment the standard writes is not
+    // always the metaclass name spelled out. `«analysis def»`, not
+    // `«analysis case def»`; `«loop»` for both loops, whichever kind.
+    let written = match kind {
+        ElementKind::AnalysisCaseDefinition => Some("analysis def"),
+        ElementKind::AnalysisCaseUsage => Some("analysis"),
+        ElementKind::VerificationCaseDefinition => Some("verification def"),
+        ElementKind::VerificationCaseUsage => Some("verification"),
+        ElementKind::CalculationDefinition => Some("calc def"),
+        ElementKind::CalculationUsage => Some("calc"),
+        ElementKind::EnumerationDefinition => Some("enum def"),
+        ElementKind::EnumerationUsage => Some("enum"),
+        ElementKind::AssignmentActionUsage => Some("assign"),
+        ElementKind::IfActionUsage => Some("if"),
+        ElementKind::WhileLoopActionUsage | ElementKind::ForLoopActionUsage => Some("loop"),
+        _ => None,
+    };
+    if let Some(written) = written {
+        return written.to_string();
     }
     let name = kind.name();
     // `Usage` and `Definition` are the abstract bases: stripping the suffix
@@ -1351,7 +1385,7 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
             out.push(Node {
                 id: part,
                 name: label,
-                keyword: keyword(model.kind(part)),
+                keyword: box_keyword(model, part),
                 compartments: Vec::new(),
                 is_abstract: is_abstract(model, part),
                 rounded: model.kind(part).is_a(ElementKind::Usage),
@@ -2219,12 +2253,36 @@ mod tests {
     fn keywords_come_from_the_metaclass_name() {
         assert_eq!(keyword(ElementKind::PartDefinition), "part def");
         assert_eq!(keyword(ElementKind::AttributeUsage), "attribute");
-        assert_eq!(
-            keyword(ElementKind::AnalysisCaseDefinition),
-            "analysis case def"
-        );
+        assert_eq!(keyword(ElementKind::UseCaseDefinition), "use case def");
         // neither suffix: the metaclass name itself, split into words
         assert_eq!(keyword(ElementKind::Subclassification), "subclassification");
+    }
+
+    #[test]
+    fn a_name_compartment_is_written_the_way_the_standard_writes_it() {
+        // where the standard's name compartment is not the metaclass name
+        // spelled out, it is the standard that decides: `«analysis def»`,
+        // not `«analysis case def»`
+        for (kind, written) in [
+            (ElementKind::AnalysisCaseDefinition, "analysis def"),
+            (ElementKind::AnalysisCaseUsage, "analysis"),
+            (ElementKind::VerificationCaseDefinition, "verification def"),
+            (ElementKind::VerificationCaseUsage, "verification"),
+            (ElementKind::CalculationDefinition, "calc def"),
+            (ElementKind::CalculationUsage, "calc"),
+            (ElementKind::EnumerationDefinition, "enum def"),
+            (ElementKind::EnumerationUsage, "enum"),
+            (ElementKind::AssignmentActionUsage, "assign"),
+            (ElementKind::IfActionUsage, "if"),
+            (ElementKind::WhileLoopActionUsage, "loop"),
+            (ElementKind::ForLoopActionUsage, "loop"),
+            // and where it is, the metaclass name still answers
+            (ElementKind::SendActionUsage, "send action"),
+            (ElementKind::AcceptActionUsage, "accept action"),
+            (ElementKind::EventOccurrenceUsage, "event occurrence"),
+        ] {
+            assert_eq!(keyword(kind), written, "{kind:?}");
+        }
     }
 
     /// Hand-built models reach the defensive paths that parsing cannot: an
@@ -3008,6 +3066,32 @@ mod interconnection_tests {
         assert_eq!(make.links[0].relation, Relation::Transition);
         // and what became a box inside is not listed in a compartment too
         assert!(lines(make).all(|line| line.name != "g" && line.name != "b"));
+    }
+
+    #[test]
+    fn a_state_action_says_which_of_the_three_it_is() {
+        // `entry-action-name-comp = '\u{ab}' 'entry' OccurrenceUsagePrefix
+        // 'action' '\u{bb}'`, and the same for `do` and `exit`
+        let ws = resolved(
+            "action def Warm;\n\
+             action def Watch;\n\
+             action def Cool;\n\
+             state def Heating {\n\
+             \tentry action begin : Warm;\n\
+             \tdo action keep : Watch;\n\
+             \texit action stop : Cool;\n\
+             }\n\
+             part def Oven { state h : Heating; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Oven"));
+        assert_eq!(
+            diagram.nodes[0]
+                .children
+                .iter()
+                .map(|child| child.keyword.as_str())
+                .collect::<Vec<_>>(),
+            ["entry action", "do action", "exit action"]
+        );
     }
 
     #[test]
