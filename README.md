@@ -91,8 +91,13 @@ a box per part, state or action it is composed of, and an edge per
 statement relating two of them. A part box lists the features its type
 declares, since `part w : Wheel;` writes none of its own -- so the ports a
 connection can attach to are visible whether or not anything connects to
-them -- and holds the parts it is itself assembled from as boxes drawn
-inside it, one level deep. The same flag therefore serves a `part def`
+them -- and holds what it is itself assembled from as boxes drawn inside
+it, one level deep, along with what wires those together. That is the
+standard's `interconnection-view` (`(interconnection-element)*`), and
+the same view serves an action's `action-flow-compartment` and a state's
+`state-transition-compartment`: a behaviour drawn as an empty frame is
+one whose steps went unsaid. Whatever became a box inside is not listed
+in a compartment as well. The same flag therefore serves a `part def`
 (parts wired by `connect`), a `state def` (states linked by `transition`)
 and an `action def` (actions sequenced by `first ... then`); connections are
 plain lines, transitions carry an open arrowhead labelled the UML way --

@@ -715,8 +715,55 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
         }
         writeln!(out, "</g>").unwrap();
     }
-    for (child, inner) in node.children.iter().zip(child_boxes(node, rect, style)) {
+    let inners = child_boxes(node, rect, style);
+    // the lines first, so the boxes paint over their ends -- the same
+    // order the canvas itself is drawn in
+    interconnections(out, node, &inners, style);
+    for (child, inner) in node.children.iter().zip(inners) {
         draw_box(out, child, inner, style);
+    }
+}
+
+/// What joins the parts drawn inside a box: the other half of
+/// `interconnection-view`, drawn straight between the two children with
+/// the same pen the canvas uses and a port square at each named end.
+fn interconnections(out: &mut String, node: &Node, inners: &[(f64, f64, f64, f64)], style: &Style) {
+    let placed = |at: usize| {
+        let (x, y, width, height) = inners[at];
+        Placed {
+            node: at,
+            x,
+            y,
+            width,
+            height,
+        }
+    };
+    for link in &node.links {
+        let (from, to) = (placed(link.from), placed(link.to));
+        let first = border_point(&from, centre_of(&to));
+        let second = border_point(&to, centre_of(&from));
+        let (marker, class) = pen(link.relation);
+        writeln!(
+            out,
+            "<path{class} fill=\"none\" d=\"M {:.1} {:.1} L {:.1} {:.1}\"{marker}/>",
+            first.0, first.1, second.0, second.1
+        )
+        .unwrap();
+        if let Some(name) = &link.ends.0 {
+            port(out, first, second, name, None, style);
+        }
+        if let Some(name) = &link.ends.1 {
+            port(out, second, first, name, None, style);
+        }
+        if let Some(label) = &link.label {
+            beside(
+                out,
+                ((first.0 + second.0) / 2.0, (first.1 + second.1) / 2.0),
+                second,
+                label,
+                style,
+            );
+        }
     }
 }
 
@@ -1625,6 +1672,46 @@ mod tests {
             &Style::default(),
         );
         assert!(svg.contains(">off_to_on</text>"), "{svg}");
+    }
+
+    #[test]
+    fn a_nested_connection_is_drawn_inside_the_box_that_holds_it() {
+        let ws = resolved(
+            "port def Hub;\n\
+             part def Wheel { port hub : Hub; }\n\
+             part def Axle { port mount : Hub; }\n\
+             part def Chassis {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             }\n\
+             part def Car { part c : Chassis; }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), car);
+        let layout = crate::layout(&diagram, &Style::default());
+        let svg = to_svg(&diagram, &layout, &Style::default());
+        // the line runs between the two nested boxes, and each end is
+        // named by the port it attaches to
+        assert!(svg.contains(">hub</text>"), "{svg}");
+        assert!(svg.contains(">mount</text>"), "{svg}");
+        let chassis = &layout.placed[0];
+        for name in ["hub", "mount"] {
+            let at = svg.find(&format!(">{name}</text>")).unwrap();
+            let x: f64 = svg[..at]
+                .rsplit_once("x=\"")
+                .and_then(|(_, rest)| rest.split('"').next())
+                .and_then(|n| n.parse().ok())
+                .unwrap();
+            assert!(
+                x > chassis.x && x < chassis.x + chassis.width,
+                "{name} at {x} is outside the box it belongs to"
+            );
+        }
     }
 
     #[test]

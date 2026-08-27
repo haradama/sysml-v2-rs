@@ -101,6 +101,10 @@ pub struct Node {
     /// The parts this box is itself assembled from, drawn inside it. Only
     /// an interconnection view fills this, and only one level deep.
     pub children: Vec<Node>,
+    /// The relationships between those children, indexing `children`.
+    /// A view holding the parts but not what wires them together is
+    /// half of `interconnection-view`, and the half that says less.
+    pub links: Vec<Edge>,
 }
 
 /// Gather features into the compartments the standard stacks them in,
@@ -332,6 +336,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 rounded: model.kind(id).is_a(ElementKind::Usage),
                 shape: Shape::Box,
                 children: Vec::new(),
+                links: Vec::new(),
             });
         }
     }
@@ -422,9 +427,14 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         // a part is read as `role : Type`, unlike a definition's bare name
         let label = box_label(model, child, name);
         let children = nested_parts(model, child);
+        let links = links_between(model, child, &children);
         let mut features = features_with_type(model, child);
         // whatever became a box inside is not also a compartment line
-        features.retain(|(_, feature)| children.is_empty() || feature.keyword != "part");
+        let nested: HashSet<&str> = children
+            .iter()
+            .filter_map(|child| model.name(child.id))
+            .collect();
+        features.retain(|(_, feature)| !nested.contains(feature.name.as_str()));
         index.insert(child, nodes.len());
         nodes.push(Node {
             id: child,
@@ -435,6 +445,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             rounded: model.kind(child).is_a(ElementKind::Usage),
             shape: shape_of(model.kind(child)),
             children,
+            links,
         });
     }
 
@@ -470,6 +481,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                             rounded: false,
                             shape: Shape::Initial,
                             children: Vec::new(),
+                            links: Vec::new(),
                         });
                     }
                     if from != to {
@@ -591,6 +603,7 @@ fn push_n_ary(
         rounded: false,
         shape: Shape::ConnectionDot,
         children: Vec::new(),
+        links: Vec::new(),
     });
     for end in landed {
         edges.push(Edge {
@@ -1257,6 +1270,61 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
     out
 }
 
+/// What wires the nested parts of one usage together: the standard's
+/// `interconnection-view` holds `(interconnection-element)*`, and a view
+/// with the parts but nothing between them is the half that says less.
+///
+/// Read from the same owners `nested_parts` draws from, so a connection a
+/// supertype declared joins the parts a subtype inherited.
+fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge> {
+    let at: HashMap<ElementId, usize> = children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| (child.id, index))
+        .collect();
+    let mut links = Vec::new();
+    for owner in nesting_owners(model, usage) {
+        for &child in model.owned(owner) {
+            let ends = connector_ends(model, child);
+            let [first, second] = &ends[..] else { continue };
+            let (Some(&from), Some(&to)) = (at.get(&first.target), at.get(&second.target)) else {
+                continue;
+            };
+            if from == to {
+                continue;
+            }
+            let relation = connector_relation(model, child);
+            let directed = relation == Relation::Transition;
+            links.push(Edge {
+                from,
+                to,
+                relation,
+                ends: if directed {
+                    (None, None)
+                } else {
+                    (rolename(model, first), rolename(model, second))
+                },
+                label: connector_label(model, child, relation),
+            });
+        }
+    }
+    links
+}
+
+/// Where a nested view reads its members from: the usage itself, and then
+/// the type it was declared with, since `part w : Wheel;` declares nothing
+/// of its own.
+fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
+    std::iter::once(usage)
+        .chain(
+            model
+                .type_of(usage)
+                .into_iter()
+                .flat_map(|ty| itself_and_supertypes(model, ty)),
+        )
+        .collect()
+}
+
 /// The parts a box is assembled from, as boxes to draw inside it.
 ///
 /// Taken from the usage and then its type, the same way its features are:
@@ -1264,16 +1332,13 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
 /// `Wheel`. Nesting stops here -- one level is what a box has room for.
 fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
-    let owners = std::iter::once(usage).chain(
-        model
-            .type_of(usage)
-            .into_iter()
-            .flat_map(|ty| itself_and_supertypes(model, ty)),
-    );
-    for owner in owners {
+    for owner in nesting_owners(model, usage) {
         for &part in model.owned(owner) {
-            if !model.kind(part).is_a(ElementKind::PartUsage) || !is_structure_box(model.kind(part))
-            {
+            // an action's steps and a state's states nest the same way a
+            // part's parts do: `action-flow-compartment` and
+            // `state-transition-compartment` hold the view, and drawing
+            // only the parts leaves a behaviour as an empty frame
+            if !is_structure_box(model.kind(part)) {
                 continue;
             }
             let Some(name) = model.name(part) else {
@@ -1290,8 +1355,9 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
                 compartments: Vec::new(),
                 is_abstract: is_abstract(model, part),
                 rounded: model.kind(part).is_a(ElementKind::Usage),
-                shape: Shape::Box,
+                shape: shape_of(model.kind(part)),
                 children: Vec::new(),
+                links: Vec::new(),
             });
         }
     }
@@ -2877,6 +2943,71 @@ mod interconnection_tests {
         assert_eq!(lines, ["port hub"]);
         // nesting stops at one level
         assert!(wheel.children[0].children.is_empty());
+    }
+
+    #[test]
+    fn a_nested_view_holds_what_wires_it_together() {
+        // `interconnection-view =| (interconnection-element)*`: the parts
+        // inside a box and the connections between them are one view, and
+        // the parts alone are the half that says less
+        let ws = resolved(
+            "port def Hub;\n\
+             part def Wheel { port hub : Hub; }\n\
+             part def Axle { port mount : Hub; }\n\
+             part def Chassis {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub to a.mount;\n\
+             }\n\
+             part def Car { part c : Chassis; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        let chassis = &diagram.nodes[0];
+        assert_eq!(
+            chassis
+                .children
+                .iter()
+                .map(|child| child.name.as_str())
+                .collect::<Vec<_>>(),
+            ["w : Wheel", "a : Axle"]
+        );
+        assert_eq!(chassis.links.len(), 1);
+        let link = &chassis.links[0];
+        assert_eq!((link.from, link.to), (0, 1));
+        assert_eq!(link.relation, Relation::Connection);
+        assert_eq!(
+            link.ends,
+            (Some("hub".to_string()), Some("mount".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_behaviour_nests_its_own_flow() {
+        // `action-flow-compartment` holds the same kind of view, so an
+        // action drawn as an empty frame is one whose steps went unsaid
+        let ws = resolved(
+            "action def Grind;\n\
+             action def Brew;\n\
+             action def MakeCoffee {\n\
+             \taction g : Grind;\n\
+             \taction b : Brew;\n\
+             \tfirst g then b;\n\
+             }\n\
+             part def Machine { action make : MakeCoffee; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Machine"));
+        let make = &diagram.nodes[0];
+        assert_eq!(
+            make.children
+                .iter()
+                .map(|child| child.name.as_str())
+                .collect::<Vec<_>>(),
+            ["g : Grind", "b : Brew"]
+        );
+        assert_eq!(make.links.len(), 1);
+        assert_eq!(make.links[0].relation, Relation::Transition);
+        // and what became a box inside is not listed in a compartment too
+        assert!(lines(make).all(|line| line.name != "g" && line.name != "b"));
     }
 
     #[test]
