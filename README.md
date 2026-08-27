@@ -100,7 +100,9 @@ one whose steps went unsaid. Whatever became a box inside is not listed
 in a compartment as well. The same flag therefore serves a `part def`
 (parts wired by `connect`), a `state def` (states linked by `transition`)
 and an `action def` (actions sequenced by `first ... then`); connections are
-plain lines, transitions carry an open arrowhead labelled the UML way --
+plain lines, a succession is the dashed line `aflow-succession` draws --
+a step following a step is not a machine changing state -- and transitions
+carry an open arrowhead labelled the UML way --
 name, the payload they wait for, the condition guarding them and the action
 they perform (`subscribing accept sub : Subscribe [ready] / send action`) --
 and an `entry; then x;` succession is drawn from the filled circle the

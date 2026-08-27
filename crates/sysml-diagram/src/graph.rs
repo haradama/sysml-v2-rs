@@ -178,6 +178,9 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
         return "parameters";
     }
     for (metaclass, label) in [
+        // `successions-compartment` is the standard's own; a transition
+        // has no compartment there at all, and is only ever the line
+        (ElementKind::SuccessionAsUsage, "successions"),
         (ElementKind::PerformActionUsage, "perform actions"),
         (ElementKind::AllocationUsage, "allocations"),
         (ElementKind::InterfaceUsage, "interfaces"),
@@ -232,9 +235,14 @@ pub enum Relation {
     /// `from` and `to` are wired together (`connect w.hub to a.mount`).
     /// Undirected: which end is `from` only reflects declaration order.
     Connection,
-    /// Control flows from `from` to `to` (`transition first off then on`,
-    /// `first a then b`). Directed, unlike a connection.
+    /// A state machine goes from `from` to `to` (`transition off_to_on
+    /// first off then on`). The `transition` figure: a plain line with an
+    /// open arrowhead, labelled the UML way.
     Transition,
+    /// One step follows another (`first a then b`, `succession a then b`).
+    /// `aflow-succession` draws it dashed, which is what tells a step
+    /// following a step from a state machine changing state.
+    Succession,
     /// `from` satisfies the requirement `to` (`satisfy r by p`). Drawn the
     /// SysML way (`satisfy-edge`): a plain line with an open arrowhead,
     /// keyworded `\u{ab}satisfy\u{bb}` and pointing at the requirement.
@@ -488,7 +496,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                         edges.push(Edge {
                             from,
                             to,
-                            relation: Relation::Transition,
+                            relation: Relation::Succession,
                             ends: (None, None),
                             label: None,
                         });
@@ -500,7 +508,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             continue;
         }
         let relation = connector_relation(model, child);
-        let directed = relation == Relation::Transition;
+        let directed = matches!(relation, Relation::Transition | Relation::Succession);
         // `n-ary-connection = n-ary-connection-dot n-ary-segment+`: three
         // or more ends meet at a dot, with one segment running out to
         // each. Fanning them out from whichever end was written first
@@ -565,7 +573,7 @@ fn connector_relation(model: &Model, connector: ElementId) -> Relation {
             Some(&Value::Bool(true)) => Relation::Message,
             _ => Relation::Flow,
         },
-        ElementKind::SuccessionAsUsage => Relation::Transition,
+        ElementKind::SuccessionAsUsage => Relation::Succession,
         kind if kind.is_a(ElementKind::TransitionUsage) => Relation::Transition,
         _ => Relation::Connection,
     }
@@ -1280,6 +1288,9 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
         ElementKind::AssignmentActionUsage => Some("assign"),
         ElementKind::IfActionUsage => Some("if"),
         ElementKind::WhileLoopActionUsage | ElementKind::ForLoopActionUsage => Some("loop"),
+        // the metaclass is `SuccessionAsUsage`; the notation writes it
+        // `succession a then b`
+        ElementKind::SuccessionAsUsage => Some("succession"),
         _ => None,
     };
     if let Some(written) = written {
@@ -1328,7 +1339,7 @@ fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge
                 continue;
             }
             let relation = connector_relation(model, child);
-            let directed = relation == Relation::Transition;
+            let directed = matches!(relation, Relation::Transition | Relation::Succession);
             links.push(Edge {
                 from,
                 to,
@@ -1443,7 +1454,13 @@ fn features_with_type(model: &Model, usage: ElementId) -> Vec<(&'static str, Fea
 fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Feature)> {
     let mut out = Vec::new();
     for &child in model.owned(definition) {
-        if !model.kind(child).is_a(ElementKind::Feature) {
+        // A transition is a line and nothing else: the states clause has
+        // `state-transition-compartment` for the view and no compartment
+        // to list one in, and listing it says the state owns an action by
+        // that name.
+        if !model.kind(child).is_a(ElementKind::Feature)
+            || model.kind(child).is_a(ElementKind::TransitionUsage)
+        {
             continue;
         }
         let Some(name) = effective_name(model, child) else {
@@ -1866,10 +1883,11 @@ mod tests {
             .map(|edge| (edge.from, edge.to))
             .collect();
         assert_eq!(joined, [(0, 1), (1, 2)]);
+        // `then` is a succession, which the standard draws dashed
         assert!(diagram
             .edges
             .iter()
-            .all(|edge| edge.relation == Relation::Transition));
+            .all(|edge| edge.relation == Relation::Succession));
     }
 
     #[test]
@@ -1919,7 +1937,7 @@ mod tests {
         let names: Vec<&str> = inside.nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["one : Focus[2]", "other : Focus"]);
         assert_eq!(inside.edges.len(), 1, "{:?}", inside.edges);
-        assert_eq!(inside.edges[0].relation, Relation::Transition);
+        assert_eq!(inside.edges[0].relation, Relation::Succession);
     }
 
     #[test]
@@ -3063,9 +3081,62 @@ mod interconnection_tests {
             ["g : Grind", "b : Brew"]
         );
         assert_eq!(make.links.len(), 1);
-        assert_eq!(make.links[0].relation, Relation::Transition);
+        assert_eq!(make.links[0].relation, Relation::Succession);
         // and what became a box inside is not listed in a compartment too
         assert!(lines(make).all(|line| line.name != "g" && line.name != "b"));
+    }
+
+    #[test]
+    fn a_succession_is_not_a_transition() {
+        // `transition` is a plain line, `aflow-succession` a dashed one:
+        // a step following a step is not a machine changing state, and
+        // drawing both the same way says it is
+        let ws = resolved(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition off_to_on first off then on;\n\
+             \tsuccession on then off;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Modes"));
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .map(|edge| edge.relation)
+                .collect::<Vec<_>>(),
+            [Relation::Transition, Relation::Succession]
+        );
+    }
+
+    #[test]
+    fn a_transition_is_a_line_and_a_succession_has_a_compartment() {
+        // the states clause gives a succession its own compartment
+        // (`successions-compartment`) and a transition none at all: a
+        // transition listed under `actions` says the state owns an action
+        // by that name
+        let ws = resolved(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition off_to_on first off then on;\n\
+             \tsuccession back first on then off;\n\
+             }\n\
+             part def Box { state m : Modes; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Box"));
+        let listed: Vec<(&str, &str)> = diagram.nodes[0]
+            .compartments
+            .iter()
+            .flat_map(|compartment| {
+                compartment
+                    .lines
+                    .iter()
+                    .map(move |line| (compartment.label, line.name.as_str()))
+            })
+            .collect();
+        assert_eq!(listed, [("successions", "back")]);
     }
 
     #[test]
@@ -3432,7 +3503,7 @@ mod behaviour_tests {
         assert!(diagram
             .edges
             .iter()
-            .all(|e| e.relation == Relation::Transition));
+            .all(|e| e.relation == Relation::Succession));
         assert_eq!(diagram.edges.len(), 2);
     }
 
@@ -3486,7 +3557,7 @@ mod initial_tests {
         assert!(diagram
             .edges
             .iter()
-            .any(|e| e.from == initial && e.relation == Relation::Transition));
+            .any(|e| e.from == initial && e.relation == Relation::Succession));
         assert_eq!(diagram.edges.len(), 2);
     }
 

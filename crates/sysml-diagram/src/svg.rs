@@ -31,6 +31,7 @@ const CSS: &str = "\
 .port { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
 .guide { stroke: var(--muted); stroke-width: 1; opacity: 0.4; }\n\
 .dependency { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
+.succession { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 4 3; }\n\
 .name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
 .keyword, .feature { fill: var(--muted); }\n\
@@ -174,6 +175,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Redefinition
             | Relation::Connection
             | Relation::Transition
+            | Relation::Succession
             | Relation::Satisfy
             | Relation::Binding
             | Relation::Interface
@@ -592,6 +594,9 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         // since long before SysML
         Relation::Reference => (" marker-start=\"url(#reference)\"", " class=\"edge\""),
         Relation::Transition => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // `aflow-succession` is dashed where `transition` is plain: one
+        // step following another is not a machine changing state
+        Relation::Succession => (" marker-end=\"url(#transition)\" class=\"succession\"", ""),
         // `allocate-relationship` draws the same open arrowhead a
         // transition does, and says which it is with `«allocate»`
         Relation::Allocation => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
@@ -1822,6 +1827,29 @@ mod tests {
         // in words: the specification draws no dependency here
         assert_eq!(svg.matches("url(#transition)").count(), 1);
         assert!(svg.contains(">\u{ab}satisfy\u{bb}</text>"), "{svg}");
+    }
+
+    #[test]
+    fn a_succession_is_dashed_where_a_transition_is_not() {
+        let ws = resolved(
+            "state def Modes {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \ttransition off_to_on first off then on;\n\
+             \tsuccession on then off;\n\
+             }\n",
+        );
+        let modes = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Modes")
+            .map(|(id, _)| id)
+            .unwrap();
+        let svg = render(
+            &interconnection_diagram(ws.model(), modes),
+            &Style::default(),
+        );
+        assert_eq!(svg.matches("class=\"succession\"").count(), 1, "{svg}");
+        assert!(svg.contains("stroke-dasharray: 4 3"), "{svg}");
     }
 
     #[test]

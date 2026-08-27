@@ -576,7 +576,7 @@ fn diagram(
         count(Relation::Connection) + count(Relation::Interface) + count(Relation::Binding),
         count(Relation::Flow) + count(Relation::SuccessionFlow) + count(Relation::Message),
         count(Relation::Allocation),
-        count(Relation::Transition),
+        count(Relation::Transition) + count(Relation::Succession),
         // the keyworded lines: what a definition answers for, and what
         // one element depends on another for
         count(Relation::Dependency)
