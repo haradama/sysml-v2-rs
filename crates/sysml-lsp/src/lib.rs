@@ -117,8 +117,8 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         .collect();
 
     let mut server = Server::new(library_path, &roots, &excluded);
-    if let Some(command) = option("dotCommand") {
-        server.dot_command = command;
+    if let Some(command) = option("elkCommand") {
+        server.elk_command = command;
     }
     server.serve(connection)
 }
@@ -137,8 +137,8 @@ pub struct Server {
     docs: HashMap<Url, String>,
     /// cached analysis, invalidated on document changes
     analysis: Option<Analysis>,
-    /// the Graphviz command a `layout: "graphviz"` diagram request runs
-    dot_command: String,
+    /// the ELK command a `layout: "elk"` diagram request runs
+    elk_command: String,
 }
 
 /// One analysis pass over the library + the project + all open documents.
@@ -183,7 +183,7 @@ impl Server {
             project: None,
             docs: HashMap::new(),
             analysis: None,
-            dot_command: "dot".to_string(),
+            elk_command: "elkrs".to_string(),
         }
     }
 
@@ -815,17 +815,17 @@ impl Server {
     /// with `view: "internal"`, the membership tree with `view: "browser"`.
     fn diagram(&mut self, params: &DiagramParams) -> Option<DiagramResult> {
         let uri = Url::parse(&params.uri).ok()?;
-        let graphviz = params.layout.as_deref() == Some("graphviz");
-        let command = self.dot_command.clone();
+        let elk = params.layout.as_deref() == Some("elk");
+        let command = self.elk_command.clone();
         let analysis = self.analysis();
         let file = *analysis.doc_files.get(&uri)?;
         let ws = &analysis.ws;
         let style = sysml_diagram::Style::default();
-        // Graphviz when asked for and available, this crate's own layout
+        // ELK when asked for and available, this crate's own layout
         // otherwise -- the preview always renders something
         let draw = |diagram: &sysml_diagram::Diagram| {
-            if graphviz {
-                match sysml_diagram::render_with_graphviz(diagram, &style, &command) {
+            if elk {
+                match sysml_diagram::render_with_elk(diagram, &style, &command) {
                     Ok(svg) => return svg,
                     Err(error) => {
                         eprintln!("sysml-lsp: falling back to the built-in layout: {error}")
@@ -880,7 +880,7 @@ struct DiagramParams {
     view: Option<String>,
     /// The element an `internal` view is of.
     element: Option<String>,
-    /// `builtin` (default) or `graphviz` -- who decides the positions.
+    /// `builtin` (default) or `elk` -- who decides the positions.
     layout: Option<String>,
 }
 

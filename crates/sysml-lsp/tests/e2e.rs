@@ -327,29 +327,27 @@ fn serves_diagrams_for_a_preview() {
     handle.join().unwrap();
 }
 
-/// `layout: "graphviz"` runs the configured dot command for positions;
-/// a missing command falls back to the built-in layout instead of
+/// `layout: "elk"` runs the configured ELK command for positions; a
+/// missing command falls back to the built-in layout instead of
 /// leaving the preview empty.
 #[test]
-fn lays_diagrams_out_with_graphviz_when_asked() {
+fn lays_diagrams_out_with_elk_when_asked() {
     use std::os::unix::fs::PermissionsExt;
-    let fake = std::env::temp_dir().join(format!("sysml-e2e-fake-dot-{}", std::process::id()));
+    let fake = std::env::temp_dir().join(format!("sysml-e2e-fake-elk-{}", std::process::id()));
     std::fs::write(
         &fake,
         "#!/bin/sh\ncat >/dev/null\n\
-         printf 'graph 1 6 2\\n'\n\
-         printf 'node n0 1.5 1 1 1\\n'\n\
-         printf 'node n1 4 1 1 1\\n'\n\
-         printf 'stop\\n'\n",
+         printf '{\"width\":400,\"height\":144,\"children\":\
+[{\"id\":\"n0\",\"x\":0,\"y\":0},{\"id\":\"n1\",\"x\":0,\"y\":100}]}\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     for (command, expected_height) in [
-        // the fake lays a 6in x 2in canvas: 2in * 72dpi + two 16px margins
+        // the fake's canvas plus two 16px margins
         (fake.to_str().unwrap(), Some("height=\"176\"")),
         // no such command: the built-in layout draws instead
-        ("/nonexistent/graphviz/dot", None),
+        ("/nonexistent/elk/elkrs", None),
     ] {
         let (server_side, client_side) = Connection::memory();
         let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
@@ -359,7 +357,7 @@ fn lays_diagrams_out_with_graphviz_when_asked() {
         };
         client.request(
             lsp_types::request::Initialize::METHOD,
-            json!({ "capabilities": {}, "initializationOptions": { "dotCommand": command } }),
+            json!({ "capabilities": {}, "initializationOptions": { "elkCommand": command } }),
         );
         client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
 
@@ -371,7 +369,7 @@ fn lays_diagrams_out_with_graphviz_when_asked() {
         );
         client.wait_diagnostics();
 
-        let result = client.request("sysml/diagram", json!({ "uri": uri, "layout": "graphviz" }));
+        let result = client.request("sysml/diagram", json!({ "uri": uri, "layout": "elk" }));
         let svg = result["svg"].as_str().unwrap();
         assert!(svg.starts_with("<svg xmlns="));
         assert!(svg.contains(">A<") && svg.contains(">B<"));
