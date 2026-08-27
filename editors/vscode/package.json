@@ -76,19 +76,24 @@
           "default": [],
           "description": "Directories in the workspace whose models are not part of this project -- a vendored corpus, someone else's model. Their names do not resolve and are not offered in completion. Relative paths are taken from each workspace folder."
         },
+        "sysml.preview.openAutomatically": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open the diagram preview beside the editor when a SysML or KerML file is opened. Closing the preview keeps it closed until it is asked for again (`SysML: Open Diagram Preview`)."
+        },
         "sysml.diagram.layout": {
           "type": "string",
           "enum": [
-            "graphviz",
+            "elk",
             "builtin"
           ],
-          "default": "graphviz",
-          "description": "Layout engine for the diagram preview. `graphviz` runs the `dot` command (PlantUML-style; positions only, the drawing stays the same) and falls back to the built-in layout when Graphviz is not installed."
+          "default": "elk",
+          "description": "Layout engine for the diagram preview. `elk` runs the `elkrs` command (positions only, the drawing stays the same) and falls back to the built-in layout when it is not installed -- `cargo install elkrs`."
         },
-        "sysml.diagram.dot": {
+        "sysml.diagram.elk": {
           "type": "string",
-          "default": "dot",
-          "description": "The Graphviz command the language server runs for diagram layout."
+          "default": "elkrs",
+          "description": "The Eclipse Layout Kernel command the language server runs for diagram layout (`cargo install elkrs`)."
         },
         "sysml.trace.server": {
           "type": "string",

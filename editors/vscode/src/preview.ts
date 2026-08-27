@@ -6,12 +6,26 @@ import { LanguageClient } from "vscode-languageclient/node";
 
 type View = "definitions" | "internal" | "browser";
 
+/// Whether a SysML or KerML document is what an editor is showing.
+function isModel(editor: vscode.TextEditor | undefined): boolean {
+  const language = editor?.document.languageId;
+  return language === "sysml" || language === "kerml";
+}
+
 export class Preview {
   private panel: vscode.WebviewPanel | undefined;
   private uri: vscode.Uri | undefined;
   private view: View = "definitions";
   private element: string | undefined;
   private timer: NodeJS.Timeout | undefined;
+  /// Closing the preview closes it: opening by itself must not undo
+  /// that on the next keystroke in another file. Asking for it again
+  /// says the reader has changed their mind.
+  private dismissed = false;
+  /// How often the server has answered that it has nothing yet. It is
+  /// still opening the document when the preview opens with it, so the
+  /// first answer is often none -- but not for ever.
+  private waiting = 0;
 
   constructor(
     private readonly client: () => LanguageClient | undefined,
@@ -25,20 +39,44 @@ export class Preview {
       }),
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         // the preview follows whichever SysML document is being edited
-        if (
-          editor &&
-          this.panel &&
-          (editor.document.languageId === "sysml" ||
-            editor.document.languageId === "kerml")
-        ) {
+        if (editor && this.panel && isModel(editor)) {
           this.uri = editor.document.uri;
           this.scheduleRender();
+        } else if (editor && !this.panel) {
+          void this.followActiveEditor(editor);
         }
       })
     );
   }
 
+  /// Open the preview for the document that is already being edited.
+  ///
+  /// The extension starts when a model is opened, so the document that
+  /// started it is the active one before any event could say so -- and
+  /// it has to wait for the server, which is what draws.
+  async openForActiveEditor(): Promise<void> {
+    await this.followActiveEditor(vscode.window.activeTextEditor);
+  }
+
+  /// Open the preview for a newly active model, where the reader asked
+  /// for that to happen by itself and has not closed it since.
+  private async followActiveEditor(
+    editor: vscode.TextEditor | undefined
+  ): Promise<void> {
+    if (!editor || !isModel(editor) || this.panel || this.dismissed) {
+      return;
+    }
+    const wanted = vscode.workspace
+      .getConfiguration("sysml")
+      .get<boolean>("preview.openAutomatically", true);
+    if (wanted) {
+      await this.open(editor.document.uri, "definitions");
+    }
+  }
+
   async open(uri: vscode.Uri, view: View, element?: string): Promise<void> {
+    this.dismissed = false;
+    this.waiting = 0;
     this.uri = uri;
     this.view = view;
     this.element = element;
@@ -51,6 +89,7 @@ export class Preview {
       );
       this.panel.onDidDispose(() => {
         this.panel = undefined;
+        this.dismissed = true;
       });
       this.panel.webview.onDidReceiveMessage((message) => {
         if (message.command === "setView") {
@@ -86,12 +125,19 @@ export class Preview {
           element: this.element,
           layout: vscode.workspace
             .getConfiguration("sysml")
-            .get<string>("diagram.layout", "graphviz"),
+            .get<string>("diagram.layout", "elk"),
         }
       );
-      svg = result
-        ? result.svg
-        : "<p>Nothing to draw yet — the document may still be loading.</p>";
+      if (result) {
+        this.waiting = 0;
+        svg = result.svg;
+      } else {
+        svg = "<p>Nothing to draw yet — the document may still be loading.</p>";
+        if (this.waiting < 10) {
+          this.waiting += 1;
+          this.scheduleRender();
+        }
+      }
     } catch (error) {
       svg = `<p>Preview failed: ${String(error)}</p>`;
     }

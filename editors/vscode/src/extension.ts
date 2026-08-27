@@ -52,9 +52,9 @@ function serverOptions(context: vscode.ExtensionContext): ServerOptions {
 
 function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions {
   const library = libraryPath(context);
-  const dot = vscode.workspace
+  const elk = vscode.workspace
     .getConfiguration("sysml")
-    .get<string>("diagram.dot", "dot");
+    .get<string>("diagram.elk", "elkrs");
   const exclude = vscode.workspace
     .getConfiguration("sysml")
     .get<string[]>("workspace.exclude", []);
@@ -64,7 +64,7 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
     initializationOptions: {
       ...(library ? { libraryPath: library } : {}),
       ...(exclude.length > 0 ? { excludePaths: exclude } : {}),
-      dotCommand: dot,
+      elkCommand: elk,
     },
   };
 }
@@ -116,6 +116,8 @@ export async function activate(
     })
   );
   await start(context);
+  // the server draws the preview, so it has to be running first
+  await preview.openForActiveEditor();
 }
 
 export async function deactivate(): Promise<void> {

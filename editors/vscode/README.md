@@ -24,6 +24,12 @@ Manual override, when wanted: `sysml.server.path` points at another server
 binary, `sysml.library.path` at another standard library (else
 `SYSML_LIBRARY_PATH` is honoured).
 
+The preview opens beside the editor when a `.sysml` or `.kerml` file is
+opened, and follows whichever model you are editing. Closing it keeps it
+closed until you ask for it again (`SysML: Open Diagram Preview`, or the
+button in the editor title bar); `sysml.preview.openAutomatically` turns
+the opening off for good.
+
 ## What resolves against what
 
 Every `.sysml`/`.kerml` file in the workspace folders is part of the
