@@ -762,6 +762,127 @@ fn a_connection_written_as_a_usage_still_relates_its_ends() {
 }
 
 #[test]
+fn resolving_what_is_reached_says_the_same_as_resolving_everything() {
+    // A library is loaded so that names resolve, not so that all of it
+    // is worked through. What a model reaches has to be reified all the
+    // same -- a type with no members shows none -- so this follows the
+    // answers outward until nothing new is reached, and a package is
+    // not followed: nothing is typed by one, and what is used out of it
+    // records itself.
+    let library = "package Lib {\n\
+                   \tpart def Base { part inherited; }\n\
+                   \tpart def Used :> Base { part own; }\n\
+                   \tpart def NeverNamed { part unread; }\n\
+                   }\n";
+    let model = "package M {\n\tprivate import Lib::*;\n\tpart def Rig { part u : Used; }\n}\n";
+
+    let mut reached = sysml_semantics::Workspace::new();
+    let own = reached.add_file("m.sysml", model);
+    reached.add_file("lib.sysml", library);
+    reached.resolve_reached(&[own]);
+
+    let mut everything = sysml_semantics::Workspace::new();
+    everything.add_file("m.sysml", model);
+    everything.add_file("lib.sysml", library);
+    everything.resolve_all();
+
+    // what the model reaches is reified the same either way
+    let typed = |ws: &Workspace| {
+        let model = ws.model();
+        let usage = model
+            .ids()
+            .find(|&id| model.name(id) == Some("u"))
+            .expect("`u` is declared");
+        let used = model.type_of(usage).expect("`u` is typed");
+        let supers: Vec<&str> = model
+            .owned(used)
+            .iter()
+            .filter(|&&child| model.kind(child) == ElementKind::Subclassification)
+            .filter_map(|&child| model.get(child, "superclassifier")?.as_id())
+            .filter_map(|base| model.name(base))
+            .collect();
+        (
+            model.name(used).unwrap_or_default().to_string(),
+            supers.join(","),
+        )
+    };
+    assert_eq!(typed(&reached), ("Used".to_string(), "Base".to_string()));
+    assert_eq!(typed(&reached), typed(&everything));
+
+    // and what it never names is left alone
+    let untouched = reached.model();
+    let never = untouched
+        .ids()
+        .find(|&id| untouched.name(id) == Some("NeverNamed"))
+        .expect("declared all the same");
+    assert!(
+        untouched
+            .owned(never)
+            .iter()
+            .all(|&child| untouched.kind(child) != ElementKind::FeatureTyping),
+        "a definition nothing named was resolved anyway"
+    );
+}
+
+#[test]
+fn a_connector_relates_what_it_is_written_with() {
+    // Six spellings, each of which used to relate nothing: the ends of
+    // a `bind` sit around its `=`, an `interface` may name its first
+    // end before `to` rather than after `connect`, a count may stand
+    // between the keyword and the end, a list may be parenthesised, and
+    // `then` takes an end on each side of itself.
+    let ws = ws(&[(
+        "c.sysml",
+        "port def Pt;\n\
+         part def A { port p : Pt; }\n\
+         connection def Bus;\n\
+         action def Step;\n\
+         part def Rig {\n\
+         \tpart a1 : A;\n\
+         \tpart a2 : A;\n\
+         \tpart a3 : A;\n\
+         \tbind a1.p = a2.p;\n\
+         \tinterface a1.p to a3.p;\n\
+         \tconnection counted : Bus connect [1] a1 to [1] a2;\n\
+         \tconnection listed : Bus connect (a1, a2, a3);\n\
+         }\n\
+         action def Flow {\n\
+         \taction one : Step;\n\
+         \tsuccession one then two;\n\
+         \taction two : Step;\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+
+    let model = ws.model();
+    let named = |want: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(want))
+            .expect("declared")
+    };
+    // every connector says which features it holds together
+    let related = |connector: sysml_model::ElementId| match model.get(connector, "relatedFeature") {
+        Some(sysml_model::Value::RefList(features)) => features.len(),
+        _ => 0,
+    };
+    let connectors: Vec<sysml_model::ElementId> = model
+        .ids()
+        .filter(|&id| model.kind(id).is_a(ElementKind::ConnectorAsUsage))
+        .collect();
+    assert_eq!(connectors.len(), 5, "one per statement");
+    for connector in connectors {
+        assert!(
+            related(connector) >= 2,
+            "{:?} relates {} feature(s)",
+            model.kind(connector),
+            related(connector)
+        );
+    }
+    assert_eq!(related(named("listed")), 3, "a list of three ends");
+}
+
+#[test]
 fn a_satisfaction_resolves_both_of_its_sides() {
     let ws = ws(&[(
         "s.sysml",

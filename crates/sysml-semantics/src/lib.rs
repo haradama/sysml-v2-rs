@@ -38,6 +38,14 @@ use sysml_syntax::{
     is_name_chain, parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange,
 };
 
+/// Whether a resolution pass replaces what was found about the files it
+/// touches, or adds to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Clear {
+    TheseFiles,
+    Nothing,
+}
+
 /// An unresolved reference, for reporting.
 #[derive(Clone, Debug)]
 pub struct Unresolved {
@@ -689,30 +697,85 @@ impl Workspace {
     /// reify the relationship elements.
     pub fn resolve_all(&mut self) -> ResolveStats {
         let ids: Vec<ElementId> = self.model.ids().collect();
-        self.resolve_ids(&ids)
+        self.resolve_ids(&ids, Clear::TheseFiles)
     }
 
     /// Resolve only elements belonging to the given files (imports,
     /// supertypes etc. from other files are still resolved on demand).
+    /// Resolve `files`, and then whatever they turned out to reach,
+    /// until nothing new is reached.
+    ///
+    /// A reader of the model -- a drawing, a generator -- follows the
+    /// relationships resolution reifies, so a type that was never
+    /// resolved has no members to show and no supertype to inherit
+    /// from. Resolving every loaded file answers that by doing far more
+    /// work than the question needs: a standard library is thousands of
+    /// references, of which a model uses a handful. This resolves the
+    /// files asked for, sees which files the answers landed in, and
+    /// goes round again.
+    pub fn resolve_reached(&mut self, files: &[usize]) -> ResolveStats {
+        let mut stats = self.resolve_files(files);
+        let mut done: HashSet<ElementId> = self
+            .model
+            .ids()
+            .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
+            .collect();
+        loop {
+            let mut fresh = Vec::new();
+            for reference in &self.references {
+                if done.contains(&reference.target) {
+                    continue;
+                }
+                // A package is a place to look names up, not something
+                // a model is made of: nothing is typed by one, and a
+                // qualified name records every namespace it passed
+                // through on the way. What is actually used out of a
+                // package records itself, so following the package
+                // would be reading a library to find two words in it.
+                if self.model.kind(reference.target).is_a(ElementKind::Package) {
+                    continue;
+                }
+                // what a name landed on is of no use without what it
+                // holds: the members a box would show, and the types
+                // those are declared with
+                fresh.extend(self.model.descendants(reference.target));
+            }
+            fresh.retain(|id| done.insert(*id));
+            if fresh.is_empty() {
+                return stats;
+            }
+            // every element is resolved once, so nothing said about one
+            // round is there to be replaced by the next
+            let round = self.resolve_ids(&fresh, Clear::Nothing);
+            stats.resolved += round.resolved;
+            stats.unresolved += round.unresolved;
+            stats.lookups += round.lookups;
+        }
+    }
+
     pub fn resolve_files(&mut self, files: &[usize]) -> ResolveStats {
         let ids: Vec<ElementId> = self
             .model
             .ids()
             .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
             .collect();
-        self.resolve_ids(&ids)
+        self.resolve_ids(&ids, Clear::TheseFiles)
     }
 
-    fn resolve_ids(&mut self, ids: &[ElementId]) -> ResolveStats {
+    fn resolve_ids(&mut self, ids: &[ElementId], clear: Clear) -> ResolveStats {
         // Resolving the same elements again replaces what was found
         // about them rather than adding to it: asking twice is a thing
-        // callers do, and it should not double every finding.
-        let touched: HashSet<usize> = ids
-            .iter()
-            .filter_map(|id| self.elem_file.get(id).copied())
-            .collect();
-        self.unresolved.retain(|u| !touched.contains(&u.file));
-        self.references.retain(|r| !touched.contains(&r.file));
+        // callers do, and it should not double every finding. A caller
+        // that resolves each element exactly once says so instead, so
+        // that one round does not wipe what the last one found.
+        if clear == Clear::TheseFiles {
+            let touched: HashSet<usize> = ids
+                .iter()
+                .filter_map(|id| self.elem_file.get(id).copied())
+                .collect();
+            self.unresolved.retain(|u| !touched.contains(&u.file));
+            self.references.retain(|r| !touched.contains(&r.file));
+        }
 
         let mut stats = ResolveStats::default();
         let began = self.lookups;
@@ -1767,9 +1830,41 @@ impl Workspace {
                 }
             }
         }
+        // `then action b;` writes no operand at all: what it flows into
+        // is the declaration it wraps. That declaration belongs to the
+        // enclosing scope rather than to the succession, so nothing an
+        // operand search looks at holds it -- and a succession that
+        // relates nothing is a step the model cannot say follows.
+        if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
+            if let Some(target) = self.wrapped_declaration(id, node) {
+                let end = self.model.create(ElementKind::Feature);
+                self.model.add_owned(id, end);
+                self.try_set(end, "chainingFeature", Value::RefList(vec![target]));
+                related.push(target);
+            }
+        }
         if !related.is_empty() {
             self.try_set(id, "relatedFeature", Value::RefList(related));
         }
+    }
+
+    /// The declaration a control statement wraps, as the element the
+    /// build hoisted it to.
+    ///
+    /// A wrapper keeps the name in the enclosing scope rather than one
+    /// level in, so the declaration is a sibling of the statement --
+    /// found by the syntax it was built from, which is the only thing
+    /// that still tells the two apart.
+    fn wrapped_declaration(&self, connector: ElementId, node: &SyntaxNode) -> Option<ElementId> {
+        let declared = node
+            .children()
+            .find(|child| matches!(child.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE))?;
+        let owner = self.model.owner(connector)?;
+        self.model
+            .owned(owner)
+            .iter()
+            .copied()
+            .find(|member| self.source.get(member) == Some(&declared))
     }
 
     /// Reify one connector end as a `Feature` whose `chainingFeature` holds
@@ -2334,20 +2429,70 @@ fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
     let is_reference = |kind| matches!(kind, SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR);
     let introduces_end = match node.kind() {
-        // a connector statement relates every reference it holds
+        // A connector statement relates every reference it holds --
+        // `bind a.p = b.p;` among them, which writes its second end as
+        // a value clause rather than as another operand.
         SyntaxKind::CONNECTOR_STMT => {
-            return node.children().filter(|c| is_reference(c.kind())).collect()
+            return node
+                .children()
+                .flat_map(|child| match child.kind() {
+                    kind if is_reference(kind) => vec![child],
+                    SyntaxKind::VALUE => child
+                        .children()
+                        .filter(|c| is_reference(c.kind()))
+                        .collect(),
+                    _ => Vec::new(),
+                })
+                .collect()
         }
         // `transition t first a ... then b` writes a name of its own first
         SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
         // `connection c : L connect a to b;` and `flow f of T from a to b;`
-        // declare a name and a type before the ends arrive
+        // declare a name and a type before the ends arrive, and
+        // `succession a then b;` writes its ends around the keyword
         _ => &[
             SyntaxKind::CONNECT_KW,
             SyntaxKind::TO_KW,
             SyntaxKind::FROM_KW,
+            SyntaxKind::FIRST_KW,
+            SyntaxKind::THEN_KW,
         ][..],
     };
+    // `a then b` and `interface a.p to b.p;` say where they start
+    // before the keyword, in the place a statement writing `first`,
+    // `from` or `connect` puts a name and a type instead. Only the very
+    // front of the statement is that place: a clause such as `accept rs
+    // : T` takes it for itself, and what such a clause declares is a
+    // name of its own rather than an end.
+    let says_where_first = |kind| {
+        matches!(
+            kind,
+            SyntaxKind::FIRST_KW | SyntaxKind::FROM_KW | SyntaxKind::CONNECT_KW
+        )
+    };
+    let leading_source = introduces_end
+        .iter()
+        .any(|kind| matches!(kind, SyntaxKind::THEN_KW | SyntaxKind::TO_KW))
+        && !node
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .any(|t| says_where_first(t.kind()));
+    let mut front = node
+        .children_with_tokens()
+        .take_while(|element| {
+            element.as_token().map_or(true, |token| {
+                token.kind().is_trivia()
+                    || token.kind().is_modifier_kw()
+                    || token.kind().is_visibility_kw()
+                    || token.kind().is_def_kind_kw()
+                    || matches!(
+                        token.kind(),
+                        SyntaxKind::SUCCESSION_KW | SyntaxKind::TRANSITION_KW
+                    )
+            })
+        })
+        .filter_map(|element| element.into_node())
+        .find(|child| is_reference(child.kind()));
     let mut out = Vec::new();
     let mut after_keyword = false;
     for element in node.children_with_tokens() {
@@ -2358,12 +2503,26 @@ fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
             // `then accept sig after ...`, `flow of Fuel ...` -- whose name
             // is not something to resolve.
             Some(token) => {
+                if leading_source && matches!(token.kind(), SyntaxKind::THEN_KW | SyntaxKind::TO_KW)
+                {
+                    out.extend(front.take());
+                }
                 after_keyword = introduces_end.contains(&token.kind());
             }
             None => {
                 let child = element.into_node().expect("element is a node");
+                // `connect [1] myCart to [1] products` and `first [1]
+                // paint then [1] dry` count the end before naming it,
+                // and the count is not what the keyword introduced
+                if child.kind() == SyntaxKind::MULTIPLICITY {
+                    continue;
+                }
                 if after_keyword && is_reference(child.kind()) {
                     out.push(child);
+                } else if after_keyword && child.kind() == SyntaxKind::PAREN_EXPR {
+                    // `connect (d1, d2, d3)` relates the whole list, and
+                    // the parentheses hold it rather than the statement
+                    out.extend(child.children().filter(|c| is_reference(c.kind())));
                 }
                 after_keyword = false;
             }
