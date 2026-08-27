@@ -169,6 +169,11 @@ up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
 two features of the same part, are left undrawn.
 
+What a definition documents about itself is drawn: the standard's
+`documentation-compartment` holds the prose of a `doc`, and a `rep` says
+which language it is in and what it says in it. A line longer than the
+box holds ends in the `…` the standard uses for exactly that.
+
 A view says what it exposes and what it filters by:
 `exposes-compartment` and `filters-compartment` hold what `expose
 P::Thing;` and `filter @Safety;` wrote, neither of which is a feature and

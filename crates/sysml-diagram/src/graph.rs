@@ -31,7 +31,11 @@ impl Feature {
             line.push_str(direction);
             line.push(' ');
         }
-        line.push_str(&format!("{} {}", self.keyword, self.name));
+        if !self.keyword.is_empty() {
+            line.push_str(&self.keyword);
+            line.push(' ');
+        }
+        line.push_str(&self.name);
         if let Some(ty) = &self.ty {
             line.push_str(&format!(" : {ty}"));
         }
@@ -1545,11 +1549,23 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
     let (compartment, keyword) = match model.kind(member) {
         ElementKind::MembershipExpose | ElementKind::NamespaceExpose => ("exposes", "expose"),
         ElementKind::ElementFilterMembership => ("filters", "filter"),
+        // `documentation-compartment` holds what an element documents
+        // about itself, and `\u{ab}rep\u{bb}` what it says in another
+        // language. Both were built and neither was ever drawn.
+        // the compartment is already labelled `doc`, so the prose stands
+        // on its own; a `rep` says which language it is in
+        ElementKind::Documentation => ("doc", ""),
+        ElementKind::TextualRepresentation => ("doc", "rep"),
         _ => return None,
     };
-    // neither names an element: what each says is the text it was
-    // written as -- the name exposed, or the expression filtered by
-    let named = written_text(model, member)?;
+    // none of these names an element: what each says is the text it was
+    // written as -- the name exposed, the expression filtered by, or the
+    // prose itself
+    let named = model
+        .get(member, "body")
+        .and_then(Value::as_str)
+        .map(one_line)
+        .or_else(|| written_text(model, member))?;
     Some((
         compartment,
         Feature {
@@ -1561,6 +1577,20 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
             direction: None,
         },
     ))
+}
+
+/// A block of prose as one compartment line. The standard writes `…`
+/// where a compartment holds more than it shows, and a paragraph on one
+/// line would set the width of the box it is in.
+fn one_line(text: &str) -> String {
+    const ROOM: usize = 60;
+    let first = text.lines().next().unwrap_or_default().trim();
+    let short = first.char_indices().nth(ROOM).map(|(at, _)| at);
+    match (short, first.len() < text.trim().len()) {
+        (Some(at), _) => format!("{}\u{2026}", &first[..at]),
+        (None, true) => format!("{first}\u{2026}"),
+        (None, false) => first.to_string(),
+    }
 }
 
 /// The text an element was written as, where the build kept one -- on the
@@ -2533,6 +2563,51 @@ mod tests {
                 ("Z".to_string(), "B".to_string(), None),
             ]
         );
+    }
+
+    #[test]
+    fn what_a_definition_documents_about_itself_is_drawn() {
+        // `documentation-compartment` holds the prose, and
+        // `textual-representation-node` the language and what it says
+        let ws = resolved(
+            "part def Thing {\n\
+             \tdoc /* A thing.\n\
+             \t * And more about it than one line holds.\n\
+             \t */\n\
+             \trep asJson language \"json\" /* {} */\n\
+             \tattribute a;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            diagram.nodes[0]
+                .compartments
+                .iter()
+                .flat_map(|compartment| {
+                    compartment
+                        .lines
+                        .iter()
+                        .map(move |line| (compartment.label, line.label()))
+                })
+                .collect::<Vec<_>>(),
+            [
+                // the compartment is labelled `doc`, so the prose stands
+                // on its own, and the standard's own `\u{2026}` says there
+                // is more of it than the line holds
+                ("doc", "A thing.\u{2026}".to_string()),
+                ("doc", "rep {}".to_string()),
+                ("attributes", "attribute a".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_line_of_prose_is_cut_where_the_standard_cuts_one() {
+        assert_eq!(one_line("short"), "short");
+        assert_eq!(one_line("first\nsecond"), "first\u{2026}");
+        let long = "x".repeat(80);
+        assert_eq!(one_line(&long).chars().count(), 61);
+        assert!(one_line(&long).ends_with('\u{2026}'));
     }
 
     #[test]

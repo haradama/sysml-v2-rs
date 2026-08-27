@@ -188,6 +188,12 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         if let Some(lang) = string_token(node) {
             model.set(id, "language", Value::String(lang));
         }
+        // `textual-representation-node` shows the language *and* the
+        // text: a `rep` that says which language it is in and not what
+        // it says is a representation of nothing.
+        if let Some(body) = comment_body(node) {
+            model.set(id, "body", Value::String(body));
+        }
     }
     // `expose P::Thing;` says what it exposes and `filter @Safety;` what
     // it filters by, and a view listing neither says only that it exposes
