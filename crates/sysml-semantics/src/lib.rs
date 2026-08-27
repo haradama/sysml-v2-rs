@@ -791,6 +791,13 @@ impl Workspace {
                 self.resolve_trigger_type(id, &node, &mut stats);
                 continue;
             }
+            // `dependency use from A to B;` is a statement of its own,
+            // and the names on either side of `to` are references like
+            // any other
+            if node.kind() == SyntaxKind::DEPENDENCY {
+                self.resolve_dependency(id, &node, &mut stats);
+                continue;
+            }
             // `@rust { ... }` types the metadata usage by its metadata
             // definition; resolving it is what lets the `:>> attribute`
             // settings inside reach the definition's attributes
@@ -859,6 +866,35 @@ impl Workspace {
                             });
                         }
                     }
+                }
+            }
+            // `perform w;`, `exhibit s;`, `assert c;`, `include u;` --
+            // `PerformActionUsageDeclaration : PerformActionUsage = (
+            // ownedRelationship += OwnedReferenceSubsetting ... )`. The
+            // reference is what the usage is *about*, and without it the
+            // model says only that something is performed.
+            //
+            // A name that does not resolve is left alone rather than
+            // reported: `satisfy requirement viewpointConformance by
+            // that;` writes the same shape and *declares* that name, so
+            // a finding here would be a false one.
+            //
+            // `satisfy r by p;` and `verify r;` have resolvers of their
+            // own below, which record the same operand: recording it here
+            // too would give a rename two edits over the one name.
+            let handled = self
+                .model
+                .kind(id)
+                .is_a(ElementKind::SatisfyRequirementUsage)
+                || self.model.member_role(id) == Some(Role::Verify);
+            if let Some(operand) = adapter_target(&node).filter(|_| !handled) {
+                if let Some(target) = self.resolve_from(id, &operand_segments(&operand)) {
+                    stats.resolved += 1;
+                    let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                    let range = operand.text_range();
+                    let name_range = last_name_range(&operand);
+                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    self.reify(id, false, SyntaxKind::REFERENCES, target);
                 }
             }
             // `connection c : L connect a to b;` is written as a usage, so
@@ -1854,6 +1890,68 @@ impl Workspace {
         }
     }
 
+    /// The clients and suppliers of a `dependency a, b to c;`.
+    ///
+    /// `Dependency = 'dependency' ( Identification? 'from' )? client +=
+    /// [QualifiedName] ( ',' client )* 'to' supplier += [QualifiedName]
+    /// ( ',' supplier )*` -- so `to` divides the two, and a name before
+    /// `from` is the dependency's own, not a client.
+    fn resolve_dependency(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let (mut clients, mut suppliers) = (Vec::new(), Vec::new());
+        let mut supplying = false;
+        for part in node.children_with_tokens() {
+            if part.kind() == SyntaxKind::TO_KW {
+                supplying = true;
+                continue;
+            }
+            // `dependency Use from A to B` names itself before `from`;
+            // without `from` there is no such name, and `dependency Z to
+            // A` starts with a client
+            let Some(operand) = part
+                .into_node()
+                .filter(|child| {
+                    matches!(
+                        child.kind(),
+                        SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR | SyntaxKind::QUALIFIED_NAME
+                    )
+                })
+                .filter(|operand| !before_from(node, operand))
+            else {
+                continue;
+            };
+            let segments = operand_segments(&operand);
+            let range = operand.text_range();
+            match self.resolve_from(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    let name_range = last_name_range(&operand);
+                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    if supplying {
+                        &mut suppliers
+                    } else {
+                        &mut clients
+                    }
+                    .push(target);
+                }
+                None => {
+                    stats.unresolved += 1;
+                    self.unresolved.push(Unresolved {
+                        file,
+                        range,
+                        name: Self::spell(&segments),
+                    });
+                }
+            }
+        }
+        if !clients.is_empty() {
+            self.try_set(id, "client", Value::RefList(clients));
+        }
+        if !suppliers.is_empty() {
+            self.try_set(id, "supplier", Value::RefList(suppliers));
+        }
+    }
+
     /// The declaration a control statement wraps, as the element the
     /// build hoisted it to.
     ///
@@ -2229,6 +2327,26 @@ struct Target {
     at: Vec<TextRange>,
 }
 
+/// The range of the last identifier in a reference operand -- what a
+/// rename of the thing it names rewrites, as opposed to the whole `a.b`.
+fn last_name_range(operand: &SyntaxNode) -> TextRange {
+    operand
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+        .last()
+        .map(|t| t.text_range())
+        .unwrap_or_else(|| operand.text_range())
+}
+
+/// Is there a `from` in this statement that `operand` stands before?
+/// That name is the dependency's own, not one of its clients.
+fn before_from(node: &SyntaxNode, operand: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter(|part| part.kind() == SyntaxKind::FROM_KW)
+        .any(|from| operand.text_range().end() <= from.text_range().start())
+}
+
 /// The metadata definition an `@name`/`#name` annotation names: the
 /// qualified name sitting directly under the annotation node.
 fn metadata_target(node: &SyntaxNode) -> Option<Target> {
@@ -2297,6 +2415,12 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
 /// For a usage introduced by `perform`/`exhibit`/`event`/`include` with a
 /// direct reference operand (`perform a.b;`), the segments of that operand.
 fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> {
+    adapter_target(node).map(|operand| operand_segments(&operand))
+}
+
+/// The operand a `perform`/`exhibit`/`assert`/... usage adapts, when it
+/// names one rather than declaring it.
+fn adapter_target(node: &SyntaxNode) -> Option<SyntaxNode> {
     if node.kind() != SyntaxKind::USAGE {
         return None;
     }
@@ -2327,8 +2451,7 @@ fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> {
     let operand = node
         .children()
         .find(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))?;
-    let segments = operand_segments(&operand);
-    (!segments.is_empty()).then_some(segments)
+    (!operand_segments(&operand).is_empty()).then_some(operand)
 }
 
 /// All identifier segments within a reference operand (`a.b`, `A::B.c`).

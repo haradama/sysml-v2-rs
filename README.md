@@ -62,7 +62,7 @@ vehicle.sysml: ok (0 error(s))
 $ cargo run -p sysml-cli -- parse --tree vehicle.sysml   # dump the syntax tree
 
 $ cargo run -p sysml-cli -- diagram vehicle.sysml -o vehicle.svg
-wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
+wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s), 0 dependency(ies) and 0 satisfaction(s) to vehicle.svg
 ```
 
 `diagram` draws one box per definition — its keyword, name and the features
@@ -108,11 +108,15 @@ long label does not push the rest of the row apart with it.
 
 ```console
 $ cargo run -p sysml-cli -- diagram car.sysml --internal Car -o car.svg
-wrote 3 box(es), 0 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 2 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to car.svg
+wrote 3 box(es), 0 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 2 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s), 0 dependency(ies) and 0 satisfaction(s) to car.svg
 ```
 
-Requirements are drawn too: `satisfy r by p;` becomes a dashed dependency
-from the satisfying feature to the requirement, and an n-ary
+What a definition answers for is drawn rather than only listed:
+`satisfy r by p;`, `assert c;`, `assume constraint c;`, `require c;`,
+`perform a;` and `exhibit s;` each become the line the standard gives them
+-- a plain one with an open arrowhead, keyworded «satisfy»,
+«assert» and so on. `dependency use from A to B;` is the one dashed
+line in the notation, drawn from each client to each supplier. And an n-ary
 `connection { end ::> a; end ::> b; end ::> c; }` -- how a derivation is
 written -- meets at the dot the standard draws for it
 (`n-ary-connection = n-ary-connection-dot n-ary-segment+`), with one
@@ -160,7 +164,7 @@ definitions:
 ```console
 $ cargo run -p sysml-cli -- diagram vehicle.sysml \
     --library vendor/sysml-v2-release/sysml.library -o vehicle.svg
-wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
+wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s), 0 dependency(ies) and 0 satisfaction(s) to vehicle.svg
 ```
 
 `--elk` hands the arrangement to the Eclipse Layout Kernel -- the boxes,

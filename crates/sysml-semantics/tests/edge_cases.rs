@@ -125,6 +125,19 @@ fn protected_members_inherit_but_stay_hidden() {
 }
 
 #[test]
+fn a_dependency_names_its_clients_and_suppliers() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n    part def A;\n    part def B;\n    dependency Use from A to B;\n    dependency A to NotThere;\n}\n",
+    )]);
+    // the supplier of the second one is a reference like any other, and
+    // saying nothing about a name that is not there would leave the
+    // dependency pointing at nothing
+    assert_eq!(ws.unresolved().len(), 1);
+    assert_eq!(ws.unresolved()[0].name, "NotThere");
+}
+
+#[test]
 fn recursive_imports_reexport_descendants() {
     let ws = ws(&[
         ("a.sysml", "package A { package Deep { part def Buried; } }"),

@@ -565,7 +565,7 @@ fn diagram(
     let summary = format!(
         "{} box(es), {} specialization(s), {} composition(s), {} reference(s), \
          {} subsetting(s), {} connection(s), {} flow(s), {} allocation(s), \
-         {} transition(s) and {} satisfaction(s)",
+         {} transition(s), {} dependency(ies) and {} satisfaction(s)",
         diagram.nodes.len(),
         count(Relation::Specialization),
         count(Relation::Composition),
@@ -577,6 +577,14 @@ fn diagram(
         count(Relation::Flow) + count(Relation::SuccessionFlow) + count(Relation::Message),
         count(Relation::Allocation),
         count(Relation::Transition),
+        // the keyworded lines: what a definition answers for, and what
+        // one element depends on another for
+        count(Relation::Dependency)
+            + count(Relation::Assert)
+            + count(Relation::Assume)
+            + count(Relation::Require)
+            + count(Relation::Perform)
+            + count(Relation::Exhibit),
         count(Relation::Satisfy),
     );
     emit(&svg, output, &summary)

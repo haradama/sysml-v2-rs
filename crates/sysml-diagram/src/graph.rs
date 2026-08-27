@@ -232,7 +232,8 @@ pub enum Relation {
     /// `first a then b`). Directed, unlike a connection.
     Transition,
     /// `from` satisfies the requirement `to` (`satisfy r by p`). Drawn the
-    /// SysML way, as a dashed dependency pointing at the requirement.
+    /// SysML way (`satisfy-edge`): a plain line with an open arrowhead,
+    /// keyworded `\u{ab}satisfy\u{bb}` and pointing at the requirement.
     Satisfy,
     /// `from` and `to` are bound to the same value (`bind a = b`). A plain
     /// line with `=` written on it (`binding-connection`).
@@ -252,6 +253,23 @@ pub enum Relation {
     /// A message between two occurrences (`message m from a to b`), drawn
     /// with the open arrowhead the standard reserves for it.
     Message,
+    /// `from` asserts the constraint `to` (`assert constraint c`), drawn
+    /// with the open arrowhead and `«assert»` (`assert-edge`).
+    Assert,
+    /// `from` assumes the constraint `to` (`assume constraint c`),
+    /// keyworded `«assume»` (`assume-edge`).
+    Assume,
+    /// `from` requires the constraint or requirement `to` (`require
+    /// constraint c`), keyworded `«require»` (`require-edge`).
+    Require,
+    /// `from` performs the action `to` (`perform a`), the `perform-edge`.
+    Perform,
+    /// `from` exhibits the state `to` (`exhibit s`), the `exhibit-edge`.
+    Exhibit,
+    /// `from` depends on `to` (`dependency use from A to B`). The one
+    /// dashed line in the notation (`binary-dependency`), with an open
+    /// arrowhead and the dependency's own name on it.
+    Dependency,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -338,6 +356,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
             }
         }
         compositions_of(model, node.id, from, &index, &mut edges);
+        annotations_of(model, node.id, from, &index, &mut edges);
         // `connection def D { end a : A; end b : B; }` relates the
         // definitions its ends are typed by, which is the only thing
         // holding them together in a definition diagram
@@ -354,6 +373,13 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                     label: Some(format!("{}{}", end.role, end.adornment)),
                 });
             }
+        }
+    }
+    // most dependencies are written in a package rather than inside a
+    // definition, and a package is not one of the boxes
+    for &root in roots {
+        for id in model.descendants(root) {
+            dependencies_of(model, id, &index, &mut edges);
         }
     }
 
@@ -732,7 +758,7 @@ fn push_satisfaction(
             to,
             relation: Relation::Satisfy,
             ends: (None, None),
-            label: Some("satisfy".to_string()),
+            label: Some(keyworded("satisfy", None)),
         });
     }
 }
@@ -812,9 +838,16 @@ fn is_structure_box(kind: ElementKind) -> bool {
 /// picks the box and the last names the port on it. A bare `connect w to a`
 /// chains to `[w]`, where both are the same element.
 fn connector_ends(model: &Model, connector: ElementId) -> Vec<End> {
+    // `require Load;` inside a requirement owns a reference of its own,
+    // and it is not an end. What makes a member one is the `end` keyword
+    // -- or that the thing owning it relates things for a living, which
+    // is how `connect w.hub to a.mount` writes its two without one.
+    let relates = model.kind(connector).is_a(ElementKind::Connector)
+        || model.kind(connector).is_a(ElementKind::TransitionUsage);
     model
         .owned(connector)
         .iter()
+        .filter(|&&end| relates || model.get(end, "isEnd") == Some(&Value::Bool(true)))
         .filter_map(|&end| {
             let (target, role) = chained_end(model, end)
                 .or_else(|| referenced_end(model, end))
@@ -901,6 +934,116 @@ fn referenced_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> 
             }
             _ => None,
         })
+}
+
+/// One edge per client-supplier pair of every `dependency` in scope.
+///
+/// `Dependency = 'dependency' ( Identification? 'from' )? client += ...
+/// 'to' supplier += ...`, and the standard draws `binary-dependency`
+/// between each pair. A dependency naming several of either is written
+/// out pairwise, which says the same thing as its n-ary figure.
+fn dependencies_of(
+    model: &Model,
+    scope: ElementId,
+    index: &HashMap<ElementId, usize>,
+    edges: &mut Vec<Edge>,
+) {
+    for &child in model.owned(scope) {
+        if model.kind(child) != ElementKind::Dependency {
+            continue;
+        }
+        let ends = |property| match model.get(child, property) {
+            // a dependency whose names went unresolved has neither list
+            Some(Value::RefList(ends)) => ends.clone(),
+            _ => Vec::new(),
+        };
+        for client in ends("client") {
+            for supplier in ends("supplier") {
+                let (Some(&from), Some(&to)) = (index.get(&client), index.get(&supplier)) else {
+                    continue;
+                };
+                if from != to {
+                    edges.push(Edge {
+                        from,
+                        to,
+                        relation: Relation::Dependency,
+                        ends: (None, None),
+                        label: model.name(child).map(str::to_string),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// One edge per thing a definition asserts, assumes, requires, performs
+/// or exhibits.
+///
+/// The standard draws each of these as a line of its own -- `assert-edge`,
+/// `assume-edge`, `require-edge`, `perform-edge`, `exhibit-edge` -- and
+/// listing them only in a compartment says the definition mentions them,
+/// not that it answers for them.
+fn annotations_of(
+    model: &Model,
+    definition: ElementId,
+    from: usize,
+    index: &HashMap<ElementId, usize>,
+    edges: &mut Vec<Edge>,
+) {
+    let mut linked: Vec<(usize, Relation)> = Vec::new();
+    for &child in model.owned(definition) {
+        let Some(relation) = annotation_relation(model, child) else {
+            continue;
+        };
+        // `assert constraint c;` references the constraint rather than
+        // declaring a typing of its own, so what it is about is a
+        // reference or two away
+        let Some(&to) = resolved_type(model, child).and_then(|ty| index.get(&ty)) else {
+            continue;
+        };
+        // one line per pair: `assert constraint a; assert constraint b;`
+        // over two constraints of one definition says the same thing twice
+        if from == to || linked.contains(&(to, relation)) {
+            continue;
+        }
+        linked.push((to, relation));
+        edges.push(Edge {
+            from,
+            to,
+            relation,
+            ends: (None, None),
+            label: Some(keyworded(annotation_keyword(relation), None)),
+        });
+    }
+}
+
+/// Which of the keyworded lines a member is, if it is one of them.
+fn annotation_relation(model: &Model, member: ElementId) -> Option<Relation> {
+    // the role a membership was given comes first: `assume constraint c`
+    // and `require constraint c` are both plain constraint usages, and
+    // only the role says which
+    match model.member_role(member) {
+        Some(Role::Assume) => return Some(Relation::Assume),
+        Some(Role::Require) => return Some(Relation::Require),
+        _ => {}
+    }
+    match model.kind(member) {
+        ElementKind::AssertConstraintUsage => Some(Relation::Assert),
+        ElementKind::PerformActionUsage => Some(Relation::Perform),
+        ElementKind::ExhibitStateUsage => Some(Relation::Exhibit),
+        _ => None,
+    }
+}
+
+/// The keyword the standard writes on each of those lines.
+fn annotation_keyword(relation: Relation) -> &'static str {
+    match relation {
+        Relation::Assume => "assume",
+        Relation::Require => "require",
+        Relation::Perform => "perform",
+        Relation::Exhibit => "exhibit",
+        _ => "assert",
+    }
 }
 
 /// One composition edge per distinct part type a definition declares.
@@ -1306,9 +1449,18 @@ fn expression_text(model: &Model, expression: ElementId) -> String {
 /// it bare says less than the model does, and leaves a box that looks
 /// like it stands for nothing in particular.
 fn type_name(model: &Model, usage: ElementId) -> Option<String> {
-    if let Some(target) = model.type_of(usage) {
-        return model.name(target).map(str::to_string);
-    }
+    model.name(resolved_type(model, usage)?).map(str::to_string)
+}
+
+/// What a feature is typed by, following what it subsets, redefines or
+/// references until a type turns up.
+///
+/// A declared typing answers straight away. Otherwise `part big :> engine`
+/// is one of whatever `engine` is, and `flow f of carried :> Fuel` reaches
+/// a definition rather than another feature -- subsetting a definition is
+/// how KerML says a feature is one of those, so that definition is the
+/// type and not another feature to follow.
+fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
     let mut visited = HashSet::new();
     let mut queue = std::collections::VecDeque::from([usage]);
     while let Some(current) = queue.pop_front() {
@@ -1316,13 +1468,10 @@ fn type_name(model: &Model, usage: ElementId) -> Option<String> {
             continue;
         }
         if let Some(target) = model.type_of(current) {
-            return model.name(target).map(str::to_string);
+            return Some(target);
         }
-        // `flow f of carried :> Fuel` -- subsetting a definition is how
-        // KerML says a feature is one of those, so a definition reached
-        // this way is the type, not another feature to follow
         if current != usage && !model.kind(current).is_a(ElementKind::Feature) {
-            return model.name(current).map(str::to_string);
+            return Some(current);
         }
         for &rel in model.owned(current) {
             let names = match model.kind(rel) {
@@ -2073,6 +2222,115 @@ mod tests {
     }
 
     #[test]
+    fn what_a_definition_answers_for_is_a_line_of_its_own() {
+        // `assert-edge`, `assume-edge`, `require-edge`, `perform-edge`
+        // and `exhibit-edge`: a compartment line says the definition
+        // mentions these, not that it answers for them
+        let ws = resolved(
+            "constraint def Safe { true }\n\
+             action def Warm;\n\
+             state def Idle;\n\
+             part def Oven {\n\
+             \tconstraint c : Safe;\n\
+             \tassert c;\n\
+             \taction w : Warm;\n\
+             \tperform w;\n\
+             \tstate s : Idle;\n\
+             \texhibit s;\n\
+             \tassume constraint a : Safe;\n\
+             \trequire constraint q : Safe;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let mut keyworded: Vec<(Relation, &str)> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| Some((edge.relation, edge.label.as_deref()?)))
+            .collect();
+        keyworded.sort_by_key(|(_, label)| *label);
+        assert_eq!(
+            keyworded,
+            [
+                (Relation::Assert, "\u{ab}assert\u{bb}"),
+                (Relation::Assume, "\u{ab}assume\u{bb}"),
+                (Relation::Exhibit, "\u{ab}exhibit\u{bb}"),
+                (Relation::Perform, "\u{ab}perform\u{bb}"),
+                (Relation::Require, "\u{ab}require\u{bb}"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dependency_is_drawn_from_each_client_to_each_supplier() {
+        // `Dependency = 'dependency' ( Identification? 'from' )? client
+        // += ... 'to' supplier += ...`, drawn as `binary-dependency` --
+        // and until now not drawn, or even built, at all
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tpart def B;\n\
+             \tpart def Z;\n\
+             \tdependency Use from A to B;\n\
+             \tdependency Z to A, B;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let names = |at: usize| diagram.nodes[at].name.clone();
+        let drawn: Vec<(String, String, Option<&str>)> = diagram
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == Relation::Dependency)
+            .map(|edge| (names(edge.from), names(edge.to), edge.label.as_deref()))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                // the name before `from` is the dependency's own
+                ("A".to_string(), "B".to_string(), Some("Use")),
+                // and without `from`, the first name is a client
+                ("Z".to_string(), "A".to_string(), None),
+                ("Z".to_string(), "B".to_string(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_dependency_that_names_nothing_draws_nothing() {
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tdependency A to NotThere;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn one_line_per_pair_however_often_the_model_says_it() {
+        // two constraints of one definition, asserted separately, are
+        // one `\u{ab}assert\u{bb}` between the same two boxes
+        let ws = resolved(
+            "constraint def Safe { true }\n\
+             part def Oven {\n\
+             \tconstraint c : Safe;\n\
+             \tconstraint d : Safe;\n\
+             \tassert c;\n\
+             \tassert d;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Assert)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn a_typing_without_a_reference_yields_no_type() {
         let mut model = Model::new();
         let definition = model.create(ElementKind::PartDefinition);
@@ -2461,7 +2719,7 @@ mod interconnection_tests {
         let edge = &diagram.edges[0];
         assert_eq!(edge.relation, Relation::Satisfy);
         assert_eq!((edge.from, edge.to), (1, 0));
-        assert_eq!(edge.label.as_deref(), Some("satisfy"));
+        assert_eq!(edge.label.as_deref(), Some("\u{ab}satisfy\u{bb}"));
     }
 
     #[test]

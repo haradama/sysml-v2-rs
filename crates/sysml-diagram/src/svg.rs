@@ -180,7 +180,13 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Allocation
             | Relation::Flow
             | Relation::SuccessionFlow
-            | Relation::Message => {
+            | Relation::Message
+            | Relation::Assert
+            | Relation::Assume
+            | Relation::Require
+            | Relation::Perform
+            | Relation::Exhibit
+            | Relation::Dependency => {
                 // a connection ends at the port it names, where the
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
@@ -589,15 +595,25 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         // `allocate-relationship` draws the same open arrowhead a
         // transition does, and says which it is with `«allocate»`
         Relation::Allocation => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // `assert-edge`, `assume-edge`, `require-edge`, `perform-edge`,
+        // `exhibit-edge` and `satisfy-edge` are one figure with six
+        // keywords: a plain line and the same open arrowhead
+        Relation::Assert
+        | Relation::Assume
+        | Relation::Require
+        | Relation::Perform
+        | Relation::Exhibit => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
         // what flows has the filled head; a message has the open dart the
         // standard keeps for it
         Relation::Flow | Relation::SuccessionFlow => {
             (" marker-end=\"url(#flow)\"", " class=\"edge\"")
         }
         Relation::Message => (" marker-end=\"url(#message)\"", " class=\"edge\""),
-        // a satisfy assertion is a dependency, pointing at the requirement
-        // it is about
-        Relation::Satisfy => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
+        // `satisfy-edge` is drawn the same way, and the specification
+        // draws it solid rather than dashed
+        Relation::Satisfy => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // `binary-dependency` is the one dashed line in the notation
+        Relation::Dependency => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
         // a connection, an interface and a binding are undirected and get
         // no marker at all -- what each is, its label says
         _ => ("", " class=\"edge\""),
@@ -1612,7 +1628,25 @@ mod tests {
     }
 
     #[test]
-    fn a_satisfaction_is_drawn_as_a_dashed_dependency() {
+    fn a_dependency_is_the_one_dashed_line_in_the_notation() {
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tpart def B;\n\
+             \tdependency Use from A to B;\n\
+             }\n",
+        );
+        let svg = render(
+            &definition_diagram(ws.model(), &[ws.root()]),
+            &Style::default(),
+        );
+        assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
+        assert!(svg.contains("stroke-dasharray"), "{svg}");
+        assert!(svg.contains(">Use</text>"), "{svg}");
+    }
+
+    #[test]
+    fn a_satisfaction_is_drawn_the_way_the_standard_draws_one() {
         let ws = resolved(
             "requirement def R;\n\
              part def P;\n\
@@ -1632,9 +1666,10 @@ mod tests {
             &Style::default(),
         );
 
-        assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
-        assert!(svg.contains("stroke-dasharray"));
-        assert!(svg.contains(">satisfy</text>"), "{svg}");
+        // `satisfy-edge` is a plain line with the open arrowhead, said
+        // in words: the specification draws no dependency here
+        assert_eq!(svg.matches("url(#transition)").count(), 1);
+        assert!(svg.contains(">\u{ab}satisfy\u{bb}</text>"), "{svg}");
     }
 
     #[test]

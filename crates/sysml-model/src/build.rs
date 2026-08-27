@@ -46,6 +46,10 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         CONNECTOR_STMT => connector_kind(node),
         CONTROL_STMT => control_kind(node),
         IMPORT | EXPOSE => Some(import_kind(node)),
+        // `dependency use from A to B;` -- a relationship in its own
+        // right, with clients on one side of `to` and suppliers on the
+        // other, and nothing at all in the model until now
+        DEPENDENCY => Some(ElementKind::Dependency),
         // `flow f of Fuel from a to b` -- what the flow carries, which the
         // standard owns from the flow as a feature of its own
         PAYLOAD => Some(ElementKind::PayloadFeature),
@@ -622,6 +626,21 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
                 | SyntaxKind::ASSIGN_KW
         )
     };
+    // `dependency Use from A to B;` names itself before `from`, and
+    // `Dependency = 'dependency' ( Identification? 'from' )? ...` says a
+    // name is only there when `from` is: `dependency Z to A;` starts
+    // with a client.
+    if node.kind() == SyntaxKind::DEPENDENCY {
+        if !has_token(node, SyntaxKind::FROM_KW) {
+            return None;
+        }
+        return node
+            .children_with_tokens()
+            .take_while(|part| part.kind() != SyntaxKind::FROM_KW)
+            .filter_map(|part| part.into_node())
+            .find(|child| child.kind() == SyntaxKind::NAME_REF)
+            .and_then(|name| Some(unquote(name.first_token()?.text())));
+    }
     match node.kind() {
         SyntaxKind::CONTROL_STMT => {}
         SyntaxKind::USAGE if tokens(node).any(introduces_operands) => {}
