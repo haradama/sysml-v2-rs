@@ -59,6 +59,23 @@ fn loaded(path: &std::path::Path) -> Workspace {
     ws
 }
 
+/// The name an element answers to: its own, or -- for `part redefines
+/// mcu : Atmega328p;`, which declares none -- that of what it redefines.
+fn answers_to(model: &Model, element: ElementId) -> Option<String> {
+    if let Some(name) = model.name(element) {
+        return Some(name.to_string());
+    }
+    model.owned(element).iter().find_map(|&rel| {
+        if model.kind(rel) != ElementKind::Redefinition {
+            return None;
+        }
+        match model.get(rel, "redefinedFeature") {
+            Some(sysml_model::Value::Ref(target)) => model.name(*target).map(str::to_string),
+            _ => None,
+        }
+    })
+}
+
 /// Properties every drawing must have, whatever it is a drawing of.
 fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
     let mut drawn = HashSet::new();
@@ -69,16 +86,19 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             node.id
         );
         match node.shape {
-            // a box says what it stands for, and says the same thing the
-            // model does
+            // a box says what it stands for, and says the same thing
+            // the model does: the name first, then the type it was
+            // declared with and how many of it there are, if either
             Shape::Box => {
-                let name = model.name(node.id).unwrap_or_default();
+                let name = answers_to(model, node.id).unwrap_or_default();
                 assert!(!node.name.is_empty(), "{where_}: a box with no name");
+                let said = node.name.strip_prefix(&name).is_some_and(|rest| {
+                    rest.is_empty() || rest.starts_with(" :") || rest.starts_with('[')
+                });
                 assert!(
-                    node.name == name || node.name.starts_with(&format!("{name} :")),
+                    said,
                     "{where_}: box `{}` does not name {:?}",
-                    node.name,
-                    node.id
+                    node.name, node.id
                 );
             }
             // only the start marker is allowed to carry no label, and only
@@ -98,7 +118,17 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             edge.from < diagram.nodes.len() && edge.to < diagram.nodes.len(),
             "{where_}: an edge leaves the diagram"
         );
-        assert_ne!(edge.from, edge.to, "{where_}: an edge onto itself");
+        // A membership may land back on the box it left -- `part
+        // subparts : Assembly;` inside `Assembly` -- and only a
+        // membership may: a specialization of itself, a connection to
+        // itself or a transition to itself is a model saying nothing.
+        if edge.from == edge.to {
+            assert!(
+                matches!(edge.relation, Relation::Composition | Relation::Reference),
+                "{where_}: a {:?} onto itself",
+                edge.relation
+            );
+        }
     }
 }
 
@@ -171,6 +201,30 @@ fn definition_diagrams_are_faithful_to_their_models() {
     }
 }
 
+/// Whether `sub` reaches `sup` through the specializations the model
+/// reified, so that an inherited member can be told from a stray one.
+fn specializes(model: &Model, sub: ElementId, sup: ElementId) -> bool {
+    let mut queue = vec![sub];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(current) = queue.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        if current == sup {
+            return true;
+        }
+        for &rel in model.owned(current) {
+            if model.kind(rel) != sysml_model::ElementKind::Subclassification {
+                continue;
+            }
+            if let Some(sysml_model::Value::Ref(target)) = model.get(rel, "superclassifier") {
+                queue.push(*target);
+            }
+        }
+    }
+    false
+}
+
 #[test]
 fn interconnection_diagrams_only_draw_what_is_in_scope() {
     let Some(root) = corpus() else { return };
@@ -200,11 +254,14 @@ fn interconnection_diagrams_only_draw_what_is_in_scope() {
             );
             check_shape(&diagram, model, &where_);
 
-            // an internal view shows what the element itself holds
+            // an internal view shows what the element is assembled
+            // from: what it holds, and what it inherits from what it
+            // specializes -- and nothing from anywhere else
             for node in &diagram.nodes {
+                let holder = model.owner(node.id).expect("a drawn member has an owner");
                 assert!(
-                    model.owned(owner).contains(&node.id),
-                    "{where_}: `{}` is not a member of it",
+                    holder == owner || specializes(model, owner, holder),
+                    "{where_}: `{}` is neither its own nor inherited",
                     node.name
                 );
             }

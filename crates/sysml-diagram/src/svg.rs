@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use crate::graph::Node;
 use crate::layout::child_boxes;
-use crate::{Diagram, Edge, Layout, Placed, Relation, Shape, Style};
+use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 
 /// Font stack for the drawing: the same families a browser would pick for
 /// UI text, so a diagram looks native wherever it is embedded.
@@ -25,6 +25,7 @@ const CSS: &str = "\
 .rule, .edge { stroke: var(--line); stroke-width: 1; fill: none; }\n\
 .arrow { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
 .diamond { fill: var(--line); stroke: var(--line); stroke-width: 1; }\n\
+.hollow { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
 .tip { fill: none; stroke: var(--line); stroke-width: 1; }\n\
 .initial { fill: var(--line); }\n\
 .port { fill: var(--box); stroke: var(--line); stroke-width: 1; }\n\
@@ -32,7 +33,8 @@ const CSS: &str = "\
 .dependency { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
 .name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
-.keyword, .feature { fill: var(--muted); }\n";
+.keyword, .feature { fill: var(--muted); }\n\
+.compartment { fill: var(--muted); font-style: italic; }\n";
 
 /// Render a laid-out diagram. The output is a complete SVG document: it can
 /// be written to a `.svg` file or inlined into HTML as-is.
@@ -47,6 +49,16 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
          <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
          markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
          <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
+         <marker id=\"subsetting\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
+         markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
+         <path class=\"hollow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
+         <marker id=\"redefinition\" viewBox=\"0 0 16 10\" refX=\"16\" refY=\"5\" \
+         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+         <path class=\"hollow\" d=\"M4,0 L16,5 L4,10 z\"/>\
+         <path class=\"tip\" d=\"M2,0 L2,10\"/></marker>\
+         <marker id=\"reference\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
+         markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
+         <path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
          <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
          markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
          <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker></defs>"
@@ -66,6 +78,15 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         match edge.relation {
             // the layering already put the supertype above, so the line
             // runs from the subtype's top edge to the supertype's bottom
+            Relation::Specialization if given(layout, index).is_some() => {
+                let walked = given(layout, index).expect("just checked");
+                writeln!(
+                    out,
+                    "<path class=\"edge\" fill=\"none\" d=\"{}\" \
+                     marker-end=\"url(#specialization)\"/>",
+                    polyline(walked)
+                )
+            }
             Relation::Specialization => {
                 let (x1, y1) = (from.x + from.width / 2.0, from.y);
                 // subtypes of one supertype would otherwise pile their
@@ -119,12 +140,48 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             // centre to centre clipped to both borders. Composition puts a
             // filled diamond on the side of the whole; a connection is
             // undirected and gets no marker at all.
+            // A feature typed by the thing that declares it. The line
+            // has nowhere to go but back, so it drops into the gap
+            // under the row and returns -- downward because that is the
+            // one direction the canvas grows to make room in.
+            Relation::Composition | Relation::Reference if edge.from == edge.to => {
+                let (marker, class) = pen(edge.relation);
+                let bottom = from.y + from.height;
+                // a loop has no side to be shifted onto, so what tells
+                // two of them apart is which came first, not the signed
+                // lane a pair of boxes shares
+                let nth = lane + (siblings as f64 - 1.0) / 2.0;
+                let band = band_below(layout, edge.from, style) + nth * style.line_height;
+                let inset = nth * style.line_height / 2.0;
+                let left = from.x + from.width / 3.0 + inset;
+                let right = from.x + from.width * 2.0 / 3.0 - inset;
+                floor = floor.max(band);
+                writeln!(
+                    out,
+                    "<path{class} fill=\"none\" d=\"M {left:.1} {bottom:.1} V {band:.1} \
+                     H {right:.1} V {bottom:.1}\"{marker}/>"
+                )
+            }
             Relation::Composition
+            | Relation::Reference
+            | Relation::Subsetting
+            | Relation::Redefinition
             | Relation::Connection
             | Relation::Transition
             | Relation::Satisfy => {
-                let (mut x1, mut y1) = border_point(from, centre_of(to));
-                let (mut x2, mut y2) = border_point(to, centre_of(from));
+                // a connection ends at the port it names, where the
+                // box declares one: the standard draws the port on the
+                // border, and a second square beside it would be a
+                // second port that the model never had
+                let named = edge.ends.as_ref();
+                let ((mut x1, mut y1), first_is_port) = match named {
+                    Some((end, _)) => at_port(diagram, layout, edge.from, end, centre_of(to)),
+                    None => (border_point(from, centre_of(to)), false),
+                };
+                let ((mut x2, mut y2), second_is_port) = match named {
+                    Some((_, end)) => at_port(diagram, layout, edge.to, end, centre_of(from)),
+                    None => (border_point(to, centre_of(from)), false),
+                };
                 // shift edges sharing a pair of boxes along the normal, so
                 // two connections do not collapse into one line
                 let (dx, dy) = (x2 - x1, y2 - y1);
@@ -151,16 +208,18 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                     band_below(layout, edge.from, style) + lane_shift,
                     band_below(layout, edge.to, style) + lane_shift,
                 );
-                let blocked = hidden(layout, (edge.from, edge.to), (x1, y1), (x2, y2));
-                let route = blocked
-                    .then(|| {
-                        channel_for(layout, detour, &[bands.0, bands.1])
-                            .map(Detour::Channel)
-                            .or_else(|| {
-                                sidestep(layout, detour, bands, style).map(Detour::Sidestep)
-                            })
-                    })
-                    .flatten();
+                let route = match given(layout, index) {
+                    Some(walked) => Some(Detour::Given(walked)),
+                    None => hidden(layout, (edge.from, edge.to), (x1, y1), (x2, y2))
+                        .then(|| {
+                            channel_for(layout, detour, &[bands.0, bands.1])
+                                .map(Detour::Channel)
+                                .or_else(|| {
+                                    sidestep(layout, detour, bands, style).map(Detour::Sidestep)
+                                })
+                        })
+                        .flatten(),
+                };
                 let (first_toward, second_toward, label_at) = match route {
                     None => {
                         writeln!(
@@ -186,6 +245,23 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                             ((x1 + x2) / 2.0, channel - 0.5 * style.line_height),
                         )
                     }
+                    Some(Detour::Given(walked)) => {
+                        writeln!(
+                            out,
+                            "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
+                            polyline(walked)
+                        )
+                        .unwrap();
+                        (x1, y1) = walked[0];
+                        (x2, y2) = walked[walked.len() - 1];
+                        floor = floor.max(walked.iter().map(|&(_, y)| y).fold(0.0, f64::max));
+                        let middle = walked[walked.len() / 2];
+                        (
+                            walked[1],
+                            walked[walked.len() - 2],
+                            (middle.0, middle.1 - 0.5 * style.line_height),
+                        )
+                    }
                     Some(Detour::Sidestep(column)) => {
                         ((x1, y1), (x2, y2)) = detour;
                         let (first, second) = bands;
@@ -205,11 +281,17 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         )
                     }
                 };
-                // a connection meets each box at a port, drawn the SysML
-                // way: a small square on the border, named beside it
+                // A connection meets each box at a port, drawn the SysML
+                // way: a small square on the border, named beside it.
+                // Where the box declares that port, it is already
+                // drawn there and the line simply arrives at it.
                 if let Some((first, second)) = &edge.ends {
-                    port(&mut ports, (x1, y1), first_toward, first, style);
-                    port(&mut ports, (x2, y2), second_toward, second, style);
+                    if !first_is_port {
+                        port(&mut ports, (x1, y1), first_toward, first, style);
+                    }
+                    if !second_is_port {
+                        port(&mut ports, (x2, y2), second_toward, second, style);
+                    }
                 }
                 if let Some(label) = &edge.label {
                     beside(&mut out, label_at, (x2, y2), label, style);
@@ -220,7 +302,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         .unwrap();
     }
 
-    for placed in &layout.placed {
+    for (at, placed) in layout.placed.iter().enumerate() {
         let node = &diagram.nodes[placed.node];
         if node.shape == Shape::Initial {
             writeln!(
@@ -239,6 +321,12 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             (placed.x, placed.y, placed.width, placed.height),
             style,
         );
+        // The standard draws a part's ports on its border, on any of
+        // the four sides: `part-def = part-def-name-compartment
+        // interconnection-view compartment-stack port-l* port-r*
+        // port-t* port-b*`. They go in with the other ports, after
+        // every box, so a neighbour drawn later cannot cover one.
+        border_ports(&mut ports, diagram, layout, at, style);
     }
 
     out.push_str(&ports);
@@ -307,11 +395,38 @@ fn hidden(layout: &Layout, ends: (usize, usize), start: (f64, f64), finish: (f64
 }
 
 /// How a line that cannot be drawn straight gets round what is in the way.
-enum Detour {
+enum Detour<'a> {
+    /// The layout engine already said where the line goes.
+    Given(&'a [(f64, f64)]),
     /// One gap between the rows carries the whole crossing.
     Channel(f64),
     /// Two gaps do, joined by a column nothing is drawn in.
     Sidestep(f64),
+}
+
+/// The path the layout engine chose for one edge, where it chose one
+/// worth drawing.
+fn given(layout: &Layout, edge: usize) -> Option<&[(f64, f64)]> {
+    layout
+        .routes
+        .get(edge)
+        .map(Vec::as_slice)
+        .filter(|walked| walked.len() >= 2)
+}
+
+/// A run of points as an SVG path.
+fn polyline(walked: &[(f64, f64)]) -> String {
+    let mut out = String::new();
+    for (at, (x, y)) in walked.iter().enumerate() {
+        let step = if at == 0 { 'M' } else { 'L' };
+        write!(
+            out,
+            "{}{step} {x:.1} {y:.1}",
+            if at == 0 { "" } else { " " }
+        )
+        .unwrap();
+    }
+    out
 }
 
 /// A way round whole rows of boxes, for a line that cannot reach its
@@ -405,6 +520,14 @@ fn crosses(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> bool {
 fn pen(relation: Relation) -> (&'static str, &'static str) {
     match relation {
         Relation::Composition => (" marker-start=\"url(#composition)\"", " class=\"edge\""),
+        // the same hollow triangle a subclassification carries, and for
+        // a redefinition a bar across the line with it
+        Relation::Subsetting => (" marker-end=\"url(#subsetting)\"", " class=\"edge\""),
+        Relation::Redefinition => (" marker-end=\"url(#redefinition)\"", " class=\"edge\""),
+        // what the owner refers to but is not made of: the same diamond,
+        // left hollow, which is how a drawing has told the two apart
+        // since long before SysML
+        Relation::Reference => (" marker-start=\"url(#reference)\"", " class=\"edge\""),
         Relation::Transition => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
         // a satisfy assertion is a dependency, pointing at the requirement
         // it is about
@@ -475,8 +598,11 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
         )
         .unwrap();
 
-        if !node.features.is_empty() {
-            let rule = header + 2.0 * style.line_height + style.padding / 2.0;
+        // the standard stacks labelled compartments under the name:
+        // `extended-def = extended-def-name-compartment compartment-stack`
+        let mut top = header + 2.0 * style.line_height;
+        for compartment in &node.compartments {
+            let rule = top + style.padding / 2.0;
             writeln!(
                 out,
                 "<line class=\"rule\" x1=\"{:.1}\" y1=\"{rule:.1}\" x2=\"{:.1}\" y2=\"{rule:.1}\"/>",
@@ -484,19 +610,25 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
                 placed.x + placed.width
             )
             .unwrap();
-            for (row, feature) in node.features.iter().enumerate() {
+            writeln!(
+                out,
+                "<text class=\"compartment\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+                placed.x + style.padding,
+                top + style.padding + 0.75 * style.line_height,
+                escape(compartment.label)
+            )
+            .unwrap();
+            for (row, line) in compartment.lines.iter().enumerate() {
                 writeln!(
                     out,
                     "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
-                    placed.x + style.padding,
-                    header
-                        + 2.0 * style.line_height
-                        + style.padding
-                        + (row as f64 + 0.75) * style.line_height,
-                    escape(&feature.label())
+                    placed.x + 2.0 * style.padding,
+                    top + style.padding + (row as f64 + 1.75) * style.line_height,
+                    escape(&line.label())
                 )
                 .unwrap();
             }
+            top += style.padding + (1 + compartment.lines.len()) as f64 * style.line_height;
         }
         writeln!(out, "</g>").unwrap();
     }
@@ -568,6 +700,119 @@ fn lane_spacing(from: &Placed, to: &Placed, siblings: usize, style: &Style) -> f
 /// Draw the port a connection attaches to: a small square centred on the
 /// box border at `at`, with its name set just clear of it along the edge
 /// and `across` (-1 or 1) to one side of it.
+/// The ports a box declares, drawn on its border with their labels.
+///
+/// They are spread over the left and right sides, top to bottom, which
+/// is where a reader looks for them and where the gap between columns
+/// leaves room for a name.
+fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize, style: &Style) {
+    for place in port_places(diagram, layout, at) {
+        let label = match &place.feature.ty {
+            Some(ty) => format!("{} : {ty}", place.feature.name),
+            None => place.feature.name.clone(),
+        };
+        port(out, place.at, place.toward, &label, style);
+    }
+}
+
+/// Where a connection meets a box: the port it names, when the box
+/// declares one by that name, and the border otherwise.
+fn at_port(
+    diagram: &Diagram,
+    layout: &Layout,
+    at: usize,
+    end: &str,
+    toward: (f64, f64),
+) -> ((f64, f64), bool) {
+    match port_places(diagram, layout, at)
+        .into_iter()
+        .find(|place| place.feature.name == end)
+    {
+        Some(place) => (place.at, true),
+        None => (border_point(&layout.placed[at], toward), false),
+    }
+}
+
+/// One port on a border: what it is, where it sits, and the point its
+/// name reads towards.
+struct Placement<'a> {
+    feature: &'a Feature,
+    at: (f64, f64),
+    toward: (f64, f64),
+}
+
+/// Where each of a box's ports sits on its border, and which way its
+/// name reads from there.
+///
+/// Worked out once and used twice: to draw the ports, and to end a
+/// connection at the port it names rather than at a square of its own.
+/// They alternate sides so a box with several does not stack them all
+/// down one edge.
+fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Placement<'a>> {
+    let placed = &layout.placed[at];
+    let node = &diagram.nodes[placed.node];
+    let listed: Vec<&Feature> = node
+        .compartments
+        .iter()
+        .filter(|compartment| compartment.label == "ports")
+        .flat_map(|compartment| compartment.lines.iter())
+        .collect();
+
+    // A port faces whatever it is connected to -- the standard puts one
+    // on any of the four sides, and the side a reader expects is the
+    // one the line comes from. A port nothing reaches falls back to the
+    // sides a name has room to grow out of.
+    let mut placements = Vec::new();
+    let mut spare = 0usize;
+    for feature in listed {
+        let peer = diagram.edges.iter().find_map(|edge| {
+            let (mine, theirs) = match (edge.from == at, edge.to == at) {
+                (true, _) => (0, edge.to),
+                (_, true) => (1, edge.from),
+                _ => return None,
+            };
+            let ends = edge.ends.as_ref()?;
+            let named = if mine == 0 { &ends.0 } else { &ends.1 };
+            (*named == feature.name).then(|| centre_of(&layout.placed[theirs]))
+        });
+        let (point, away) = match peer {
+            Some(peer) => facing(placed, peer),
+            None => {
+                let left = spare % 2 == 0;
+                let down =
+                    placed.y + (spare / 2 + 1) as f64 * placed.height / (spare as f64 / 2.0 + 2.0);
+                spare += 1;
+                let x = if left {
+                    placed.x
+                } else {
+                    placed.x + placed.width
+                };
+                ((x, down), (if left { -1.0 } else { 1.0 }, 0.0))
+            }
+        };
+        placements.push(Placement {
+            feature,
+            at: point,
+            toward: (point.0 + away.0 * 8.0, point.1 + away.1 * 8.0),
+        });
+    }
+    placements
+}
+
+/// Where on a box's border a port facing `peer` sits, and which way its
+/// name reads from there.
+fn facing(placed: &Placed, peer: (f64, f64)) -> ((f64, f64), (f64, f64)) {
+    let point = border_point(placed, peer);
+    let centre = centre_of(placed);
+    let (dx, dy) = (point.0 - centre.0, point.1 - centre.1);
+    let away = if dx.abs() * placed.height >= dy.abs() * placed.width {
+        (dx.signum(), 0.0)
+    } else {
+        (0.0, dy.signum())
+    };
+    (point, away)
+}
+
 fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style: &Style) {
     let side = 0.6 * style.line_height;
     writeln!(
@@ -795,6 +1040,7 @@ mod tests {
             ],
             width: 520.0,
             height: 270.0,
+            routes: Vec::new(),
         };
         let svg = to_svg(&diagram, &placed, &style);
         assert!(svg.contains("<path class=\"edge\" fill=\"none\" d=\"M 450.0 200.0 V "));
@@ -822,6 +1068,51 @@ mod tests {
 
     /// Three rows, the middle one so wide that no single gap between the
     /// rows lets a line reach from the bottom row to the top.
+    #[test]
+    fn a_route_the_engine_chose_is_the_one_drawn() {
+        // The renderer works out its own way round a box in the way.
+        // Where a layout engine has already said where the line goes,
+        // that is what is drawn -- it picked the positions expecting
+        // its own bends, and a line cutting straight across them ends
+        // up somewhere it left no room for.
+        let ws =
+            resolved("part def Super;\npart def Sub :> Super;\npart def W { part s : Sub; }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let straight = Layout {
+            placed: (0..diagram.nodes.len())
+                .map(|at| place(at, 0.0, 200.0 * at as f64, 100.0, 50.0))
+                .collect(),
+            width: 600.0,
+            height: 700.0,
+            routes: Vec::new(),
+        };
+        let bend = vec![(50.0, 40.0), (50.0, 120.0), (300.0, 120.0), (300.0, 200.0)];
+        let bent = Layout {
+            routes: vec![bend; diagram.edges.len()],
+            ..straight.clone()
+        };
+
+        let drawn = to_svg(&diagram, &bent, &style);
+        let spelled = "d=\"M 50.0 40.0 L 50.0 120.0 L 300.0 120.0 L 300.0 200.0\"";
+        assert_eq!(
+            drawn.matches(spelled).count(),
+            diagram.edges.len(),
+            "{drawn}"
+        );
+        // every kind of edge keeps the marker that says what it is
+        assert!(
+            drawn.contains("marker-end=\"url(#specialization)\""),
+            "{drawn}"
+        );
+        assert!(
+            drawn.contains("marker-start=\"url(#composition)\""),
+            "{drawn}"
+        );
+        // without a route the renderer decides for itself, as before
+        assert!(!to_svg(&diagram, &straight, &style).contains(spelled));
+    }
+
     fn three_rows() -> Layout {
         Layout {
             placed: vec![
@@ -831,6 +1122,7 @@ mod tests {
             ],
             width: 452.0,
             height: 300.0,
+            routes: Vec::new(),
         }
     }
 
@@ -874,7 +1166,6 @@ mod tests {
         let diagram = interconnection_diagram(model, top);
         let style = Style::default();
         let svg = to_svg(&diagram, &three_rows(), &style);
-
         let route = edge_route(&svg).expect("the connection is drawn as a path");
         assert_eq!(route.matches(" V ").count(), 3, "route: {route}");
         assert_eq!(route.matches(" H ").count(), 2, "route: {route}");
@@ -883,9 +1174,10 @@ mod tests {
             let column: f64 = step.split(' ').next().unwrap().parse().unwrap();
             assert!((0.0..=452.0).contains(&column), "off the canvas: {column}");
         }
-        // and both port names are still written beside their own box
-        assert!(svg.contains(">p<"));
-        assert!(svg.contains(">q<"));
+        // and both ports are still named beside their own box, the way
+        // `port-label = QualifiedName (':' QualifiedName)?` reads
+        assert!(svg.contains(">p : P</text>"), "{svg}");
+        assert!(svg.contains(">q : P</text>"), "{svg}");
     }
 
     #[test]
@@ -898,6 +1190,7 @@ mod tests {
             ],
             width: 320.0,
             height: 100.0,
+            routes: Vec::new(),
         };
         let band = band_below(&side_by_side, 0, &style);
         assert_eq!(
@@ -1022,10 +1315,10 @@ mod tests {
         let diagram = interconnection_diagram(ws.model(), top);
         let style = Style::default();
         let svg = to_svg(&diagram, &layout(&diagram, &style), &style);
-        // the boxes sit side by side, so one name grows right and the other
-        // left; neither is centred on the border it sits against
-        assert!(svg.contains("text-anchor=\"start\""));
-        assert!(svg.contains("text-anchor=\"end\""));
+        // the standard puts a port on a side and its name outside
+        // that side, so a left-hand port reads leftward and a
+        // right-hand one rightward
+        assert!(svg.contains("text-anchor=\"end\""), "{svg}");
     }
 
     #[test]
@@ -1225,7 +1518,35 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_compartment_gets_a_rule_and_one_line_each() {
+    fn a_port_is_drawn_on_the_border_it_belongs_to() {
+        // `part-def = part-def-name-compartment interconnection-view
+        // compartment-stack port-l* port-r* port-t* port-b*` -- a port
+        // only listed in a compartment is one a reader cannot see
+        // anything connect to.
+        let svg = svg_of(
+            "port def Fuel;\n\
+             port def Air;\n\
+             part def Engine {\n\
+             \tport fuelIn : Fuel;\n\
+             \tport airIn : Air;\n\
+             }\n",
+        );
+        assert_eq!(svg.matches("<rect class=\"port\"").count(), 2, "{svg}");
+        // each is named beside itself, and still listed in the stack
+        assert!(svg.contains(">fuelIn : Fuel</text>"), "{svg}");
+        assert!(svg.contains(">airIn : Air</text>"), "{svg}");
+        assert!(svg.contains(">port fuelIn : Fuel</text>"), "{svg}");
+        // and the two sit on opposite edges rather than on top of one
+        // another
+        let squares: Vec<&str> = svg.matches("<rect class=\"port\"").collect();
+        assert_eq!(squares.len(), 2);
+        let first = svg.find("<rect class=\"port\"").unwrap();
+        let second = svg[first + 1..].find("<rect class=\"port\"").unwrap() + first + 1;
+        assert_ne!(&svg[first..first + 40], &svg[second..second + 40]);
+    }
+
+    #[test]
+    fn each_compartment_gets_a_rule_a_label_and_one_line_each() {
         let svg = svg_of(
             "part def FuelPort;\n\
              part def Engine {\n\
@@ -1233,7 +1554,11 @@ mod tests {
              	port fuelIn : FuelPort;\n\
              }\n",
         );
-        assert_eq!(svg.matches("<line class=\"rule\"").count(), 1);
+        // one rule and one label per compartment: the standard names
+        // every compartment after what it holds
+        assert_eq!(svg.matches("<line class=\"rule\"").count(), 2);
+        assert!(svg.contains(">attributes</text>"), "{svg}");
+        assert!(svg.contains(">ports</text>"), "{svg}");
         assert!(svg.contains(">attribute power</text>"));
         assert!(svg.contains(">port fuelIn : FuelPort</text>"));
     }
@@ -1385,10 +1710,30 @@ mod port_tests {
             let start = head.rfind("y=\"").unwrap() + 3;
             head[start..].split('"').next().unwrap().parse().unwrap()
         };
-        // the boxes share a row, so the line is horizontal and the names
-        // straddle it
-        let line = placed.placed[0].y + placed.placed[0].height / 2.0;
-        assert!(y_of("hub") < line, "hub should sit above the line");
-        assert!(y_of("mount") > line, "mount should sit below the line");
+        // each name sits beside its own port, on the border of the box
+        // that declares it, rather than beside the line between them
+        let x_of = |name: &str| -> f64 {
+            let at = svg.find(&format!(">{name}</text>")).unwrap();
+            let head = &svg[..at];
+            let start = head.rfind("x=\"").unwrap() + 3;
+            head[start..].split('"').next().unwrap().parse().unwrap()
+        };
+        // each sits nearer the box that declares it than the other one
+        let near = |name: &str, at: usize| {
+            let box_ = &placed.placed[at];
+            let other = &placed.placed[1 - at];
+            let mine = (x_of(name) - (box_.x + box_.width / 2.0)).abs();
+            let theirs = (x_of(name) - (other.x + other.width / 2.0)).abs();
+            assert!(mine < theirs, "`{name}` is written beside the wrong box");
+        };
+        near("hub", 0);
+        near("mount", 1);
+        // and neither is written inside the box it sits on
+        let wheel = &placed.placed[0];
+        assert!(
+            x_of("hub") <= wheel.x || x_of("hub") >= wheel.x + wheel.width,
+            "hub is written outside its box"
+        );
+        let _ = y_of("hub");
     }
 }

@@ -28,6 +28,13 @@ pub struct Layout {
     pub placed: Vec<Placed>,
     pub width: f64,
     pub height: f64,
+    /// The path an engine chose for each edge, indexed by edge and
+    /// running from the edge's `from` to its `to`. Empty where the
+    /// engine chose none and the renderer is to route for itself: a
+    /// layout engine picks positions and routes together, and drawing
+    /// straight through a layout that expected bends puts lines where
+    /// the engine left no room for them.
+    pub routes: Vec<Vec<(f64, f64)>>,
 }
 
 /// Assign every node of `diagram` a position.
@@ -121,7 +128,8 @@ fn wrap_layers(
 }
 
 /// Width and height of one box: wide enough for its longest line, tall
-/// enough for the keyword, the name and one line per feature.
+/// enough for the keyword, the name, and every compartment with its
+/// label and its lines.
 pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     if node.shape == Shape::Initial {
         // a filled circle, sized to read at the same weight as a box border
@@ -131,12 +139,17 @@ pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     // the name is drawn bold, which the 0.6 em estimate does not account for
     let mut width = (style.text_width(&node.name) * 1.1)
         .max(style.text_width(&format!("\u{ab}{}\u{bb}", node.keyword)));
-    for feature in &node.features {
-        width = width.max(style.text_width(&feature.label()));
+    for compartment in &node.compartments {
+        width = width.max(style.text_width(compartment.label));
+        for line in &compartment.lines {
+            // a line sits one indent in from its compartment's label
+            width = width.max(style.padding + style.text_width(&line.label()));
+        }
     }
     let mut height = 2.0 * style.padding + 2.0 * style.line_height;
-    if !node.features.is_empty() {
-        height += style.padding + node.features.len() as f64 * style.line_height;
+    for compartment in &node.compartments {
+        // the label, then a line each, and a gap before the next rule
+        height += style.padding + (1 + compartment.lines.len()) as f64 * style.line_height;
     }
     if !node.children.is_empty() {
         let (nested_width, nested_height) = children_block(node, style);
@@ -343,6 +356,7 @@ fn place(
             placed,
             width: 2.0 * style.margin,
             height: 2.0 * style.margin,
+            routes: Vec::new(),
         };
     }
 
@@ -387,6 +401,7 @@ fn place(
         placed,
         width: content + 2.0 * style.margin,
         height: y - style.v_gap + style.margin,
+        routes: Vec::new(),
     }
 }
 

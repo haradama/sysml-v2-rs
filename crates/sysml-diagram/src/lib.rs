@@ -32,15 +32,16 @@
 //! ```
 
 mod browser;
-mod dot;
+mod elk;
 mod graph;
 mod layout;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
-pub use dot::{graphviz_layout, GraphvizError};
+pub use elk::{elk_layout, ElkError};
 pub use graph::{
-    definition_diagram, interconnection_diagram, Diagram, Edge, Feature, Node, Relation, Shape,
+    definition_diagram, interconnection_diagram, lines, Compartment, Diagram, Edge, Feature, Node,
+    Relation, Shape,
 };
 pub use layout::{layout, Layout, Placed};
 pub use svg::to_svg;
@@ -95,18 +96,18 @@ pub fn render(diagram: &Diagram, style: &Style) -> String {
     to_svg(diagram, &layout(diagram, style), style)
 }
 
-/// Like [`render`], but let Graphviz decide the positions -- `command`
-/// names the `dot` binary. PlantUML-style: only the layout comes from
-/// Graphviz; boxes, edges and labels are still drawn here, so the two
-/// engines produce the same visual language.
-pub fn render_with_graphviz(
+/// Like [`render`], but let ELK decide the positions -- `command` names
+/// the `elkrs` binary. Only the layout comes from ELK; boxes, edges and
+/// labels are still drawn here, so the two engines produce the same
+/// visual language.
+pub fn render_with_elk(
     diagram: &Diagram,
     style: &Style,
     command: &str,
-) -> Result<String, GraphvizError> {
+) -> Result<String, ElkError> {
     Ok(to_svg(
         diagram,
-        &graphviz_layout(diagram, style, command)?,
+        &elk_layout(diagram, style, command)?,
         style,
     ))
 }

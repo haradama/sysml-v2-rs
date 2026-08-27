@@ -106,13 +106,13 @@ enum Command {
         /// diagram of relationships
         #[arg(long, conflicts_with = "internal")]
         browser: bool,
-        /// Let Graphviz `dot` decide the positions (PlantUML-style: the
-        /// drawing itself stays the same); needs Graphviz installed
+        /// Let the Eclipse Layout Kernel arrange and route it (the
+        /// drawing itself stays the same); needs `cargo install elkrs`
         #[arg(long)]
-        graphviz: bool,
-        /// The Graphviz command to run with --graphviz
-        #[arg(long, default_value = "dot", value_name = "COMMAND")]
-        dot: String,
+        elk: bool,
+        /// The ELK command to run with --elk
+        #[arg(long, default_value = "elkrs", value_name = "COMMAND")]
+        elk_command: String,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -250,15 +250,15 @@ fn main() -> ExitCode {
             library,
             internal,
             browser,
-            graphviz,
-            dot,
+            elk,
+            elk_command,
             output,
         } => diagram(
             &paths,
             &library,
             internal.as_deref(),
             browser,
-            graphviz.then_some(dot.as_str()),
+            elk.then_some(elk_command.as_str()),
             output.as_deref(),
         ),
         Command::ImportRust {
@@ -496,7 +496,7 @@ fn diagram(
     library: &[PathBuf],
     internal: Option<&str>,
     browser: bool,
-    graphviz: Option<&str>,
+    elk: Option<&str>,
     output: Option<&Path>,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
@@ -509,7 +509,10 @@ fn diagram(
     if !load_paths(&mut ws, library) {
         return ExitCode::FAILURE;
     }
-    ws.resolve_all();
+    // only what is drawn, and what it reaches: a library is loaded so
+    // that names resolve, not so that all of it is worked through
+    let files: Vec<usize> = (0..drawn).collect();
+    ws.resolve_reached(&files);
     let roots: Vec<_> = (0..drawn)
         .flat_map(|file| ws.file_roots(file).to_vec())
         .collect();
@@ -541,8 +544,8 @@ fn diagram(
         return ExitCode::FAILURE;
     }
     let style = sysml_diagram::Style::default();
-    let svg = match graphviz {
-        Some(command) => match sysml_diagram::render_with_graphviz(&diagram, &style, command) {
+    let svg = match elk {
+        Some(command) => match sysml_diagram::render_with_elk(&diagram, &style, command) {
             Ok(svg) => svg,
             Err(error) => {
                 eprintln!("error: {error}");
@@ -559,11 +562,13 @@ fn diagram(
             .count()
     };
     let summary = format!(
-        "{} box(es), {} specialization(s), {} composition(s), {} connection(s), \
-         {} transition(s) and {} satisfaction(s)",
+        "{} box(es), {} specialization(s), {} composition(s), {} reference(s), \
+         {} subsetting(s), {} connection(s), {} transition(s) and {} satisfaction(s)",
         diagram.nodes.len(),
         count(sysml_diagram::Relation::Specialization),
         count(sysml_diagram::Relation::Composition),
+        count(sysml_diagram::Relation::Reference),
+        count(sysml_diagram::Relation::Subsetting) + count(sysml_diagram::Relation::Redefinition),
         count(sysml_diagram::Relation::Connection),
         count(sysml_diagram::Relation::Transition),
         count(sysml_diagram::Relation::Satisfy),
@@ -582,7 +587,11 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
     if !load_paths(&mut ws, library) {
         return ExitCode::FAILURE;
     }
-    let stats = ws.resolve_all();
+    // what is generated is what was named, and what that reaches; the
+    // rest of a library is loaded so names resolve, not to be worked
+    // through
+    let files: Vec<usize> = (0..own).collect();
+    let stats = ws.resolve_reached(&files);
     if stats.unresolved > 0 {
         // generated code would silently miss whatever did not resolve
         for missing in ws.unresolved() {

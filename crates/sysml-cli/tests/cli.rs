@@ -415,7 +415,7 @@ fn diagram_renders_definitions_as_svg() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains(
-            "2 box(es), 1 specialization(s), 0 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s)"
+            "2 box(es), 1 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s)"
         ),
         "{stderr}"
     );
@@ -644,22 +644,20 @@ fn no_arguments_prints_usage() {
 }
 
 #[test]
-fn diagram_can_let_graphviz_lay_out_the_boxes() {
+fn diagram_can_let_elk_lay_out_the_boxes() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = temp_dir("diagram-graphviz");
+    let dir = temp_dir("diagram-elk");
     let model = write(
         &dir,
         "model.sysml",
         "part def PowerSource;\npart def Engine :> PowerSource;\n",
     );
-    let fake = dir.join("fake-dot");
+    let fake = dir.join("fake-elk");
     std::fs::write(
         &fake,
         "#!/bin/sh\ncat >/dev/null\n\
-         printf 'graph 1 6 2\\n'\n\
-         printf 'node n0 1.5 1 1 1\\n'\n\
-         printf 'node n1 4 1 1 1\\n'\n\
-         printf 'stop\\n'\n",
+         printf '{\"width\":400,\"height\":144,\"children\":\
+[{\"id\":\"n0\",\"x\":0,\"y\":0},{\"id\":\"n1\",\"x\":0,\"y\":100}]}\\n'\n",
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -667,26 +665,26 @@ fn diagram_can_let_graphviz_lay_out_the_boxes() {
     let out = sysml(&[
         "diagram",
         model.to_str().unwrap(),
-        "--graphviz",
-        "--dot",
+        "--elk",
+        "--elk-command",
         fake.to_str().unwrap(),
     ]);
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // the fake's 6in x 2in canvas, not the built-in layered one
+    // the fake's canvas plus two 16px margins, not the built-in one
     assert!(stdout.contains("height=\"176\""), "{stdout}");
 
-    // a missing dot is an error that says what to install
+    // a missing elkrs is an error that says what to install
     let out = sysml(&[
         "diagram",
         model.to_str().unwrap(),
-        "--graphviz",
-        "--dot",
-        "/nonexistent/graphviz/dot",
+        "--elk",
+        "--elk-command",
+        "/nonexistent/elk/elkrs",
     ]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("is Graphviz installed?"), "{stderr}");
+    assert!(stderr.contains("cargo install elkrs"), "{stderr}");
 }
 
 #[test]
