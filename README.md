@@ -112,7 +112,10 @@ they perform (`subscribing accept sub : Subscribe [ready] / send action`) --
 and an `entry; then x;` succession is drawn from the filled circle the
 machine starts at. A control node is drawn as the glyph the standard gives
 it rather than as a box, because a flow does not split at an action: `fork`
-and `join` are bars, `merge` and `decide` diamonds, `terminate` a cross.
+and `join` are bars, `merge` and `decide` diamonds, `terminate` a cross. An
+`if` or a loop says what it asks -- `if-condition`, `while-condition`,
+`for iterator` -- and holds its body as a flow drawn inside it, whether or
+not the node was given a name of its own.
 Port names and transition labels sit in the gap between
 the boxes they belong to, and only that gap is widened to hold them, so one
 long label does not push the rest of the row apart with it.

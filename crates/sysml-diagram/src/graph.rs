@@ -477,18 +477,31 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         if !is_box(model, child) {
             continue;
         }
-        let Some(name) = effective_name(model, child) else {
+        // `if c { ... }` is a node whether or not it was given a name:
+        // `if-else-action-node` and the two loop nodes carry the keyword
+        // that says what they are, and `usage-name-with-alias` may be
+        // empty
+        let anonymous = matches!(
+            model.kind(child),
+            ElementKind::IfActionUsage
+                | ElementKind::WhileLoopActionUsage
+                | ElementKind::ForLoopActionUsage
+        );
+        let Some(name) = effective_name(model, child).or(anonymous.then_some("")) else {
             continue;
         };
         // A specialization that redeclares an inherited part names it
         // again, and the nearer one comes first. One box stands for
         // both, and both reach it: what the supertype connects is
-        // written in terms of the part it declared.
-        if let Some(&at) = drawn.get(name) {
-            index.insert(child, at);
-            continue;
+        // written in terms of the part it declared. Two nameless nodes
+        // are two nodes, though.
+        if !name.is_empty() {
+            if let Some(&at) = drawn.get(name) {
+                index.insert(child, at);
+                continue;
+            }
+            drawn.insert(name, nodes.len());
         }
-        drawn.insert(name, nodes.len());
         // a part is read as `role : Type`, unlike a definition's bare name
         let label = box_label(model, child, name);
         let children = nested_parts(model, child);
@@ -1540,6 +1553,14 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
             out.push(line);
             continue;
         }
+        // The variable a `for` loop declares is written in its iterator
+        // compartment (`ForVariableDeclarationMember 'in'
+        // NodeParameterMember`), not listed again beside it.
+        if model.kind(definition) == ElementKind::ForLoopActionUsage
+            && model.kind(child) == ElementKind::ReferenceUsage
+        {
+            continue;
+        }
         // A transition is a line and nothing else: the states clause has
         // `state-transition-compartment` for the view and no compartment
         // to list one in, and listing it says the state owns an action by
@@ -1565,6 +1586,21 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
         ));
     }
     out
+}
+
+/// The compartment the condition of an `if` or a loop goes in, named for
+/// the question the node asks: `if-condition ='if condition'`,
+/// `while-condition ='while condition'`, `iteration ='for iterator'`.
+fn condition_compartment(model: &Model, member: ElementId) -> Option<&'static str> {
+    if !model.kind(member).is_a(ElementKind::Expression) {
+        return None;
+    }
+    match model.kind(model.owner(member)?) {
+        ElementKind::IfActionUsage => Some("if condition"),
+        ElementKind::WhileLoopActionUsage => Some("while condition"),
+        ElementKind::ForLoopActionUsage => Some("for iterator"),
+        _ => None,
+    }
 }
 
 /// The relationships of a definition whose other end is not drawn, in the
@@ -1610,6 +1646,21 @@ fn unlisted_relationships(
 /// A member the standard lists that is a relationship rather than a
 /// feature: what a view exposes, and the expression a package filters by.
 fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str, Feature)> {
+    // What an `if` or a loop asks has no name of its own, only the text
+    // it was written as, and goes in a compartment named for the question
+    if let Some(label) = condition_compartment(model, member) {
+        return Some((
+            label,
+            Feature {
+                keyword: String::new(),
+                name: written_text(model, member)?,
+                ty: None,
+                multiplicity: None,
+                value: None,
+                direction: None,
+            },
+        ));
+    }
     let (compartment, keyword) = match model.kind(member) {
         ElementKind::MembershipExpose | ElementKind::NamespaceExpose => ("exposes", "expose"),
         ElementKind::ElementFilterMembership => ("filters", "filter"),
@@ -3526,6 +3577,91 @@ mod interconnection_tests {
                 .map(|compartment| (compartment.label, compartment.lines[0].label()))
                 .collect::<Vec<_>>(),
             [("relationships", "subsets engine".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_branch_and_a_loop_say_what_they_ask() {
+        // `if-condition ='if condition'`, `while-condition ='while
+        // condition'` and `iteration ='for iterator'`: a node holding
+        // only its body says a flow branches or repeats without saying
+        // on what -- and the condition was being read and dropped
+        let ws = resolved(
+            "attribute def Real;\n\
+             action def Step;\n\
+             action def Machine {\n\
+             \tattribute hot : Real;\n\
+             \taction heat : Step;\n\
+             \taction cool : Step;\n\
+             \tif hot > 100 then cool else heat;\n\
+             \twhile hot > 0 { action tick : Step; }\n\
+             \tfor t in 1..3 { action each : Step; }\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Machine"));
+        let asked: Vec<(&str, &str, String)> = diagram
+            .nodes
+            .iter()
+            .flat_map(|node| {
+                node.compartments.iter().map(move |compartment| {
+                    (
+                        node.keyword.as_str(),
+                        compartment.label,
+                        compartment.lines[0].label(),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                ("if", "if condition", "hot > 100".to_string()),
+                ("loop", "while condition", "hot > 0".to_string()),
+                ("loop", "for iterator", "t in 1..3".to_string()),
+            ]
+        );
+        // and each is a node of its own, named or not
+        assert_eq!(
+            diagram
+                .nodes
+                .iter()
+                .map(|node| node.name.as_str())
+                .collect::<Vec<_>>(),
+            ["heat : Step", "cool : Step", "", "", ""]
+        );
+        // the body of a loop is drawn inside it -- `loop-body` holds an
+        // action flow view of its own
+        assert_eq!(
+            diagram
+                .nodes
+                .iter()
+                .flat_map(|node| node.children.iter().map(|child| child.name.as_str()))
+                .collect::<Vec<_>>(),
+            ["tick : Step", "each : Step"]
+        );
+    }
+
+    #[test]
+    fn a_bare_loop_is_the_same_node_asking_nothing() {
+        // `WhileLoopNode : WhileLoopActionUsage = ... ( 'while'
+        // ExpressionParameterMember | 'loop' EmptyParameterMember ) ...`
+        let ws = resolved(
+            "action def Step;\n\
+             action def M {\n\
+             \taction a : Step;\n\
+             \tloop { action tick : Step; }\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "M"));
+        let loop_node = diagram.nodes.iter().find(|n| n.keyword == "loop").unwrap();
+        assert!(loop_node.compartments.is_empty(), "it asks nothing");
+        assert_eq!(
+            loop_node
+                .children
+                .iter()
+                .map(|child| child.name.as_str())
+                .collect::<Vec<_>>(),
+            ["tick : Step"]
         );
     }
 

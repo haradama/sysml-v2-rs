@@ -290,9 +290,7 @@ impl Parser<'_> {
             AT | AT_AT => self.metadata_annotation(cp),
             DEPENDENCY_KW => self.lead_stmt(cp, DEPENDENCY),
             CONNECT_KW | BIND_KW | ALLOCATE_KW => self.lead_stmt(cp, CONNECTOR_STMT),
-            // `if` is handled as an expression statement: a conditional
-            // result expression parses whole, and an action `if cond then t;`
-            // continues via a `then` statement member.
+            IF_KW => self.if_member(cp),
             FIRST_KW | THEN_KW | ELSE_KW | WHILE_KW | UNTIL_KW | FOR_KW | LOOP_KW | MERGE_KW
             | DECIDE_KW | FORK_KW | JOIN_KW | SEND_KW | ACCEPT_KW | ASSIGN_KW | TERMINATE_KW
             | DO_KW | ENTRY_KW | EXIT_KW | TRANSITION_KW => self.lead_stmt(cp, CONTROL_STMT),
@@ -627,6 +625,11 @@ impl Parser<'_> {
                 }
                 L_BRACE => {
                     self.body();
+                    // `if c { ... } else { ... }` carries on past its
+                    // first body; nothing else in the language does
+                    if self.at(ELSE_KW) {
+                        continue;
+                    }
                     return;
                 }
                 EOF | R_BRACE => {
@@ -695,6 +698,34 @@ impl Parser<'_> {
                 )),
             }
         }
+    }
+
+    /// `if c then a else b;` and `if c { ... } else { ... }` are one action
+    /// usage -- `IfNode : IfActionUsage = ... 'if' ExpressionParameterMember
+    /// ActionBodyParameterMember ( 'else' ActionBodyParameterMember )?` --
+    /// while `if c ? t else f` is the conditional expression.
+    ///
+    /// The `?` is what tells them apart and it only turns up after the
+    /// condition, so the node is wrapped once the condition has been read.
+    fn if_member(&mut self, cp: Checkpoint) {
+        self.bump(); // `if`
+        self.expression();
+        if self.at(QUESTION) {
+            self.bump();
+            self.expression();
+            if self.eat(ELSE_KW) {
+                self.expression();
+            }
+            self.start_node_at(cp, COND_EXPR);
+            self.finish_node();
+            self.start_node_at(cp, EXPR_STMT);
+            self.eat(SEMICOLON);
+            self.finish_node();
+            return;
+        }
+        self.start_node_at(cp, CONTROL_STMT);
+        self.element_tail();
+        self.finish_node();
     }
 
     /// `{ member* }`

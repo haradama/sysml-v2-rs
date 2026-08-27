@@ -91,7 +91,19 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             // declared with and how many of it there are, if either
             Shape::Box => {
                 let name = answers_to(model, node.id).unwrap_or_default();
-                assert!(!node.name.is_empty(), "{where_}: a box with no name");
+                // `if c { ... }` is a node whether or not it was given a
+                // name, and the keyword above it says what it is; every
+                // other box has to name what it stands for
+                let may_be_nameless = matches!(
+                    model.kind(node.id),
+                    ElementKind::IfActionUsage
+                        | ElementKind::WhileLoopActionUsage
+                        | ElementKind::ForLoopActionUsage
+                );
+                assert!(
+                    !node.name.is_empty() || may_be_nameless,
+                    "{where_}: a box with no name"
+                );
                 let said = node.name.strip_prefix(&name).is_some_and(|rest| {
                     rest.is_empty() || rest.starts_with(" :") || rest.starts_with('[')
                 });

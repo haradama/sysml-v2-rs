@@ -230,6 +230,21 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if kind == ElementKind::AcceptActionUsage {
         reify_accept_payload(model, node, id);
     }
+    // `IfNode : IfActionUsage = ... 'if' ownedRelationship +=
+    // ExpressionParameterMember ...` and the two loops the same way: the
+    // condition is what the node is about, and it was being read and
+    // dropped.
+    if matches!(
+        kind,
+        ElementKind::IfActionUsage
+            | ElementKind::WhileLoopActionUsage
+            | ElementKind::ForLoopActionUsage
+    ) {
+        reify_condition(model, node, id);
+    }
+    if kind == ElementKind::ForLoopActionUsage {
+        reify_loop_variable(model, node, id);
+    }
     if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id);
     }
@@ -555,6 +570,72 @@ fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
     model.set(written, "representedElement", Value::Ref(guard));
 }
 
+/// Keep what an `if` or a loop asks, as the text the author wrote it as.
+///
+/// `if hot > 100 then cool;` and `while hot > 0 { ... }` are about their
+/// condition; a node holding only the body says a flow branches or
+/// repeats without saying on what.
+fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
+    use SyntaxKind::*;
+    let mut asked = String::new();
+    for part in node.children_with_tokens() {
+        match part.kind() {
+            // the keyword that introduces the node is not part of what
+            // it asks, and what follows the condition is the body
+            IF_KW | WHILE_KW | UNTIL_KW | FOR_KW | LOOP_KW => continue,
+            THEN_KW | ELSE_KW | L_BRACE | SEMICOLON | BODY => break,
+            kind if kind.is_trivia() => continue,
+            _ => {}
+        }
+        let written = match part {
+            sysml_syntax::SyntaxElement::Node(node) => node.text().to_string(),
+            sysml_syntax::SyntaxElement::Token(token) => token.text().to_string(),
+        };
+        if !asked.is_empty() {
+            asked.push(' ');
+        }
+        asked.push_str(written.trim());
+    }
+    let asked = asked.trim();
+    if asked.is_empty() {
+        return;
+    }
+    let condition = model.create(ElementKind::Expression);
+    model.add_owned(id, condition);
+    model.set_member_role(condition, Role::Result);
+    represent_textually(model, condition, asked);
+}
+
+/// Declare the variable a `for` loop iterates with.
+///
+/// `ForVariableDeclarationMember : FeatureMembership = ownedRelatedElement
+/// += ForVariableDeclaration` -- the loop owns it, and the body refers to
+/// it by name, so a loop without it leaves `in power = vehiclePower;`
+/// naming nothing.
+fn reify_loop_variable(model: &mut Model, node: &SyntaxNode, id: ElementId) {
+    use SyntaxKind::*;
+    let mut named = None;
+    for part in node.children_with_tokens() {
+        match part.kind() {
+            IN_KW => break,
+            NAME | NAME_REF | QUALIFIED_NAME => {
+                named = part.into_node().and_then(|child| {
+                    child
+                        .descendants_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .find(|t| matches!(t.kind(), IDENT | UNRESTRICTED_NAME))
+                        .map(|t| unquote(t.text()))
+                });
+            }
+            _ => {}
+        }
+    }
+    let Some(named) = named else { return };
+    let variable = model.create(ElementKind::ReferenceUsage);
+    model.add_owned(id, variable);
+    model.set(variable, "declaredName", Value::String(named));
+}
+
 /// Reify the action a transition performs on its way across.
 ///
 /// `transition t first a do send x to b then b;` writes the effect inline
@@ -617,6 +698,18 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     declaration.or_else(|| {
         tokens(node).find_map(|token| match token {
             SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
+            // `while x > 0 { ... }` and `for t in xs { ... }` are action
+            // usages of their own (`WhileLoopActionUsage`,
+            // `ForLoopActionUsage`). Without them the statement built
+            // nothing, and what the loop body declared went with it.
+            // `WhileLoopNode : WhileLoopActionUsage = ... ( 'while'
+            // ExpressionParameterMember | 'loop' EmptyParameterMember ) ...`
+            // -- a bare `loop { ... }` is the same node, asking nothing
+            SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW | SyntaxKind::LOOP_KW => {
+                Some(ElementKind::WhileLoopActionUsage)
+            }
+            SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
+            SyntaxKind::IF_KW => Some(ElementKind::IfActionUsage),
             // `terminate c1;` -- unlike `merge m`, the name of a terminate
             // node comes before the keyword, so it is not one of the
             // declaring keywords a name is looked for after
@@ -679,6 +772,17 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
             .filter_map(|part| part.into_node())
             .find(|child| child.kind() == SyntaxKind::NAME_REF)
             .and_then(|name| Some(unquote(name.first_token()?.text())));
+    }
+    // `for t in 1..3` and `if hot > 100 then cool` lead with the loop
+    // variable and the condition; taking either for a name would leave
+    // the statement saying nothing about what it asks
+    if tokens(node).any(|token| {
+        matches!(
+            token,
+            SyntaxKind::FOR_KW | SyntaxKind::IF_KW | SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW
+        )
+    }) {
+        return None;
     }
     match node.kind() {
         SyntaxKind::CONTROL_STMT => {}
