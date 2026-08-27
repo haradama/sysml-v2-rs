@@ -561,17 +561,23 @@ fn diagram(
             .filter(|edge| edge.relation == relation)
             .count()
     };
+    use sysml_diagram::Relation;
     let summary = format!(
         "{} box(es), {} specialization(s), {} composition(s), {} reference(s), \
-         {} subsetting(s), {} connection(s), {} transition(s) and {} satisfaction(s)",
+         {} subsetting(s), {} connection(s), {} flow(s), {} allocation(s), \
+         {} transition(s) and {} satisfaction(s)",
         diagram.nodes.len(),
-        count(sysml_diagram::Relation::Specialization),
-        count(sysml_diagram::Relation::Composition),
-        count(sysml_diagram::Relation::Reference),
-        count(sysml_diagram::Relation::Subsetting) + count(sysml_diagram::Relation::Redefinition),
-        count(sysml_diagram::Relation::Connection),
-        count(sysml_diagram::Relation::Transition),
-        count(sysml_diagram::Relation::Satisfy),
+        count(Relation::Specialization),
+        count(Relation::Composition),
+        count(Relation::Reference),
+        count(Relation::Subsetting) + count(Relation::Redefinition),
+        // an interface and a binding are connections too -- what each is,
+        // the drawing says on the line
+        count(Relation::Connection) + count(Relation::Interface) + count(Relation::Binding),
+        count(Relation::Flow) + count(Relation::SuccessionFlow) + count(Relation::Message),
+        count(Relation::Allocation),
+        count(Relation::Transition),
+        count(Relation::Satisfy),
     );
     emit(&svg, output, &summary)
 }

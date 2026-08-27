@@ -111,6 +111,35 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
                     "{where_}: a start marker that is not a succession"
                 );
             }
+            // the dot three or more ends meet at, named -- when it is
+            // named at all -- by the connection itself
+            Shape::ConnectionDot => {
+                let name = answers_to(model, node.id).unwrap_or_default();
+                assert_eq!(
+                    node.name, name,
+                    "{where_}: a connection dot that is not named by its connection"
+                );
+            }
+            // a control node is drawn as its glyph rather than a box, and
+            // only a control node is: the shape has to say what the model
+            // says the element is
+            Shape::Bar | Shape::Diamond | Shape::Cross => {
+                let kind = model.kind(node.id);
+                let expected = match node.shape {
+                    Shape::Bar => [ElementKind::ForkNode, ElementKind::JoinNode],
+                    Shape::Diamond => [ElementKind::MergeNode, ElementKind::DecisionNode],
+                    _ => [
+                        ElementKind::TerminateActionUsage,
+                        ElementKind::TerminateActionUsage,
+                    ],
+                };
+                assert!(
+                    expected.contains(&kind),
+                    "{where_}: {:?} drawn as {:?}",
+                    kind,
+                    node.shape
+                );
+            }
         }
     }
     for edge in &diagram.edges {

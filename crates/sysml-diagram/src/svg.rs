@@ -61,7 +61,13 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
          <path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
          <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
          markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
-         <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker></defs>"
+         <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker>\
+         <marker id=\"flow\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
+         markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
+         <path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/></marker>\
+         <marker id=\"message\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
+         markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
+         <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker></defs>"
     )
     .unwrap();
 
@@ -168,18 +174,23 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Redefinition
             | Relation::Connection
             | Relation::Transition
-            | Relation::Satisfy => {
+            | Relation::Satisfy
+            | Relation::Binding
+            | Relation::Interface
+            | Relation::Allocation
+            | Relation::Flow
+            | Relation::SuccessionFlow
+            | Relation::Message => {
                 // a connection ends at the port it names, where the
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
                 // second port that the model never had
-                let named = edge.ends.as_ref();
-                let ((mut x1, mut y1), first_is_port) = match named {
-                    Some((end, _)) => at_port(diagram, layout, edge.from, end, centre_of(to)),
+                let ((mut x1, mut y1), first_is_port) = match &edge.ends.0 {
+                    Some(end) => at_port(diagram, layout, edge.from, end, centre_of(to)),
                     None => (border_point(from, centre_of(to)), false),
                 };
-                let ((mut x2, mut y2), second_is_port) = match named {
-                    Some((_, end)) => at_port(diagram, layout, edge.to, end, centre_of(from)),
+                let ((mut x2, mut y2), second_is_port) = match &edge.ends.1 {
+                    Some(end) => at_port(diagram, layout, edge.to, end, centre_of(from)),
                     None => (border_point(to, centre_of(from)), false),
                 };
                 // shift edges sharing a pair of boxes along the normal, so
@@ -285,13 +296,11 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // way: a small square on the border, named beside it.
                 // Where the box declares that port, it is already
                 // drawn there and the line simply arrives at it.
-                if let Some((first, second)) = &edge.ends {
-                    if !first_is_port {
-                        port(&mut ports, (x1, y1), first_toward, first, style);
-                    }
-                    if !second_is_port {
-                        port(&mut ports, (x2, y2), second_toward, second, style);
-                    }
+                if let Some(first) = edge.ends.0.as_ref().filter(|_| !first_is_port) {
+                    port(&mut ports, (x1, y1), first_toward, first, None, style);
+                }
+                if let Some(second) = edge.ends.1.as_ref().filter(|_| !second_is_port) {
+                    port(&mut ports, (x2, y2), second_toward, second, None, style);
                 }
                 if let Some(label) = &edge.label {
                     beside(&mut out, label_at, (x2, y2), label, style);
@@ -304,15 +313,22 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
 
     for (at, placed) in layout.placed.iter().enumerate() {
         let node = &diagram.nodes[placed.node];
-        if node.shape == Shape::Initial {
-            writeln!(
-                out,
-                "<circle class=\"initial\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"{:.1}\"/>",
-                placed.x + placed.width / 2.0,
-                placed.y + placed.height / 2.0,
-                placed.width / 2.0
-            )
-            .unwrap();
+        if let Some(glyph) = glyph_of(node.shape, placed) {
+            out.push_str(&glyph);
+            // what a marker is called is read above it: the `cdot-label`
+            // of an n-ary connection, or the name a control node was
+            // declared with
+            if !node.name.is_empty() {
+                beside_with(
+                    &mut out,
+                    centre_of(placed),
+                    (0.0, -1.0),
+                    placed.height / 2.0,
+                    "middle",
+                    style,
+                    &node.name,
+                );
+            }
             continue;
         }
         draw_box(
@@ -332,6 +348,47 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     out.push_str(&ports);
     let height = layout.height.max(floor + style.margin);
     document(layout.width, height, style, &out)
+}
+
+/// The glyph the standard gives a node that is not a box: the filled
+/// circle a flow starts at or an n-ary connection meets at, the bar it
+/// splits at, the diamond it chooses at, the cross it stops at. A box has
+/// no glyph -- it is drawn as a box.
+fn glyph_of(shape: Shape, placed: &Placed) -> Option<String> {
+    let (cx, cy) = centre_of(placed);
+    let (w, h) = (placed.width, placed.height);
+    Some(match shape {
+        Shape::Box => return None,
+        Shape::Initial | Shape::ConnectionDot => format!(
+            "<circle class=\"initial\" cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"{:.1}\"/>\n",
+            w / 2.0
+        ),
+        Shape::Bar => format!(
+            "<rect class=\"initial\" x=\"{:.1}\" y=\"{:.1}\" width=\"{w:.1}\" \
+             height=\"{h:.1}\"/>\n",
+            placed.x, placed.y
+        ),
+        Shape::Diamond => format!(
+            "<path class=\"box\" d=\"M {cx:.1} {:.1} L {:.1} {cy:.1} L {cx:.1} {:.1} \
+             L {:.1} {cy:.1} z\"/>\n",
+            placed.y,
+            placed.x + w,
+            placed.y + h,
+            placed.x
+        ),
+        Shape::Cross => format!(
+            "<path class=\"rule\" d=\"M {:.1} {:.1} L {:.1} {:.1} M {:.1} {:.1} \
+             L {:.1} {:.1}\"/>\n",
+            placed.x,
+            placed.y,
+            placed.x + w,
+            placed.y + h,
+            placed.x + w,
+            placed.y,
+            placed.x,
+            placed.y + h
+        ),
+    })
 }
 
 /// Do the two boxes share a band of the canvas -- that is, is one drawn
@@ -529,10 +586,20 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         // since long before SysML
         Relation::Reference => (" marker-start=\"url(#reference)\"", " class=\"edge\""),
         Relation::Transition => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // `allocate-relationship` draws the same open arrowhead a
+        // transition does, and says which it is with `«allocate»`
+        Relation::Allocation => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        // what flows has the filled head; a message has the open dart the
+        // standard keeps for it
+        Relation::Flow | Relation::SuccessionFlow => {
+            (" marker-end=\"url(#flow)\"", " class=\"edge\"")
+        }
+        Relation::Message => (" marker-end=\"url(#message)\"", " class=\"edge\""),
         // a satisfy assertion is a dependency, pointing at the requirement
         // it is about
         Relation::Satisfy => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
-        // a connection is undirected and gets no marker at all
+        // a connection, an interface and a binding are undirected and get
+        // no marker at all -- what each is, its label says
         _ => ("", " class=\"edge\""),
     }
 }
@@ -711,7 +778,14 @@ fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize,
             Some(ty) => format!("{} : {ty}", place.feature.name),
             None => place.feature.name.clone(),
         };
-        port(out, place.at, place.toward, &label, style);
+        port(
+            out,
+            place.at,
+            place.toward,
+            &label,
+            place.feature.direction,
+            style,
+        );
     }
 }
 
@@ -771,9 +845,13 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
                 (_, true) => (1, edge.from),
                 _ => return None,
             };
-            let ends = edge.ends.as_ref()?;
-            let named = if mine == 0 { &ends.0 } else { &ends.1 };
-            (*named == feature.name).then(|| centre_of(&layout.placed[theirs]))
+            let named = if mine == 0 {
+                &edge.ends.0
+            } else {
+                &edge.ends.1
+            };
+            (named.as_deref() == Some(feature.name.as_str()))
+                .then(|| centre_of(&layout.placed[theirs]))
         });
         let (point, away) = match peer {
             Some(peer) => facing(placed, peer),
@@ -813,7 +891,14 @@ fn facing(placed: &Placed, peer: (f64, f64)) -> ((f64, f64), (f64, f64)) {
     (point, away)
 }
 
-fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style: &Style) {
+fn port(
+    out: &mut String,
+    at: (f64, f64),
+    toward: (f64, f64),
+    name: &str,
+    direction: Option<&str>,
+    style: &Style,
+) {
     let side = 0.6 * style.line_height;
     writeln!(
         out,
@@ -836,6 +921,9 @@ fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style:
     } else {
         "middle"
     };
+    if let Some(direction) = direction {
+        direction_arrow(out, at, (ux, uy), direction, side);
+    }
     beside_with(
         out,
         at,
@@ -845,6 +933,47 @@ fn port(out: &mut String, at: (f64, f64), toward: (f64, f64), name: &str, style:
         style,
         name,
     );
+}
+
+/// The arrow the standard draws inside a port's square -- `pdh` on a left
+/// or right border, `pdv` on a top or bottom one. `out` runs the way the
+/// port faces, `in` runs back into the box it belongs to, and `inout` is
+/// the one shaft with a head at each end.
+fn direction_arrow(out: &mut String, at: (f64, f64), away: (f64, f64), direction: &str, side: f64) {
+    let (reach, head) = (0.42 * side, 0.3 * side);
+    let (fx, fy) = if direction == "in" {
+        (-away.0, -away.1)
+    } else {
+        away
+    };
+    let tip = (at.0 + fx * reach, at.1 + fy * reach);
+    let tail = (at.0 - fx * reach, at.1 - fy * reach);
+    writeln!(
+        out,
+        "<path class=\"rule\" d=\"M {:.1} {:.1} L {:.1} {:.1}\"/>",
+        tail.0, tail.1, tip.0, tip.1
+    )
+    .unwrap();
+    arrowhead(out, tip, (fx, fy), head);
+    if direction == "inout" {
+        arrowhead(out, tail, (-fx, -fy), head);
+    }
+}
+
+/// An open arrowhead at `tip`, opening back against the way it points.
+fn arrowhead(out: &mut String, tip: (f64, f64), (ux, uy): (f64, f64), size: f64) {
+    let (px, py) = (-uy * size * 0.7, ux * size * 0.7);
+    writeln!(
+        out,
+        "<path class=\"tip\" d=\"M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1}\"/>",
+        tip.0 - ux * size + px,
+        tip.1 - uy * size + py,
+        tip.0,
+        tip.1,
+        tip.0 - ux * size - px,
+        tip.1 - uy * size - py,
+    )
+    .unwrap();
 }
 
 /// Set `text` beside the point `at`, offset to one side of the line running
@@ -1326,8 +1455,56 @@ mod tests {
         // a line arriving from below has no side to grow away along, so the
         // name sits over the port instead
         let mut out = String::new();
-        port(&mut out, (50.0, 20.0), (50.0, 90.0), "p", &Style::default());
+        port(
+            &mut out,
+            (50.0, 20.0),
+            (50.0, 90.0),
+            "p",
+            None,
+            &Style::default(),
+        );
         assert!(out.contains("text-anchor=\"middle\""));
+    }
+
+    /// The tips a port's direction arrow draws, and which way each points:
+    /// one head for `in` or `out`, one at each end for `inout`.
+    fn tips(direction: &str) -> Vec<f64> {
+        let mut out = String::new();
+        // a port on the left border of a box that lies to the right, so
+        // the way it faces is -x and `in` runs back into the box
+        port(
+            &mut out,
+            (50.0, 20.0),
+            (42.0, 20.0),
+            "p",
+            Some(direction),
+            &Style::default(),
+        );
+        out.lines()
+            .filter(|line| line.contains("class=\"tip\""))
+            .map(|line| {
+                // the head's own point is the middle of its three, and it
+                // sits ahead of the shaft on the side it points to
+                let x: Vec<f64> = line
+                    .split(char::is_whitespace)
+                    .filter_map(|word| word.parse().ok())
+                    .collect();
+                x[2] - x[0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_port_draws_the_direction_it_was_declared_with() {
+        assert_eq!(tips("out").len(), 1);
+        assert_eq!(tips("in").len(), 1);
+        assert_eq!(tips("inout").len(), 2);
+        // `out` faces away from the box, `in` back into it, and `inout`
+        // does both from the one shaft
+        assert!(tips("out")[0] < 0.0);
+        assert!(tips("in")[0] > 0.0);
+        let both = tips("inout");
+        assert!(both[0] < 0.0 && both[1] > 0.0);
     }
 
     #[test]

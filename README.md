@@ -62,7 +62,7 @@ vehicle.sysml: ok (0 error(s))
 $ cargo run -p sysml-cli -- parse --tree vehicle.sysml   # dump the syntax tree
 
 $ cargo run -p sysml-cli -- diagram vehicle.sysml -o vehicle.svg
-wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
+wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
 ```
 
 `diagram` draws one box per definition — its keyword, name and the features
@@ -99,19 +99,34 @@ plain lines, transitions carry an open arrowhead labelled the UML way --
 name, the payload they wait for, the condition guarding them and the action
 they perform (`subscribing accept sub : Subscribe [ready] / send action`) --
 and an `entry; then x;` succession is drawn from the filled circle the
-machine starts at. Port names and transition labels sit in the gap between
+machine starts at. A control node is drawn as the glyph the standard gives
+it rather than as a box, because a flow does not split at an action: `fork`
+and `join` are bars, `merge` and `decide` diamonds, `terminate` a cross.
+Port names and transition labels sit in the gap between
 the boxes they belong to, and only that gap is widened to hold them, so one
 long label does not push the rest of the row apart with it.
 
 ```console
 $ cargo run -p sysml-cli -- diagram car.sysml --internal Car -o car.svg
-wrote 3 box(es), 0 specialization(s), 0 composition(s), 2 connection(s), 0 transition(s) and 0 satisfaction(s) to car.svg
+wrote 3 box(es), 0 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 2 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to car.svg
 ```
 
 Requirements are drawn too: `satisfy r by p;` becomes a dashed dependency
 from the satisfying feature to the requirement, and an n-ary
 `connection { end ::> a; end ::> b; end ::> c; }` -- how a derivation is
-written -- fans out from the end written first.
+written -- meets at the dot the standard draws for it
+(`n-ary-connection = n-ary-connection-dot n-ary-segment+`), with one
+segment out to each end and the connection's own name beside the dot.
+Each end is written the way `connection-graphical` writes it, `rolename
+multiplicity c-adornment`: `bead [1] in ordered`, `rim redefines seat`.
+
+A two-ended statement is drawn the way its own production draws it, since
+the standard gives each a different line: `bind a = b` is a plain line
+written `=`, `interface i connect a to b` one keyworded `«interface»`,
+`allocate a to b` an open arrowhead with `«allocate»`, a `flow` the filled
+arrowhead and what it carries (`fuel of Fuel`), a `succession flow` the same
+keyworded `«succession flow»`, and a `message` the open dart the standard
+keeps for it.
 
 Every port a box declares is drawn on its border, the way the standard has
 it (`part-def = part-def-name-compartment interconnection-view
@@ -120,7 +135,9 @@ straddling the border with `name : Type` beside it, on the side facing
 whatever it is connected to. Connector ends are matched by the feature chain
 name resolution records, so `connect w.hub to a.mount` links the boxes for
 `w` and `a` even when several parts share one type, and the line arrives at
-the port rather than drawing a second square of its own. Connections
+the port rather than drawing a second square of its own. An end that reaches
+the whole of a part has no rolename to write, so no square is drawn for it.
+Connections
 sharing a pair of boxes are spread apart so they stay separate lines, closing
 up when there are more of them than the borders have room for, and the gap
 between boxes widens to fit the names drawn in it. Connections reaching outside the definition, and those between
@@ -143,7 +160,7 @@ definitions:
 ```console
 $ cargo run -p sysml-cli -- diagram vehicle.sysml \
     --library vendor/sysml-v2-release/sysml.library -o vehicle.svg
-wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
+wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s) to vehicle.svg
 ```
 
 `--elk` hands the arrangement to the Eclipse Layout Kernel -- the boxes,

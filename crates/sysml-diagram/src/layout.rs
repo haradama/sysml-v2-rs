@@ -62,9 +62,13 @@ fn label_gaps(diagram: &Diagram, style: &Style) -> HashMap<(usize, usize), f64> 
     let mut gaps: HashMap<(usize, usize), f64> = HashMap::new();
     for edge in &diagram.edges {
         let mut needed: f64 = 0.0;
-        if let Some((first, second)) = &edge.ends {
-            // one name per end, each set clear of its own port
-            let widest = style.text_width(first).max(style.text_width(second));
+        // one name per end, each set clear of its own port
+        let widest = [&edge.ends.0, &edge.ends.1]
+            .into_iter()
+            .flatten()
+            .map(|name| style.text_width(name))
+            .fold(0.0_f64, f64::max);
+        if widest > 0.0 {
             needed = needed.max(2.0 * widest + style.line_height);
         }
         if let Some(label) = &edge.label {
@@ -131,10 +135,17 @@ fn wrap_layers(
 /// enough for the keyword, the name, and every compartment with its
 /// label and its lines.
 pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
-    if node.shape == Shape::Initial {
+    match node.shape {
         // a filled circle, sized to read at the same weight as a box border
-        let diameter = style.line_height;
-        return (diameter, diameter);
+        Shape::Initial | Shape::ConnectionDot => {
+            let diameter = style.line_height;
+            return (diameter, diameter);
+        }
+        // long enough that several successions can meet along it
+        Shape::Bar => return (3.0 * style.line_height, 0.3 * style.line_height),
+        Shape::Diamond => return (1.6 * style.line_height, 1.6 * style.line_height),
+        Shape::Cross => return (style.line_height, style.line_height),
+        Shape::Box => {}
     }
     // the name is drawn bold, which the 0.6 em estimate does not account for
     let mut width = (style.text_width(&node.name) * 1.1)
@@ -518,7 +529,7 @@ mod tests {
             from: 0,
             to: 0,
             relation: Relation::Specialization,
-            ends: None,
+            ends: (None, None),
             label: None,
         }];
 
@@ -564,7 +575,10 @@ mod tests {
             from: 0,
             to: 1,
             relation: Relation::Connection,
-            ends: Some(("aVeryLongPortName".to_string(), "short".to_string())),
+            ends: (
+                Some("aVeryLongPortName".to_string()),
+                Some("short".to_string()),
+            ),
             label: None,
         }];
         let widened = gap_between(&label_gaps(&diagram, &style), 0, 1, &style);
@@ -576,7 +590,7 @@ mod tests {
             from: 0,
             to: 1,
             relation: Relation::Transition,
-            ends: None,
+            ends: (None, None),
             label: Some("aVeryLongTransitionName".to_string()),
         }];
         let gaps = label_gaps(&diagram, &style);

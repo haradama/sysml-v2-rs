@@ -16,12 +16,22 @@ pub struct Feature {
     pub multiplicity: Option<String>,
     /// Declared default or initial value, rendered as ` = 4` / ` := 4`.
     pub value: Option<String>,
+    /// `in`, `out` or `inout`, when the feature declares a direction.
+    /// The standard writes it in the line (`directed-features-compartment-element
+    /// = el-prefix FeatureDirection DefinitionBodyItem*`) and draws it as
+    /// an arrow inside a port's square.
+    pub direction: Option<&'static str>,
 }
 
 impl Feature {
     /// The compartment line as it appears in the drawing.
     pub fn label(&self) -> String {
-        let mut line = format!("{} {}", self.keyword, self.name);
+        let mut line = String::new();
+        if let Some(direction) = self.direction {
+            line.push_str(direction);
+            line.push(' ');
+        }
+        line.push_str(&format!("{} {}", self.keyword, self.name));
         if let Some(ty) = &self.ty {
             line.push_str(&format!(" : {ty}"));
         }
@@ -44,6 +54,29 @@ pub enum Shape {
     /// The filled circle a state machine or action flow starts from,
     /// carrying no label of its own.
     Initial,
+    /// The filled circle three or more connection ends meet at
+    /// (`n-ary-connection-dot`), named beside it by the connection.
+    ConnectionDot,
+    /// The bar a flow splits at or comes back together at (`fork-node`,
+    /// `join-node`, drawn alike).
+    Bar,
+    /// The diamond a flow chooses at or comes back together at
+    /// (`decision-node`, `merge-node`, drawn alike).
+    Diamond,
+    /// The cross a flow stops at (`terminate-node`).
+    Cross,
+}
+
+/// The shape the standard draws an action- or state-flow node with. The
+/// control nodes are not boxes: `fork-node` and `join-node` are bars,
+/// `decision-node` and `merge-node` diamonds, `terminate-node` a cross.
+fn shape_of(kind: ElementKind) -> Shape {
+    match kind {
+        ElementKind::ForkNode | ElementKind::JoinNode => Shape::Bar,
+        ElementKind::MergeNode | ElementKind::DecisionNode => Shape::Diamond,
+        ElementKind::TerminateActionUsage => Shape::Cross,
+        _ => Shape::Box,
+    }
 }
 
 /// One box: a named definition and the features it declares.
@@ -133,10 +166,13 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
             Role::Return | Role::Result => "result",
         };
     }
-    if model.get(member, "direction").is_some() {
+    let kind = model.kind(member);
+    // A directed port is still a port: the standard keeps it in the ports
+    // compartment and draws its direction as an arrow in the square on the
+    // border, rather than moving it in with the parameters.
+    if model.get(member, "direction").is_some() && !kind.is_a(ElementKind::PortUsage) {
         return "parameters";
     }
-    let kind = model.kind(member);
     for (metaclass, label) in [
         (ElementKind::PerformActionUsage, "perform actions"),
         (ElementKind::AllocationUsage, "allocations"),
@@ -198,6 +234,24 @@ pub enum Relation {
     /// `from` satisfies the requirement `to` (`satisfy r by p`). Drawn the
     /// SysML way, as a dashed dependency pointing at the requirement.
     Satisfy,
+    /// `from` and `to` are bound to the same value (`bind a = b`). A plain
+    /// line with `=` written on it (`binding-connection`).
+    Binding,
+    /// `from` and `to` are joined by an interface (`interface i connect a
+    /// to b`). A plain line keyworded `«interface»`.
+    Interface,
+    /// `from` is allocated to `to` (`allocate a to b`). An open arrowhead
+    /// and the keyword `«allocate»` (`allocate-relationship`).
+    Allocation,
+    /// Something flows from `from` to `to` (`flow f from a.out to b.in`),
+    /// drawn with the filled arrowhead the standard gives a flow.
+    Flow,
+    /// The same, ordered in time (`succession flow`), keyworded
+    /// `«succession flow»`.
+    SuccessionFlow,
+    /// A message between two occurrences (`message m from a to b`), drawn
+    /// with the open arrowhead the standard reserves for it.
+    Message,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -207,9 +261,12 @@ pub struct Edge {
     pub from: usize,
     pub to: usize,
     pub relation: Relation,
-    /// For a connection, the feature each end attaches to (`hub`, `mount`),
-    /// which is what tells two connections between the same pair apart.
-    pub ends: Option<(String, String)>,
+    /// The `rolename` the standard writes at each end: the feature the
+    /// line attaches to (`hub`, `mount`), which is what tells two
+    /// connections between the same pair apart. `None` where there is
+    /// nothing to name -- a transition, or an end that is the box itself,
+    /// as in `allocate tank to eng`.
+    pub ends: (Option<String>, Option<String>),
     /// A name for the relationship itself, drawn beside the line. Only a
     /// transition carries one: `transition subscribing first ... then ...`.
     pub label: Option<String>,
@@ -275,7 +332,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                     from,
                     to,
                     relation: Relation::Specialization,
-                    ends: None,
+                    ends: (None, None),
                     label: None,
                 });
             }
@@ -284,8 +341,8 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
         // `connection def D { end a : A; end b : B; }` relates the
         // definitions its ends are typed by, which is the only thing
         // holding them together in a definition diagram
-        for (target, end) in connector_ends(model, node.id) {
-            let Some(&to) = index.get(&target) else {
+        for end in connector_ends(model, node.id) {
+            let Some(&to) = index.get(&end.target) else {
                 continue;
             };
             if from != to {
@@ -293,8 +350,8 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                     from,
                     to,
                     relation: Relation::Connection,
-                    ends: None,
-                    label: Some(end),
+                    ends: (None, None),
+                    label: Some(format!("{}{}", end.role, end.adornment)),
                 });
             }
         }
@@ -350,7 +407,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             compartments: into_compartments(features),
             is_abstract: is_abstract(model, child),
             rounded: model.kind(child).is_a(ElementKind::Usage),
-            shape: Shape::Box,
+            shape: shape_of(model.kind(child)),
             children,
         });
     }
@@ -375,7 +432,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         // it is the filled circle a machine starts at.
         if let [only] = &ends[..] {
             if model.kind(child) == ElementKind::SuccessionAsUsage {
-                if let Some(&to) = index.get(&only.0) {
+                if let Some(&to) = index.get(&only.target) {
                     let from = previous.unwrap_or(nodes.len());
                     if previous.is_none() {
                         nodes.push(Node {
@@ -394,7 +451,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                             from,
                             to,
                             relation: Relation::Transition,
-                            ends: None,
+                            ends: (None, None),
                             label: None,
                         });
                     }
@@ -404,19 +461,27 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             }
             continue;
         }
-        // an n-ary connection -- `connection { end ::> a; end ::> b; end
-        // ::> c; }` -- fans out from the end written first, which is the
-        // one the others relate to
+        let relation = connector_relation(model, child);
+        let directed = relation == Relation::Transition;
+        // `n-ary-connection = n-ary-connection-dot n-ary-segment+`: three
+        // or more ends meet at a dot, with one segment running out to
+        // each. Fanning them out from whichever end was written first
+        // would say that end relates the others, which is not what an
+        // n-ary connection means.
+        if ends.len() > 2 && !directed {
+            push_n_ary(
+                model, child, &ends, &index, relation, &mut nodes, &mut edges,
+            );
+            continue;
+        }
         let Some((first, rest)) = ends.split_first() else {
             continue;
         };
-        let Some(&from) = index.get(&first.0) else {
+        let Some(&from) = index.get(&first.target) else {
             continue;
         };
-        let directed = model.kind(child).is_a(ElementKind::TransitionUsage)
-            || model.kind(child) == ElementKind::SuccessionAsUsage;
         for second in rest {
-            let Some(&to) = index.get(&second.0) else {
+            let Some(&to) = index.get(&second.target) else {
                 continue;
             };
             if from == to {
@@ -425,22 +490,165 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             edges.push(Edge {
                 from,
                 to,
-                relation: if directed {
-                    Relation::Transition
-                } else {
-                    Relation::Connection
-                },
+                relation,
                 // a transition names its states twice over; only a
                 // connection's port labels add anything
-                ends: (!directed).then(|| (first.1.clone(), second.1.clone())),
+                ends: if directed {
+                    (None, None)
+                } else {
+                    (rolename(model, first), rolename(model, second))
+                },
                 // `off_to_on / send action`, after the UML convention of
                 // naming the step and then what it does
-                label: directed.then(|| transition_label(model, child)).flatten(),
+                label: connector_label(model, child, relation),
             });
         }
     }
 
     Diagram { nodes, edges }
+}
+
+/// Which line the standard draws for a two-ended statement.
+///
+/// The specification gives each its own notation -- clauses 8.2.3.13 to
+/// 8.2.3.16 -- and drawing them all as one plain line loses what the
+/// source said: that `a` is *bound* to `b`, or *allocated* to it, rather
+/// than merely wired to it.
+fn connector_relation(model: &Model, connector: ElementId) -> Relation {
+    match model.kind(connector) {
+        ElementKind::BindingConnector | ElementKind::BindingConnectorAsUsage => Relation::Binding,
+        ElementKind::InterfaceUsage => Relation::Interface,
+        ElementKind::AllocationUsage => Relation::Allocation,
+        ElementKind::SuccessionFlowUsage => Relation::SuccessionFlow,
+        // A message has no metaclass of its own: `Message : FlowUsage =
+        // ... { isAbstract = true }` is how the standard writes one, so
+        // the flag is what tells it from a flow.
+        ElementKind::FlowUsage => match model.get(connector, "isAbstract") {
+            Some(&Value::Bool(true)) => Relation::Message,
+            _ => Relation::Flow,
+        },
+        ElementKind::SuccessionAsUsage => Relation::Transition,
+        kind if kind.is_a(ElementKind::TransitionUsage) => Relation::Transition,
+        _ => Relation::Connection,
+    }
+}
+
+/// Draw an n-ary connection the way the standard does: a dot carrying the
+/// connection's own name, and a segment out to each end it names.
+///
+/// A dot with fewer than two segments joins nothing, so it is only drawn
+/// once the ends that landed in the diagram are known.
+fn push_n_ary(
+    model: &Model,
+    connector: ElementId,
+    ends: &[End],
+    index: &HashMap<ElementId, usize>,
+    relation: Relation,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let landed: Vec<&End> = ends
+        .iter()
+        .filter(|end| index.contains_key(&end.target))
+        .collect();
+    if landed.len() < 2 {
+        return;
+    }
+    let dot = nodes.len();
+    nodes.push(Node {
+        id: connector,
+        // `cdot-label`, read beside the dot
+        name: model.name(connector).unwrap_or_default().to_string(),
+        keyword: String::new(),
+        compartments: Vec::new(),
+        is_abstract: false,
+        rounded: false,
+        shape: Shape::ConnectionDot,
+        children: Vec::new(),
+    });
+    for end in landed {
+        edges.push(Edge {
+            from: dot,
+            to: index[&end.target],
+            relation,
+            ends: (None, rolename(model, end)),
+            label: None,
+        });
+    }
+}
+
+/// The `rolename` to write at one end of a line: the feature it attaches
+/// to, and nothing at all when that feature is the box itself. `allocate
+/// tank to eng` attaches to the whole of `tank`, and a square labelled
+/// `tank` on the box already labelled `tank` says nothing twice.
+fn rolename(model: &Model, end: &End) -> Option<String> {
+    let named = !end.role.is_empty() && effective_name(model, end.target) != Some(&end.role);
+    (named || !end.adornment.is_empty())
+        .then(|| format!("{}{}", end.role, end.adornment).trim().to_string())
+}
+
+/// What the standard writes on a two-ended line.
+///
+/// Every one of these comes from the production that draws it --
+/// `binding-connection` writes `=`, `allocate-relationship` writes
+/// `«allocate»`, a flow writes what it carries -- and without them one
+/// plain line would stand for six different statements.
+fn connector_label(model: &Model, child: ElementId, relation: Relation) -> Option<String> {
+    let written = match relation {
+        Relation::Transition => return transition_label(model, child),
+        Relation::Binding => "=".to_string(),
+        Relation::Interface => keyworded("interface", model.name(child)),
+        Relation::Allocation => keyworded("allocate", model.name(child)),
+        Relation::SuccessionFlow => {
+            let carried = carries(model, child);
+            keyworded("succession flow", carried.as_deref())
+        }
+        // a flow and a message write what they carry and nothing else
+        Relation::Flow | Relation::Message => carries(model, child)?,
+        _ => return None,
+    };
+    Some(written)
+}
+
+/// `«keyword»`, and the name after it when the statement was given one.
+fn keyworded(keyword: &str, name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("\u{ab}{keyword}\u{bb} {name}"),
+        None => format!("\u{ab}{keyword}\u{bb}"),
+    }
+}
+
+/// What a flow carries, as `flow-label` writes it: `UsageDeclaration? ('of'
+/// FlowPayloadFeatureMember)?`. A flow whose payload went unread is one
+/// that appears to carry nothing.
+fn carries(model: &Model, flow: ElementId) -> Option<String> {
+    let payload = model
+        .owned(flow)
+        .iter()
+        .find(|&&owned| model.kind(owned) == ElementKind::PayloadFeature)
+        .and_then(|&owned| payload_label(model, owned));
+    match (model.name(flow), payload) {
+        (Some(name), Some(payload)) => Some(format!("{name} of {payload}")),
+        (Some(name), None) => Some(name.to_string()),
+        (None, Some(payload)) => Some(format!("of {payload}")),
+        (None, None) => None,
+    }
+}
+
+/// The `FlowPayloadFeatureMember` as the notation writes it: `Fuel`,
+/// `Fuel[2]`, or `fuelCommand : FuelCommand` where the payload was
+/// declared and named.
+fn payload_label(model: &Model, payload: ElementId) -> Option<String> {
+    let mut written = match (effective_name(model, payload), type_name(model, payload)) {
+        (Some(name), Some(ty)) => format!("{name} : {ty}"),
+        (Some(name), None) => name.to_string(),
+        (None, Some(ty)) => ty,
+        (None, None) => return None,
+    };
+    if let Some(range) = multiplicity_of(model, payload) {
+        written.push_str(&range);
+    }
+    Some(written)
 }
 
 /// What to write beside a transition, after the UML reading of `trigger /
@@ -523,7 +731,7 @@ fn push_satisfaction(
             from,
             to,
             relation: Relation::Satisfy,
-            ends: None,
+            ends: (None, None),
             label: Some("satisfy".to_string()),
         });
     }
@@ -544,8 +752,16 @@ fn typed_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
     if !matches!(model.get(end, "isEnd"), Some(Value::Bool(true))) {
         return None;
     }
-    let target = model.type_of(end)?;
-    Some((target, model.name(end).unwrap_or_default().to_string()))
+    // `end [1] part bead : TireBead` writes the multiplicity between the
+    // keyword and the feature, which makes the `end` an anonymous wrapper
+    // around the feature it declares: what the end reaches is a level in,
+    // while the multiplicity and the other adornments stay out here.
+    std::iter::once(end)
+        .chain(model.owned(end).iter().copied())
+        .find_map(|feature| {
+            let target = model.type_of(feature)?;
+            Some((target, model.name(feature).unwrap_or_default().to_string()))
+        })
 }
 
 /// Whether an element gets a box of its own in an interconnection view.
@@ -595,16 +811,70 @@ fn is_structure_box(kind: ElementKind) -> bool {
 /// `connect w.hub to a.mount` chains to `[w, hub]`, so the first entry
 /// picks the box and the last names the port on it. A bare `connect w to a`
 /// chains to `[w]`, where both are the same element.
-fn connector_ends(model: &Model, connector: ElementId) -> Vec<(ElementId, String)> {
+fn connector_ends(model: &Model, connector: ElementId) -> Vec<End> {
     model
         .owned(connector)
         .iter()
         .filter_map(|&end| {
-            chained_end(model, end)
+            let (target, role) = chained_end(model, end)
                 .or_else(|| referenced_end(model, end))
-                .or_else(|| typed_end(model, end))
+                .or_else(|| typed_end(model, end))?;
+            Some(End {
+                target,
+                role,
+                adornment: end_adornment(model, end),
+            })
         })
         .collect()
+}
+
+/// One end of a two-ended statement: what it reaches, the `rolename` that
+/// names it there, and what the standard writes after that name.
+struct End {
+    target: ElementId,
+    role: String,
+    adornment: String,
+}
+
+/// The `multiplicity` and `c-adornment` the standard writes at an end,
+/// after its rolename: `c-adornment = (a-property | a-direction |
+/// a-subsetting | a-redefinition)*`.
+///
+/// (`readonly` is in that list but in neither grammar nor metamodel, so
+/// there is no way to write one and nothing to draw.)
+fn end_adornment(model: &Model, end: ElementId) -> String {
+    let mut out = String::new();
+    if let Some(range) = multiplicity_of(model, end) {
+        out.push_str(&format!(" {range}"));
+    }
+    if let Some(direction) = direction_of(model, end) {
+        out.push_str(&format!(" {direction}"));
+    }
+    for (flag, written) in [
+        ("isOrdered", "ordered"),
+        ("isAbstract", "abstract"),
+        ("isDerived", "derived"),
+    ] {
+        if model.get(end, flag) == Some(&Value::Bool(true)) {
+            out.push_str(&format!(" {written}"));
+        }
+    }
+    if model.get(end, "isUnique") == Some(&Value::Bool(false)) {
+        out.push_str(" nonunique");
+    }
+    // exact kinds, so the reference subsetting that gives the end its
+    // rolename (`end ::> w.hub`) is not written out a second time
+    let refinements = model.owned(end).iter().filter_map(|&rel| {
+        let (written, property) = match model.kind(rel) {
+            ElementKind::Subsetting => ("subsets", "subsettedFeature"),
+            ElementKind::Redefinition => ("redefines", "redefinedFeature"),
+            _ => return None,
+        };
+        let name = model.name(model.get(rel, property)?.as_id()?)?;
+        Some(format!(" {written} {name}"))
+    });
+    out.extend(refinements);
+    out
 }
 
 /// An end written inline, as `connect w.hub to a.mount`.
@@ -686,7 +956,7 @@ fn compositions_of(
             from,
             to,
             relation,
-            ends: None,
+            ends: (None, None),
             label: None,
         });
     }
@@ -728,7 +998,7 @@ fn specializations_of(
                 from,
                 to,
                 relation,
-                ends: None,
+                ends: (None, None),
                 label: None,
             });
         }
@@ -944,6 +1214,7 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
                 ty: type_name(model, child),
                 multiplicity: multiplicity_of(model, child),
                 value: value_of(model, child),
+                direction: direction_of(model, child),
             },
         ));
     }
@@ -954,6 +1225,14 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
 /// instances of its own, which the drawing is expected to say.
 fn is_abstract(model: &Model, element: ElementId) -> bool {
     model.get(element, "isAbstract") == Some(&Value::Bool(true))
+}
+
+/// The direction a feature was declared with, when it declares one.
+fn direction_of(model: &Model, feature: ElementId) -> Option<&'static str> {
+    match model.get(feature, "direction") {
+        Some(Value::EnumLit(direction)) => Some(direction),
+        _ => None,
+    }
 }
 
 /// The multiplicity a usage was declared with, as the text between its
@@ -1038,6 +1317,12 @@ fn type_name(model: &Model, usage: ElementId) -> Option<String> {
         }
         if let Some(target) = model.type_of(current) {
             return model.name(target).map(str::to_string);
+        }
+        // `flow f of carried :> Fuel` -- subsetting a definition is how
+        // KerML says a feature is one of those, so a definition reached
+        // this way is the type, not another feature to follow
+        if current != usage && !model.kind(current).is_a(ElementKind::Feature) {
+            return model.name(current).map(str::to_string);
         }
         for &rel in model.owned(current) {
             let names = match model.kind(rel) {
@@ -1493,6 +1778,7 @@ mod tests {
                     ty: None,
                     multiplicity: None,
                     value: None,
+                    direction: None,
                 },
                 Feature {
                     keyword: "port".to_string(),
@@ -1500,6 +1786,7 @@ mod tests {
                     ty: Some("FuelPort".to_string()),
                     multiplicity: None,
                     value: None,
+                    direction: None,
                 },
             ]
         );
@@ -1507,6 +1794,54 @@ mod tests {
         assert_eq!(
             lines(engine).nth(1).unwrap().label(),
             "port fuelIn : FuelPort"
+        );
+    }
+
+    #[test]
+    fn a_declared_direction_is_written_in_the_line_it_belongs_to() {
+        let ws = resolved(
+            "part def Fuel;\n\
+             port def FuelPort;\n\
+             part def Engine {\n\
+             	in item supply : Fuel;\n\
+             	out item spent : Fuel;\n\
+             	inout port fuelIn : FuelPort;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let engine = diagram.nodes.iter().find(|n| n.name == "Engine").unwrap();
+
+        // the direction reads at the front of the line, the way the
+        // notation writes it
+        let written: Vec<String> = lines(engine).map(Feature::label).collect();
+        assert_eq!(
+            written,
+            [
+                "in item supply : Fuel",
+                "out item spent : Fuel",
+                "inout port fuelIn : FuelPort",
+            ]
+        );
+
+        // and a directed port stays a port rather than joining the
+        // parameters, because it is still drawn on the border
+        let where_each: Vec<(&str, &str)> = engine
+            .compartments
+            .iter()
+            .flat_map(|compartment| {
+                compartment
+                    .lines
+                    .iter()
+                    .map(move |line| (compartment.label, line.name.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            where_each,
+            [
+                ("parameters", "supply"),
+                ("parameters", "spent"),
+                ("ports", "fuelIn"),
+            ]
         );
     }
 
@@ -1796,16 +2131,16 @@ mod interconnection_tests {
                 from: 0,
                 to: 1,
                 relation: Relation::Connection,
-                ends: Some(("hub".to_string(), "mount".to_string())),
+                ends: (Some("hub".to_string()), Some("mount".to_string())),
                 label: None,
             }]
         );
     }
 
     #[test]
-    fn requirements_and_their_derivation_are_drawn() {
-        // ends written as their own members, and three of them: the first
-        // is what the others derive from
+    fn an_n_ary_connection_meets_at_a_dot() {
+        // ends written as their own members, and three of them:
+        // `n-ary-connection = n-ary-connection-dot n-ary-segment+`
         let ws = resolved(
             "requirement def R;\n\
              package P {\n\
@@ -1827,18 +2162,277 @@ mod interconnection_tests {
         let diagram = interconnection_diagram(ws.model(), package);
 
         let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, ["a : R", "b : R", "c : R"]);
+        // the fourth box is the dot, which this connection did not name
+        assert_eq!(names, ["a : R", "b : R", "c : R", ""]);
+        assert_eq!(diagram.nodes[3].shape, Shape::ConnectionDot);
+        // one segment out of the dot to each end, rather than a fan from
+        // whichever end happened to be written first
         assert_eq!(
             diagram
                 .edges
                 .iter()
                 .map(|e| (e.from, e.to))
                 .collect::<Vec<_>>(),
-            [(0, 1), (0, 2)]
+            [(3, 0), (3, 1), (3, 2)]
         );
+        // an end that reaches the whole of `a` has no rolename to write:
+        // a square labelled `a` on the box labelled `a` says it twice
+        assert_eq!(diagram.edges[0].ends, (None, None));
+    }
+
+    #[test]
+    fn a_named_n_ary_connection_reads_its_name_beside_the_dot() {
+        let ws = resolved(
+            "part def P;\n\
+             part def Whole {\n\
+             \tpart a : P;\n\
+             \tpart b : P;\n\
+             \tpart c : P;\n\
+             \tconnection wiring {\n\
+             \t\tend ::> a;\n\
+             \t\tend ::> b;\n\
+             \t\tend ::> c;\n\
+             \t}\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Whole"));
+        let dot = diagram
+            .nodes
+            .iter()
+            .find(|node| node.shape == Shape::ConnectionDot)
+            .unwrap();
+        assert_eq!(dot.name, "wiring");
         assert_eq!(
-            diagram.edges[0].ends,
-            Some(("a".to_string(), "b".to_string()))
+            diagram.edges.iter().filter(|e| e.from == 3).count(),
+            3,
+            "one segment per end"
+        );
+    }
+
+    #[test]
+    fn an_n_ary_connection_reaching_one_box_draws_no_dot() {
+        // a dot with a single segment joins nothing to anything
+        let ws = resolved(
+            "part def P;\n\
+             part def Whole {\n\
+             \tpart a : P;\n\
+             \tconnection {\n\
+             \t\tend ::> a;\n\
+             \t\tend ::> P;\n\
+             \t\tend ::> P;\n\
+             \t}\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Whole"));
+        assert!(diagram
+            .nodes
+            .iter()
+            .all(|node| node.shape != Shape::ConnectionDot));
+        assert!(diagram.edges.is_empty());
+    }
+
+    #[test]
+    fn an_end_is_written_with_its_multiplicity_and_adornments() {
+        // `connection-graphical` writes `rolename multiplicity
+        // c-adornment` at each end, and `c-adornment = (a-property |
+        // a-direction | a-subsetting | a-redefinition)*`
+        let ws = resolved(
+            "part def TireBead;\n\
+             part def TireMountingRim;\n\
+             connection def BeadSeat {\n\
+             \tend [1] in ordered part bead : TireBead;\n\
+             \tend [0..*] abstract derived nonunique part rim : TireMountingRim;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let mut written: Vec<&str> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| edge.label.as_deref())
+            .collect();
+        written.sort_unstable();
+        assert_eq!(
+            written,
+            [
+                "bead [1] in ordered",
+                "rim [0..*] abstract derived nonunique"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_payload_is_written_however_it_was_declared() {
+        // `flow-label = UsageDeclaration? ('of' FlowPayloadFeatureMember)?`,
+        // and a payload may be written as a bare type, a type with a
+        // multiplicity, or a feature declared and named
+        let ws = resolved(
+            "part def A;\n\
+             item def Fuel;\n\
+             part def V {\n\
+             \tpart a : A;\n\
+             \tpart b : A;\n\
+             \tflow one of Fuel[2] from a to b;\n\
+             \tflow two of carried :> Fuel from a to b;\n\
+             \tflow three of named : Fuel from a to b;\n\
+             \tflow four from a to b;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "V"));
+        let written: Vec<&str> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| edge.label.as_deref())
+            .collect();
+        assert_eq!(
+            written,
+            [
+                "one of Fuel[2]",
+                "two of carried : Fuel",
+                "three of named : Fuel",
+                // a flow that carries nothing named still says which flow
+                // it is
+                "four",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_payload_may_be_declared_rather_than_named_by_its_type() {
+        // `PayloadFeature = Identification PayloadFeatureSpecializationPart
+        // ValuePart? | Identification ValuePart | ...`: a payload may be
+        // declared and typed, or declared and only given a value
+        let ws = resolved(
+            "part def A;\n\
+             item def Fuel;\n\
+             part def V {\n\
+             \tpart a : A;\n\
+             \tpart b : A;\n\
+             \tflow one of named : Fuel [2] from a to b;\n\
+             \tflow two of counted = 5 from a to b;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "V"));
+        let written: Vec<&str> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| edge.label.as_deref())
+            .collect();
+        assert_eq!(written, ["one of named : Fuel[2]", "two of counted"]);
+    }
+
+    #[test]
+    fn a_payload_may_redefine_the_one_it_inherits() {
+        let ws = resolved(
+            "part def A;\n\
+             item def Fuel;\n\
+             item def Diesel :> Fuel;\n\
+             part def Base {\n\
+             \tpart a : A;\n\
+             \tpart b : A;\n\
+             \tflow f of carried : Fuel from a to b;\n\
+             }\n\
+             part def Sub :> Base {\n\
+             \tflow g :>> f of carried :>> Base::f::carried : Diesel from a to b;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Sub"));
+        let written: Vec<&str> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| edge.label.as_deref())
+            .collect();
+        // the narrowed payload, and the inherited flow it redefines
+        assert_eq!(written, ["g of carried : Diesel", "f of carried : Fuel"]);
+    }
+
+    #[test]
+    fn an_end_that_refines_another_says_which() {
+        // `a-subsetting` and `a-redefinition` -- what an end narrows in
+        // the connection it specializes
+        let ws = resolved(
+            "part def TireBead;\n\
+             part def TireMountingRim;\n\
+             connection def Seating {\n\
+             \tend part bead : TireBead;\n\
+             \tend part rim : TireMountingRim;\n\
+             }\n\
+             connection def BeadSeat :> Seating {\n\
+             \tend part inner : TireBead redefines bead;\n\
+             \tend part outer : TireMountingRim subsets rim;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let mut written: Vec<&str> = diagram
+            .edges
+            .iter()
+            .filter_map(|edge| edge.label.as_deref())
+            .collect();
+        written.sort_unstable();
+        assert_eq!(
+            written,
+            ["bead", "inner redefines bead", "outer subsets rim", "rim"]
+        );
+    }
+
+    #[test]
+    fn each_two_ended_statement_gets_the_line_its_production_draws() {
+        // clauses 8.2.3.13 to 8.2.3.16: six statements the notation draws
+        // six different ways, which one plain line each would flatten
+        let ws = resolved(
+            "item def Fuel;\n\
+             port def FuelPort;\n\
+             part def Tank { port out1 : FuelPort; }\n\
+             part def Engine { port in1 : FuelPort; }\n\
+             part def Vehicle {\n\
+             \tpart tank : Tank;\n\
+             \tpart eng : Engine;\n\
+             \tconnect tank.out1 to eng.in1;\n\
+             \tflow fuel of Fuel from tank.out1 to eng.in1;\n\
+             \tsuccession flow later of Fuel from tank.out1 to eng.in1;\n\
+             \tbind tank.out1 = eng.in1;\n\
+             \tallocate tank to eng;\n\
+             \tinterface iface connect tank.out1 to eng.in1;\n\
+             \tmessage note from tank to eng;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Vehicle"));
+        let drawn: Vec<(Relation, Option<&str>)> = diagram
+            .edges
+            .iter()
+            .map(|edge| (edge.relation, edge.label.as_deref()))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                (Relation::Connection, None),
+                (Relation::Flow, Some("fuel of Fuel")),
+                (
+                    Relation::SuccessionFlow,
+                    Some("\u{ab}succession flow\u{bb} later of Fuel")
+                ),
+                (Relation::Binding, Some("=")),
+                (Relation::Allocation, Some("\u{ab}allocate\u{bb}")),
+                (Relation::Interface, Some("\u{ab}interface\u{bb} iface")),
+                (Relation::Message, Some("note")),
+            ]
+        );
+
+        // `allocate tank to eng` reaches the whole of each part, so
+        // neither end has a rolename; the rest attach to a port
+        let allocation = diagram
+            .edges
+            .iter()
+            .find(|edge| edge.relation == Relation::Allocation)
+            .unwrap();
+        assert_eq!(allocation.ends, (None, None));
+        let flow = diagram
+            .edges
+            .iter()
+            .find(|edge| edge.relation == Relation::Flow)
+            .unwrap();
+        assert_eq!(
+            flow.ends,
+            (Some("out1".to_string()), Some("in1".to_string()))
         );
     }
 
@@ -1935,7 +2529,7 @@ mod interconnection_tests {
     }
 
     #[test]
-    fn a_typed_end_still_names_what_it_references() {
+    fn a_typed_end_still_finds_what_it_references() {
         // the end owns a typing as well as the reference
         let ws = resolved(
             "requirement def R;\n\
@@ -1955,10 +2549,10 @@ mod interconnection_tests {
             .unwrap();
         let diagram = interconnection_diagram(ws.model(), package);
         assert_eq!(diagram.edges.len(), 1);
-        assert_eq!(
-            diagram.edges[0].ends,
-            Some(("a".to_string(), "b".to_string()))
-        );
+        // the boxes it joins are `a` and `b` themselves, so neither end
+        // has a rolename of its own to write
+        assert_eq!((diagram.edges[0].from, diagram.edges[0].to), (0, 1));
+        assert_eq!(diagram.edges[0].ends, (None, None));
     }
 
     #[test]
@@ -2174,14 +2768,14 @@ mod behaviour_tests {
                     from: 0,
                     to: 1,
                     relation: Relation::Transition,
-                    ends: None,
+                    ends: (None, None),
                     label: Some("off_to_on".to_string()),
                 },
                 Edge {
                     from: 1,
                     to: 0,
                     relation: Relation::Transition,
-                    ends: None,
+                    ends: (None, None),
                     label: Some("on_to_off".to_string()),
                 },
             ]
@@ -2264,6 +2858,46 @@ mod behaviour_tests {
     }
 
     #[test]
+    fn a_control_node_is_drawn_as_its_glyph_not_as_a_box() {
+        // `action-flow-node = start-node | done-node | terminate-node |
+        // fork-node | join-node | decision-node | merge-node | ...`:
+        // none of these is a box, and drawing them as boxes says a flow
+        // splits at an action
+        let diagram = internal(
+            "action def Brew {\n\
+             \taction heat;\n\
+             \tfork split;\n\
+             \tjoin gather;\n\
+             \tmerge again;\n\
+             \tdecide which;\n\
+             \taction stop terminate;\n\
+             \tfirst heat then split;\n\
+             \tfirst split then gather;\n\
+             \tfirst gather then which;\n\
+             \tfirst which then again;\n\
+             \tfirst again then stop;\n\
+             }\n",
+            "Brew",
+        );
+        let drawn: Vec<(&str, Shape)> = diagram
+            .nodes
+            .iter()
+            .map(|node| (node.name.as_str(), node.shape))
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                ("heat", Shape::Box),
+                ("split", Shape::Bar),
+                ("gather", Shape::Bar),
+                ("again", Shape::Diamond),
+                ("which", Shape::Diamond),
+                ("stop", Shape::Cross),
+            ]
+        );
+    }
+
+    #[test]
     fn a_then_succession_continues_from_what_stands_before_it() {
         // `action A1; then J;` is the shorthand chain: A1 flows into J.
         // Only a `then` with nothing before it starts from a circle.
@@ -2279,7 +2913,12 @@ mod behaviour_tests {
         );
         let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["a", "j", "b"]);
-        assert!(diagram.nodes.iter().all(|n| n.shape == Shape::Box));
+        // none of them is the start marker, and the join is the bar the
+        // standard draws a `join-node` as
+        assert_eq!(
+            diagram.nodes.iter().map(|n| n.shape).collect::<Vec<_>>(),
+            [Shape::Box, Shape::Bar, Shape::Box]
+        );
         assert_eq!(
             diagram
                 .edges

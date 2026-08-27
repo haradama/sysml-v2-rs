@@ -415,7 +415,7 @@ fn diagram_renders_definitions_as_svg() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains(
-            "2 box(es), 1 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 transition(s) and 0 satisfaction(s)"
+            "2 box(es), 1 specialization(s), 0 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s) and 0 satisfaction(s)"
         ),
         "{stderr}"
     );
