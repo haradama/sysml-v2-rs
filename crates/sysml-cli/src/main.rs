@@ -617,6 +617,7 @@ fn diagram(
         // the keyworded lines: what a definition answers for, and what
         // one element depends on another for
         count(Relation::Dependency)
+            + count(Relation::Client)
             + count(Relation::Assert)
             + count(Relation::Assume)
             + count(Relation::Require)

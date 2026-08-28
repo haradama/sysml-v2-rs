@@ -131,7 +131,10 @@ What a definition answers for is drawn rather than only listed:
 the standard gives them
 -- a plain one with an open arrowhead, keyworded «satisfy»,
 «assert» and so on. `dependency use from A to B;` is the one dashed
-line in the notation, drawn from each client to each supplier. And an n-ary
+line in the notation, drawn from each client to each supplier -- or, with
+more than one of either end, meeting at the dot `n-ary-dependency` draws
+instead, where a client link carries no arrowhead because the dot is not
+what the client depends on. And an n-ary
 `connection { end ::> a; end ::> b; end ::> c; }` -- how a derivation is
 written -- meets at the dot the standard draws for it
 (`n-ary-connection = n-ary-connection-dot n-ary-segment+`), with one

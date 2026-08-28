@@ -331,6 +331,10 @@ pub enum Relation {
     /// `from` is a comment about `to` (`comment about A /* ... */`). The
     /// `annotation-link`: a dashed line with nothing on either end.
     Annotation,
+    /// `from` is a client of the dependency `to` meets at
+    /// (`n-ary-dependency-client-link`): dashed, and with no arrowhead,
+    /// since the dot is not what the client depends on.
+    Client,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -442,7 +446,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
     // definition, and a package is not one of the boxes
     for &root in roots {
         for id in model.descendants(root) {
-            dependencies_of(model, id, &index, &mut edges);
+            dependencies_of(model, id, &index, &mut nodes, &mut edges);
         }
     }
     // What a definition relates to that is not on the canvas is said in
@@ -1071,29 +1075,68 @@ fn dependencies_of(
     model: &Model,
     scope: ElementId,
     index: &HashMap<ElementId, usize>,
+    nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
     for &child in model.owned(scope) {
         if model.kind(child) != ElementKind::Dependency {
             continue;
         }
-        let ends = |property| match model.get(child, property) {
+        let drawn = |property| match model.get(child, property) {
             // a dependency whose names went unresolved has neither list
-            Some(Value::RefList(ends)) => ends.clone(),
+            Some(Value::RefList(ends)) => ends
+                .iter()
+                .filter_map(|end| index.get(end).copied())
+                .collect(),
             _ => Vec::new(),
         };
-        for client in ends("client") {
-            for supplier in ends("supplier") {
-                let (Some(&from), Some(&to)) = (index.get(&client), index.get(&supplier)) else {
-                    continue;
+        let (clients, suppliers): (Vec<usize>, Vec<usize>) = (drawn("client"), drawn("supplier"));
+        let named = model.name(child).map(str::to_string);
+        // `n-ary-dependency = &n-ary-association-dot (link &element-node)+`,
+        // and the standard's note has it: two or more of either end makes
+        // it n-ary, and then the links meet at a dot rather than crossing
+        // pairwise.
+        if clients.len() > 1 || suppliers.len() > 1 {
+            let dot = nodes.len();
+            nodes.push(Node {
+                id: child,
+                name: named.unwrap_or_default(),
+                keyword: String::new(),
+                compartments: Vec::new(),
+                is_abstract: false,
+                rounded: false,
+                shape: Shape::ConnectionDot,
+                children: Vec::new(),
+                links: Vec::new(),
+            });
+            for (at, relation) in clients
+                .into_iter()
+                .map(|at| (at, Relation::Client))
+                .chain(suppliers.into_iter().map(|at| (at, Relation::Dependency)))
+            {
+                let (from, to) = match relation {
+                    Relation::Client => (at, dot),
+                    _ => (dot, at),
                 };
+                edges.push(Edge {
+                    from,
+                    to,
+                    relation,
+                    ends: (None, None),
+                    label: None,
+                });
+            }
+            continue;
+        }
+        for &from in &clients {
+            for &to in &suppliers {
                 if from != to {
                     edges.push(Edge {
                         from,
                         to,
                         relation: Relation::Dependency,
                         ends: (None, None),
-                        label: model.name(child).map(str::to_string),
+                        label: named.clone(),
                     });
                 }
             }
@@ -2846,10 +2889,27 @@ mod tests {
             [
                 // the name before `from` is the dependency's own
                 ("A".to_string(), "B".to_string(), Some("Use")),
-                // and without `from`, the first name is a client
-                ("Z".to_string(), "A".to_string(), None),
-                ("Z".to_string(), "B".to_string(), None),
+                // `dependency Z to A, B` has two suppliers, which the
+                // standard's note makes an n-ary dependency: the links
+                // meet at a dot rather than crossing pairwise
+                (String::new(), "A".to_string(), None),
+                (String::new(), "B".to_string(), None),
             ]
+        );
+        let client: Vec<(String, String)> = diagram
+            .edges
+            .iter()
+            .filter(|edge| edge.relation == Relation::Client)
+            .map(|edge| (names(edge.from), names(edge.to)))
+            .collect();
+        assert_eq!(client, [("Z".to_string(), String::new())]);
+        assert_eq!(
+            diagram
+                .nodes
+                .iter()
+                .filter(|node| node.shape == Shape::ConnectionDot)
+                .count(),
+            1
         );
     }
 

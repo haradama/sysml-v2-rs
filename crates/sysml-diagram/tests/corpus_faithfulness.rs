@@ -230,11 +230,12 @@ fn definition_diagrams_are_faithful_to_their_models() {
         check_shape(&diagram, model, &where_);
 
         // every box is a named classifier of this file, and nothing else
-        // is -- a note stands for the comment it holds, not a definition
+        // is -- a note stands for the comment or metadata it holds, and a
+        // dot for the n-ary dependency its links meet at
         let drawn: Vec<ElementId> = diagram
             .nodes
             .iter()
-            .filter(|node| node.shape != Shape::Note)
+            .filter(|node| !matches!(node.shape, Shape::Note | Shape::ConnectionDot))
             .map(|node| node.id)
             .collect();
         for &id in &drawn {

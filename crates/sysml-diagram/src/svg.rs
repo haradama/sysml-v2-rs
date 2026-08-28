@@ -202,7 +202,8 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Dependency
             | Relation::Portion
             | Relation::Event
-            | Relation::Annotation => {
+            | Relation::Annotation
+            | Relation::Client => {
                 // a connection ends at the port it names, where the
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
@@ -639,8 +640,10 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         // `binary-dependency` is the one dashed line in the notation
         Relation::Dependency => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
         // `annotation-link` is dashed too, and carries nothing at either
-        // end: which is the note is plain from the shapes
-        Relation::Annotation => ("", " class=\"dependency\""),
+        // end: which is the note is plain from the shapes. So is
+        // `n-ary-dependency-client-link`, since the dot is not what the
+        // client depends on.
+        Relation::Annotation | Relation::Client => ("", " class=\"dependency\""),
         // a connection, an interface and a binding are undirected and get
         // no marker at all -- what each is, its label says
         _ => ("", " class=\"edge\""),
@@ -1880,6 +1883,30 @@ mod tests {
         assert!(svg.contains("<path class=\"box\" d=\"M"), "{svg}");
         assert!(svg.contains(">Said.</text>"), "{svg}");
         assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
+    }
+
+    #[test]
+    fn an_n_ary_dependency_meets_at_a_dot() {
+        // the standard's note: two or more of either end makes it n-ary,
+        // and then a client link reaches the dot with no arrowhead --
+        // the dot is not what the client depends on
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tpart def B;\n\
+             \tpart def C;\n\
+             \tdependency Wide from A, B to C;\n\
+             }\n",
+        );
+        let svg = render(
+            &definition_diagram(ws.model(), &[ws.root()]),
+            &Style::default(),
+        );
+        assert_eq!(svg.matches("class=\"dependency\"").count(), 3, "{svg}");
+        // one of the three carries the arrowhead: the supplier link
+        assert_eq!(svg.matches("url(#transition)").count(), 1, "{svg}");
+        assert_eq!(svg.matches("class=\"initial\"").count(), 1, "{svg}");
+        assert!(svg.contains(">Wide</text>"), "{svg}");
     }
 
     #[test]
