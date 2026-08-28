@@ -183,6 +183,11 @@ rather than left unsaid: the standard's `relationships-compartment`
 Integer` for a definition whose supertype is in the library and so has
 no box to point at.
 
+A comment is a node of the drawing, not a line of prose lost in the
+source: `comment about A, B /* ... */` becomes the folded-corner note
+the standard draws (`comment-node`) with a dashed `annotation-link` to
+each thing it is about, and it may be about more than one.
+
 What a definition documents about itself is drawn: the standard's
 `documentation-compartment` holds the prose of a `doc`, and a `rep` says
 which language it is in and what it says in it. A line longer than the

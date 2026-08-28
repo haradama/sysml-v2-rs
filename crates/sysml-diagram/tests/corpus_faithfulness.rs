@@ -132,6 +132,16 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
                     "{where_}: a connection dot that is not named by its connection"
                 );
             }
+            // a note carries what the comment says, and only a comment
+            // has a note
+            Shape::Note => {
+                assert_eq!(
+                    model.kind(node.id),
+                    ElementKind::Comment,
+                    "{where_}: a note that is not a comment"
+                );
+                assert!(!node.name.is_empty(), "{where_}: a note saying nothing");
+            }
             // a control node is drawn as its glyph rather than a box, and
             // only a control node is: the shape has to say what the model
             // says the element is
@@ -216,8 +226,14 @@ fn definition_diagrams_are_faithful_to_their_models() {
         let where_ = path.file_name().unwrap().to_string_lossy().to_string();
         check_shape(&diagram, model, &where_);
 
-        // every box is a named classifier of this file, and nothing else is
-        let drawn: Vec<ElementId> = diagram.nodes.iter().map(|node| node.id).collect();
+        // every box is a named classifier of this file, and nothing else
+        // is -- a note stands for the comment it holds, not a definition
+        let drawn: Vec<ElementId> = diagram
+            .nodes
+            .iter()
+            .filter(|node| node.shape != Shape::Note)
+            .map(|node| node.id)
+            .collect();
         for &id in &drawn {
             assert!(
                 model.kind(id).is_a(ElementKind::Classifier),

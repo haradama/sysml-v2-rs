@@ -69,6 +69,8 @@ pub enum Shape {
     Diamond,
     /// The cross a flow stops at (`terminate-node`).
     Cross,
+    /// The folded-corner note a comment is written in (`comment-node`).
+    Note,
 }
 
 /// The shape the standard draws an action- or state-flow node with. The
@@ -326,6 +328,9 @@ pub enum Relation {
     /// `from` is an event of `to` (`event occurrence ev;`), keyworded
     /// `\u{ab}event\u{bb}` (`event-edge`).
     Event,
+    /// `from` is a comment about `to` (`comment about A /* ... */`). The
+    /// `annotation-link`: a dashed line with nothing on either end.
+    Annotation,
 }
 
 /// A relationship between two boxes. Both index fields index
@@ -450,6 +455,12 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 label: "relationships",
                 lines,
             });
+        }
+    }
+    // a comment is a node of the drawing too, joined to what it is about
+    for &root in roots {
+        for id in model.descendants(root) {
+            notes_of(model, id, &index, &mut nodes, &mut edges);
         }
     }
 
@@ -1612,6 +1623,58 @@ fn condition_compartment(model: &Model, member: ElementId) -> Option<&'static st
         ElementKind::WhileLoopActionUsage => Some("while condition"),
         ElementKind::ForLoopActionUsage => Some("for iterator"),
         _ => None,
+    }
+}
+
+/// The comments written about anything on the canvas, as notes joined to
+/// what they are about.
+///
+/// `annotation-node` is a node of the drawing and `annotation-link` the
+/// dashed line to what it annotates -- a comment listed nowhere says
+/// something about nothing in particular.
+fn notes_of(
+    model: &Model,
+    scope: ElementId,
+    index: &HashMap<ElementId, usize>,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let written = model.owned(scope).iter().filter_map(|&child| {
+        (model.kind(child) == ElementKind::Comment).then_some(())?;
+        Some((child, model.get(child, "body")?.as_str()?))
+    });
+    for (child, text) in written {
+        let about: Vec<usize> = model
+            .owned(child)
+            .iter()
+            .filter(|&&rel| model.kind(rel) == ElementKind::Annotation)
+            .filter_map(|&rel| model.get(rel, "annotatedElement")?.as_id())
+            .filter_map(|target| index.get(&target).copied())
+            .collect();
+        if about.is_empty() {
+            continue;
+        }
+        let from = nodes.len();
+        nodes.push(Node {
+            id: child,
+            name: one_line(text),
+            keyword: String::new(),
+            compartments: Vec::new(),
+            is_abstract: false,
+            rounded: false,
+            shape: Shape::Note,
+            children: Vec::new(),
+            links: Vec::new(),
+        });
+        for to in about {
+            edges.push(Edge {
+                from,
+                to,
+                relation: Relation::Annotation,
+                ends: (None, None),
+                label: model.name(child).map(str::to_string),
+            });
+        }
     }
 }
 
@@ -2902,6 +2965,56 @@ mod tests {
             .find(|edge| edge.relation == Relation::Event)
             .unwrap();
         assert_eq!(event.label.as_deref(), Some("\u{ab}event\u{bb}"));
+    }
+
+    #[test]
+    fn a_comment_is_a_note_joined_to_what_it_is_about() {
+        // `annotation-node` is a node of the drawing and `annotation-link`
+        // the dashed line to what it annotates -- and `comment about A, B`
+        // may name more than one
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tpart def B;\n\
+             \tcomment about A, B /* Said about both. */\n\
+             \tcomment Named about A /* Just A. */\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let notes: Vec<(&str, Shape)> = diagram
+            .nodes
+            .iter()
+            .filter(|node| node.shape == Shape::Note)
+            .map(|node| (node.name.as_str(), node.shape))
+            .collect();
+        assert_eq!(
+            notes,
+            [("Said about both.", Shape::Note), ("Just A.", Shape::Note)]
+        );
+        let names = |at: usize| diagram.nodes[at].name.clone();
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Annotation)
+                .map(|edge| (names(edge.from), names(edge.to), edge.label.as_deref()))
+                .collect::<Vec<_>>(),
+            [
+                ("Said about both.".to_string(), "A".to_string(), None),
+                ("Said about both.".to_string(), "B".to_string(), None),
+                ("Just A.".to_string(), "A".to_string(), Some("Named")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_comment_about_nothing_drawn_is_not_drawn() {
+        // the standard's note has it: a comment may be attached to zero
+        // annotated elements, and one attached to nothing on the canvas
+        // has no line to draw and nothing to sit beside
+        let ws = resolved("package P { comment /* Said of the package. */ }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert!(diagram.nodes.is_empty());
     }
 
     #[test]

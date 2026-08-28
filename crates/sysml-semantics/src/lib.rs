@@ -791,6 +791,15 @@ impl Workspace {
                 self.resolve_trigger_type(id, &node, &mut stats);
                 continue;
             }
+            // `comment about A, B /* ... */` says what it is about, and
+            // the names it says it about are references like any other
+            if node.kind() == SyntaxKind::COMMENT_ELEM
+                || node.kind() == SyntaxKind::DOCUMENTATION
+                || node.kind() == SyntaxKind::REP
+            {
+                self.resolve_annotation(id, &node, &mut stats);
+                continue;
+            }
             // `dependency use from A to B;` is a statement of its own,
             // and the names on either side of `to` are references like
             // any other
@@ -1890,6 +1899,45 @@ impl Workspace {
         }
     }
 
+    /// What a comment says it is about.
+    ///
+    /// `comment about A, B /* ... */` names what it annotates, and the
+    /// standard reifies one `Annotation` per name -- without them the
+    /// comment says something about nothing in particular.
+    fn resolve_annotation(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let Some(about) = node
+            .children()
+            .find(|child| child.kind() == SyntaxKind::ABOUT)
+        else {
+            return;
+        };
+        for operand in about
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::TYPE_REF)
+        {
+            let segments = name_segments_of(&operand);
+            let range = operand.text_range();
+            match self.resolve_from(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.record(file, range, last_name_range(&operand), &[], target);
+                    let annotation = self.model.create(ElementKind::Annotation);
+                    self.model.add_owned(id, annotation);
+                    self.try_set(annotation, "annotatedElement", Value::Ref(target));
+                }
+                None => {
+                    stats.unresolved += 1;
+                    self.unresolved.push(Unresolved {
+                        file,
+                        range,
+                        name: Self::spell(&segments),
+                    });
+                }
+            }
+        }
+    }
+
     /// The clients and suppliers of a `dependency a, b to c;`.
     ///
     /// `Dependency = 'dependency' ( Identification? 'from' )? client +=
@@ -2325,6 +2373,16 @@ struct Target {
     /// range of each segment, in order -- the earlier ones name
     /// something too
     at: Vec<TextRange>,
+}
+
+/// The identifier segments of a type reference, which holds its name in a
+/// `QUALIFIED_NAME` child rather than as an expression.
+fn name_segments_of(operand: &SyntaxNode) -> Vec<String> {
+    operand
+        .children()
+        .find(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
+        .map(|qname| name_segments(&qname))
+        .unwrap_or_default()
 }
 
 /// The range of the last identifier in a reference operand -- what a

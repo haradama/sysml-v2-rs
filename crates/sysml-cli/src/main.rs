@@ -622,7 +622,8 @@ fn diagram(
             + count(Relation::Require)
             + count(Relation::Perform)
             + count(Relation::Exhibit)
-            + count(Relation::Event),
+            + count(Relation::Event)
+            + count(Relation::Annotation),
         count(Relation::Satisfy),
     );
     emit(&svg, output, &summary)

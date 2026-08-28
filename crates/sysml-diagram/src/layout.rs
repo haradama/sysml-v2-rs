@@ -145,7 +145,8 @@ pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
         Shape::Bar => return (3.0 * style.line_height, 0.3 * style.line_height),
         Shape::Diamond => return (1.6 * style.line_height, 1.6 * style.line_height),
         Shape::Cross => return (style.line_height, style.line_height),
-        Shape::Box => {}
+        // a note is sized by the text it holds, like a box with one line
+        Shape::Note | Shape::Box => {}
     }
     // the name is drawn bold, which the 0.6 em estimate does not account for
     let mut width = (style.text_width(&node.name) * 1.1)

@@ -201,7 +201,8 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             | Relation::Exhibit
             | Relation::Dependency
             | Relation::Portion
-            | Relation::Event => {
+            | Relation::Event
+            | Relation::Annotation => {
                 // a connection ends at the port it names, where the
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
@@ -379,7 +380,8 @@ fn glyph_of(shape: Shape, placed: &Placed) -> Option<String> {
     let (cx, cy) = centre_of(placed);
     let (w, h) = (placed.width, placed.height);
     Some(match shape {
-        Shape::Box => return None,
+        // a note and a box are both drawn with their text inside
+        Shape::Note | Shape::Box => return None,
         Shape::Initial | Shape::ConnectionDot => format!(
             "<circle class=\"initial\" cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"{:.1}\"/>\n",
             w / 2.0
@@ -636,6 +638,9 @@ fn pen(relation: Relation) -> (&'static str, &'static str) {
         Relation::Satisfy => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
         // `binary-dependency` is the one dashed line in the notation
         Relation::Dependency => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
+        // `annotation-link` is dashed too, and carries nothing at either
+        // end: which is the note is plain from the shapes
+        Relation::Annotation => ("", " class=\"dependency\""),
         // a connection, an interface and a binding are undirected and get
         // no marker at all -- what each is, its label says
         _ => ("", " class=\"edge\""),
@@ -663,6 +668,34 @@ pub(crate) fn document(width: f64, height: f64, style: &Style, body: &str) -> St
 /// Draw one box and, inside it, the parts it is assembled from.
 fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &Style) {
     let (x, y, width, height) = rect;
+    // `comment-node` is the folded-corner note, holding its text and
+    // nothing else -- no keyword line, no compartments
+    if node.shape == Shape::Note {
+        let fold = style.line_height;
+        writeln!(
+            out,
+            "<path class=\"box\" d=\"M {x:.1} {y:.1} H {:.1} L {:.1} {:.1} V {:.1} \
+             H {x:.1} z\"/>\n\
+             <path class=\"rule\" fill=\"none\" d=\"M {:.1} {y:.1} V {:.1} H {:.1}\"/>",
+            x + width - fold,
+            x + width,
+            y + fold,
+            y + height,
+            x + width - fold,
+            y + fold,
+            x + width,
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+            x + style.padding,
+            y + style.padding + 0.75 * style.line_height,
+            escape(&node.name)
+        )
+        .unwrap();
+        return;
+    }
     {
         let placed = Placed {
             node: 0,
@@ -1813,6 +1846,25 @@ mod tests {
         );
         assert!(svg.contains("url(#portion)"), "{svg}");
         assert!(!svg.contains("url(#composition)"), "{svg}");
+    }
+
+    #[test]
+    fn a_note_is_drawn_with_its_corner_folded() {
+        let ws = resolved(
+            "package P {\n\
+             \tpart def A;\n\
+             \tcomment about A /* Said. */\n\
+             }\n",
+        );
+        let svg = render(
+            &definition_diagram(ws.model(), &[ws.root()]),
+            &Style::default(),
+        );
+        // the fold is a rule of its own across the corner, and the line
+        // to what it annotates carries nothing at either end
+        assert!(svg.contains("<path class=\"box\" d=\"M"), "{svg}");
+        assert!(svg.contains(">Said.</text>"), "{svg}");
+        assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
     }
 
     #[test]
