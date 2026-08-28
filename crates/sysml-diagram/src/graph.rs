@@ -1639,43 +1639,88 @@ fn notes_of(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let written = model.owned(scope).iter().filter_map(|&child| {
-        (model.kind(child) == ElementKind::Comment).then_some(())?;
-        Some((child, model.get(child, "body")?.as_str()?))
-    });
-    for (child, text) in written {
-        let about: Vec<usize> = model
+    let written = model
+        .owned(scope)
+        .iter()
+        .filter_map(|&child| Some((child, note_of(model, child)?)));
+    for (child, note) in written {
+        let mut about: Vec<usize> = model
             .owned(child)
             .iter()
             .filter(|&&rel| model.kind(rel) == ElementKind::Annotation)
             .filter_map(|&rel| model.get(rel, "annotatedElement")?.as_id())
             .filter_map(|target| index.get(&target).copied())
             .collect();
+        // `#Safety part def Boiler;` -- `PrefixMetadataAnnotation :
+        // Annotation = '#' annotatingElement = PrefixMetadataUsage`, so
+        // what a prefix annotates is whatever it stands before
+        if about.is_empty() {
+            about.extend(model.owner(child).and_then(|owner| index.get(&owner)));
+        }
         if about.is_empty() {
             continue;
         }
         let from = nodes.len();
-        nodes.push(Node {
-            id: child,
-            name: one_line(text),
-            keyword: String::new(),
-            compartments: Vec::new(),
-            is_abstract: false,
-            rounded: false,
-            shape: Shape::Note,
-            children: Vec::new(),
-            links: Vec::new(),
-        });
+        // a comment's note holds only its prose, so its name goes on the
+        // line (`(rel-name)?`); a metadata note already says what it was
+        // declared as
+        let named = note
+            .keyword
+            .is_empty()
+            .then(|| model.name(child).map(str::to_string))
+            .flatten();
+        nodes.push(note);
         for to in about {
             edges.push(Edge {
                 from,
                 to,
                 relation: Relation::Annotation,
                 ends: (None, None),
-                label: model.name(child).map(str::to_string),
+                label: named.clone(),
             });
         }
     }
+}
+
+/// The note an annotating element is drawn as, when it is one.
+///
+/// `comment-node` holds the prose of a comment;
+/// `metadata-feature-annotation-node` is the same folded-corner note with
+/// `\u{ab}metadata\u{bb}`, what it was declared as, and the values it sets
+/// (`metadata-feature-name-value-list`).
+fn note_of(model: &Model, element: ElementId) -> Option<Node> {
+    let (keyword, name, lines) = match model.kind(element) {
+        ElementKind::Comment => (
+            String::new(),
+            one_line(model.get(element, "body")?.as_str()?),
+            Vec::new(),
+        ),
+        // `#Safety` names no metadata usage of its own, so what it is
+        // typed by is the whole of its declaration
+        ElementKind::MetadataUsage => (
+            keyword(ElementKind::MetadataUsage),
+            match effective_name(model, element) {
+                Some(named) => box_label(model, element, named),
+                None => type_name(model, element)?,
+            },
+            features_of(model, element)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect(),
+        ),
+        _ => return None,
+    };
+    Some(Node {
+        id: element,
+        name,
+        keyword,
+        compartments: vec![Compartment { label: "", lines }],
+        is_abstract: false,
+        rounded: false,
+        shape: Shape::Note,
+        children: Vec::new(),
+        links: Vec::new(),
+    })
 }
 
 /// Who performs each action, by the actions they say they perform.
@@ -3003,6 +3048,63 @@ mod tests {
                 ("Said about both.".to_string(), "A".to_string(), None),
                 ("Said about both.".to_string(), "B".to_string(), None),
                 ("Just A.".to_string(), "A".to_string(), Some("Named")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_metadata_usage_is_the_same_note_with_what_it_sets() {
+        // `metadata-feature-annotation-node` is the folded-corner note
+        // again, with `\u{ab}metadata\u{bb}`, what it was declared as and
+        // the values it sets
+        let ws = resolved(
+            "package P {\n\
+             \tattribute def Level;\n\
+             \tmetadata def Safety { attribute level : Level; }\n\
+             \tpart def Reactor;\n\
+             \tmetadata safe : Safety about Reactor { :>> level = 3; }\n\
+             \t#Safety part def Boiler;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let notes: Vec<(&str, &str, Vec<String>)> = diagram
+            .nodes
+            .iter()
+            .filter(|node| node.shape == Shape::Note)
+            .map(|node| {
+                (
+                    node.keyword.as_str(),
+                    node.name.as_str(),
+                    lines(node).map(Feature::label).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                (
+                    "metadata",
+                    "safe : Safety",
+                    vec!["reference level : Level = 3".to_string()]
+                ),
+                // a prefix names no usage of its own, so what it is typed
+                // by is the whole of its declaration
+                ("metadata", "Safety", Vec::new()),
+            ]
+        );
+        // and each is joined to what it annotates: the one it says it is
+        // about, and for a prefix whatever it stands before
+        let names = |at: usize| diagram.nodes[at].name.clone();
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Annotation)
+                .map(|edge| (names(edge.from), names(edge.to)))
+                .collect::<Vec<_>>(),
+            [
+                ("safe : Safety".to_string(), "Reactor".to_string()),
+                ("Safety".to_string(), "Boiler".to_string()),
             ]
         );
     }

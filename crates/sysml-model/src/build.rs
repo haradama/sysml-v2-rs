@@ -64,6 +64,11 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         COMMENT_ELEM => Some(ElementKind::Comment),
         REP => Some(ElementKind::TextualRepresentation),
         METADATA_ANNOTATION => Some(ElementKind::MetadataUsage),
+        // `#Safety part def Boiler;` -- `PrefixMetadataUsage :
+        // MetadataUsage = ownedRelationship += OwnedFeatureTyping`, so
+        // the prefix is a usage of its own and not a spelling of the
+        // element it stands before
+        PREFIX_METADATA => Some(ElementKind::MetadataUsage),
         // `mass * speed` ending a calculation body -- the result
         // expression, kept as the text the author wrote the way a guard
         // is. `if c { ... }` structured control is not a result.
@@ -264,7 +269,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
                     build_node(model, &member, Some(id), built);
                 }
             }
-            PAYLOAD => build_node(model, &child, Some(id), built),
+            PAYLOAD | PREFIX_METADATA => build_node(model, &child, Some(id), built),
             // Two shapes wrap the declaration the author wrote in an
             // element of their own: `then action b;` (a succession) and
             // `in event occurrence ieo;` (an anonymous direction/adapter

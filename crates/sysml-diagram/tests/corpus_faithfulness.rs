@@ -132,13 +132,16 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
                     "{where_}: a connection dot that is not named by its connection"
                 );
             }
-            // a note carries what the comment says, and only a comment
-            // has a note
+            // a note carries what a comment says or what a metadata
+            // usage was declared as, and nothing else has one
             Shape::Note => {
-                assert_eq!(
-                    model.kind(node.id),
-                    ElementKind::Comment,
-                    "{where_}: a note that is not a comment"
+                assert!(
+                    matches!(
+                        model.kind(node.id),
+                        ElementKind::Comment | ElementKind::MetadataUsage
+                    ),
+                    "{where_}: a {:?} drawn as a note",
+                    model.kind(node.id)
                 );
                 assert!(!node.name.is_empty(), "{where_}: a note saying nothing");
             }

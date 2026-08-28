@@ -791,13 +791,21 @@ impl Workspace {
                 self.resolve_trigger_type(id, &node, &mut stats);
                 continue;
             }
-            // `comment about A, B /* ... */` says what it is about, and
-            // the names it says it about are references like any other
-            if node.kind() == SyntaxKind::COMMENT_ELEM
-                || node.kind() == SyntaxKind::DOCUMENTATION
-                || node.kind() == SyntaxKind::REP
-            {
-                self.resolve_annotation(id, &node, &mut stats);
+            // `comment about A, B /* ... */` and `metadata m : M about
+            // A` both say what they are about, and the names they say it
+            // about are references like any other
+            self.resolve_annotation(id, &node, &mut stats);
+            if matches!(
+                node.kind(),
+                SyntaxKind::COMMENT_ELEM | SyntaxKind::DOCUMENTATION | SyntaxKind::REP
+            ) {
+                continue;
+            }
+            // `#Safety part def Boiler;` -- the prefix is a metadata
+            // usage typed by what it names, and the typing is written as
+            // a bare qualified name rather than a typing clause
+            if node.kind() == SyntaxKind::PREFIX_METADATA {
+                self.resolve_prefix_metadata(id, &node, &mut stats);
                 continue;
             }
             // `dependency use from A to B;` is a statement of its own,
@@ -1916,24 +1924,55 @@ impl Workspace {
             .children()
             .filter(|child| child.kind() == SyntaxKind::TYPE_REF)
         {
-            let segments = name_segments_of(&operand);
-            let range = operand.text_range();
-            match self.resolve_from(id, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    self.record(file, range, last_name_range(&operand), &[], target);
-                    let annotation = self.model.create(ElementKind::Annotation);
-                    self.model.add_owned(id, annotation);
-                    self.try_set(annotation, "annotatedElement", Value::Ref(target));
+            for qname in operand
+                .children()
+                .filter(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
+            {
+                let segments = name_segments(&qname);
+                let range = operand.text_range();
+                match self.resolve_from(id, &segments) {
+                    Some(target) => {
+                        stats.resolved += 1;
+                        // the earlier steps of `a::b::c` are references too,
+                        // and a rename has to reach every one of them
+                        let at = segment_ranges(&qname);
+                        self.record(file, range, last_name_range(&operand), &at, target);
+                        let annotation = self.model.create(ElementKind::Annotation);
+                        self.model.add_owned(id, annotation);
+                        self.try_set(annotation, "annotatedElement", Value::Ref(target));
+                    }
+                    None => {
+                        stats.unresolved += 1;
+                        self.unresolved.push(Unresolved {
+                            file,
+                            range,
+                            name: Self::spell(&segments),
+                        });
+                    }
                 }
-                None => {
-                    stats.unresolved += 1;
-                    self.unresolved.push(Unresolved {
-                        file,
-                        range,
-                        name: Self::spell(&segments),
-                    });
-                }
+            }
+        }
+    }
+
+    /// What a `#Safety` prefix is typed by.
+    fn resolve_prefix_metadata(
+        &mut self,
+        id: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        for qname in node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
+        {
+            let segments = name_segments(&qname);
+            if let Some(target) = self.resolve_from(id, &segments) {
+                stats.resolved += 1;
+                let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                let range = qname.text_range();
+                let at = segment_ranges(&qname);
+                self.record(file, range, last_name_range(&qname), &at, target);
+                self.reify(id, false, SyntaxKind::TYPING, target);
             }
         }
     }
@@ -2373,16 +2412,6 @@ struct Target {
     /// range of each segment, in order -- the earlier ones name
     /// something too
     at: Vec<TextRange>,
-}
-
-/// The identifier segments of a type reference, which holds its name in a
-/// `QUALIFIED_NAME` child rather than as an expression.
-fn name_segments_of(operand: &SyntaxNode) -> Vec<String> {
-    operand
-        .children()
-        .find(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
-        .map(|qname| name_segments(&qname))
-        .unwrap_or_default()
 }
 
 /// The range of the last identifier in a reference operand -- what a

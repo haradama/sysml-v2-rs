@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
-use crate::graph::Node;
+use crate::graph::{lines, Node};
 use crate::layout::child_boxes;
 use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 
@@ -686,14 +686,29 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
             x + width,
         )
         .unwrap();
-        writeln!(
-            out,
-            "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
-            x + style.padding,
-            y + style.padding + 0.75 * style.line_height,
-            escape(&node.name)
-        )
-        .unwrap();
+        let mut line = y + style.padding + 0.75 * style.line_height;
+        if !node.keyword.is_empty() {
+            writeln!(
+                out,
+                "<text class=\"keyword\" x=\"{:.1}\" y=\"{line:.1}\">\u{ab}{}\u{bb}</text>",
+                x + style.padding,
+                escape(&node.keyword)
+            )
+            .unwrap();
+            line += style.line_height;
+        }
+        // the text of a comment, or what a metadata usage was declared as
+        // and the values it sets
+        for written in std::iter::once(node.name.clone()).chain(lines(node).map(Feature::label)) {
+            writeln!(
+                out,
+                "<text class=\"feature\" x=\"{:.1}\" y=\"{line:.1}\">{}</text>",
+                x + style.padding,
+                escape(&written)
+            )
+            .unwrap();
+            line += style.line_height;
+        }
         return;
     }
     {

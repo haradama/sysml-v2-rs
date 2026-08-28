@@ -186,7 +186,10 @@ no box to point at.
 A comment is a node of the drawing, not a line of prose lost in the
 source: `comment about A, B /* ... */` becomes the folded-corner note
 the standard draws (`comment-node`) with a dashed `annotation-link` to
-each thing it is about, and it may be about more than one.
+each thing it is about, and it may be about more than one. A metadata
+usage is the same note with `«metadata»`, what it was declared as and
+the values it sets (`metadata-feature-annotation-node`); `#Safety part
+def Boiler;` annotates whatever it stands before.
 
 What a definition documents about itself is drawn: the standard's
 `documentation-compartment` holds the prose of a `doc`, and a `rep` says
