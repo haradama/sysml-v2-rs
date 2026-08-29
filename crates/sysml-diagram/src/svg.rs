@@ -1121,15 +1121,28 @@ fn marked(
     style: &Style,
 ) {
     let side = 0.6 * style.line_height;
-    let corner = if rounded { side / 3.0 } else { 0.0 };
-    writeln!(
-        out,
-        "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\" width=\"{side:.1}\" \
-         height=\"{side:.1}\" rx=\"{corner:.1}\"/>",
-        at.0 - side / 2.0,
-        at.1 - side / 2.0
-    )
-    .unwrap();
+    // `proxy-v`/`proxy-h` stand a circle in for what a name reaches
+    // through the border rather than declares on it
+    if name.contains('.') {
+        writeln!(
+            out,
+            "<circle class=\"port\" cx=\"{:.1}\" cy=\"{:.1}\" r=\"{:.1}\"/>",
+            at.0,
+            at.1,
+            side / 2.0
+        )
+        .unwrap();
+    } else {
+        let corner = if rounded { side / 3.0 } else { 0.0 };
+        writeln!(
+            out,
+            "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\" width=\"{side:.1}\" \
+             height=\"{side:.1}\" rx=\"{corner:.1}\"/>",
+            at.0 - side / 2.0,
+            at.1 - side / 2.0
+        )
+        .unwrap();
+    }
 
     // `max` keeps the direction finite when the two boxes somehow coincide
     let (dx, dy) = (toward.0 - at.0, toward.1 - at.1);
@@ -1756,6 +1769,32 @@ mod tests {
         );
         assert!(svg.contains(">cold : Temp</text>"), "{svg}");
         assert!(svg.contains(">hot : Temp</text>"), "{svg}");
+    }
+
+    #[test]
+    fn a_name_that_reaches_through_the_border_is_a_proxy() {
+        // `proxy-v`/`proxy-h` stand a circle in for what a name reaches
+        // through the border, where a port it declares is a square
+        let mut out = String::new();
+        port(
+            &mut out,
+            (50.0, 20.0),
+            (42.0, 20.0),
+            "hub.pin",
+            None,
+            &Style::default(),
+        );
+        assert!(out.contains("<circle class=\"port\""), "{out}");
+        let mut declared = String::new();
+        port(
+            &mut declared,
+            (50.0, 20.0),
+            (42.0, 20.0),
+            "pin",
+            None,
+            &Style::default(),
+        );
+        assert!(declared.contains("<rect class=\"port\""), "{declared}");
     }
 
     #[test]

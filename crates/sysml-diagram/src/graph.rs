@@ -1157,9 +1157,16 @@ fn chained_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
     let Some(Value::RefList(chain)) = model.get(end, "chainingFeature") else {
         return None;
     };
-    let part = *chain.first()?;
-    let feature = model.name(*chain.last()?).unwrap_or_default();
-    Some((part, feature.to_string()))
+    let (part, reached) = chain.split_first()?;
+    // `connect w.hub.pin to ...` reaches past the box's own features, and
+    // the standard stands a proxy in for what it reached: `proxy-label =
+    // '.'? FeatureChainMember`, the chain itself. Naming only its last
+    // step would say `w` declares a `pin`.
+    let named: Vec<&str> = reached
+        .iter()
+        .filter_map(|&step| model.name(step))
+        .collect();
+    Some((*part, named.join(".")))
 }
 
 /// An end declared as its own member, as `end ::> vehicleMassRequirement;`.
@@ -3849,6 +3856,29 @@ mod interconnection_tests {
         // has a rolename of its own to write
         assert_eq!((diagram.edges[0].from, diagram.edges[0].to), (0, 1));
         assert_eq!(diagram.edges[0].ends, (None, None));
+    }
+
+    #[test]
+    fn an_end_that_reaches_deeper_is_named_by_the_chain_it_reaches_through() {
+        // `proxy-label = '.'? FeatureChainMember`: `connect w.hub.pin`
+        // reaches past what `w` declares, and naming only `pin` would say
+        // `w` declares one
+        let ws = resolved(
+            "port def Pin;\n\
+             part def Hub { port pin : Pin; }\n\
+             part def Wheel { part hub : Hub; }\n\
+             part def Axle { port mount : Pin; }\n\
+             part def Car {\n\
+             \tpart w : Wheel;\n\
+             \tpart a : Axle;\n\
+             \tconnect w.hub.pin to a.mount;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Car"));
+        assert_eq!(
+            diagram.edges[0].ends,
+            (Some("hub.pin".to_string()), Some("mount".to_string()))
+        );
     }
 
     #[test]

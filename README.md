@@ -163,7 +163,11 @@ straddling the border with `name : Type` beside it, on the side facing
 whatever it is connected to. Connector ends are matched by the feature chain
 name resolution records, so `connect w.hub to a.mount` links the boxes for
 `w` and `a` even when several parts share one type, and the line arrives at
-the port rather than drawing a second square of its own. An action's
+the port rather than drawing a second square of its own. A name that
+reaches *through* the border rather than naming something declared on
+it -- `connect w.hub.pin to ...` -- is the standard's proxy: a circle
+instead of a square, labelled with the chain it reaches through, since
+naming only `pin` would say `w` declares one. An action's
 parameters go on its border the same way (`param-l | param-r | param-t |
 param-b`), drawn rounded rather than square, and a port or parameter with
 a declared direction carries the arrow the standard puts inside it: one
