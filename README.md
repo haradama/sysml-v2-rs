@@ -271,6 +271,12 @@ $ cargo install elkrs
 $ cargo run -p sysml-cli -- diagram vehicle.sysml --elk -o vehicle.svg
 ```
 
+Packages go to ELK as the nodes they are, so it arranges each package's
+contents inside that package's own frame and the frame lands where ELK put
+it. A swimlane view is the exception: ELK's partitions run along the flow
+and a swimlane runs across it, so a view partitioned by performer keeps the
+built-in arrangement whether or not `--elk` is given.
+
 Without it the compartment reads `attribute mass`; with it, `attribute mass
 : Real = 1200.0` -- a declared multiplicity and a declared value travel with
 the feature (`part wheels : Wheel[4]`), since the model keeps them as the

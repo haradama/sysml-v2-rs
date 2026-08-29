@@ -16,7 +16,7 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 
 use crate::graph::Relation;
-use crate::layout::{box_size, Layout, Placed};
+use crate::layout::{box_size, enclosed, Frame, Layout, Placed};
 use crate::{Diagram, Style};
 
 /// Why ELK produced no layout.
@@ -49,6 +49,12 @@ impl std::error::Error for ElkError {}
 /// Lay `diagram` out by running `command` (`elkrs` or anything speaking
 /// ELK's JSON) and reading the positions back.
 pub fn elk_layout(diagram: &Diagram, style: &Style, command: &str) -> Result<Layout, ElkError> {
+    // The layered algorithm's partitions run along the flow, and a
+    // swimlane runs across it, so a view partitioned by performer is laid
+    // out here rather than sent away to be arranged the wrong way round.
+    if !diagram.lanes.is_empty() {
+        return Ok(crate::layout(diagram, style));
+    }
     let sizes: Vec<(f64, f64)> = diagram
         .nodes
         .iter()
@@ -76,35 +82,103 @@ fn to_elk(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> String {
         style.v_gap
     )
     .unwrap();
+    // a package holds what it contains, so it goes to ELK as a node with
+    // children and the engine arranges each package's contents inside it
+    if !diagram.groups.is_empty() {
+        out.push_str(",\"elk.hierarchyHandling\":\"INCLUDE_CHILDREN\"");
+    }
     out.push_str("},\"children\":[");
-    for (at, (width, height)) in sizes.iter().enumerate() {
-        if at > 0 {
-            out.push(',');
+    let owners = edge_owners(diagram);
+    let mut written = 0;
+    for at in 0..diagram.groups.len() {
+        if diagram.groups[at].depth == 0 {
+            separate(&mut out, &mut written);
+            package(&mut out, diagram, sizes, style, &owners, at);
         }
+    }
+    for (at, (width, height)) in sizes.iter().enumerate() {
+        if diagram.groups.iter().any(|group| group.nodes.contains(&at)) {
+            continue;
+        }
+        separate(&mut out, &mut written);
         write!(
             out,
             "{{\"id\":\"n{at}\",\"width\":{width:.4},\"height\":{height:.4}}}"
         )
         .unwrap();
     }
-    out.push_str("],\"edges\":[");
+    out.push(']');
+    edges(&mut out, diagram, &owners, None);
+    out.push('}');
+    out
+}
+
+/// The edges an ELK node owns, as its `edges` array. ELK resolves an
+/// edge's ends within the node it is written in, so each edge is written
+/// in the innermost package that holds both of them.
+fn edges(out: &mut String, diagram: &Diagram, owners: &[Option<usize>], within: Option<usize>) {
+    use std::fmt::Write as _;
+
+    out.push_str(",\"edges\":[");
+    let mut written = 0;
     for (at, edge) in diagram.edges.iter().enumerate() {
+        if owners[at] != within {
+            continue;
+        }
         let (tail, head) = if points_upward(edge.relation) {
             (edge.to, edge.from)
         } else {
             (edge.from, edge.to)
         };
-        if at > 0 {
-            out.push(',');
-        }
+        separate(out, &mut written);
         write!(
             out,
             "{{\"id\":\"e{at}\",\"sources\":[\"n{tail}\"],\"targets\":[\"n{head}\"]}}"
         )
         .unwrap();
     }
-    out.push_str("]}");
-    out
+    out.push(']');
+}
+
+/// The packages each edge is written in: the innermost one holding both
+/// of its ends, or the whole drawing where they are in different packages.
+fn edge_owners(diagram: &Diagram) -> Vec<Option<usize>> {
+    let holders: Vec<Vec<usize>> = (0..diagram.nodes.len())
+        .map(|node| holding(diagram, node))
+        .collect();
+    diagram
+        .edges
+        .iter()
+        .map(|edge| {
+            holders[edge.from]
+                .iter()
+                .zip(&holders[edge.to])
+                .take_while(|(one, other)| one == other)
+                .map(|(one, _)| *one)
+                .last()
+        })
+        .collect()
+}
+
+/// The packages a box is inside, outermost first.
+fn holding(diagram: &Diagram, node: usize) -> Vec<usize> {
+    let Some(innermost) = diagram
+        .groups
+        .iter()
+        .position(|group| group.nodes.contains(&node))
+    else {
+        return Vec::new();
+    };
+    let mut chain = vec![innermost];
+    let mut depth = diagram.groups[innermost].depth;
+    for (at, group) in diagram.groups[..innermost].iter().enumerate().rev() {
+        if depth > 0 && group.depth == depth - 1 {
+            chain.push(at);
+            depth -= 1;
+        }
+    }
+    chain.reverse();
+    chain
 }
 
 /// Whether the box an edge is drawn towards is the one that should sit
@@ -112,6 +186,55 @@ fn to_elk(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> String {
 /// edge the other way round from the way it is drawn.
 fn points_upward(relation: Relation) -> bool {
     matches!(relation, Relation::Specialization | Relation::Satisfy)
+}
+
+/// A comma before every element of a JSON array but the first.
+fn separate(out: &mut String, written: &mut usize) {
+    if *written > 0 {
+        out.push(',');
+    }
+    *written += 1;
+}
+
+/// One package as an ELK node: what it owns as children, and the packages
+/// it encloses nested inside it. The padding leaves room at the top for
+/// the tab the standard draws the package's name in.
+fn package(
+    out: &mut String,
+    diagram: &Diagram,
+    sizes: &[(f64, f64)],
+    style: &Style,
+    owners: &[Option<usize>],
+    at: usize,
+) {
+    use std::fmt::Write as _;
+
+    let pad = style.padding;
+    let tab = 2.0 * style.padding + style.line_height;
+    write!(
+        out,
+        "{{\"id\":\"g{at}\",\"layoutOptions\":{{\"elk.algorithm\":\"layered\",\
+         \"elk.direction\":\"DOWN\",\"elk.padding\":\"[top={tab:.4},left={pad:.4},\
+         bottom={pad:.4},right={pad:.4}]\"}},\"children\":["
+    )
+    .unwrap();
+    let mut written = 0;
+    for &node in &diagram.groups[at].nodes {
+        separate(out, &mut written);
+        let (width, height) = sizes[node];
+        write!(
+            out,
+            "{{\"id\":\"n{node}\",\"width\":{width:.4},\"height\":{height:.4}}}"
+        )
+        .unwrap();
+    }
+    for below in enclosed(diagram, at) {
+        separate(out, &mut written);
+        package(out, diagram, sizes, style, owners, below);
+    }
+    out.push(']');
+    edges(out, diagram, owners, Some(at));
+    out.push('}');
 }
 
 /// Feed `source` to `command -` and return what it wrote.
@@ -165,33 +288,24 @@ fn parse_elk(
             .ok_or_else(|| unreadable(format!("expected a number for `{name}`")))
     };
 
-    let children = graph
-        .get("children")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| unreadable("no children".to_string()))?;
-
     let mut placed: Vec<Option<Placed>> = vec![None; sizes.len()];
-    for child in children {
-        let id = child
-            .get("id")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let at: usize = id
-            .strip_prefix('n')
-            .and_then(|digits| digits.parse().ok())
-            .filter(|&at| at < sizes.len())
-            .ok_or_else(|| unreadable(format!("unknown node `{id}`")))?;
-        // the sizes are this crate's own; ELK only echoes them
-        let (width, height) = sizes[at];
-        placed[at] = Some(Placed {
-            node: at,
-            x: style.margin + number(child, "x")?,
-            y: style.margin + number(child, "y")?,
-            width,
-            height,
-        });
-    }
+    let mut packages: Vec<Option<Frame>> = vec![None; diagram.groups.len()];
+    read_children(
+        &graph,
+        (style.margin, style.margin),
+        diagram,
+        sizes,
+        &mut placed,
+        &mut packages,
+    )?;
 
+    // a frame ELK left out would leave the drawing unable to say where a
+    // package is, which is a refusal rather than a package quietly missing
+    let packages = packages
+        .into_iter()
+        .enumerate()
+        .map(|(at, slot)| slot.ok_or_else(|| unreadable(format!("no position for package g{at}"))))
+        .collect::<Result<Vec<Frame>, ElkError>>()?;
     let placed = placed
         .into_iter()
         .enumerate()
@@ -202,10 +316,74 @@ fn parse_elk(
         width: number(&graph, "width")? + 2.0 * style.margin,
         height: number(&graph, "height")? + 2.0 * style.margin,
         routes: routes_of(&graph, diagram, style),
-        // the engine arranged the boxes; the swimlane bands are ours
+        // a laned view never reaches here; it is laid out by this crate
         lanes: Vec::new(),
-        packages: Vec::new(),
+        packages,
     })
+}
+
+/// Read one level of a laid-out graph and the levels below it. ELK places
+/// a child within its parent, so a package's corner is carried down and
+/// added to what it contains, which leaves every position on the canvas.
+fn read_children(
+    of: &serde_json::Value,
+    (left, top): (f64, f64),
+    diagram: &Diagram,
+    sizes: &[(f64, f64)],
+    placed: &mut [Option<Placed>],
+    packages: &mut [Option<Frame>],
+) -> Result<(), ElkError> {
+    let unreadable = |detail: String| ElkError::Unreadable { detail };
+    let number = |of: &serde_json::Value, name: &str| -> Result<f64, ElkError> {
+        of.get(name)
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| unreadable(format!("expected a number for `{name}`")))
+    };
+
+    let children = of
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| unreadable("no children".to_string()))?;
+
+    for child in children {
+        let id = child
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if let Some(at) = index(id, 'g', diagram.groups.len()) {
+            let (x, y) = (left + number(child, "x")?, top + number(child, "y")?);
+            packages[at] = Some(Frame {
+                name: diagram.groups[at].name.clone(),
+                x,
+                y,
+                width: number(child, "width")?,
+                height: number(child, "height")?,
+            });
+            read_children(child, (x, y), diagram, sizes, placed, packages)?;
+            continue;
+        }
+        let at = index(id, 'n', sizes.len())
+            .ok_or_else(|| unreadable(format!("unknown node `{id}`")))?;
+        let (x, y) = (left + number(child, "x")?, top + number(child, "y")?);
+        // the sizes are this crate's own; ELK only echoes them
+        let (width, height) = sizes[at];
+        placed[at] = Some(Placed {
+            node: at,
+            x,
+            y,
+            width,
+            height,
+        });
+    }
+    Ok(())
+}
+
+/// The number an ELK id names, if it is one of ours and within range.
+fn index(id: &str, prefix: char, count: usize) -> Option<usize> {
+    id.strip_prefix(prefix)?
+        .parse()
+        .ok()
+        .filter(|&at| at < count)
 }
 
 /// The path ELK chose for each edge, in the diagram's own order and
@@ -372,6 +550,121 @@ mod tests {
         assert_eq!(wired["edges"].as_array().unwrap().len(), inside.edges.len());
     }
 
+    /// A package holding a sub-package that holds the definitions.
+    const NESTED: &str = "package Outer {\n\
+                          package Parts { part def Engine; }\n\
+                          package Wholes { part def Car { part e : Parts::Engine; } }\n\
+                          }\n";
+
+    #[test]
+    fn a_package_is_a_node_that_holds_what_it_contains() {
+        let ws = resolved(NESTED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let names: Vec<&str> = diagram.groups.iter().map(|g| g.name.as_str()).collect();
+        // `Outer` owns no definition of its own and is a frame all the same
+        assert_eq!(names, ["Outer", "Parts", "Wholes"]);
+        assert_eq!(diagram.groups[0].nodes, Vec::<usize>::new());
+
+        let sizes = vec![(100.0, 40.0); diagram.nodes.len()];
+        let graph: serde_json::Value =
+            serde_json::from_str(&to_elk(&diagram, &sizes, &Style::default())).unwrap();
+        assert_eq!(
+            graph["layoutOptions"]["elk.hierarchyHandling"],
+            "INCLUDE_CHILDREN"
+        );
+
+        // one node at the top, holding the two packages below it
+        let outer = &graph["children"][0];
+        assert_eq!(outer["id"], "g0");
+        assert!(graph["children"][1].is_null());
+        let within: Vec<&str> = outer["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|child| child["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(within, ["g1", "g2"]);
+
+        // the composition crosses from `Wholes` into `Parts`, so only
+        // `Outer` can see both of its ends and it is written there
+        assert!(graph["edges"].as_array().unwrap().is_empty());
+        assert_eq!(outer["edges"][0]["sources"][0], "n1");
+        assert_eq!(outer["edges"][0]["targets"][0], "n0");
+        assert!(outer["children"][0]["edges"][0].is_null());
+    }
+
+    #[test]
+    fn a_box_outside_every_package_still_goes_to_elk() {
+        let ws = resolved("package P { part def A; }\npart def Loose;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sizes = vec![(100.0, 40.0); diagram.nodes.len()];
+        let graph: serde_json::Value =
+            serde_json::from_str(&to_elk(&diagram, &sizes, &Style::default())).unwrap();
+        let top: Vec<&str> = graph["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|child| child["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(top, ["g0", "n1"]);
+    }
+
+    #[test]
+    fn a_package_elk_placed_becomes_the_frame_drawn_round_it() {
+        let style = Style::default();
+        let ws = resolved(NESTED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sizes = [(100.0, 40.0), (100.0, 40.0)];
+        // ELK places a child within its parent, so the corners add up
+        let laid_out = "{\"id\":\"root\",\"width\":400,\"height\":300,\"children\":[\
+                        {\"id\":\"g0\",\"x\":10,\"y\":20,\"width\":380,\"height\":270,\
+                        \"children\":[\
+                        {\"id\":\"g1\",\"x\":5,\"y\":30,\"width\":120,\"height\":80,\
+                        \"children\":[{\"id\":\"n0\",\"x\":6,\"y\":40}]},\
+                        {\"id\":\"g2\",\"x\":5,\"y\":150,\"width\":120,\"height\":80,\
+                        \"children\":[{\"id\":\"n1\",\"x\":6,\"y\":40}]}]}]}";
+        let layout = parse_elk(laid_out, &diagram, &sizes, &style).unwrap();
+
+        let frames: Vec<(&str, f64, f64)> = layout
+            .packages
+            .iter()
+            .map(|frame| (frame.name.as_str(), frame.x, frame.y))
+            .collect();
+        assert_eq!(
+            frames,
+            [
+                ("Outer", style.margin + 10.0, style.margin + 20.0),
+                ("Parts", style.margin + 15.0, style.margin + 50.0),
+                ("Wholes", style.margin + 15.0, style.margin + 170.0),
+            ]
+        );
+        assert_eq!(layout.packages[0].width, 380.0);
+        assert_eq!(layout.placed[0].x, style.margin + 21.0);
+        assert_eq!(layout.placed[0].y, style.margin + 90.0);
+    }
+
+    #[test]
+    fn a_swimlane_view_is_laid_out_here_rather_than_by_elk() {
+        let ws = resolved(
+            "action providePower {\n\
+             \taction generate;\n\
+             \taction convert;\n\
+             }\n\
+             part def Engine { perform providePower.generate; }\n\
+             part def Gearbox { perform providePower.convert; }\n",
+        );
+        let providing = ws
+            .named_elements()
+            .find(|(_, declared)| *declared == "providePower")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = crate::interconnection_diagram(ws.model(), providing);
+        assert!(!diagram.lanes.is_empty());
+        // no ELK to run: it is never reached, so the name cannot matter
+        let layout = elk_layout(&diagram, &Style::default(), "elk-that-is-not-there").unwrap();
+        assert_eq!(layout.lanes.len(), diagram.lanes.len());
+    }
+
     #[test]
     fn a_laid_out_graph_maps_back_to_pixels() {
         let style = Style::default();
@@ -413,6 +706,16 @@ mod tests {
         assert!(unreadable("{\"children\":[{}]}").contains("unknown node ``"));
         assert!(unreadable("{\"children\":[{\"id\":\"n0\",\"y\":0}]}").contains("a number for `x`"));
         assert_eq!(unreadable("{\"children\":[]}"), "no position for node n0");
+        // and a package ELK never placed is refused the same way
+        let ws = resolved(NESTED);
+        let nested = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            parse_elk("{\"children\":[]}", &nested, &[(1.0, 1.0); 2], &style)
+                .expect_err("a graph that placed nothing")
+                .to_string()
+                .replace("unreadable ELK output: ", ""),
+            "no position for package g0"
+        );
         assert!(
             unreadable("{\"children\":[{\"id\":\"n0\",\"x\":0,\"y\":0}],\"height\":1}")
                 .contains("a number for `width`")

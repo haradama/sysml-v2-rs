@@ -512,52 +512,71 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
 /// `package-node` holds a `general-view` of what the package contains, so
 /// a definition is drawn inside the package that owns it. A sub-package
 /// counts its enclosing ones as depth, and holds only what it owns
-/// directly.
+/// directly -- a package whose members are all sub-packages still gets a
+/// frame, because the frames it encloses are drawn inside it.
 fn packages_of(model: &Model, nodes: &[Node]) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
+    // what each group is a frame for, so the same package is found again
+    let mut framed: Vec<ElementId> = Vec::new();
     for (at, node) in nodes.iter().enumerate() {
-        let Some((package, name)) = enclosing_package(model, node.id) else {
+        let chain = enclosing_packages(model, node.id);
+        let Some(&(innermost, _)) = chain.last() else {
             continue;
         };
-        match groups.iter_mut().find(|group| group.name == name) {
-            Some(group) => group.nodes.push(at),
-            None => groups.push(Group {
-                name: name.to_string(),
-                depth: enclosing_packages(model, package),
-                nodes: vec![at],
-            }),
+        for (depth, &(package, name)) in chain.iter().enumerate() {
+            if framed.contains(&package) {
+                continue;
+            }
+            // a package is drawn inside the one that encloses it, so it is
+            // kept after that one and after everything already within it
+            let position = depth
+                .checked_sub(1)
+                .and_then(|up| framed.iter().position(|&seen| seen == chain[up].0))
+                .map_or(groups.len(), |above| {
+                    above
+                        + 1
+                        + groups[above + 1..]
+                            .iter()
+                            .take_while(|group| group.depth > depth - 1)
+                            .count()
+                });
+            groups.insert(
+                position,
+                Group {
+                    name: name.to_string(),
+                    depth,
+                    nodes: Vec::new(),
+                },
+            );
+            framed.insert(position, package);
         }
+        let holder = framed
+            .iter()
+            .position(|&seen| seen == innermost)
+            .expect("the chain's own packages were just made sure of");
+        groups[holder].nodes.push(at);
     }
     groups
 }
 
-/// The nearest named package above an element, and what it is called.
+/// The named packages above an element, outermost first.
 ///
 /// A file's synthetic root and the anonymous wrappers a statement parses
 /// into are packages that nothing can be said to be inside of, so a
 /// package has to be named to hold anything.
-fn enclosing_package(model: &Model, element: ElementId) -> Option<(ElementId, &str)> {
+fn enclosing_packages(model: &Model, element: ElementId) -> Vec<(ElementId, &str)> {
+    let mut chain = Vec::new();
     let mut above = model.owner(element);
     while let Some(current) = above {
         if model.kind(current).is_a(ElementKind::Package) {
             if let Some(name) = model.name(current) {
-                return Some((current, name));
+                chain.push((current, name));
             }
         }
         above = model.owner(current);
     }
-    None
-}
-
-/// How many named packages enclose one.
-fn enclosing_packages(model: &Model, package: ElementId) -> usize {
-    let mut depth = 0;
-    let mut above = enclosing_package(model, package);
-    while let Some((current, _)) = above {
-        depth += 1;
-        above = enclosing_package(model, current);
-    }
-    depth
+    chain.reverse();
+    chain
 }
 
 /// The internal structure of one definition: a box per part, state or action
@@ -3374,6 +3393,27 @@ mod tests {
                 ("Inner", 1, vec!["C".to_string()]),
                 ("Other", 0, vec!["E".to_string()]),
             ]
+        );
+    }
+
+    #[test]
+    fn a_package_of_nothing_but_packages_is_still_a_frame() {
+        // the frames it encloses are drawn inside it, so it is drawn even
+        // though it owns no definition that could put it on the diagram
+        let ws = resolved(
+            "package Top {\n\
+             \tpackage One { part def A; }\n\
+             \tpackage Two { part def B; }\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            diagram
+                .groups
+                .iter()
+                .map(|group| (group.name.as_str(), group.depth, group.nodes.len()))
+                .collect::<Vec<_>>(),
+            [("Top", 0, 0), ("One", 1, 1), ("Two", 1, 1)]
         );
     }
 

@@ -2026,6 +2026,32 @@ mod tests {
     }
 
     #[test]
+    fn a_package_that_owns_only_packages_is_drawn_round_them() {
+        let ws = resolved(
+            "package Top {\n\
+             \tpackage One { part def A; }\n\
+             \tpackage Two { part def B; }\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let layout = crate::layout(&diagram, &Style::default());
+        let frame = |name: &str| {
+            layout
+                .packages
+                .iter()
+                .find(|frame| frame.name == name)
+                .unwrap()
+        };
+        let (top, one, two) = (frame("Top"), frame("One"), frame("Two"));
+        for within in [one, two] {
+            assert!(top.x <= within.x && within.x + within.width <= top.x + top.width);
+            assert!(top.y < within.y && within.y + within.height <= top.y + top.height);
+        }
+        assert!(two.y >= one.y + one.height, "two frames overlap");
+        assert!(to_svg(&diagram, &layout, &Style::default()).contains(">Top</text>"));
+    }
+
+    #[test]
     fn a_swimlane_is_headed_by_its_performer_and_holds_what_it_carries_out() {
         let ws = resolved(
             "action def Generate;\n\

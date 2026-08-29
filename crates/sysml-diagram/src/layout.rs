@@ -230,7 +230,7 @@ fn frame(
 }
 
 /// The packages one package encloses, in document order.
-fn enclosed(diagram: &Diagram, at: usize) -> Vec<usize> {
+pub(crate) fn enclosed(diagram: &Diagram, at: usize) -> Vec<usize> {
     let depth = diagram.groups[at].depth;
     diagram
         .groups
