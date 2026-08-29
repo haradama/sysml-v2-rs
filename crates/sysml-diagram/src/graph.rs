@@ -364,11 +364,26 @@ pub struct Lane {
     pub nodes: Vec<usize>,
 }
 
+/// One package drawn as a frame around what it holds: `package-node`,
+/// with its name in the tab and its members inside.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Group {
+    pub name: String,
+    /// How many drawn packages enclose this one.
+    pub depth: usize,
+    /// Indices into [`Diagram::nodes`] -- the definitions this package
+    /// owns directly. What its sub-packages own is in their own groups.
+    pub nodes: Vec<usize>,
+}
+
 /// The definitions to draw and the specializations between them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagram {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// `package-node` per package that holds any of them, in document
+    /// order and nested by `depth`. Empty where nothing is packaged.
+    pub groups: Vec<Group>,
     /// `perform-actions-swimlanes = (swimlane)*` -- the performers this
     /// view is partitioned by, empty where nothing says who performs
     /// what. A node in no lane is drawn in the view alongside them.
@@ -481,11 +496,68 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
         }
     }
 
+    let groups = packages_of(model, &nodes);
+
     Diagram {
         nodes,
         edges,
+        groups,
         lanes: Vec::new(),
     }
+}
+
+/// The packages the drawn definitions belong to, as frames to draw round
+/// them.
+///
+/// `package-node` holds a `general-view` of what the package contains, so
+/// a definition is drawn inside the package that owns it. A sub-package
+/// counts its enclosing ones as depth, and holds only what it owns
+/// directly.
+fn packages_of(model: &Model, nodes: &[Node]) -> Vec<Group> {
+    let mut groups: Vec<Group> = Vec::new();
+    for (at, node) in nodes.iter().enumerate() {
+        let Some((package, name)) = enclosing_package(model, node.id) else {
+            continue;
+        };
+        match groups.iter_mut().find(|group| group.name == name) {
+            Some(group) => group.nodes.push(at),
+            None => groups.push(Group {
+                name: name.to_string(),
+                depth: enclosing_packages(model, package),
+                nodes: vec![at],
+            }),
+        }
+    }
+    groups
+}
+
+/// The nearest named package above an element, and what it is called.
+///
+/// A file's synthetic root and the anonymous wrappers a statement parses
+/// into are packages that nothing can be said to be inside of, so a
+/// package has to be named to hold anything.
+fn enclosing_package(model: &Model, element: ElementId) -> Option<(ElementId, &str)> {
+    let mut above = model.owner(element);
+    while let Some(current) = above {
+        if model.kind(current).is_a(ElementKind::Package) {
+            if let Some(name) = model.name(current) {
+                return Some((current, name));
+            }
+        }
+        above = model.owner(current);
+    }
+    None
+}
+
+/// How many named packages enclose one.
+fn enclosing_packages(model: &Model, package: ElementId) -> usize {
+    let mut depth = 0;
+    let mut above = enclosing_package(model, package);
+    while let Some((current, _)) = above {
+        depth += 1;
+        above = enclosing_package(model, current);
+    }
+    depth
 }
 
 /// The internal structure of one definition: a box per part, state or action
@@ -694,6 +766,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     Diagram {
         nodes,
         edges,
+        groups: Vec::new(),
         lanes,
     }
 }
@@ -3207,6 +3280,46 @@ mod tests {
                 ("Safety".to_string(), "Boiler".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn a_package_holds_what_it_owns_and_the_packages_below_it() {
+        // `package-node` holds a `general-view` of the package's contents,
+        // so a definition belongs to the package that owns it and a
+        // sub-package counts the ones above it as depth
+        let ws = resolved(
+            "package Outer {\n\
+             \tpart def A;\n\
+             \tpackage Inner { part def C; }\n\
+             }\n\
+             package Other { part def E; }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let names = |at: &usize| diagram.nodes[*at].name.clone();
+        assert_eq!(
+            diagram
+                .groups
+                .iter()
+                .map(|group| (
+                    group.name.as_str(),
+                    group.depth,
+                    group.nodes.iter().map(names).collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("Outer", 0, vec!["A".to_string()]),
+                ("Inner", 1, vec!["C".to_string()]),
+                ("Other", 0, vec!["E".to_string()]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_definition_in_no_package_is_in_no_frame() {
+        let ws = resolved("part def Loose;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(diagram.nodes.len(), 1);
+        assert!(diagram.groups.is_empty());
     }
 
     #[test]

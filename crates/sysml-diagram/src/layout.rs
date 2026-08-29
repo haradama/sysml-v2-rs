@@ -38,6 +38,20 @@ pub struct Layout {
     /// Where each swimlane's column sits, in the diagram's lane order.
     /// Empty where the view is not partitioned by performer.
     pub lanes: Vec<Column>,
+    /// Where each package's frame sits, in the diagram's group order.
+    /// Empty where nothing drawn is packaged.
+    pub packages: Vec<Frame>,
+}
+
+/// One package's frame: the folder the standard draws round what it
+/// holds, with its name in the tab.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Frame {
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
 }
 
 /// One swimlane's column: what it is headed by and the band it occupies.
@@ -62,11 +76,171 @@ pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
     if !diagram.lanes.is_empty() {
         return swimlanes(diagram, &sizes, style);
     }
+    if !diagram.groups.is_empty() {
+        return packages(diagram, &sizes, style);
+    }
     let gaps = label_gaps(diagram, style);
     let ranks = ranks(diagram);
     let layers = order_layers(diagram, &ranks);
     let rows = wrap_layers(&layers, &sizes, &gaps, style);
     place(&sizes, &rows, &gaps, style)
+}
+
+/// Lay a view out package by package, each inside the frame the standard
+/// draws round what it holds.
+///
+/// `package-node` holds a `general-view` of the package's contents, so a
+/// definition is drawn inside the package that owns it and a sub-package
+/// inside the one above it. The frames are worked out here rather than
+/// derived from where the boxes landed, so two packages can never overlap.
+fn packages(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
+    let mut placed: Vec<Placed> = sizes
+        .iter()
+        .enumerate()
+        .map(|(node, &(width, height))| Placed {
+            node,
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        })
+        .collect();
+    let mut frames = vec![Frame::default(); diagram.groups.len()];
+
+    // one frame per package, stacked in document order, each holding its
+    // own definitions in wrapped rows and then the packages below it
+    let mut down = style.margin;
+    let mut widest: f64 = 0.0;
+    for at in 0..diagram.groups.len() {
+        if diagram.groups[at].depth > 0 {
+            continue; // drawn inside the package that encloses it
+        }
+        let (width, height) = frame(
+            diagram,
+            sizes,
+            style,
+            at,
+            style.margin,
+            down,
+            &mut placed,
+            &mut frames,
+        );
+        widest = widest.max(width);
+        down += height + style.v_gap;
+    }
+    Layout {
+        placed,
+        width: style.margin + widest + style.margin,
+        height: down - style.v_gap + style.margin,
+        routes: Vec::new(),
+        lanes: Vec::new(),
+        packages: frames,
+    }
+}
+
+/// Place one package's frame at `(left, top)` and everything it holds,
+/// returning the room it took.
+#[allow(clippy::too_many_arguments)]
+fn frame(
+    diagram: &Diagram,
+    sizes: &[(f64, f64)],
+    style: &Style,
+    at: usize,
+    left: f64,
+    top: f64,
+    placed: &mut [Placed],
+    frames: &mut [Frame],
+) -> (f64, f64) {
+    let group = &diagram.groups[at];
+    let tab = 2.0 * style.padding + style.line_height;
+    let inside = left + style.padding;
+    let mut down = top + tab + style.padding;
+    let mut widest: f64 = style.text_width(&group.name) + 2.0 * style.padding;
+
+    // the package's own definitions, wrapped into rows
+    let mut row: Vec<usize> = Vec::new();
+    let mut across = 0.0f64;
+    let mut tallest = 0.0f64;
+    let flush = |row: &mut Vec<usize>,
+                 across: &mut f64,
+                 tallest: &mut f64,
+                 down: &mut f64,
+                 widest: &mut f64,
+                 placed: &mut [Placed]| {
+        let mut next = inside;
+        for &node in row.iter() {
+            placed[node].x = next;
+            placed[node].y = *down;
+            next += sizes[node].0 + style.h_gap;
+        }
+        *widest = widest.max(*across + 2.0 * style.padding);
+        *down += *tallest + style.v_gap;
+        row.clear();
+        *across = 0.0;
+        *tallest = 0.0;
+    };
+    for &node in &group.nodes {
+        let (width, height) = sizes[node];
+        if !row.is_empty() && across + style.h_gap + width > style.max_row_width {
+            flush(
+                &mut row,
+                &mut across,
+                &mut tallest,
+                &mut down,
+                &mut widest,
+                placed,
+            );
+        }
+        across += if row.is_empty() {
+            width
+        } else {
+            style.h_gap + width
+        };
+        tallest = tallest.max(height);
+        row.push(node);
+    }
+    if !row.is_empty() {
+        flush(
+            &mut row,
+            &mut across,
+            &mut tallest,
+            &mut down,
+            &mut widest,
+            placed,
+        );
+    }
+
+    // then the packages this one encloses, each in its own frame
+    for below in enclosed(diagram, at) {
+        let (width, height) = frame(diagram, sizes, style, below, inside, down, placed, frames);
+        widest = widest.max(width + 2.0 * style.padding);
+        down += height + style.v_gap;
+    }
+
+    // the gap after the last row becomes the padding under it
+    let height = (down - style.v_gap + style.padding - top).max(tab + style.padding);
+    frames[at] = Frame {
+        name: group.name.clone(),
+        x: left,
+        y: top,
+        width: widest,
+        height,
+    };
+    (widest, height)
+}
+
+/// The packages one package encloses, in document order.
+fn enclosed(diagram: &Diagram, at: usize) -> Vec<usize> {
+    let depth = diagram.groups[at].depth;
+    diagram
+        .groups
+        .iter()
+        .enumerate()
+        .skip(at + 1)
+        .take_while(|(_, group)| group.depth > depth)
+        .filter(|(_, group)| group.depth == depth + 1)
+        .map(|(below, _)| below)
+        .collect()
 }
 
 /// Lay a view out by who carries each node out.
@@ -153,6 +327,7 @@ fn swimlanes(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
         height: top + heading + style.padding + tallest + style.margin,
         routes: Vec::new(),
         lanes: columns,
+        packages: Vec::new(),
     }
 }
 
@@ -475,6 +650,7 @@ fn place(
             height: 2.0 * style.margin,
             routes: Vec::new(),
             lanes: Vec::new(),
+            packages: Vec::new(),
         };
     }
 
@@ -521,6 +697,7 @@ fn place(
         height: y - style.v_gap + style.margin,
         routes: Vec::new(),
         lanes: Vec::new(),
+        packages: Vec::new(),
     }
 }
 

@@ -83,7 +83,35 @@ pub(crate) fn markers() -> String {
 /// be written to a `.svg` file or inlined into HTML as-is.
 pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     let mut out = markers();
-    // the swimlanes first, so every box and line sits on top of them
+    // the package frames first, so every box and line sits on top of them
+    for frame in &layout.packages {
+        let tab = 2.0 * style.padding + style.line_height;
+        let notch = style.text_width(&frame.name) + 2.0 * style.padding;
+        // the folder the standard draws: a tab on the top left, and the
+        // body below it holding what the package contains
+        writeln!(
+            out,
+            "<path class=\"box\" d=\"M {:.1} {:.1} H {:.1} V {:.1} H {:.1} V {:.1} \
+             H {:.1} z\"/>",
+            frame.x,
+            frame.y,
+            frame.x + notch.min(frame.width),
+            frame.y + tab,
+            frame.x + frame.width,
+            frame.y + frame.height,
+            frame.x,
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "<text class=\"name\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+            frame.x + style.padding,
+            frame.y + style.padding + 0.75 * style.line_height,
+            escape(&frame.name)
+        )
+        .unwrap();
+    }
+    // the swimlanes next, so every box and line sits on top of them
     for column in &layout.lanes {
         writeln!(
             out,
@@ -1366,6 +1394,7 @@ mod tests {
             height: 270.0,
             routes: Vec::new(),
             lanes: Vec::new(),
+            packages: Vec::new(),
         };
         let svg = to_svg(&diagram, &placed, &style);
         assert!(svg.contains("<path class=\"edge\" fill=\"none\" d=\"M 450.0 200.0 V "));
@@ -1412,6 +1441,7 @@ mod tests {
             height: 700.0,
             routes: Vec::new(),
             lanes: Vec::new(),
+            packages: Vec::new(),
         };
         let bend = vec![(50.0, 40.0), (50.0, 120.0), (300.0, 120.0), (300.0, 200.0)];
         let bent = Layout {
@@ -1450,6 +1480,7 @@ mod tests {
             height: 300.0,
             routes: Vec::new(),
             lanes: Vec::new(),
+            packages: Vec::new(),
         }
     }
 
@@ -1519,6 +1550,7 @@ mod tests {
             height: 100.0,
             routes: Vec::new(),
             lanes: Vec::new(),
+            packages: Vec::new(),
         };
         let band = band_below(&side_by_side, 0, &style);
         assert_eq!(
@@ -1914,6 +1946,44 @@ mod tests {
         assert!(svg.contains("<path class=\"box\" d=\"M"), "{svg}");
         assert!(svg.contains(">Said.</text>"), "{svg}");
         assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
+    }
+
+    #[test]
+    fn a_package_is_the_folder_the_standard_draws_round_what_it_holds() {
+        let ws = resolved(
+            "package Outer {\n\
+             \tpart def A;\n\
+             \tpackage Inner { part def C; }\n\
+             }\n\
+             package Other { part def E; }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let layout = crate::layout(&diagram, &Style::default());
+        let svg = to_svg(&diagram, &layout, &Style::default());
+        assert!(svg.contains(">Outer</text>"), "{svg}");
+
+        // `Inner` is drawn inside `Outer`, and `Other` beside neither
+        let frame = |name: &str| {
+            layout
+                .packages
+                .iter()
+                .find(|frame| frame.name == name)
+                .unwrap()
+        };
+        let (outer, inner, other) = (frame("Outer"), frame("Inner"), frame("Other"));
+        assert!(outer.x <= inner.x && inner.x + inner.width <= outer.x + outer.width);
+        assert!(outer.y < inner.y && inner.y + inner.height <= outer.y + outer.height);
+        assert!(other.y >= outer.y + outer.height, "two frames overlap");
+
+        // and every definition sits inside the package that owns it
+        for (group, frame) in diagram.groups.iter().zip(&layout.packages) {
+            for &at in &group.nodes {
+                let placed = &layout.placed[at];
+                assert!(placed.x >= frame.x, "{} escaped its package", placed.node);
+                assert!(placed.x + placed.width <= frame.x + frame.width);
+                assert!(placed.y >= frame.y && placed.y + placed.height <= frame.y + frame.height);
+            }
+        }
     }
 
     #[test]

@@ -204,6 +204,7 @@ fn parse_elk(
         routes: routes_of(&graph, diagram, style),
         // the engine arranged the boxes; the swimlane bands are ours
         lanes: Vec::new(),
+        packages: Vec::new(),
     })
 }
 

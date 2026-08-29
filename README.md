@@ -224,6 +224,13 @@ $ cargo run -p sysml-cli -- diagram interaction.sysml --sequence CruiseControlIn
 wrote 4 lifeline(s) and 3 message(s) to seq.svg
 ```
 
+A package is the folder the standard draws round what it holds
+(`package-node`): its name in the tab, the definitions it owns inside,
+and a package it encloses drawn inside its frame. The frames are worked
+out as the boxes are placed rather than fitted round them afterwards, so
+two packages can never overlap. Lines still run between definitions in
+different packages, across the frames.
+
 `--browser` draws the other standard view that needs nothing but the model
 itself: the membership hierarchy, as an indented tree with one row per named
 element.
