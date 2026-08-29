@@ -117,7 +117,6 @@ fn packages(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
         }
         let (width, height) = frame(
             diagram,
-            sizes,
             style,
             at,
             style.margin,
@@ -143,7 +142,6 @@ fn packages(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
 #[allow(clippy::too_many_arguments)]
 fn frame(
     diagram: &Diagram,
-    sizes: &[(f64, f64)],
     style: &Style,
     at: usize,
     left: f64,
@@ -157,62 +155,31 @@ fn frame(
     let mut down = top + tab + style.padding;
     let mut widest: f64 = style.text_width(&group.name) + 2.0 * style.padding;
 
-    // the package's own definitions, wrapped into rows
-    let mut row: Vec<usize> = Vec::new();
-    let mut across = 0.0f64;
-    let mut tallest = 0.0f64;
-    let flush = |row: &mut Vec<usize>,
-                 across: &mut f64,
-                 tallest: &mut f64,
-                 down: &mut f64,
-                 widest: &mut f64,
-                 placed: &mut [Placed]| {
-        let mut next = inside;
-        for &node in row.iter() {
-            placed[node].x = next;
-            placed[node].y = *down;
-            next += sizes[node].0 + style.h_gap;
+    // the package's own definitions, laid out the way an unpackaged view
+    // is. Document order is what a package's members come in, and it says
+    // nothing about what is drawn between them.
+    if !group.nodes.is_empty() {
+        let within = arranged(diagram, &group.nodes, style);
+        for spot in &within.placed {
+            let node = group.nodes[spot.node];
+            placed[node] = Placed {
+                node,
+                x: inside + spot.x - style.margin,
+                y: down + spot.y - style.margin,
+                ..*spot
+            };
         }
-        *widest = widest.max(*across + 2.0 * style.padding);
-        *down += *tallest + style.v_gap;
-        row.clear();
-        *across = 0.0;
-        *tallest = 0.0;
-    };
-    for &node in &group.nodes {
-        let (width, height) = sizes[node];
-        if !row.is_empty() && across + style.h_gap + width > style.max_row_width {
-            flush(
-                &mut row,
-                &mut across,
-                &mut tallest,
-                &mut down,
-                &mut widest,
-                placed,
-            );
-        }
-        across += if row.is_empty() {
-            width
-        } else {
-            style.h_gap + width
-        };
-        tallest = tallest.max(height);
-        row.push(node);
-    }
-    if !row.is_empty() {
-        flush(
-            &mut row,
-            &mut across,
-            &mut tallest,
-            &mut down,
-            &mut widest,
-            placed,
+        let (across, tall) = (
+            within.width - 2.0 * style.margin,
+            within.height - 2.0 * style.margin,
         );
+        widest = widest.max(across + 2.0 * style.padding);
+        down += tall + style.v_gap;
     }
 
     // then the packages this one encloses, each in its own frame
     for below in enclosed(diagram, at) {
-        let (width, height) = frame(diagram, sizes, style, below, inside, down, placed, frames);
+        let (width, height) = frame(diagram, style, below, inside, down, placed, frames);
         widest = widest.max(width + 2.0 * style.padding);
         down += height + style.v_gap;
     }
@@ -227,6 +194,37 @@ fn frame(
         height,
     };
     (widest, height)
+}
+
+/// One package's members laid out among themselves, as if nothing else
+/// were drawn: the same layering, ordering and wrapping an unpackaged
+/// view gets, over the edges that stay inside the package.
+fn arranged(diagram: &Diagram, nodes: &[usize], style: &Style) -> Layout {
+    let held: HashMap<usize, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(within, &node)| (node, within))
+        .collect();
+    let alone = Diagram {
+        nodes: nodes
+            .iter()
+            .map(|&node| diagram.nodes[node].clone())
+            .collect(),
+        edges: diagram
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                Some(Edge {
+                    from: *held.get(&edge.from)?,
+                    to: *held.get(&edge.to)?,
+                    ..edge.clone()
+                })
+            })
+            .collect(),
+        groups: Vec::new(),
+        lanes: Vec::new(),
+    };
+    layout(&alone, style)
 }
 
 /// The packages one package encloses, in document order.
@@ -431,12 +429,33 @@ pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     // the name is drawn bold, which the 0.6 em estimate does not account for
     let mut width = (style.text_width(&node.name) * 1.1)
         .max(style.text_width(&format!("\u{ab}{}\u{bb}", node.keyword)));
+    // a note draws its prose flush with its first line; a box indents a
+    // line one step in from the label of the compartment holding it
+    let indent = if node.shape == Shape::Note {
+        0.0
+    } else {
+        style.padding
+    };
     for compartment in &node.compartments {
         width = width.max(style.text_width(compartment.label));
         for line in &compartment.lines {
-            // a line sits one indent in from its compartment's label
-            width = width.max(style.padding + style.text_width(&line.label()));
+            width = width.max(indent + style.text_width(&line.label()));
         }
+    }
+    if node.shape == Shape::Note {
+        // and it is prose and nothing else: no name set off from a
+        // keyword above it, no compartment labels, no rules between them
+        let said = usize::from(!node.keyword.is_empty())
+            + 1
+            + node
+                .compartments
+                .iter()
+                .map(|held| held.lines.len())
+                .sum::<usize>();
+        return (
+            width + 2.0 * style.padding,
+            2.0 * style.padding + said as f64 * style.line_height,
+        );
     }
     let mut height = 2.0 * style.padding + 2.0 * style.line_height;
     for compartment in &node.compartments {
@@ -505,6 +524,26 @@ fn specializations(diagram: &Diagram) -> impl Iterator<Item = &Edge> {
         .filter(|edge| edge.relation == Relation::Specialization)
 }
 
+/// The ends of a relationship the standard reads down the page, upper
+/// first: the supertype above what specializes it, the whole above what
+/// it is made of, the requirement above what satisfies it.
+///
+/// `None` where neither end is above the other. A connection, a flow or
+/// a message runs between peers, and stacking one on the other would say
+/// something about them that the model does not.
+fn above(edge: &Edge) -> Option<(usize, usize)> {
+    match edge.relation {
+        Relation::Specialization
+        | Relation::Subsetting
+        | Relation::Redefinition
+        | Relation::Satisfy => Some((edge.to, edge.from)),
+        Relation::Composition | Relation::Reference | Relation::Portion => {
+            Some((edge.from, edge.to))
+        }
+        _ => None,
+    }
+}
+
 /// Layer index of each node: 0 when it has no supertype inside the diagram,
 /// otherwise one below its deepest supertype.
 ///
@@ -515,9 +554,9 @@ fn ranks(diagram: &Diagram) -> Vec<usize> {
     let mut ranks = vec![0usize; diagram.nodes.len()];
     for _ in 0..diagram.nodes.len() {
         let mut changed = false;
-        for edge in specializations(diagram) {
-            if ranks[edge.from] <= ranks[edge.to] {
-                ranks[edge.from] = ranks[edge.to] + 1;
+        for (upper, lower) in diagram.edges.iter().filter_map(above) {
+            if ranks[lower] <= ranks[upper] {
+                ranks[lower] = ranks[upper] + 1;
                 changed = true;
             }
         }
@@ -944,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn composition_does_not_order_the_layers() {
+    fn composition_orders_the_layers_as_specialization_does() {
         let (diagram, layout) = laid_out(
             "part def Engine;\n\
              part def Vehicle {\n\
@@ -952,14 +991,58 @@ mod tests {
              }\n",
         );
         assert_eq!(diagram.edges.len(), 1);
-        // a whole is not a subtype of its parts, so both stay on one row --
-        // boxes of unequal height are centred in it, so the centres match
+        // a whole is read before what it is made of, so it is drawn above
+        // it -- which is what the ELK emission has always told ELK, and
+        // what document order alone would not have given
         let engine = placed_by_name(&diagram, &layout, "Engine");
         let vehicle = placed_by_name(&diagram, &layout, "Vehicle");
-        assert_eq!(
-            engine.y + engine.height / 2.0,
-            vehicle.y + vehicle.height / 2.0
+        assert!(vehicle.y + vehicle.height <= engine.y);
+    }
+
+    #[test]
+    fn a_package_lays_its_own_members_out_among_themselves() {
+        // `Whole` is made of `Part`, which puts it above it inside the
+        // frame; the composition reaching out of the package into
+        // `Elsewhere` says nothing about where anything in here goes
+        let (diagram, layout) = laid_out(
+            "package Away { part def Elsewhere; }\n\
+             package Here {\n\
+             \tpart def Part;\n\
+             \tpart def Whole {\n\
+             \t\tpart p : Part;\n\
+             \t\tpart e : Away::Elsewhere;\n\
+             \t}\n\
+             }\n",
         );
+        assert_eq!(diagram.groups.len(), 2);
+        let whole = placed_by_name(&diagram, &layout, "Whole");
+        let part = placed_by_name(&diagram, &layout, "Part");
+        assert!(whole.y + whole.height <= part.y);
+        // and both are still inside the frame that holds them
+        let here = layout
+            .packages
+            .iter()
+            .find(|frame| frame.name == "Here")
+            .unwrap();
+        for box_ in [whole, part] {
+            assert!(box_.x >= here.x && box_.x + box_.width <= here.x + here.width);
+            assert!(box_.y >= here.y && box_.y + box_.height <= here.y + here.height);
+        }
+    }
+
+    #[test]
+    fn a_relation_between_peers_leaves_them_on_one_row() {
+        // nothing about a dependency says which end is above the other,
+        // so neither is moved and both stay where the layering left them
+        let (diagram, layout) = laid_out(
+            "part def Sensor;\n\
+             part def Display;\n\
+             dependency from Sensor to Display;\n",
+        );
+        assert_eq!(diagram.edges.len(), 1);
+        let sensor = placed_by_name(&diagram, &layout, "Sensor");
+        let display = placed_by_name(&diagram, &layout, "Display");
+        assert_eq!(sensor.y, display.y);
     }
 
     #[test]

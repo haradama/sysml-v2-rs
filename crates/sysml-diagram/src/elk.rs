@@ -210,11 +210,14 @@ fn package(
     use std::fmt::Write as _;
 
     let pad = style.padding;
-    let tab = 2.0 * style.padding + style.line_height;
+    // the tab and then the same clearance the other three sides get:
+    // padding of exactly the tab would leave the first box's top border
+    // drawn along the tab's bottom, which reads as one line, not two
+    let top = 2.0 * style.padding + style.line_height + pad;
     write!(
         out,
         "{{\"id\":\"g{at}\",\"layoutOptions\":{{\"elk.algorithm\":\"layered\",\
-         \"elk.direction\":\"DOWN\",\"elk.padding\":\"[top={tab:.4},left={pad:.4},\
+         \"elk.direction\":\"DOWN\",\"elk.padding\":\"[top={top:.4},left={pad:.4},\
          bottom={pad:.4},right={pad:.4}]\"}},\"children\":["
     )
     .unwrap();
@@ -394,14 +397,45 @@ fn index(id: &str, prefix: char, count: usize) -> Option<usize> {
 /// through a layout that was arranged expecting the bends. An edge ELK
 /// said nothing about keeps an empty route, and the renderer routes it.
 fn routes_of(graph: &serde_json::Value, diagram: &Diagram, style: &Style) -> Vec<Vec<(f64, f64)>> {
-    let point = |at: &serde_json::Value| -> Option<(f64, f64)> {
-        Some((
-            style.margin + at.get("x")?.as_f64()?,
-            style.margin + at.get("y")?.as_f64()?,
-        ))
-    };
     let mut routes = vec![Vec::new(); diagram.edges.len()];
-    for edge in graph
+    read_routes(graph, (style.margin, style.margin), diagram, &mut routes);
+    routes
+}
+
+/// Read the routes one node holds and those its children hold. An edge is
+/// written in the node that can see both of its ends, so a package holds
+/// the routes between the things inside it -- in its own coordinates,
+/// which is why the corner it was placed at is carried down.
+fn read_routes(
+    of: &serde_json::Value,
+    (left, top): (f64, f64),
+    diagram: &Diagram,
+    routes: &mut [Vec<(f64, f64)>],
+) {
+    let point = |at: &serde_json::Value| -> Option<(f64, f64)> {
+        Some((left + at.get("x")?.as_f64()?, top + at.get("y")?.as_f64()?))
+    };
+    for child in of
+        .get("children")
+        .and_then(serde_json::Value::as_array)
+        .unwrap_or(&Vec::new())
+    {
+        // where a child was placed has already been read and refused if
+        // it was missing, so a corner that is not a number cannot be one
+        let corner = |name: &str| {
+            child
+                .get(name)
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or_default()
+        };
+        read_routes(
+            child,
+            (left + corner("x"), top + corner("y")),
+            diagram,
+            routes,
+        );
+    }
+    for edge in of
         .get("edges")
         .and_then(serde_json::Value::as_array)
         .unwrap_or(&Vec::new())
@@ -442,7 +476,6 @@ fn routes_of(graph: &serde_json::Value, diagram: &Diagram, style: &Style) -> Vec
         }
         routes[at] = walked;
     }
-    routes
 }
 
 #[cfg(test)]
@@ -594,6 +627,31 @@ mod tests {
     }
 
     #[test]
+    fn a_package_leaves_room_under_its_tab() {
+        let style = Style::default();
+        let ws = resolved(NESTED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sizes = vec![(100.0, 40.0); diagram.nodes.len()];
+        let graph: serde_json::Value =
+            serde_json::from_str(&to_elk(&diagram, &sizes, &style)).unwrap();
+
+        // the drawing puts the package's name in a tab inside the frame,
+        // so what the frame holds has to start below it and then clear of
+        // it by as much as the other three sides are cleared by
+        let tab = 2.0 * style.padding + style.line_height;
+        let padding = graph["children"][0]["layoutOptions"]["elk.padding"]
+            .as_str()
+            .expect("a package says how much room it keeps");
+        let top: f64 = padding
+            .trim_start_matches("[top=")
+            .split(',')
+            .next()
+            .and_then(|room| room.parse().ok())
+            .unwrap();
+        assert!(top >= tab + style.padding, "{padding}");
+    }
+
+    #[test]
     fn a_box_outside_every_package_still_goes_to_elk() {
         let ws = resolved("package P { part def A; }\npart def Loose;\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
@@ -641,6 +699,39 @@ mod tests {
         assert_eq!(layout.packages[0].width, 380.0);
         assert_eq!(layout.placed[0].x, style.margin + 21.0);
         assert_eq!(layout.placed[0].y, style.margin + 90.0);
+    }
+
+    #[test]
+    fn a_route_a_package_holds_is_read_in_the_canvas_it_is_drawn_on() {
+        let style = Style::default();
+        let ws = resolved(NESTED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sizes = [(100.0, 40.0), (100.0, 40.0)];
+        // the composition crosses between the two sub-packages, so `Outer`
+        // is the node that holds it -- and its bends are `Outer`'s own
+        let laid_out = "{\"id\":\"root\",\"width\":400,\"height\":300,\"children\":[\
+                        {\"id\":\"g0\",\"x\":10,\"y\":20,\"width\":380,\"height\":270,\
+                        \"children\":[\
+                        {\"id\":\"g1\",\"x\":5,\"y\":30,\"width\":120,\"height\":80,\
+                        \"children\":[{\"id\":\"n0\",\"x\":6,\"y\":40}]},\
+                        {\"id\":\"g2\",\"x\":5,\"y\":150,\"width\":120,\"height\":80,\
+                        \"children\":[{\"id\":\"n1\",\"x\":6,\"y\":40}]}],\
+                        \"edges\":[{\"id\":\"e0\",\"sections\":[{\
+                        \"startPoint\":{\"x\":50,\"y\":230},\
+                        \"bendPoints\":[{\"x\":50,\"y\":140}],\
+                        \"endPoint\":{\"x\":60,\"y\":110}}]}]}]}";
+        let layout = parse_elk(laid_out, &diagram, &sizes, &style).unwrap();
+
+        // every point is `Outer`'s corner plus the margin plus its own
+        let corner = style.margin + 10.0;
+        assert_eq!(
+            layout.routes[0],
+            [
+                (corner + 50.0, style.margin + 20.0 + 230.0),
+                (corner + 50.0, style.margin + 20.0 + 140.0),
+                (corner + 60.0, style.margin + 20.0 + 110.0),
+            ]
+        );
     }
 
     #[test]

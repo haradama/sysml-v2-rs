@@ -24,6 +24,18 @@ pub struct Feature {
 }
 
 impl Feature {
+    /// A line of prose, which names nothing and is declared as nothing.
+    pub(crate) fn prose(line: String) -> Feature {
+        Feature {
+            keyword: String::new(),
+            name: line,
+            ty: None,
+            multiplicity: None,
+            value: None,
+            direction: None,
+        }
+    }
+
     /// The compartment line as it appears in the drawing.
     pub fn label(&self) -> String {
         let mut line = String::new();
@@ -116,7 +128,7 @@ pub struct Node {
 /// Gather features into the compartments the standard stacks them in,
 /// keeping the order they were declared and the order the compartments
 /// were first needed.
-fn into_compartments(lines: Vec<(&'static str, Feature)>) -> Vec<Compartment> {
+fn into_compartments(name: &str, lines: Vec<(&'static str, Feature)>) -> Vec<Compartment> {
     let mut out: Vec<Compartment> = Vec::new();
     for (label, line) in lines {
         match out.iter_mut().find(|already| already.label == label) {
@@ -127,6 +139,7 @@ fn into_compartments(lines: Vec<(&'static str, Feature)>) -> Vec<Compartment> {
             }),
         }
     }
+    fill_prose(name, &mut out);
     out
 }
 
@@ -421,7 +434,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 id,
                 name: name.to_string(),
                 keyword: keyword(model.kind(id)),
-                compartments: into_compartments(features_of(model, id)),
+                compartments: into_compartments(name, features_of(model, id)),
                 is_abstract: is_abstract(model, id),
                 rounded: model.kind(id).is_a(ElementKind::Usage),
                 shape: Shape::Box,
@@ -639,9 +652,9 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         index.insert(child, nodes.len());
         nodes.push(Node {
             id: child,
-            name: label,
             keyword: box_keyword(model, child),
-            compartments: into_compartments(features),
+            compartments: into_compartments(&label, features),
+            name: label,
             is_abstract: is_abstract(model, child),
             rounded: model.kind(child).is_a(ElementKind::Usage),
             shape: shape_of(model.kind(child)),
@@ -1390,6 +1403,12 @@ fn annotation_keyword(relation: Relation) -> &'static str {
 /// like any other membership, back onto the box it left: the standard
 /// exempts no feature from being drawn, and a recursive structure is
 /// something a reader has to be able to see.
+///
+/// A port is the exception, because it is drawn: it sits on the border of
+/// what declares it, as its own square, and the line to what it is typed
+/// by leaves from that square. So a port names its end of the line, and
+/// two ports of one type get a line each -- one square each is what the
+/// drawing already has.
 fn compositions_of(
     model: &Model,
     definition: ElementId,
@@ -1397,7 +1416,7 @@ fn compositions_of(
     index: &HashMap<ElementId, usize>,
     edges: &mut Vec<Edge>,
 ) {
-    let mut linked: Vec<(usize, Relation)> = Vec::new();
+    let mut linked: Vec<(usize, Relation, Option<String>)> = Vec::new();
     for &child in model.owned(definition) {
         // Every feature a type owns is drawn from the type to what the
         // feature is typed by: the standard's `type-relationship` reads
@@ -1434,15 +1453,24 @@ fn compositions_of(
         let Some(&to) = model.type_of(child).and_then(|ty| index.get(&ty)) else {
             continue;
         };
-        if linked.contains(&(to, relation)) {
+        // naming the end is what puts the line on the port's square
+        // rather than on the box's border somewhere else, which would
+        // leave the square attached to nothing
+        let end = model
+            .kind(child)
+            .is_a(ElementKind::PortUsage)
+            .then(|| model.name(child))
+            .flatten()
+            .map(str::to_string);
+        if linked.contains(&(to, relation, end.clone())) {
             continue;
         }
-        linked.push((to, relation));
+        linked.push((to, relation, end.clone()));
         edges.push(Edge {
             from,
             to,
             relation,
-            ends: (None, None),
+            ends: (end, None),
             label: None,
         });
     }
@@ -1899,11 +1927,16 @@ fn notes_of(
 /// (`metadata-feature-name-value-list`).
 fn note_of(model: &Model, element: ElementId) -> Option<Node> {
     let (keyword, name, lines) = match model.kind(element) {
-        ElementKind::Comment => (
-            String::new(),
-            one_line(model.get(element, "body")?.as_str()?),
-            Vec::new(),
-        ),
+        ElementKind::Comment => {
+            // a note holds prose and nothing else, so it is drawn as a
+            // first line and the ones the wrapping put after it
+            let mut prose = wrapped(model.get(element, "body")?.as_str()?, PROSE).into_iter();
+            (
+                String::new(),
+                prose.next().unwrap_or_default(),
+                prose.map(Feature::prose).collect(),
+            )
+        }
         // `#Safety` names no metadata usage of its own, so what it is
         // typed by is the whole of its declaration
         ElementKind::MetadataUsage => (
@@ -2083,11 +2116,12 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
     };
     // none of these names an element: what each says is the text it was
     // written as -- the name exposed, the expression filtered by, or the
-    // prose itself
+    // prose itself, which is kept whole here and broken by [`fill_prose`],
+    // the only place that knows how wide the box holding it has become
     let named = model
         .get(member, "body")
         .and_then(Value::as_str)
-        .map(one_line)
+        .map(str::to_string)
         .or_else(|| written_text(model, member))?;
     Some((
         compartment,
@@ -2102,22 +2136,91 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
     ))
 }
 
-/// A block of prose as one compartment line. The standard writes `…`
-/// where a compartment holds more than it shows, and a paragraph on one
-/// line would set the width of the box it is in.
-fn one_line(text: &str) -> String {
-    const ROOM: usize = 60;
+/// A block of prose as compartment lines.
+///
+/// Where a comment was broken is where it fitted the source, not where it
+/// fits a box, so the words are run together and broken again to a width
+/// a box can hold -- a paragraph left on one line would set the width of
+/// everything drawn beside it. The standard writes `…` where a
+/// compartment holds more than it shows, and a doc long enough to crowd
+/// out the model is what that is for.
+fn wrapped(text: &str, room: usize) -> Vec<String> {
+    /// Lines of prose a box shows before the rest is left unsaid.
+    const MOST: usize = 6;
+
     // the `*` margin of a block comment is decoration, not what it says
-    let said = |line: &str| line.trim().trim_start_matches('*').trim().to_string();
-    let mut lines = text.lines().map(said).filter(|line| !line.is_empty());
-    let first = lines.next().unwrap_or_default();
-    let cut = first.char_indices().nth(ROOM).map(|(at, _)| at);
-    match (cut, lines.next().is_some()) {
-        (Some(at), _) => format!("{}\u{2026}", &first[..at]),
-        (None, true) => format!("{first}\u{2026}"),
-        (None, false) => first,
+    fn said(line: &str) -> &str {
+        line.trim().trim_start_matches('*').trim()
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.lines().flat_map(|line| said(line).split_whitespace()) {
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 1 + word.chars().count() <= room => {
+                line.push(' ');
+                line.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    if lines.len() > MOST {
+        lines.truncate(MOST);
+        lines[MOST - 1].push('\u{2026}');
+    }
+    lines
+}
+
+/// The width prose is broken to where a box is no wider than its prose.
+const PROSE: usize = 48;
+
+/// Break the prose in a box to the width the box already has.
+///
+/// A `doc` is the one compartment line long enough to need breaking, and
+/// breaking it to a width of its own leaves it ragged inside a box that
+/// something else has already made wider. So it is broken last, to
+/// whatever room the rest of the box takes, and sets the width itself
+/// only where it is the widest thing in there.
+fn fill_prose(name: &str, compartments: &mut [Compartment]) {
+    let counted = |text: &str| text.chars().count();
+    // the name is set bold, which takes more room than its characters say
+    let mut room = PROSE.max(counted(name) * 11 / 10);
+    for compartment in compartments.iter() {
+        if compartment.label == PROSE_COMPARTMENT {
+            continue;
+        }
+        room = room.max(counted(compartment.label));
+        for line in &compartment.lines {
+            room = room.max(counted(&line.label()));
+        }
+    }
+    for compartment in compartments
+        .iter_mut()
+        .filter(|held| held.label == PROSE_COMPARTMENT)
+    {
+        compartment.lines = compartment
+            .lines
+            .iter()
+            .flat_map(|line| {
+                // `\u{ab}rep\u{bb}` says which language the prose is in,
+                // which is said once however long the prose runs
+                let keyword = line.keyword.clone();
+                wrapped(&line.name, room)
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(at, said)| Feature {
+                        keyword: if at == 0 {
+                            keyword.clone()
+                        } else {
+                            String::new()
+                        },
+                        ..Feature::prose(said)
+                    })
+            })
+            .collect();
     }
 }
+
+/// The compartment the standard puts an element's own prose in.
+const PROSE_COMPARTMENT: &str = "doc";
 
 /// The text an element was written as, where the build kept one -- on the
 /// element itself, or on the expression it owns.
@@ -3114,8 +3217,9 @@ mod tests {
         // `textual-representation-node` the language and what it says
         let ws = resolved(
             "part def Thing {\n\
-             \tdoc /* A thing.\n\
-             \t * And more about it than one line holds.\n\
+             \tdoc /* A thing. And more about it than a single\n\
+             \t * line of a compartment could ever hold, which\n\
+             \t * is what the wrapping is for.\n\
              \t */\n\
              \trep asJson language \"json\" /* {} */\n\
              \tattribute a;\n\
@@ -3135,9 +3239,17 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 // the compartment is labelled `doc`, so the prose stands
-                // on its own, and the standard's own `\u{2026}` says there
-                // is more of it than the line holds
-                ("doc", "A thing.\u{2026}".to_string()),
+                // on its own -- broken where a box can hold it rather
+                // than where the comment happened to be written
+                (
+                    "doc",
+                    "A thing. And more about it than a single line of".to_string()
+                ),
+                (
+                    "doc",
+                    "a compartment could ever hold, which is what the".to_string()
+                ),
+                ("doc", "wrapping is for.".to_string()),
                 ("doc", "rep {}".to_string()),
                 ("attributes", "attribute a".to_string()),
             ]
@@ -3145,15 +3257,117 @@ mod tests {
     }
 
     #[test]
-    fn a_long_line_of_prose_is_cut_where_the_standard_cuts_one() {
-        assert_eq!(one_line("short"), "short");
-        assert_eq!(one_line("first\nsecond"), "first\u{2026}");
-        // the `*` margin of a block comment is decoration
-        assert_eq!(one_line("\n * said\n * and more\n"), "said\u{2026}");
-        assert_eq!(one_line("\n * only this\n"), "only this");
-        let long = "x".repeat(80);
-        assert_eq!(one_line(&long).chars().count(), 61);
-        assert!(one_line(&long).ends_with('\u{2026}'));
+    fn a_port_names_its_end_so_the_line_lands_on_its_square() {
+        // a port is drawn on the border of what declares it, and the
+        // line to what it is typed by leaves from that square; two ports
+        // of one type have a square each, so they have a line each
+        let ws = resolved(
+            "port def DigitalPin;\n\
+             port def SerialPort;\n\
+             part def Microcontroller {\n\
+             \tport digital : DigitalPin;\n\
+             \tport spare : DigitalPin;\n\
+             \tport serial : SerialPort;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .map(|edge| (edge.ends.0.clone(), diagram.nodes[edge.to].name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (Some("digital".to_string()), "DigitalPin"),
+                (Some("spare".to_string()), "DigitalPin"),
+                (Some("serial".to_string()), "SerialPort"),
+            ]
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_port_is_drawn_once_per_type_and_names_no_end() {
+        let ws = resolved(
+            "part def Wheel;\n\
+             part def Car {\n\
+             \tpart front : Wheel;\n\
+             \tpart rear : Wheel;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(diagram.edges.len(), 1);
+        assert_eq!(diagram.edges[0].ends, (None, None));
+    }
+
+    #[test]
+    fn prose_fills_a_box_that_something_else_has_widened() {
+        // 50 characters, which is more than prose alone is broken to
+        let prose = "An Arduino-compatible board with the sketch on it.";
+        let doc = |source: &str| {
+            let ws = resolved(source);
+            let diagram = definition_diagram(ws.model(), &[ws.root()]);
+            diagram.nodes[0]
+                .compartments
+                .iter()
+                .filter(|held| held.label == "doc")
+                .flat_map(|held| held.lines.iter().map(Feature::label))
+                .collect::<Vec<_>>()
+        };
+
+        // on its own the prose is what makes the box wide, so it is
+        // broken to the width prose is broken to
+        assert_eq!(
+            doc(&format!("part def Board {{ doc /* {prose} */ }}\n")),
+            ["An Arduino-compatible board with the sketch on", "it."]
+        );
+
+        // a line the box has to be wide enough for anyway gives the prose
+        // room it did not have, and it uses it
+        assert_eq!(
+            doc(&format!(
+                "part def Board {{\n\
+                 \tdoc /* {prose} */\n\
+                 \tattribute aNameLongEnoughToWidenTheBoxPastItsProse;\n\
+                 }}\n"
+            )),
+            [prose]
+        );
+    }
+
+    #[test]
+    fn prose_is_broken_where_a_box_can_hold_it() {
+        assert_eq!(wrapped("short", PROSE), ["short"]);
+        // where the source broke a comment is not where a box breaks it
+        assert_eq!(wrapped("first\nsecond", PROSE), ["first second"]);
+        // and the `*` margin of a block comment is decoration
+        assert_eq!(
+            wrapped("\n * said\n * and more\n", PROSE),
+            ["said and more"]
+        );
+        assert_eq!(wrapped("", PROSE), Vec::<String>::new());
+
+        // no line runs past the width, and no word is broken to fit
+        let prose = "the board shall show, without instruments, that it is running";
+        assert_eq!(
+            wrapped(prose, PROSE),
+            [
+                "the board shall show, without instruments, that",
+                "it is running"
+            ]
+        );
+        // the same prose in a wider box uses the room the box has
+        assert_eq!(wrapped(prose, 80), [prose]);
+
+        // a word too long for a line is left whole on one of its own
+        let word = "x".repeat(80);
+        assert_eq!(wrapped(&word, PROSE), std::slice::from_ref(&word));
+
+        // and prose long enough to crowd the model out is left unsaid,
+        // with the standard's ellipsis on the last line that is shown
+        let long = wrapped(&"word ".repeat(200), PROSE);
+        assert_eq!(long.len(), 6);
+        assert!(long[5].ends_with('\u{2026}'));
+        assert!(long[..5].iter().all(|line| line.chars().count() <= PROSE));
     }
 
     #[test]

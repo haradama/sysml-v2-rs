@@ -264,11 +264,11 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // border, and a second square beside it would be a
                 // second port that the model never had
                 let ((mut x1, mut y1), first_is_port) = match &edge.ends.0 {
-                    Some(end) => at_port(diagram, layout, edge.from, end, centre_of(to)),
+                    Some(end) => at_port(diagram, layout, edge.from, end, centre_of(to), style),
                     None => (border_point(from, centre_of(to)), false),
                 };
                 let ((mut x2, mut y2), second_is_port) = match &edge.ends.1 {
-                    Some(end) => at_port(diagram, layout, edge.to, end, centre_of(from)),
+                    Some(end) => at_port(diagram, layout, edge.to, end, centre_of(from), style),
                     None => (border_point(to, centre_of(from)), false),
                 };
                 // shift edges sharing a pair of boxes along the normal, so
@@ -289,14 +289,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // boxes are left downward and joined in a clear channel
                 // beneath the row, one lane per shared pair
                 let lane_shift = lane.abs() * style.line_height;
-                let detour = (
-                    (from.x + from.width / 2.0, from.y + from.height),
-                    (to.x + to.width / 2.0, to.y + to.height),
-                );
-                let bands = (
-                    band_below(layout, edge.from, style) + lane_shift,
-                    band_below(layout, edge.to, style) + lane_shift,
-                );
+                let Facing { detour, bands } = facing_sides(layout, edge, style, lane_shift);
                 let route = match given(layout, index) {
                     Some(walked) => Some(Detour::Given(walked)),
                     None => hidden(layout, (edge.from, edge.to), (x1, y1), (x2, y2))
@@ -563,6 +556,51 @@ fn polyline(walked: &[(f64, f64)]) -> String {
         .unwrap();
     }
     out
+}
+
+/// Which border each box is left through on a detour, and the gap the
+/// line runs along after it.
+///
+/// A line leaves a box on the side that faces the other one: where the
+/// layering has put a whole above its parts, it leaves the whole
+/// downward and arrives at the part from above. Between boxes in one row
+/// there is no such side, and both are left downward -- the one direction
+/// the canvas grows to make room in.
+fn facing_sides(layout: &Layout, edge: &Edge, style: &Style, lane_shift: f64) -> Facing {
+    let (from, to) = (&layout.placed[edge.from], &layout.placed[edge.to]);
+    let (middle, other) = (from.x + from.width / 2.0, to.x + to.width / 2.0);
+    if from.y + from.height <= to.y {
+        return Facing {
+            detour: ((middle, from.y + from.height), (other, to.y)),
+            bands: (
+                band_below(layout, edge.from, style) + lane_shift,
+                band_above(layout, edge.to, style) - lane_shift,
+            ),
+        };
+    }
+    if to.y + to.height <= from.y {
+        return Facing {
+            detour: ((middle, from.y), (other, to.y + to.height)),
+            bands: (
+                band_above(layout, edge.from, style) - lane_shift,
+                band_below(layout, edge.to, style) + lane_shift,
+            ),
+        };
+    }
+    Facing {
+        detour: ((middle, from.y + from.height), (other, to.y + to.height)),
+        bands: (
+            band_below(layout, edge.from, style) + lane_shift,
+            band_below(layout, edge.to, style) + lane_shift,
+        ),
+    }
+}
+
+/// Where a detour leaves its two boxes, and the gap each end runs along
+/// after it.
+struct Facing {
+    detour: ((f64, f64), (f64, f64)),
+    bands: (f64, f64),
 }
 
 /// A way round whole rows of boxes, for a line that cannot reach its
@@ -965,17 +1003,20 @@ fn lane_spacing(from: &Placed, to: &Placed, siblings: usize, style: &Style) -> f
 /// leaves room for a name.
 fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize, style: &Style) {
     for place in port_places(diagram, layout, at) {
-        let label = match &place.feature.ty {
-            Some(ty) => format!("{} : {ty}", place.feature.name),
-            None => place.feature.name.clone(),
-        };
+        // `port-label = QualifiedName (':' QualifiedName)?`: the name
+        // alone, because every port drawn on a border was read out of
+        // the box's own ports compartment, which says the type an inch
+        // away. Saying it twice only gives a line more to run through.
         marked(
             out,
-            place.at,
-            place.toward,
-            &label,
-            place.feature.direction,
-            place.rounded,
+            Marked {
+                at: place.at,
+                toward: place.toward,
+                peer: place.peer,
+                name: &place.feature.name,
+                direction: place.feature.direction,
+                rounded: place.rounded,
+            },
             style,
         );
     }
@@ -989,14 +1030,32 @@ fn at_port(
     at: usize,
     end: &str,
     toward: (f64, f64),
+    style: &Style,
 ) -> ((f64, f64), bool) {
     match port_places(diagram, layout, at)
         .into_iter()
         .find(|place| place.feature.name == end)
     {
-        Some(place) => (place.at, true),
+        // the line starts on the square's outer face rather than at its
+        // middle, so what it carries there -- a composition's diamond --
+        // sits against the port instead of on top of it
+        Some(place) => {
+            let clear = port_side(style) / 2.0;
+            (
+                (
+                    place.at.0 + place.away.0 * clear,
+                    place.at.1 + place.away.1 * clear,
+                ),
+                true,
+            )
+        }
         None => (border_point(&layout.placed[at], toward), false),
     }
+}
+
+/// How wide the square the standard draws a port as is.
+fn port_side(style: &Style) -> f64 {
+    0.6 * style.line_height
 }
 
 /// One port on a border: what it is, where it sits, and the point its
@@ -1005,6 +1064,10 @@ struct Placement<'a> {
     feature: &'a Feature,
     at: (f64, f64),
     toward: (f64, f64),
+    /// The way out of the box through the border the port sits on.
+    away: (f64, f64),
+    /// What the line leaving this port reaches, where one does.
+    peer: Option<(f64, f64)>,
     /// A parameter, drawn as the rounded rectangle `param-l` has rather
     /// than the square of a port.
     rounded: bool,
@@ -1076,6 +1139,8 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
             feature,
             at: point,
             toward: (point.0 + away.0 * 8.0, point.1 + away.1 * 8.0),
+            away,
+            peer,
             rounded,
         });
     }
@@ -1104,23 +1169,51 @@ fn port(
     direction: Option<&str>,
     style: &Style,
 ) {
-    marked(out, at, toward, name, direction, false, style)
+    marked(
+        out,
+        Marked {
+            at,
+            toward,
+            // the line runs straight to the other end, so the name has a
+            // side of it to be kept off
+            peer: Some(toward),
+            name,
+            direction,
+            rounded: false,
+        },
+        style,
+    )
+}
+
+/// A port to draw: the square straddling a border, the name beside it,
+/// and the direction the feature declares where it declares one.
+struct Marked<'a> {
+    /// The middle of the square, on the border it sits on.
+    at: (f64, f64),
+    /// A point the way out of the box, which the name is set beyond.
+    toward: (f64, f64),
+    /// What the line leaving the port reaches, where one does. The name
+    /// goes on the other side of the port from it, so that the line does
+    /// not run through the name it belongs to.
+    peer: Option<(f64, f64)>,
+    name: &'a str,
+    direction: Option<&'a str>,
+    rounded: bool,
 }
 
 /// The glyph straddling a border and the name beside it: `port-l` draws a
 /// square, `param-l` the same rounded, and the direction arrow goes inside
 /// either.
-#[allow(clippy::too_many_arguments)]
-fn marked(
-    out: &mut String,
-    at: (f64, f64),
-    toward: (f64, f64),
-    name: &str,
-    direction: Option<&str>,
-    rounded: bool,
-    style: &Style,
-) {
-    let side = 0.6 * style.line_height;
+fn marked(out: &mut String, mark: Marked<'_>, style: &Style) {
+    let Marked {
+        at,
+        toward,
+        peer,
+        name,
+        direction,
+        rounded,
+    } = mark;
+    let side = port_side(style);
     // `proxy-v`/`proxy-h` stand a circle in for what a name reaches
     // through the border rather than declares on it
     if name.contains('.') {
@@ -1148,27 +1241,31 @@ fn marked(
     let (dx, dy) = (toward.0 - at.0, toward.1 - at.1);
     let length = dx.hypot(dy).max(f64::EPSILON);
     let (ux, uy) = (dx / length, dy / length);
-    // just past the port and growing away from the box, so a long name
-    // cannot fall back across the border it belongs to
-    let anchor = if ux > 0.3 {
-        "start"
-    } else if ux < -0.3 {
-        "end"
-    } else {
-        "middle"
-    };
+    // The name is set just past the port and off to one side of it: the
+    // side the line is not on, so that the line and what it carries --
+    // a composition's diamond -- are not drawn over the name.
+    let along = 0.45 * style.line_height;
+    let (px, py) = (-uy, ux);
+    let across = across_of(style)
+        * match peer {
+            Some(peer) => {
+                let (dx, dy) = (peer.0 - at.0, peer.1 - at.1);
+                if dx * px + dy * py >= 0.0 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            None => 1.0,
+        };
+    // and it grows the way it was offset, so a long name never runs back
+    // over the square it belongs to
+    let put = beside_point(at, (ux, uy), along, across);
+    let anchor = if put.0 >= at.0 { "start" } else { "end" };
     if let Some(direction) = direction {
         direction_arrow(out, at, (ux, uy), direction, side);
     }
-    beside_with(
-        out,
-        at,
-        (ux, uy),
-        0.45 * style.line_height,
-        anchor,
-        style,
-        name,
-    );
+    label_at(out, put, anchor, name);
 }
 
 /// The arrow the standard draws inside a port's square -- `pdh` on a left
@@ -1228,6 +1325,11 @@ fn beside(out: &mut String, at: (f64, f64), toward: (f64, f64), text: &str, styl
     );
 }
 
+/// How far off the line a label set beside it is put.
+fn across_of(style: &Style) -> f64 {
+    -0.7 * style.line_height
+}
+
 /// Shared placement: `along` the given direction from `at`, then off to one
 /// side of it.
 fn beside_with(
@@ -1239,13 +1341,29 @@ fn beside_with(
     style: &Style,
     text: &str,
 ) {
-    let across = -0.7 * style.line_height;
-    writeln!(
+    label_at(
         out,
-        "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"{anchor}\" \
-         dominant-baseline=\"middle\">{}</text>",
+        beside_point(at, (ux, uy), along, across_of(style)),
+        anchor,
+        text,
+    );
+}
+
+/// Where a label set beside a line through `at` running `(ux, uy)` goes:
+/// `along` the line from there, then `across` to one side of it.
+fn beside_point(at: (f64, f64), (ux, uy): (f64, f64), along: f64, across: f64) -> (f64, f64) {
+    (
         at.0 + ux * along - uy * across,
         at.1 + uy * along + ux * across,
+    )
+}
+
+/// One line of text, anchored so that it grows the way it was put.
+fn label_at(out: &mut String, (x, y): (f64, f64), anchor: &str, text: &str) {
+    writeln!(
+        out,
+        "<text class=\"feature\" x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"{anchor}\" \
+         dominant-baseline=\"middle\">{}</text>",
         escape(text)
     )
     .unwrap();
@@ -1354,9 +1472,10 @@ mod tests {
         let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
 
         let (x1, y1) = border_point(whole, centre_of(part));
-        // the two boxes share a row, so the line leaves through a side
-        assert!((x1 - whole.x).abs() < f64::EPSILON || (x1 - (whole.x + whole.width)).abs() < 0.1);
-        assert!(y1 >= whole.y && y1 <= whole.y + whole.height);
+        // the whole is drawn above its part, so the line leaves the
+        // bottom border and arrives at the top of the other
+        assert!((y1 - (whole.y + whole.height)).abs() < 0.1, "{y1}");
+        assert!(x1 >= whole.x && x1 <= whole.x + whole.width);
         assert!(to_svg(&diagram, &placed, &style).contains(&format!("x1=\"{x1:.1}\"")));
         assert!(y1.is_finite());
     }
@@ -1370,16 +1489,80 @@ mod tests {
     }
 
     #[test]
+    fn a_line_leaves_each_box_on_the_side_that_faces_the_other() {
+        let style = Style::default();
+        let ws = resolved(
+            "part def LugBolt;\n\
+             part def Wheel { part lb : LugBolt; }\n\
+             part def Chassis {\n\
+             \tpart w : Wheel;\n\
+             \tpart lb : LugBolt;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let placed = layout(&diagram, &style);
+        let spanning = diagram
+            .edges
+            .iter()
+            .position(|edge| {
+                let (from, to) = (&placed.placed[edge.from], &placed.placed[edge.to]);
+                to.y > from.y + from.height + style.v_gap
+            })
+            .expect("the bolt is two rows below the chassis");
+        let edge = &diagram.edges[spanning];
+        let Facing {
+            detour: (leaves, arrives),
+            bands: (first, second),
+        } = facing_sides(&placed, edge, &style, 0.0);
+        let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
+
+        // down out of the whole and in through the top of the part
+        assert_eq!(leaves.1, whole.y + whole.height);
+        assert_eq!(arrives.1, part.y);
+        // and the gaps it runs along lie between them
+        assert!(first > whole.y + whole.height && first < part.y);
+        assert!(second > whole.y + whole.height && second < part.y);
+    }
+
+    #[test]
+    fn a_line_between_peers_leaves_both_downward() {
+        // neither box is above the other, so there is no facing side and
+        // the line drops into the gap under the row they share
+        let style = Style::default();
+        let ws = resolved(
+            "part def Sensor;\n\
+             part def Display;\n\
+             dependency from Sensor to Display;\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let placed = layout(&diagram, &style);
+        let joined = diagram
+            .edges
+            .iter()
+            .position(|edge| edge.relation == Relation::Dependency)
+            .expect("one definition depends on the other");
+        let edge = &diagram.edges[joined];
+        let Facing {
+            detour: (leaves, arrives),
+            bands: (first, second),
+        } = facing_sides(&placed, edge, &style, 0.0);
+        let (one, other) = (&placed.placed[edge.from], &placed.placed[edge.to]);
+
+        assert_eq!(leaves.1, one.y + one.height);
+        assert_eq!(arrives.1, other.y + other.height);
+        assert!(first > one.y + one.height && second > other.y + other.height);
+    }
+
+    #[test]
     fn a_line_that_would_run_under_a_box_steps_around_it() {
-        // `chs` and `rb` end up at opposite ends of the row, with the two
-        // boxes of `Wheel`/`LugBolt` between them
+        // `Chassis` is made of a wheel and of a bolt the wheel is made
+        // of too, so the line to the bolt has a row to get past
         let svg = svg_of(
             "part def LugBolt;\n\
              part def Wheel { part lb : LugBolt; }\n\
-             part def RollBar;\n\
              part def Chassis {\n\
              	part w : Wheel;\n\
-             	part rb : RollBar;\n\
+             	part lb : LugBolt;\n\
              }\n",
         );
         // the detour is a three-segment path, not a straight line
@@ -1547,8 +1730,8 @@ mod tests {
         }
         // and both ports are still named beside their own box, the way
         // `port-label = QualifiedName (':' QualifiedName)?` reads
-        assert!(svg.contains(">p : P</text>"), "{svg}");
-        assert!(svg.contains(">q : P</text>"), "{svg}");
+        assert!(svg.contains(">p</text>"), "{svg}");
+        assert!(svg.contains(">q</text>"), "{svg}");
     }
 
     #[test]
@@ -1582,10 +1765,9 @@ mod tests {
         let ws = resolved(
             "part def LugBolt;\n\
              part def Wheel { part lb : LugBolt; }\n\
-             part def RollBar;\n\
              part def Chassis {\n\
              	part w : Wheel;\n\
-             	part rb : RollBar;\n\
+             	part lb : LugBolt;\n\
              }\n",
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
@@ -1695,19 +1877,65 @@ mod tests {
     }
 
     #[test]
-    fn a_port_on_a_horizontal_border_keeps_its_name_centred() {
-        // a line arriving from below has no side to grow away along, so the
-        // name sits over the port instead
+    fn a_port_sets_its_name_on_the_side_its_line_is_not_on() {
+        // the line leaves the left border going down, so the name goes up
+        let style = Style::default();
+        let above = |out: &str| {
+            let y: f64 = out
+                .split("<text")
+                .nth(1)
+                .and_then(|text| text.split("y=\"").nth(1))
+                .and_then(|value| value.split('"').next())
+                .and_then(|value| value.parse().ok())
+                .expect("the name states where it sits");
+            y < 20.0
+        };
+        let beside = |peer: (f64, f64)| {
+            let mut out = String::new();
+            marked(
+                &mut out,
+                Marked {
+                    at: (50.0, 20.0),
+                    // the border faces left, whatever the line then does
+                    toward: (42.0, 20.0),
+                    peer: Some(peer),
+                    name: "p",
+                    direction: None,
+                    rounded: false,
+                },
+                &style,
+            );
+            out
+        };
+        let down = beside((10.0, 90.0));
+        assert!(above(&down), "{down}");
+
+        // and the other way round when the line leaves going up
+        let up = beside((10.0, -50.0));
+        assert!(!above(&up), "{up}");
+    }
+
+    #[test]
+    fn a_port_on_a_horizontal_border_sets_its_name_beside_it() {
+        // a line leaving straight down has no room under the port for a
+        // name, so the name goes to one side of it and grows that way --
+        // centred, it would be drawn over its own square
+        let style = Style::default();
         let mut out = String::new();
-        port(
-            &mut out,
-            (50.0, 20.0),
-            (50.0, 90.0),
-            "p",
-            None,
-            &Style::default(),
+        port(&mut out, (50.0, 20.0), (50.0, 90.0), "p", None, &style);
+
+        assert!(out.contains("text-anchor=\"start\""), "{out}");
+        let x: f64 = out
+            .split("<text")
+            .nth(1)
+            .and_then(|text| text.split("x=\"").nth(1))
+            .and_then(|value| value.split('"').next())
+            .and_then(|value| value.parse().ok())
+            .expect("the name states where it starts");
+        assert!(
+            x > 50.0 + port_side(&style) / 2.0,
+            "the name covers its port"
         );
-        assert!(out.contains("text-anchor=\"middle\""));
     }
 
     /// The tips a port's direction arrow draws, and which way each points:
@@ -1767,8 +1995,10 @@ mod tests {
             glyphs.iter().all(|glyph| !glyph.contains("rx=\"0.0\"")),
             "a parameter is not square: {glyphs:?}"
         );
-        assert!(svg.contains(">cold : Temp</text>"), "{svg}");
-        assert!(svg.contains(">hot : Temp</text>"), "{svg}");
+        // the name beside the glyph, the type in the compartment
+        assert!(svg.contains(">cold</text>"), "{svg}");
+        assert!(svg.contains(">hot</text>"), "{svg}");
+        assert!(svg.contains(">in item cold : Temp</text>"), "{svg}");
     }
 
     #[test]
@@ -2026,6 +2256,30 @@ mod tests {
     }
 
     #[test]
+    fn a_package_tab_is_clear_of_what_the_package_holds() {
+        // the tab is drawn inside the frame, so a box at the very top of
+        // it would have its own border drawn along the tab's bottom line
+        // and the two would read as one
+        let style = Style::default();
+        let ws = resolved(
+            "package Outer {\n\
+             \tpart def A;\n\
+             \tpackage Inner { part def C; }\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let placed = layout(&diagram, &style);
+        let tab = 2.0 * style.padding + style.line_height;
+        for (group, frame) in diagram.groups.iter().zip(&placed.packages) {
+            for &at in &group.nodes {
+                let clear = frame.y + tab + style.padding;
+                let named = &diagram.nodes[at].name;
+                assert!(placed.placed[at].y >= clear, "{named} is under the tab");
+            }
+        }
+    }
+
+    #[test]
     fn a_package_that_owns_only_packages_is_drawn_round_them() {
         let ws = resolved(
             "package Top {\n\
@@ -2254,9 +2508,12 @@ mod tests {
              }\n",
         );
         assert_eq!(svg.matches("<rect class=\"port\"").count(), 2, "{svg}");
-        // each is named beside itself, and still listed in the stack
-        assert!(svg.contains(">fuelIn : Fuel</text>"), "{svg}");
-        assert!(svg.contains(">airIn : Air</text>"), "{svg}");
+        // each is named beside itself. The name alone: the compartment
+        // an inch away says what it is typed by, and a second copy of
+        // that only gives a line more to be drawn through
+        assert!(svg.contains(">fuelIn</text>"), "{svg}");
+        assert!(svg.contains(">airIn</text>"), "{svg}");
+        assert!(!svg.contains(">fuelIn : Fuel</text>"), "{svg}");
         assert!(svg.contains(">port fuelIn : Fuel</text>"), "{svg}");
         // and the two sit on opposite edges rather than on top of one
         // another
