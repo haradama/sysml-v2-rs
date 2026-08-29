@@ -43,7 +43,7 @@ jobs:
   # that breaks it would otherwise go unnoticed: nothing else compiles
   # this TypeScript
   vscode:
-    name: VSCode extension compiles
+    name: VSCode extension compiles and its preview page works
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +56,11 @@ jobs:
         working-directory: editors/vscode
       - name: compile
         run: npm run compile
+        working-directory: editors/vscode
+      # the preview page is plain JavaScript that TypeScript never sees,
+      # so it is driven under a DOM instead
+      - name: test
+        run: npm test
         working-directory: editors/vscode
 
   coverage:

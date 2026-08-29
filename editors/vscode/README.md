@@ -30,6 +30,18 @@ closed until you ask for it again (`SysML: Open Diagram Preview`, or the
 button in the editor title bar); `sysml.preview.openAutomatically` turns
 the opening off for good.
 
+Its toolbar zooms: `+` and `-` step by a fifth, `1:1` goes back to the
+size it was drawn at, and `Fit` scales it to the window. Ctrl (or
+command) and the wheel zoom towards the pointer, the wheel by itself
+scrolls, dragging pans, and `+`, `-` and `0` do what the buttons do. An
+edit redraws without disturbing where you had scrolled to or how far in
+you had zoomed.
+
+`Save...` writes the diagram out. The format follows the name you give
+it: `.svg` saves what the server drew, and `.png` saves the preview's own
+rendering of it at twice the size -- in the colours and on the background
+you are looking at it in, so a dark theme saves the dark drawing.
+
 ## What resolves against what
 
 Every `.sysml`/`.kerml` file in the workspace folders is part of the

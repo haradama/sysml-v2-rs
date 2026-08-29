@@ -154,7 +154,8 @@
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
     "package": "vsce package",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "test": "npm run compile && node --test test/*.test.mjs"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -162,6 +163,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
+    "jsdom": "^30.0.1",
     "typescript": "^5.4.0"
   },
   "activationEvents": [

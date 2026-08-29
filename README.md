@@ -337,7 +337,10 @@ make vscode   # build server, bundle it with the standard library, package, inst
 
 The preview opens beside the editor when a model file is opened and
 follows what you edit; closing it keeps it closed
-(`sysml.preview.openAutomatically`).
+(`sysml.preview.openAutomatically`). Its toolbar zooms -- buttons, `Fit`,
+ctrl and the wheel towards the pointer, drag to pan -- and keeps where you
+were across a redraw, and `Save...` writes the diagram out as SVG or PNG
+under a name you give it.
 
 The whole workspace is the model: every `.sysml`/`.kerml` file under the
 open folders resolves against every other, whether or not it is in a tab,

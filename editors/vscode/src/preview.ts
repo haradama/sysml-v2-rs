@@ -3,8 +3,13 @@
 
 import * as vscode from "vscode";
 import { LanguageClient } from "vscode-languageclient/node";
+import { page } from "./page";
 
 type View = "definitions" | "internal" | "browser";
+
+/// What the preview is showing: a drawing, or a line of text where there
+/// is none to show.
+type Drawing = { kind: "svg" | "message"; body: string };
 
 /// Whether a SysML or KerML document is what an editor is showing.
 function isModel(editor: vscode.TextEditor | undefined): boolean {
@@ -26,6 +31,8 @@ export class Preview {
   /// still opening the document when the preview opens with it, so the
   /// first answer is often none -- but not for ever.
   private waiting = 0;
+  /// The drawing on screen, which is also the one a save writes out.
+  private drawing: Drawing | undefined;
 
   constructor(
     private readonly client: () => LanguageClient | undefined,
@@ -87,19 +94,99 @@ export class Preview {
         { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
         { enableScripts: true }
       );
+      // the page is written once and the drawings are posted into it, so
+      // that a keystroke redraws without throwing away where the reader
+      // had scrolled to and how far in they had zoomed
+      this.panel.webview.html = page();
       this.panel.onDidDispose(() => {
         this.panel = undefined;
         this.dismissed = true;
       });
-      this.panel.webview.onDidReceiveMessage((message) => {
-        if (message.command === "setView") {
-          this.view = message.view;
-          this.element = message.element || undefined;
+      this.panel.webview.onDidReceiveMessage((message) =>
+        this.receive(message)
+      );
+      // a hidden panel is torn down and rebuilt when it comes back, and
+      // the rebuilt page starts empty until it is drawn into again
+      this.panel.onDidChangeViewState(() => {
+        if (this.panel?.visible) {
           this.scheduleRender();
         }
       });
     }
     await this.render();
+  }
+
+  private receive(message: {
+    command: string;
+    view?: View;
+    element?: string;
+    png?: string;
+  }): void {
+    if (message.command === "ready") {
+      void this.render();
+    } else if (message.command === "setView") {
+      this.view = message.view ?? "definitions";
+      this.element = message.element || undefined;
+      this.scheduleRender();
+    } else if (message.command === "save") {
+      void this.save(message.png);
+    }
+  }
+
+  /// Write the drawing to a file the reader names.
+  ///
+  /// The format follows the name they give it: the SVG is what the server
+  /// drew, and a PNG is the webview's rendering of that same drawing,
+  /// which is why it arrives with the request rather than being made here.
+  private async save(png: string | undefined): Promise<void> {
+    if (!this.uri || this.drawing?.kind !== "svg") {
+      await vscode.window.showWarningMessage("There is no diagram to save.");
+      return;
+    }
+    const file = this.uri.path.split("/").pop() ?? "diagram";
+    const stem = file.replace(/\.(sysml|kerml)$/i, "");
+    const about =
+      this.view === "internal" && this.element ? this.element : this.view;
+    // a qualified name is a legal thing to ask for and an illegal thing
+    // to call a file, on Windows at least
+    const named = `${stem}-${about}`.replace(/[^\w.-]+/g, "-");
+    // an untitled buffer is nowhere, so the folder that is open stands in
+    const beside =
+      this.uri.scheme === "file"
+        ? vscode.Uri.joinPath(this.uri, "..")
+        : vscode.workspace.workspaceFolders?.[0]?.uri;
+    const target = await vscode.window.showSaveDialog({
+      title: "Save diagram",
+      ...(beside
+        ? { defaultUri: vscode.Uri.joinPath(beside, `${named}.svg`) }
+        : {}),
+      filters: { "SVG image": ["svg"], "PNG image": ["png"] },
+    });
+    if (!target) {
+      return;
+    }
+    if (target.path.toLowerCase().endsWith(".png")) {
+      if (!png) {
+        await vscode.window.showErrorMessage(
+          "The preview could not turn this diagram into a PNG. Save it as SVG instead."
+        );
+        return;
+      }
+      await vscode.workspace.fs.writeFile(target, Buffer.from(png, "base64"));
+    } else {
+      await vscode.workspace.fs.writeFile(
+        target,
+        Buffer.from(this.drawing.body, "utf8")
+      );
+    }
+    const name = target.path.split("/").pop();
+    const choice = await vscode.window.showInformationMessage(
+      `Saved ${name}`,
+      "Open"
+    );
+    if (choice === "Open") {
+      await vscode.commands.executeCommand("vscode.open", target);
+    }
   }
 
   private scheduleRender(): void {
@@ -115,7 +202,7 @@ export class Preview {
       return;
     }
     this.panel.title = `Preview ${this.uri.path.split("/").pop()}`;
-    let svg: string;
+    let drawing: Drawing;
     try {
       const result = await client.sendRequest<{ svg: string } | null>(
         "sysml/diagram",
@@ -130,61 +217,27 @@ export class Preview {
       );
       if (result) {
         this.waiting = 0;
-        svg = result.svg;
+        drawing = { kind: "svg", body: result.svg };
       } else {
-        svg = "<p>Nothing to draw yet — the document may still be loading.</p>";
+        drawing = {
+          kind: "message",
+          body: "Nothing to draw yet — the document may still be loading.",
+        };
         if (this.waiting < 10) {
           this.waiting += 1;
           this.scheduleRender();
         }
       }
     } catch (error) {
-      svg = `<p>Preview failed: ${String(error)}</p>`;
+      drawing = { kind: "message", body: `Preview failed: ${String(error)}` };
     }
-    this.panel.webview.html = this.html(svg);
-  }
-
-  private html(svg: string): string {
-    const internal = this.view === "internal";
-    return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body { padding: 0.5em; }
-  #bar { display: flex; gap: 0.5em; align-items: center; margin-bottom: 0.5em;
-         font-family: var(--vscode-font-family); font-size: 12px; }
-  select, input {
-    background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, transparent); padding: 2px 4px;
-  }
-  #diagram { overflow: auto; }
-  #diagram svg { max-width: none; }
-</style>
-</head>
-<body>
-<div id="bar">
-  <select id="view">
-    <option value="definitions"${this.view === "definitions" ? " selected" : ""}>Definitions</option>
-    <option value="internal"${internal ? " selected" : ""}>Internal structure</option>
-    <option value="browser"${this.view === "browser" ? " selected" : ""}>Tree</option>
-  </select>
-  <input id="element" placeholder="element name"
-         value="${this.element ?? ""}" style="display:${internal ? "inline" : "none"}">
-</div>
-<div id="diagram">${svg}</div>
-<script>
-  const vscode = acquireVsCodeApi();
-  const view = document.getElementById("view");
-  const element = document.getElementById("element");
-  function send() {
-    element.style.display = view.value === "internal" ? "inline" : "none";
-    vscode.postMessage({ command: "setView", view: view.value, element: element.value });
-  }
-  view.addEventListener("change", send);
-  element.addEventListener("change", send);
-</script>
-</body>
-</html>`;
+    this.drawing = drawing;
+    await this.panel.webview.postMessage({
+      command: "draw",
+      kind: drawing.kind,
+      body: drawing.body,
+      view: this.view,
+      element: this.element ?? "",
+    });
   }
 }
