@@ -727,7 +727,34 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     // a `part big :> engine` whose `engine` is not one of the boxes says
     // it in words, the same way a definition does
     let performed = performers(model);
+    let satisfied = satisfiers(model);
     for node in &mut nodes {
+        // what satisfies a requirement is drawn as a line where both ends
+        // are on the canvas, and said in the compartment where they are
+        // not
+        let lines: Vec<Feature> = satisfied
+            .get(&node.id)
+            .into_iter()
+            .flatten()
+            // one already on the canvas is joined to the requirement by
+            // the line the standard draws, and saying it twice adds
+            // nothing
+            .filter(|(by, _)| !index.contains_key(by))
+            .map(|(_, name)| Feature {
+                keyword: String::new(),
+                name: name.clone(),
+                ty: None,
+                multiplicity: None,
+                value: None,
+                direction: None,
+            })
+            .collect();
+        if !lines.is_empty() {
+            node.compartments.push(Compartment {
+                label: "satisfies",
+                lines,
+            });
+        }
         // the lane a node is drawn in is headed by the first performer,
         // so the compartment only has something left to say when there
         // is more than one
@@ -1884,6 +1911,35 @@ fn note_of(model: &Model, element: ElementId) -> Option<Node> {
         children: Vec::new(),
         links: Vec::new(),
     })
+}
+
+/// What satisfies each requirement, by the assertions that say so.
+///
+/// `satisfy r by p;` is drawn as a line where both ends are on the
+/// canvas, and where they are not the requirement said nothing about
+/// being satisfied at all. The standard keeps a `satisfies-compartment`
+/// for it.
+fn satisfiers(model: &Model) -> HashMap<ElementId, Vec<(ElementId, String)>> {
+    let mut out: HashMap<ElementId, Vec<(ElementId, String)>> = HashMap::new();
+    let assertions = model.ids().filter_map(|id| {
+        model
+            .kind(id)
+            .is_a(ElementKind::SatisfyRequirementUsage)
+            .then_some(())?;
+        // `not satisfy r by p;` asserts that it does not, and a list of
+        // what satisfies a requirement is no place to say so
+        (model.get(id, "isNegated") != Some(&Value::Bool(true))).then_some(())?;
+        let requirement = single_reference(model, id, "satisfiedRequirement")?;
+        let by = single_reference(model, id, "satisfyingFeature")?;
+        Some((requirement, by, effective_name(model, by)?))
+    });
+    for (requirement, by, name) in assertions {
+        let listed = out.entry(requirement).or_default();
+        if !listed.iter().any(|(drawn, _)| *drawn == by) {
+            listed.push((by, name.to_string()));
+        }
+    }
+    out
 }
 
 /// Who performs each action, by the actions they say they perform.
@@ -4116,6 +4172,56 @@ mod interconnection_tests {
                 vec!["Logical".to_string(), "Physical".to_string()]
             )]
         );
+    }
+
+    #[test]
+    fn a_requirement_says_what_satisfies_it_where_no_line_can() {
+        // `satisfies-compartment = UsageDeclaration* '\u{2026}'?`: the
+        // satisfaction is a line where both ends are on the canvas, and
+        // where they are not the requirement said nothing at all
+        let ws = resolved(
+            "part def Rocket;\n\
+             requirement def Lift;\n\
+             part def System {\n\
+             \trequirement lift : Lift;\n\
+             \tpart rocket : Rocket;\n\
+             \tsatisfy lift by rocket;\n\
+             }\n\
+             part def Other { part spare : Rocket; }\n\
+             part def Wider { requirement lift2 : Lift; }\n\
+             satisfy Wider::lift2 by Other::spare;\n",
+        );
+        // drawn together: the line says it, and the compartment does not
+        let inside = interconnection_diagram(ws.model(), definition(&ws, "System"));
+        assert!(inside
+            .edges
+            .iter()
+            .any(|edge| edge.relation == Relation::Satisfy));
+        assert!(inside.nodes.iter().all(|node| node.compartments.is_empty()));
+
+        // the satisfier outside: no line to draw, so it is said in words
+        let apart = interconnection_diagram(ws.model(), definition(&ws, "Wider"));
+        assert_eq!(
+            apart.nodes[0]
+                .compartments
+                .iter()
+                .map(|compartment| (compartment.label, compartment.lines[0].label()))
+                .collect::<Vec<_>>(),
+            [("satisfies", "spare".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_negated_satisfaction_is_no_satisfaction_to_list() {
+        let ws = resolved(
+            "part def Rocket;\n\
+             requirement def Lift;\n\
+             part def Other { part spare : Rocket; }\n\
+             part def Wider { requirement lift2 : Lift; }\n\
+             not satisfy Wider::lift2 by Other::spare;\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Wider"));
+        assert!(diagram.nodes[0].compartments.is_empty());
     }
 
     #[test]

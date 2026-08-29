@@ -189,6 +189,10 @@ node has more than one performer the lane names the first and the
 `performed-by-compartment` names them all; with one there is nothing
 left for it to say.
 
+A requirement says what satisfies it where no line can: the satisfaction
+is drawn as a line where both ends are on the canvas, and listed in the
+standard's `satisfies-compartment` where the satisfier is not.
+
 What a definition relates to that is not on the canvas is said in words
 rather than left unsaid: the standard's `relationships-compartment`
 (`el-prefix? relationship-name QualifiedName`) holds `specializes
