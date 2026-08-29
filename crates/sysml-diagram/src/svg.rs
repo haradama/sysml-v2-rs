@@ -33,6 +33,7 @@ const CSS: &str = "\
 .dependency { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
 .succession { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 4 3; }\n\
 .lifeline { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 3 4; }\n\
+.lane { fill: none; stroke: var(--line); stroke-width: 1; }\n\
 .name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
 .keyword, .feature { fill: var(--muted); }\n\
@@ -82,6 +83,32 @@ pub(crate) fn markers() -> String {
 /// be written to a `.svg` file or inlined into HTML as-is.
 pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     let mut out = markers();
+    // the swimlanes first, so every box and line sits on top of them
+    for column in &layout.lanes {
+        writeln!(
+            out,
+            "<rect class=\"lane\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" \
+             height=\"{:.1}\"/>\n\
+             <line class=\"rule\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\"/>",
+            column.x,
+            column.top,
+            column.width,
+            column.height,
+            column.x,
+            column.top + 2.0 * style.padding + style.line_height,
+            column.x + column.width,
+            column.top + 2.0 * style.padding + style.line_height,
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "<text class=\"name\" x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\">{}</text>",
+            column.x + column.width / 2.0,
+            column.top + style.padding + 0.75 * style.line_height,
+            escape(&column.name)
+        )
+        .unwrap();
+    }
 
     // edges first, so the boxes paint over the line ends. Ports sit on
     // those borders and must survive, so they are held back until after.
@@ -1338,6 +1365,7 @@ mod tests {
             width: 520.0,
             height: 270.0,
             routes: Vec::new(),
+            lanes: Vec::new(),
         };
         let svg = to_svg(&diagram, &placed, &style);
         assert!(svg.contains("<path class=\"edge\" fill=\"none\" d=\"M 450.0 200.0 V "));
@@ -1383,6 +1411,7 @@ mod tests {
             width: 600.0,
             height: 700.0,
             routes: Vec::new(),
+            lanes: Vec::new(),
         };
         let bend = vec![(50.0, 40.0), (50.0, 120.0), (300.0, 120.0), (300.0, 200.0)];
         let bent = Layout {
@@ -1420,6 +1449,7 @@ mod tests {
             width: 452.0,
             height: 300.0,
             routes: Vec::new(),
+            lanes: Vec::new(),
         }
     }
 
@@ -1488,6 +1518,7 @@ mod tests {
             width: 320.0,
             height: 100.0,
             routes: Vec::new(),
+            lanes: Vec::new(),
         };
         let band = band_below(&side_by_side, 0, &style);
         assert_eq!(
@@ -1883,6 +1914,45 @@ mod tests {
         assert!(svg.contains("<path class=\"box\" d=\"M"), "{svg}");
         assert!(svg.contains(">Said.</text>"), "{svg}");
         assert_eq!(svg.matches("class=\"dependency\"").count(), 1);
+    }
+
+    #[test]
+    fn a_swimlane_is_headed_by_its_performer_and_holds_what_it_carries_out() {
+        let ws = resolved(
+            "action def Generate;\n\
+             action def Convert;\n\
+             action providePower {\n\
+             \taction generateTorque : Generate;\n\
+             \taction convert : Convert;\n\
+             }\n\
+             part def Engine { perform providePower.generateTorque; }\n\
+             part def Gearbox { perform providePower.convert; }\n",
+        );
+        let power = ws
+            .named_elements()
+            .find(|(_, name)| *name == "providePower")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), power);
+        let layout = crate::layout(&diagram, &Style::default());
+        let svg = to_svg(&diagram, &layout, &Style::default());
+        assert_eq!(svg.matches("class=\"lane\"").count(), 2, "{svg}");
+        assert!(svg.contains(">Engine</text>"), "{svg}");
+
+        // the lanes touch on their vertical edges and are aligned along
+        // the top and the bottom, the way the standard's note has it
+        assert_eq!(layout.lanes.len(), 2);
+        let (first, second) = (&layout.lanes[0], &layout.lanes[1]);
+        assert_eq!(first.x + first.width, second.x);
+        assert_eq!((first.top, first.height), (second.top, second.height));
+        // and each box sits inside the lane that carries it out
+        for (lane, column) in diagram.lanes.iter().zip(&layout.lanes) {
+            for &at in &lane.nodes {
+                let placed = &layout.placed[at];
+                assert!(placed.x >= column.x, "a box outside its lane");
+                assert!(placed.x + placed.width <= column.x + column.width);
+            }
+        }
     }
 
     #[test]

@@ -176,9 +176,14 @@ between boxes widens to fit the names drawn in it. Connections reaching outside 
 two features of the same part, are left undrawn.
 
 An action says who carries it out: `part p { perform flow.step; }` is how
-a model says which part performs a step, and the standard keeps a
-`performed-by-compartment` for it. The step itself said nothing about it
-before.
+a model says which part performs a step, and the view is partitioned by
+it -- `perform-actions-swimlanes = (swimlane)*`, one column per
+performer, headed by its name, attached to its neighbours on the
+vertical edges and aligned along the top and bottom. A node nothing
+names a performer for is in no lane and is drawn above them. Where a
+node has more than one performer the lane names the first and the
+`performed-by-compartment` names them all; with one there is nothing
+left for it to say.
 
 What a definition relates to that is not on the canvas is said in words
 rather than left unsaid: the standard's `relationships-compartment`

@@ -355,11 +355,24 @@ pub struct Edge {
     pub label: Option<String>,
 }
 
+/// One swimlane: a performer and the nodes it carries out, in the order
+/// the flow declares them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lane {
+    pub name: String,
+    /// Indices into [`Diagram::nodes`].
+    pub nodes: Vec<usize>,
+}
+
 /// The definitions to draw and the specializations between them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagram {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// `perform-actions-swimlanes = (swimlane)*` -- the performers this
+    /// view is partitioned by, empty where nothing says who performs
+    /// what. A node in no lane is drawn in the view alongside them.
+    pub lanes: Vec<Lane>,
 }
 
 /// Collect every named definition owned (directly or transitively) by one of
@@ -468,7 +481,11 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
         }
     }
 
-    Diagram { nodes, edges }
+    Diagram {
+        nodes,
+        edges,
+        lanes: Vec::new(),
+    }
 }
 
 /// The internal structure of one definition: a box per part, state or action
@@ -639,8 +656,11 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     // it in words, the same way a definition does
     let performed = performers(model);
     for node in &mut nodes {
+        // the lane a node is drawn in is headed by the first performer,
+        // so the compartment only has something left to say when there
+        // is more than one
         let lines = performed_by(&performed, node.id);
-        if !lines.is_empty() {
+        if lines.len() > 1 {
             node.compartments.push(Compartment {
                 label: "performed by",
                 lines,
@@ -654,8 +674,28 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             });
         }
     }
+    // `perform-actions-swimlanes = (swimlane)*`: the view is partitioned
+    // by who carries each node out, in the order the performers first
+    // take part. What nothing says a performer for is in no lane.
+    let mut lanes: Vec<Lane> = Vec::new();
+    for (at, node) in nodes.iter().enumerate() {
+        let Some(name) = performed.get(&node.id).and_then(|by| by.first()) else {
+            continue;
+        };
+        match lanes.iter_mut().find(|lane| &lane.name == name) {
+            Some(lane) => lane.nodes.push(at),
+            None => lanes.push(Lane {
+                name: name.clone(),
+                nodes: vec![at],
+            }),
+        }
+    }
 
-    Diagram { nodes, edges }
+    Diagram {
+        nodes,
+        edges,
+        lanes,
+    }
 }
 
 /// Which line the standard draws for a two-ended statement.
@@ -3913,6 +3953,8 @@ mod interconnection_tests {
              part def Physical { perform providePower.generateTorque; }\n",
         );
         let diagram = interconnection_diagram(ws.model(), definition(&ws, "providePower"));
+        // two performers, so the lane heading names one and the
+        // compartment still has the rest to say
         assert_eq!(
             diagram.nodes[0]
                 .compartments
@@ -3931,6 +3973,47 @@ mod interconnection_tests {
                 vec!["Logical".to_string(), "Physical".to_string()]
             )]
         );
+    }
+
+    #[test]
+    fn a_view_is_partitioned_by_who_carries_each_node_out() {
+        // `perform-actions-swimlanes = (swimlane)*`, one per performer in
+        // the order they first take part
+        let ws = resolved(
+            "action def Generate;\n\
+             action def Convert;\n\
+             action providePower {\n\
+             \taction generateTorque : Generate;\n\
+             \taction convert : Convert;\n\
+             \taction spare : Convert;\n\
+             }\n\
+             part def Engine { perform providePower.generateTorque; }\n\
+             part def Gearbox { perform providePower.convert; }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "providePower"));
+        let names = |at: &usize| diagram.nodes[*at].name.clone();
+        assert_eq!(
+            diagram
+                .lanes
+                .iter()
+                .map(|lane| (
+                    lane.name.as_str(),
+                    lane.nodes.iter().map(names).collect::<Vec<_>>()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("Engine", vec!["generateTorque : Generate".to_string()]),
+                ("Gearbox", vec!["convert : Convert".to_string()]),
+            ]
+        );
+        // `spare` is in no lane: nothing says who carries it out
+        assert_eq!(diagram.nodes.len(), 3);
+        // and the lane says who performs it, so the compartment does not
+        // say it a second time
+        assert!(diagram
+            .nodes
+            .iter()
+            .all(|node| node.compartments.is_empty()));
     }
 
     #[test]

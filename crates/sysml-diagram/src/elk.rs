@@ -202,6 +202,8 @@ fn parse_elk(
         width: number(&graph, "width")? + 2.0 * style.margin,
         height: number(&graph, "height")? + 2.0 * style.margin,
         routes: routes_of(&graph, diagram, style),
+        // the engine arranged the boxes; the swimlane bands are ours
+        lanes: Vec::new(),
     })
 }
 

@@ -1,7 +1,7 @@
 //! Layered layout: every supertype sits above the subtypes that specialize
 //! it, and each layer is ordered to keep the edges between layers untangled.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::graph::{Node, Relation, Shape};
 use crate::{Diagram, Edge, Style};
@@ -35,6 +35,21 @@ pub struct Layout {
     /// straight through a layout that expected bends puts lines where
     /// the engine left no room for them.
     pub routes: Vec<Vec<(f64, f64)>>,
+    /// Where each swimlane's column sits, in the diagram's lane order.
+    /// Empty where the view is not partitioned by performer.
+    pub lanes: Vec<Column>,
+}
+
+/// One swimlane's column: what it is headed by and the band it occupies.
+/// The lanes are attached to each other on their vertical edges and
+/// aligned along the top and bottom, the way the standard's note has it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Column {
+    pub name: String,
+    pub x: f64,
+    pub width: f64,
+    pub top: f64,
+    pub height: f64,
 }
 
 /// Assign every node of `diagram` a position.
@@ -44,11 +59,101 @@ pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
         .iter()
         .map(|node| box_size(node, style))
         .collect();
+    if !diagram.lanes.is_empty() {
+        return swimlanes(diagram, &sizes, style);
+    }
     let gaps = label_gaps(diagram, style);
     let ranks = ranks(diagram);
     let layers = order_layers(diagram, &ranks);
     let rows = wrap_layers(&layers, &sizes, &gaps, style);
     place(&sizes, &rows, &gaps, style)
+}
+
+/// Lay a view out by who carries each node out.
+///
+/// `swimlane = usage-name-compartment &action-flow-node*`: each performer
+/// gets a column headed by its name, holding its nodes in the order the
+/// flow declares them. What nothing says a performer for is drawn in a
+/// row above the columns, which is where the standard's `action-flow-view`
+/// puts the elements its swimlanes do not cover.
+fn swimlanes(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
+    let mut placed: Vec<Placed> = sizes
+        .iter()
+        .enumerate()
+        .map(|(node, &(width, height))| Placed {
+            node,
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        })
+        .collect();
+
+    // the loose nodes first: one row, left to right, above the columns
+    let laned: HashSet<usize> = diagram
+        .lanes
+        .iter()
+        .flat_map(|lane| lane.nodes.iter().copied())
+        .collect();
+    let loose: Vec<usize> = (0..sizes.len()).filter(|at| !laned.contains(at)).collect();
+    let mut next = style.margin;
+    for &at in &loose {
+        placed[at].x = next;
+        placed[at].y = style.margin;
+        next += sizes[at].0 + style.h_gap;
+    }
+    let above = loose.iter().map(|&at| sizes[at].1).fold(0.0f64, f64::max);
+    let top = style.margin
+        + if loose.is_empty() {
+            0.0
+        } else {
+            above + style.v_gap
+        };
+
+    // then the columns, attached to each other and aligned top and bottom
+    let heading = 2.0 * style.padding + style.line_height;
+    let tallest = diagram
+        .lanes
+        .iter()
+        .map(|lane| {
+            lane.nodes
+                .iter()
+                .map(|&at| sizes[at].1 + style.v_gap)
+                .sum::<f64>()
+        })
+        .fold(0.0f64, f64::max);
+    let mut columns = Vec::new();
+    let mut left = style.margin;
+    for lane in &diagram.lanes {
+        let width = lane
+            .nodes
+            .iter()
+            .map(|&at| sizes[at].0)
+            .fold(style.text_width(&lane.name), f64::max)
+            + 2.0 * style.padding;
+        let mut down = top + heading + style.padding;
+        for &at in &lane.nodes {
+            placed[at].x = left + (width - sizes[at].0) / 2.0;
+            placed[at].y = down;
+            down += sizes[at].1 + style.v_gap;
+        }
+        columns.push(Column {
+            name: lane.name.clone(),
+            x: left,
+            width,
+            top,
+            height: heading + style.padding + tallest,
+        });
+        left += width;
+    }
+
+    Layout {
+        placed,
+        width: left.max(next - style.h_gap) + style.margin,
+        height: top + heading + style.padding + tallest + style.margin,
+        routes: Vec::new(),
+        lanes: columns,
+    }
 }
 
 /// How much room the names drawn between two boxes need, per pair.
@@ -369,6 +474,7 @@ fn place(
             width: 2.0 * style.margin,
             height: 2.0 * style.margin,
             routes: Vec::new(),
+            lanes: Vec::new(),
         };
     }
 
@@ -414,6 +520,7 @@ fn place(
         width: content + 2.0 * style.margin,
         height: y - style.v_gap + style.margin,
         routes: Vec::new(),
+        lanes: Vec::new(),
     }
 }
 
