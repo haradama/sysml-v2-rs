@@ -1,5 +1,9 @@
 [workspace]
-resolver = "2"
+# Resolver 3 picks dependency versions that the declared `rust-version`
+# can build. No lockfile is checked in, so without it a fresh resolve
+# takes the newest of everything and the minimum this workspace claims
+# is whatever its dependencies happened to raise theirs to this week.
+resolver = "3"
 members = [
     "crates/sysml-syntax",
     "crates/sysml-model",
@@ -22,7 +26,9 @@ exclude = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.80"
+# the oldest toolchain the locked dependency set builds with (icu, via
+# url, asks for 1.86); CI checks it, so the number is a promise
+rust-version = "1.86"
 repository = "https://github.com/haradama/sysml-v2-rs"
 readme = "README.md"
 keywords = ["sysml", "kerml", "mbse", "modeling", "parser"]

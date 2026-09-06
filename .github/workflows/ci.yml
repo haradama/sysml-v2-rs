@@ -39,6 +39,108 @@ jobs:
       - name: tests (incl. corpus regressions)
         run: cargo test --release --all-features
 
+  # `rust-version` in Cargo.toml is a promise to users of the crates, and
+  # nothing else here would notice it being broken: the other jobs build
+  # with whatever `stable` is that day
+  msrv:
+    name: builds on the declared minimum Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.86
+      - uses: Swatinem/rust-cache@v2
+      # no lockfile is checked in, so this resolves afresh -- which is
+      # what somebody depending on the published crates would get, and
+      # the reason the number was wrong: a dependency had raised its own
+      # minimum and nothing here noticed
+      - name: check on the declared minimum
+        run: cargo check --workspace --all-features --all-targets
+
+  # the ELK layout path is otherwise only ever exercised against a fake
+  # `elkrs` script in the crate's tests; this runs the real one
+  elk:
+    name: diagrams lay out with the real ELK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: install elkrs
+        run: cargo install elkrs --locked
+      - name: render corpus models through ELK and check the SVG is well-formed
+        run: |
+          set -eu
+          cargo build --release -p sysml-cli
+          for model in \
+            "vendor/sysml-v2-release/sysml/src/examples/Vehicle Example/VehicleDefinitions.sysml" \
+            "vendor/sysml-v2-release/sysml/src/examples/Simple Tests/PartTest.sysml" \
+            "vendor/sysml-v2-release/sysml/src/training/24. States/State Actions.sysml"; do
+            target/release/sysml diagram --elk "$model" -o out.svg
+            python3 -c 'import sys, xml.etree.ElementTree as et; et.parse("out.svg"); print("ok", sys.argv[1])' "$model"
+          done
+      # `tools/render` is outside the workspace, so `cargo test` never
+      # builds it, and the way it substitutes the CSS variables the
+      # diagrams carry is coupled to what the SVG writer emits
+      - name: the review rasteriser still reads what the SVG writer writes
+        run: |
+          set -eu
+          target/release/sysml diagram \
+            "vendor/sysml-v2-release/sysml/src/examples/Vehicle Example/VehicleDefinitions.sysml" \
+            -o vehicle.svg
+          cargo run --manifest-path tools/render/Cargo.toml -- vehicle.svg vehicle.png 2
+          python3 - <<'PY'
+          import struct
+          data = open("vehicle.png", "rb").read()
+          assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+          width, height = struct.unpack(">II", data[16:24])
+          assert width > 1000 and height > 500, (width, height)
+          # a drawing whose paint went unresolved, or whose labels were
+          # dropped for want of a font, is a nearly blank page, and a
+          # blank page of this size compresses to a few kilobytes
+          assert len(data) > 50000, f"{len(data)} bytes looks blank"
+          print(f"rasterised {width}x{height}, {len(data)} bytes")
+          PY
+
+  # the worked example is excluded from the workspace, so `cargo test`
+  # never builds it: nothing else would notice a change to `rustgen`
+  # that rewrote what it generates, or broke what the README shows
+  example:
+    name: the Arduino example regenerates and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: the checked-in Rust is what rustgen writes
+        working-directory: examples/arduino-uno
+        run: |
+          set -eu
+          cargo run --manifest-path ../../Cargo.toml -p sysml-cli -- rustgen \
+            model/blink.sysml model/requirements.sysml model/verification.sysml \
+            --library model/hardware.sysml \
+            --library model/middleware.sysml \
+            --library ../../vendor/sysml-v2-release/sysml.library \
+            -o /tmp/generated.rs
+          diff -u src/generated.rs /tmp/generated.rs
+      - name: the model resolves whole
+        run: |
+          cargo run -p sysml-cli -- check examples/arduino-uno/model \
+            vendor/sysml-v2-release/sysml.library
+      - name: it runs, and says what the README says it says
+        working-directory: examples/arduino-uno
+        run: |
+          set -eu
+          cargo run --quiet > out.txt
+          cat out.txt
+          grep -qx '6 writes, 3 of them high' out.txt
+      - name: its own tests pass
+        working-directory: examples/arduino-uno
+        run: cargo test
+
   # the extension is the language server's only client, so an API change
   # that breaks it would otherwise go unnoticed: nothing else compiles
   # this TypeScript

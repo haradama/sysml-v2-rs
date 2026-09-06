@@ -12,13 +12,13 @@ and a CLI. Both are validated against the official
 corpus — all 403 `.sysml`/`.kerml` files: the complete standard libraries
 (`sysml.library`) and every official example, training and validation
 model. **All 403 files parse cleanly and every reference in any of them
-resolves**: the standard library on its own (16173/16173), the library
-together with all official SysML examples (22611/22611), and the KerML
-examples alongside it (17323/17323), counting the operands of `connect`,
-`bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`, and
-the names written inside expressions -- a constraint body, the result of
-a `calc`, the value after `=` -- alongside every typing and
-specialization.
+resolves**: the standard library on its own (16547/16547), the library
+together with all official SysML examples (23551/23551), and the KerML
+examples alongside it (17860/17860), counting the operands of `connect`,
+`bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`, the
+name an `alias` is `for`, and the names written inside expressions -- a
+constraint body, the result of a `calc`, the value after `=` --
+alongside every typing and specialization.
 
 Eleven of those used to resolve to themselves. A feature that declares
 no name of its own answers to the name of what it redefines -- which is
@@ -266,9 +266,9 @@ together, and both are drawn; it trades the built-in layout's reproducible
 bytes for ELK's crossing minimization, and needs one Rust binary on the path
 (`--elk-command` names it):
 
-```console
-$ cargo install elkrs
-$ cargo run -p sysml-cli -- diagram vehicle.sysml --elk -o vehicle.svg
+```sh
+cargo install elkrs
+cargo run -p sysml-cli -- diagram vehicle.sysml --elk -o vehicle.svg
 ```
 
 Packages go to ELK as the nodes they are, so it arranges each package's
@@ -314,10 +314,14 @@ wrote 12 definition(s) to ThatCrateApi.sysml
 Structs become `item def`s (with `Vec`/`Option` as multiplicities), plain
 enums `enum def`s, traits `port def`s with an `action def` per method
 (`in` parameters, `out result`, an `out error [0..1]` for `Result`), free
-functions `action def`s. Doc comments travel along. What has no
-monomorphic SysML shape -- generics, tuple structs, data-carrying enum
-variants -- is listed at the end of the package rather than dropped
-silently. Regenerating in CI and diffing detects API drift.
+functions `action def`s. Doc comments travel along. A scalar keeps the
+width the crate declared -- `u32` and `&str` each get an `attribute def`
+of their own, bound to that Rust type -- so what `rustgen` later writes
+calls the signature the crate actually has. What has no monomorphic
+SysML shape -- generics, tuple structs, data-carrying enum variants, a
+container inside a container, a borrow of anything but a string -- is
+listed at the end of the package rather than dropped silently.
+Regenerating in CI and diffing detects API drift.
 
 ### VSCode
 
