@@ -5,9 +5,11 @@
 //! result out as a layered graph with supertypes above their subtypes, and
 //! serializes it as a standalone SVG document.
 //!
-//! Nothing external is involved: layering, crossing reduction, text metrics
-//! and the SVG itself are all produced here, so a model always renders to the
-//! same bytes and the result needs no viewer beyond a browser.
+//! No layout engine and no font engine are involved: layering, crossing
+//! reduction, text metrics and the SVG itself are all produced here, so a
+//! model always renders to the same bytes and the result needs no viewer
+//! beyond a browser. Only how many columns a character takes is read from
+//! Unicode's own table, through `unicode-width`.
 //!
 //! Only specializations the model reifies are drawn. `sysml-semantics`
 //! reifies the ones written in the source but not the implicit library
@@ -89,8 +91,27 @@ impl Style {
     /// so this assumes the average glyph of a sans-serif face is 0.6 em --
     /// wide enough for the ASCII identifiers SysML models are written with.
     pub(crate) fn text_width(&self, text: &str) -> f64 {
-        text.chars().count() as f64 * self.font_size * 0.6
+        columns(text) as f64 * self.font_size * 0.6
     }
+}
+
+/// How many columns `text` takes, counting a character an em across as two.
+///
+/// The 0.6 em an ASCII letter is estimated at is about right for Latin and
+/// about half of what a Chinese, Japanese or Korean character takes, so a
+/// `doc` written in one of them would be measured at half its width and run
+/// out of the box it set the size of. Two columns overstates such a
+/// character slightly, which leaves a box wider than it needs to be rather
+/// than prose wider than its box.
+///
+/// Which characters those are is UAX #11's East Asian Width, and it is read
+/// from `unicode-width` rather than written out here: the property covers
+/// far more than the CJK blocks -- the Yi syllables, the vertical and small
+/// forms, the emoji drawn square -- and a list copied into this file would
+/// be a snapshot of one Unicode release with nothing in the repository to
+/// check it against.
+pub(crate) fn columns(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
 }
 
 /// Lay `diagram` out and render it as a standalone SVG document.
@@ -142,12 +163,31 @@ mod tests {
         let style = Style::default();
         assert!(style.text_width("mm") > style.text_width("m"));
         assert_eq!(style.text_width(""), 0.0);
+        // a Chinese, Japanese or Korean character is about an em across,
+        // twice what the estimate allows a Latin letter
+        assert_eq!(style.text_width("\u{57fa}"), 2.0 * style.text_width("m"));
+        assert_eq!(columns("ab\u{57fa}"), 4);
 
         let bigger = Style {
             font_size: 24.0,
             ..Style::default()
         };
         assert_eq!(bigger.text_width("m"), 2.0 * style.text_width("m"));
+    }
+
+    #[test]
+    fn a_character_drawn_an_em_across_is_measured_as_two_columns() {
+        // a Yi syllable and an emoji are as square as an ideograph is,
+        // and a name or a `doc` can hold either
+        assert_eq!(columns("\u{a000}"), 2);
+        assert_eq!(columns("\u{1f600}"), 2);
+        assert_eq!(columns("\u{ff21}"), 2);
+        // where the width is Ambiguous the character is narrow unless
+        // the surrounding text says otherwise, and this one is prose in
+        // a Latin document as often as not
+        assert_eq!(columns("\u{3248}"), 1);
+        // and a combining mark is drawn over the letter before it
+        assert_eq!(columns("e\u{301}"), 1);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::columns;
 use sysml_model::{ElementId, ElementKind, Model, Role, Value};
 
 /// One entry of a box's feature compartment, e.g. `attribute mass : Real`.
@@ -24,16 +25,22 @@ pub struct Feature {
 }
 
 impl Feature {
-    /// A line of prose, which names nothing and is declared as nothing.
-    pub(crate) fn prose(line: String) -> Feature {
+    /// A line that names one thing under a keyword and declares nothing
+    /// else about it: `\u{ab}satisfy\u{bb} massLimit`.
+    pub(crate) fn named(keyword: String, name: String) -> Feature {
         Feature {
-            keyword: String::new(),
-            name: line,
+            keyword,
+            name,
             ty: None,
             multiplicity: None,
             value: None,
             direction: None,
         }
+    }
+
+    /// A line of prose, which names nothing and is declared as nothing.
+    pub(crate) fn prose(line: String) -> Feature {
+        Feature::named(String::new(), line)
     }
 
     /// The compartment line as it appears in the drawing.
@@ -180,7 +187,6 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
             Role::Actor => "actors",
             Role::Stakeholder => "stakeholders",
             Role::Objective => "objective",
-            Role::Render => "rendering",
             Role::Frame => "frames",
             Role::Verify => "verifies",
             Role::Assume => "assume constraints",
@@ -188,6 +194,7 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
             Role::Entry | Role::Do | Role::Exit => "state actions",
             Role::Variant => "variants",
             Role::Return | Role::Result => "result",
+            Role::Render => "rendering",
         };
     }
     let kind = model.kind(member);
@@ -224,47 +231,58 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
         Some(Value::EnumLit("timeslice")) => return "timeslices",
         _ => {}
     }
-    for (metaclass, label) in [
-        // `successions-compartment` is the standard's own; a transition
-        // has no compartment there at all, and is only ever the line
-        (ElementKind::SuccessionAsUsage, "successions"),
-        (ElementKind::PerformActionUsage, "perform actions"),
-        (ElementKind::AllocationUsage, "allocations"),
-        (ElementKind::InterfaceUsage, "interfaces"),
-        (ElementKind::ConnectionUsage, "connections"),
-        (ElementKind::FlowUsage, "flows"),
-        (ElementKind::ExhibitStateUsage, "exhibit states"),
-        (ElementKind::StateUsage, "states"),
-        // `calcs-compartment ='calcs'`, not the metaclass spelled out
-        (ElementKind::CalculationUsage, "calcs"),
-        (ElementKind::AssertConstraintUsage, "assert constraints"),
-        (ElementKind::SatisfyRequirementUsage, "satisfy requirements"),
-        (ElementKind::IncludeUseCaseUsage, "include use cases"),
-        (ElementKind::ConcernUsage, "concerns"),
-        // a viewpoint is a requirement in the metamodel and has a
-        // compartment of its own in the notation, so it comes first
-        (ElementKind::ViewpointUsage, "viewpoints"),
-        (ElementKind::RequirementUsage, "requirements"),
-        (ElementKind::ConstraintUsage, "constraints"),
-        (ElementKind::VerificationCaseUsage, "verifications"),
-        (ElementKind::AnalysisCaseUsage, "analyses"),
-        (ElementKind::UseCaseUsage, "use cases"),
-        (ElementKind::ViewUsage, "views"),
-        (ElementKind::RenderingUsage, "rendering"),
-        (ElementKind::ActionUsage, "actions"),
-        (ElementKind::PortUsage, "ports"),
-        (ElementKind::PartUsage, "parts"),
-        (ElementKind::EnumerationUsage, "enums"),
-        (ElementKind::AttributeUsage, "attributes"),
-        (ElementKind::OccurrenceUsage, "occurrences"),
-        (ElementKind::ItemUsage, "items"),
-    ] {
+    for (metaclass, label) in COMPARTMENTS {
         if kind.is_a(metaclass) {
             return label;
         }
     }
     "features"
 }
+
+/// Which compartment a member of each kind goes in, most specific kind
+/// first.
+///
+/// The metamodel makes a use case a kind of calculation and a metadata
+/// usage a kind of item, so a row for the general kind placed above the
+/// special one would answer for both and file the special one under the
+/// wrong heading. `no_compartment_is_shadowed_by_a_more_general_one`
+/// holds the order to that.
+const COMPARTMENTS: [(ElementKind, &str); 29] = [
+    // `successions-compartment` is the standard's own; a transition
+    // has no compartment there at all, and is only ever the line
+    (ElementKind::SuccessionAsUsage, "successions"),
+    (ElementKind::IncludeUseCaseUsage, "include use cases"),
+    (ElementKind::ExhibitStateUsage, "exhibit states"),
+    (ElementKind::PerformActionUsage, "perform actions"),
+    (ElementKind::SatisfyRequirementUsage, "satisfy requirements"),
+    (ElementKind::AssertConstraintUsage, "assert constraints"),
+    (ElementKind::AllocationUsage, "allocations"),
+    (ElementKind::InterfaceUsage, "interfaces"),
+    (ElementKind::FlowUsage, "flows"),
+    (ElementKind::ConnectionUsage, "connections"),
+    (ElementKind::StateUsage, "states"),
+    (ElementKind::VerificationCaseUsage, "verifications"),
+    (ElementKind::AnalysisCaseUsage, "analyses"),
+    (ElementKind::UseCaseUsage, "use cases"),
+    // `calcs-compartment ='calcs'`, not the metaclass spelled out
+    (ElementKind::CalculationUsage, "calcs"),
+    (ElementKind::ConcernUsage, "concerns"),
+    // a viewpoint is a requirement in the metamodel and has a
+    // compartment of its own in the notation, so it comes first
+    (ElementKind::ViewpointUsage, "viewpoints"),
+    (ElementKind::RequirementUsage, "requirements"),
+    (ElementKind::ConstraintUsage, "constraints"),
+    (ElementKind::ViewUsage, "views"),
+    (ElementKind::RenderingUsage, "rendering"),
+    (ElementKind::ActionUsage, "actions"),
+    (ElementKind::PortUsage, "ports"),
+    (ElementKind::MetadataUsage, "metadata"),
+    (ElementKind::PartUsage, "parts"),
+    (ElementKind::EnumerationUsage, "enums"),
+    (ElementKind::AttributeUsage, "attributes"),
+    (ElementKind::ItemUsage, "items"),
+    (ElementKind::OccurrenceUsage, "occurrences"),
+];
 
 /// What an edge between two boxes means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -437,7 +455,9 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
                 keyword: keyword(model.kind(id)),
                 compartments: into_compartments(name, features_of(model, id)),
                 is_abstract: is_abstract(model, id),
-                rounded: model.kind(id).is_a(ElementKind::Usage),
+                // only a usage is drawn with rounded corners, and every
+                // box here stands for a classifier
+                rounded: false,
                 shape: Shape::Box,
                 children: Vec::new(),
                 links: Vec::new(),
@@ -454,7 +474,9 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
             let Some(Value::Ref(target)) = model.get(rel, "superclassifier") else {
                 continue;
             };
-            if let Some(&to) = index.get(target) {
+            // `part def C :> C;` parses and resolves, and a line from a
+            // box to itself says nothing a reader can follow
+            if let Some(&to) = index.get(target).filter(|&&to| to != from) {
                 edges.push(Edge {
                     from,
                     to,
@@ -484,12 +506,25 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
             }
         }
     }
+    // What the dependencies and the notes are looked for in. Roots may
+    // overlap or nest, and one reached from two of them would be drawn
+    // twice; the owner of each root is looked in as well, because a
+    // dependency or a `comment about` is written beside what it is
+    // about rather than inside it, and the CLI's roots are a file's
+    // top-level elements.
+    let mut seen: HashSet<ElementId> = HashSet::new();
+    let mut scope: Vec<ElementId> = Vec::new();
+    for &root in roots {
+        for id in model.owner(root).into_iter().chain(model.descendants(root)) {
+            if seen.insert(id) {
+                scope.push(id);
+            }
+        }
+    }
     // most dependencies are written in a package rather than inside a
     // definition, and a package is not one of the boxes
-    for &root in roots {
-        for id in model.descendants(root) {
-            dependencies_of(model, id, &index, &mut nodes, &mut edges);
-        }
+    for &id in &scope {
+        dependencies_of(model, id, &index, &mut nodes, &mut edges);
     }
     // What a definition relates to that is not on the canvas is said in
     // words rather than left unsaid: `relationships-compartment-element =
@@ -504,10 +539,8 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
         }
     }
     // a comment is a node of the drawing too, joined to what it is about
-    for &root in roots {
-        for id in model.descendants(root) {
-            notes_of(model, id, &index, &mut nodes, &mut edges);
-        }
+    for &id in &scope {
+        notes_of(model, id, &index, &mut nodes, &mut edges);
     }
 
     let groups = packages_of(model, &nodes);
@@ -624,7 +657,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 | ElementKind::WhileLoopActionUsage
                 | ElementKind::ForLoopActionUsage
         );
-        let Some(name) = effective_name(model, child).or(anonymous.then_some("")) else {
+        let Some(name) = model.effective_name(child).or(anonymous.then_some("")) else {
             continue;
         };
         // A specialization that redeclares an inherited part names it
@@ -773,14 +806,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             // the line the standard draws, and saying it twice adds
             // nothing
             .filter(|(by, _)| !index.contains_key(by))
-            .map(|(_, name)| Feature {
-                keyword: String::new(),
-                name: name.clone(),
-                ty: None,
-                multiplicity: None,
-                value: None,
-                direction: None,
-            })
+            .map(|(_, name)| Feature::prose(name.clone()))
             .collect();
         if !lines.is_empty() {
             node.compartments.push(Compartment {
@@ -804,6 +830,44 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 label: "relationships",
                 lines,
             });
+        }
+    }
+    // A definition assembled from nothing still has a boundary, and what
+    // sits on that boundary is what this view is read for: the ports a
+    // part is reached through. Drawn as itself it says that much, where
+    // an empty canvas says nothing at all.
+    if nodes.is_empty() {
+        if let Some(name) = model.name(definition) {
+            let mut compartments = into_compartments(name, features_of(model, definition));
+            // only where there is something on the boundary to show: a
+            // definition with nothing inside and nothing on it either is
+            // a page with nothing on it, and saying so is the answer
+            if compartments
+                .iter()
+                .any(|compartment| matches!(compartment.label, "ports" | "parameters"))
+            {
+                // the boundary is a box like any other, and what it
+                // relates to that is not on the canvas is said in words
+                // there as it is on the rest
+                let lines = unlisted_relationships(model, definition, &index);
+                if !lines.is_empty() {
+                    compartments.push(Compartment {
+                        label: "relationships",
+                        lines,
+                    });
+                }
+                nodes.push(Node {
+                    id: definition,
+                    name: name.to_string(),
+                    keyword: keyword(model.kind(definition)),
+                    compartments,
+                    is_abstract: is_abstract(model, definition),
+                    rounded: model.kind(definition).is_a(ElementKind::Usage),
+                    shape: Shape::Box,
+                    children: Vec::new(),
+                    links: Vec::new(),
+                });
+            }
         }
     }
     // `perform-actions-swimlanes = (swimlane)*`: the view is partitioned
@@ -906,7 +970,7 @@ fn push_n_ary(
 /// tank to eng` attaches to the whole of `tank`, and a square labelled
 /// `tank` on the box already labelled `tank` says nothing twice.
 fn rolename(model: &Model, end: &End) -> Option<String> {
-    let named = !end.role.is_empty() && effective_name(model, end.target) != Some(&end.role);
+    let named = !end.role.is_empty() && model.effective_name(end.target) != Some(&end.role);
     (named || !end.adornment.is_empty())
         .then(|| format!("{}{}", end.role, end.adornment).trim().to_string())
 }
@@ -967,7 +1031,7 @@ fn carries(model: &Model, flow: ElementId) -> Option<String> {
 /// `Fuel[2]`, or `fuelCommand : FuelCommand` where the payload was
 /// declared and named.
 fn payload_label(model: &Model, payload: ElementId) -> Option<String> {
-    let mut written = match (effective_name(model, payload), type_name(model, payload)) {
+    let mut written = match (model.effective_name(payload), type_name(model, payload)) {
         (Some(name), Some(ty)) => format!("{name} : {ty}"),
         (Some(name), None) => name.to_string(),
         (None, Some(ty)) => ty,
@@ -1434,8 +1498,14 @@ fn compositions_of(
         // `redefinition` among its type relationships, and a `part big
         // :> engine` that is joined to nothing reads as unrelated to
         // the engine it is one of.
+        //
+        // A feature that is drawn as a keyworded edge of its own --
+        // `perform action b : B`, `exhibit state s : S`, `assert
+        // constraint k : K` -- is left out for the same reason: the
+        // «perform» line already says what a diamond would say again.
         if model.kind(child).is_a(ElementKind::ConnectorAsUsage)
             || model.get(child, "isEnd") == Some(&Value::Bool(true))
+            || annotation_relation(model, child).is_some()
         {
             continue;
         }
@@ -1456,10 +1526,11 @@ fn compositions_of(
         };
         // naming the end is what puts the line on the port's square
         // rather than on the box's border somewhere else, which would
-        // leave the square attached to nothing
-        let end = model
-            .kind(child)
-            .is_a(ElementKind::PortUsage)
+        // leave the square attached to nothing. A behaviour's parameters
+        // are drawn on the border too -- rounded rather than square --
+        // so the two compartments the renderer draws from are the two
+        // that name an end.
+        let end = matches!(compartment_of(model, child), "ports" | "parameters")
             .then(|| model.name(child))
             .flatten()
             .map(str::to_string);
@@ -1520,28 +1591,6 @@ fn specializations_of(
     }
 }
 
-/// The name a member answers to: its own, or -- for `part redefines mcu
-/// : Atmega328p;`, which declares none -- the name of what it redefines.
-///
-/// A specialization narrows an inherited part by redeclaring it, and
-/// the redeclaration is the nearer one and the one that says the type.
-/// Reading only declared names skips it and draws the inherited part
-/// instead, which is the same box under a vaguer type.
-pub(crate) fn effective_name(model: &Model, member: ElementId) -> Option<&str> {
-    if let Some(name) = model.name(member) {
-        return Some(name);
-    }
-    model.owned(member).iter().find_map(|&rel| {
-        if model.kind(rel) != ElementKind::Redefinition {
-            return None;
-        }
-        match model.get(rel, "redefinedFeature") {
-            Some(&Value::Ref(target)) => model.name(target),
-            _ => None,
-        }
-    })
-}
-
 /// Everything a definition is assembled from: what it owns, and what it
 /// inherits from the definitions it specializes, nearest first.
 ///
@@ -1550,8 +1599,12 @@ pub(crate) fn effective_name(model: &Model, member: ElementId) -> Option<&str> {
 /// sketch and none of the board -- and then every `connect` the board
 /// declares is missing, and every `satisfy` that names one of its parts
 /// points at nothing and is left standing alone on the canvas.
-fn assembled_from(model: &Model, definition: ElementId) -> Vec<ElementId> {
-    itself_and_supertypes(model, definition)
+///
+/// A usage is assembled from what its type is: drawing `part v : Vehicle`
+/// from what the usage itself owns leaves an empty page, when what the
+/// reader asked to see is what a `Vehicle` is made of.
+pub(crate) fn assembled_from(model: &Model, definition: ElementId) -> Vec<ElementId> {
+    nesting_owners(model, definition)
         .into_iter()
         .flat_map(|current| model.owned(current).iter().copied())
         .collect()
@@ -1642,6 +1695,23 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
         // the metaclass is `SuccessionAsUsage`; the notation writes it
         // `succession a then b`
         ElementKind::SuccessionAsUsage => Some("succession"),
+        // The control nodes and the rest below are spelled by the
+        // notation rather than by the metaclass: `fork-node ='fork'`,
+        // `ref-prefix ='ref'`, `alias-member ='alias'` and so on through
+        // the BNF. Reading the metaclass name out instead gives
+        // «fork node» and «reference», which are not what the model was
+        // written with.
+        ElementKind::ForkNode => Some("fork"),
+        ElementKind::JoinNode => Some("join"),
+        ElementKind::MergeNode => Some("merge"),
+        ElementKind::DecisionNode => Some("decide"),
+        ElementKind::ReferenceUsage => Some("ref"),
+        ElementKind::Membership => Some("alias"),
+        ElementKind::TextualRepresentation => Some("rep"),
+        ElementKind::BindingConnector | ElementKind::BindingConnectorAsUsage => Some("binding"),
+        ElementKind::Invariant => Some("inv"),
+        ElementKind::BooleanExpression => Some("bool"),
+        ElementKind::Expression => Some("expr"),
         _ => None,
     };
     if let Some(written) = written {
@@ -1707,17 +1777,25 @@ fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge
     links
 }
 
-/// Where a nested view reads its members from: the usage itself, and then
-/// the type it was declared with, since `part w : Wheel;` declares nothing
+/// Where a view of one thing reads its members from: the thing itself
+/// and whatever it specializes, then the type it was declared with and
+/// whatever that specializes, since `part w : Wheel;` declares nothing
 /// of its own.
+///
+/// A definition names no type and answers with itself and its
+/// supertypes; a usage answers with the type's, which is the only
+/// structure it has.
 fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
-    std::iter::once(usage)
+    let mut seen = HashSet::new();
+    itself_and_supertypes(model, usage)
+        .into_iter()
         .chain(
             model
                 .type_of(usage)
                 .into_iter()
                 .flat_map(|ty| itself_and_supertypes(model, ty)),
         )
+        .filter(|id| seen.insert(*id))
         .collect()
 }
 
@@ -1831,7 +1909,7 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
         {
             continue;
         }
-        let Some(name) = effective_name(model, child) else {
+        let Some(name) = model.effective_name(child) else {
             continue;
         };
         out.push((
@@ -1931,10 +2009,13 @@ fn note_of(model: &Model, element: ElementId) -> Option<Node> {
         ElementKind::Comment => {
             // a note holds prose and nothing else, so it is drawn as a
             // first line and the ones the wrapping put after it
+            //
+            // A comment with no words in it is nothing to draw: an
+            // empty box on a line to something it says nothing about.
             let mut prose = wrapped(model.get(element, "body")?.as_str()?, PROSE).into_iter();
             (
                 String::new(),
-                prose.next().unwrap_or_default(),
+                prose.next()?,
                 prose.map(Feature::prose).collect(),
             )
         }
@@ -1942,7 +2023,7 @@ fn note_of(model: &Model, element: ElementId) -> Option<Node> {
         // typed by is the whole of its declaration
         ElementKind::MetadataUsage => (
             keyword(ElementKind::MetadataUsage),
-            match effective_name(model, element) {
+            match model.effective_name(element) {
                 Some(named) => box_label(model, element, named),
                 None => type_name(model, element)?,
             },
@@ -1984,7 +2065,7 @@ fn satisfiers(model: &Model) -> HashMap<ElementId, Vec<(ElementId, String)>> {
         (model.get(id, "isNegated") != Some(&Value::Bool(true))).then_some(())?;
         let requirement = single_reference(model, id, "satisfiedRequirement")?;
         let by = single_reference(model, id, "satisfyingFeature")?;
-        Some((requirement, by, effective_name(model, by)?))
+        Some((requirement, by, model.effective_name(by)?))
     });
     for (requirement, by, name) in assertions {
         let listed = out.entry(requirement).or_default();
@@ -2014,7 +2095,7 @@ fn performers(model: &Model) -> HashMap<ElementId, Vec<String>> {
                 .then(|| model.get(rel, "referencedFeature")?.as_id())
                 .flatten()
         })?;
-        Some((performed, effective_name(model, model.owner(id)?)?))
+        Some((performed, model.effective_name(model.owner(id)?)?))
     });
     for (performed, name) in performances {
         let listed = out.entry(performed).or_default();
@@ -2034,14 +2115,7 @@ fn performed_by(performers: &HashMap<ElementId, Vec<String>>, node: ElementId) -
         .get(&node)
         .into_iter()
         .flatten()
-        .map(|name| Feature {
-            keyword: String::new(),
-            name: name.clone(),
-            ty: None,
-            multiplicity: None,
-            value: None,
-            direction: None,
-        })
+        .map(|name| Feature::prose(name.clone()))
         .collect()
 }
 
@@ -2070,14 +2144,7 @@ fn unlisted_relationships(
         let Some(name) = model.name(target).filter(|_| !index.contains_key(&target)) else {
             continue;
         };
-        let line = Feature {
-            keyword: written.to_string(),
-            name: name.to_string(),
-            ty: None,
-            multiplicity: None,
-            value: None,
-            direction: None,
-        };
+        let line = Feature::named(written.to_string(), name.to_string());
         if !out.contains(&line) {
             out.push(line);
         }
@@ -2091,16 +2158,26 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
     // What an `if` or a loop asks has no name of its own, only the text
     // it was written as, and goes in a compartment named for the question
     if let Some(label) = condition_compartment(model, member) {
+        let asked = written_text(model, member)?;
+        // A loop keeps the name it binds apart from the sequence it
+        // iterates over, because they are two members of it. The
+        // compartment shows the iteration the way it was written.
+        let owner = model.owner(member)?;
+        let bound = (model.kind(owner) == ElementKind::ForLoopActionUsage)
+            .then(|| {
+                model
+                    .owned(owner)
+                    .iter()
+                    .find(|&&child| model.kind(child) == ElementKind::ReferenceUsage)
+                    .and_then(|&child| model.name(child))
+            })
+            .flatten();
         return Some((
             label,
-            Feature {
-                keyword: String::new(),
-                name: written_text(model, member)?,
-                ty: None,
-                multiplicity: None,
-                value: None,
-                direction: None,
-            },
+            Feature::prose(match bound {
+                Some(bound) => format!("{bound} in {asked}"),
+                None => asked,
+            }),
         ));
     }
     let (compartment, keyword) = match model.kind(member) {
@@ -2124,17 +2201,7 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| written_text(model, member))?;
-    Some((
-        compartment,
-        Feature {
-            keyword: keyword.to_string(),
-            name: named,
-            ty: None,
-            multiplicity: None,
-            value: None,
-            direction: None,
-        },
-    ))
+    Some((compartment, Feature::named(keyword.to_string(), named)))
 }
 
 /// A block of prose as compartment lines.
@@ -2156,7 +2223,7 @@ fn wrapped(text: &str, room: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for word in text.lines().flat_map(|line| said(line).split_whitespace()) {
         match lines.last_mut() {
-            Some(line) if line.chars().count() + 1 + word.chars().count() <= room => {
+            Some(line) if columns(line) + 1 + columns(word) <= room => {
                 line.push(' ');
                 line.push_str(word);
             }
@@ -2181,7 +2248,7 @@ const PROSE: usize = 48;
 /// whatever room the rest of the box takes, and sets the width itself
 /// only where it is the widest thing in there.
 fn fill_prose(name: &str, compartments: &mut [Compartment]) {
-    let counted = |text: &str| text.chars().count();
+    let counted = |text: &str| columns(text);
     // the name is set bold, which takes more room than its characters say
     let mut room = PROSE.max(counted(name) * 11 / 10);
     for compartment in compartments.iter() {
@@ -2364,6 +2431,196 @@ fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A dependency and a comment written beside the definitions
+    /// rather than inside one of them, as most models write them.
+    const BESIDE: &str =
+        "part def A;\npart def B;\ndependency A to B;\ncomment about A /* why */\n";
+
+    #[test]
+    fn a_part_that_declares_only_what_it_refers_to_answers_to_that_name() {
+        // `part ::> v` declares neither name nor short name, so KerML's
+        // effective-name rule lends it the one it refers to; reading
+        // declared names alone left it out of the drawing entirely
+        let ws = resolved("part def V;\npart def Sys {\n\tpart v : V;\n\tpart ::> v;\n}\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sys = diagram
+            .nodes
+            .iter()
+            .find(|node| node.name == "Sys")
+            .expect("the definition is drawn");
+        let parts: Vec<&str> = sys
+            .compartments
+            .iter()
+            .filter(|compartment| compartment.label == "parts")
+            .flat_map(|compartment| compartment.lines.iter().map(|line| line.name.as_str()))
+            .collect();
+        assert_eq!(parts, ["v", "v"]);
+    }
+
+    #[test]
+    fn a_keyworded_member_is_drawn_as_one_line_not_two() {
+        // each of these is composite as well as keyworded, and used to
+        // get a composition diamond beside its own line
+        let ws = resolved(
+            "action def B;\n\
+             state def S;\n\
+             constraint def K;\n\
+             part def Sys {\n\
+             \tperform action b : B;\n\
+             \texhibit state s : S;\n\
+             \tassert constraint k : K;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let drawn: Vec<Relation> = diagram.edges.iter().map(|edge| edge.relation).collect();
+        assert_eq!(
+            drawn,
+            [Relation::Perform, Relation::Exhibit, Relation::Assert]
+        );
+    }
+
+    #[test]
+    fn a_keyword_is_the_one_the_notation_writes_not_the_metaclass_name() {
+        // each of these reads out of the metaclass as something the
+        // language has no word for: «fork node», «reference», «boolean
+        // expression»
+        for (kind, written) in [
+            (ElementKind::ForkNode, "fork"),
+            (ElementKind::JoinNode, "join"),
+            (ElementKind::MergeNode, "merge"),
+            (ElementKind::DecisionNode, "decide"),
+            (ElementKind::ReferenceUsage, "ref"),
+            (ElementKind::Membership, "alias"),
+            (ElementKind::TextualRepresentation, "rep"),
+            (ElementKind::BindingConnector, "binding"),
+            (ElementKind::BindingConnectorAsUsage, "binding"),
+            (ElementKind::Invariant, "inv"),
+            (ElementKind::BooleanExpression, "bool"),
+            (ElementKind::Expression, "expr"),
+        ] {
+            assert_eq!(keyword(kind), written);
+        }
+    }
+
+    #[test]
+    fn a_comment_with_no_words_in_it_is_not_a_note() {
+        let ws = resolved("part def A;\ncomment about A /* */\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(diagram.nodes.len(), 1);
+        assert_eq!(diagram.edges, Vec::new());
+    }
+
+    #[test]
+    fn a_definition_that_specializes_itself_is_joined_to_nothing() {
+        let ws = resolved("part def C :> C;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(diagram.nodes.len(), 1);
+        assert_eq!(diagram.edges, Vec::new());
+    }
+
+    #[test]
+    fn a_dependency_beside_the_definitions_is_still_drawn() {
+        // the CLI draws a file's top-level elements, so the dependency
+        // is a sibling of every root rather than a descendant of one
+        let ws = resolved(BESIDE);
+        let roots = ws.file_roots(0).to_vec();
+        let diagram = definition_diagram(ws.model(), &roots);
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Dependency)
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Annotation)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn overlapping_roots_draw_a_dependency_and_a_note_once_each() {
+        let ws = resolved(BESIDE);
+        let root = ws.root();
+        let once = definition_diagram(ws.model(), &[root]);
+        let twice = definition_diagram(ws.model(), &[root, root]);
+        assert_eq!(twice.nodes.len(), once.nodes.len());
+        assert_eq!(twice.edges.len(), once.edges.len());
+    }
+
+    #[test]
+    fn a_special_kind_of_member_keeps_its_own_heading() {
+        // every one of these is a subtype of a kind that has a
+        // compartment of its own, and used to be filed under it
+        let ws = resolved(
+            "requirement def R;\n\
+             state def S;\n\
+             use case def U;\n\
+             analysis def An;\n\
+             verification def V;\n\
+             item def I;\n\
+             metadata def M;\n\
+             part def Holder {\n\
+             \tuse case u : U;\n\
+             \tanalysis an : An;\n\
+             \tverification v : V;\n\
+             \texhibit state es : S;\n\
+             \tinclude use case iu : U;\n\
+             \tsatisfy requirement sr : R;\n\
+             \titem it : I;\n\
+             \tmetadata md : M;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let holder = diagram
+            .nodes
+            .iter()
+            .find(|node| node.name == "Holder")
+            .expect("the part definition is drawn");
+        let filed: Vec<(&str, &str)> = holder
+            .compartments
+            .iter()
+            .flat_map(|compartment| {
+                compartment
+                    .lines
+                    .iter()
+                    .map(move |line| (compartment.label, line.name.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            filed,
+            [
+                ("use cases", "u"),
+                ("analyses", "an"),
+                ("verifications", "v"),
+                ("exhibit states", "es"),
+                ("include use cases", "iu"),
+                ("satisfy requirements", "sr"),
+                ("items", "it"),
+                ("metadata", "md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn no_compartment_is_shadowed_by_a_more_general_one() {
+        // a row whose kind is a subtype of an earlier row's is never
+        // reached, and its members are filed under that earlier heading
+        for (nth, (kind, label)) in COMPARTMENTS.iter().enumerate() {
+            for (over, (general, above)) in COMPARTMENTS[..nth].iter().enumerate() {
+                assert!(
+                    !kind.is_a(*general),
+                    "`{label}` (row {nth}) never answers: `{above}` (row {over}) does"
+                );
+            }
+        }
+    }
     use crate::tests::resolved;
 
     /// What a box says of itself, for one internal view.
@@ -3287,6 +3544,36 @@ mod tests {
     }
 
     #[test]
+    fn a_parameter_names_its_end_as_a_port_does() {
+        // a behaviour's parameters are drawn on its border exactly as a
+        // part's ports are -- rounded rather than square -- so the line
+        // to what one is typed by has to land on the glyph the same way,
+        // and an unnamed end leaves the glyph joined to nothing
+        let ws = resolved(
+            "attribute def Millis;\n\
+             attribute def PinNumber;\n\
+             action def SetPin {\n\
+             \tin pin : PinNumber;\n\
+             \tin wait : Millis;\n\
+             \tout result : Millis;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(
+            diagram
+                .edges
+                .iter()
+                .map(|edge| (edge.ends.0.clone(), diagram.nodes[edge.to].name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (Some("pin".to_string()), "PinNumber"),
+                (Some("wait".to_string()), "Millis"),
+                (Some("result".to_string()), "Millis"),
+            ]
+        );
+    }
+
+    #[test]
     fn what_is_not_a_port_is_drawn_once_per_type_and_names_no_end() {
         let ws = resolved(
             "part def Wheel;\n\
@@ -3337,6 +3624,13 @@ mod tests {
 
     #[test]
     fn prose_is_broken_where_a_box_can_hold_it() {
+        // a character an em across takes two of the columns prose is
+        // broken to, so a line of them breaks where a line of letters
+        // twice as long would
+        assert_eq!(
+            wrapped("\u{57fa}\u{677f} ab", 6),
+            ["\u{57fa}\u{677f}", "ab"]
+        );
         assert_eq!(wrapped("short", PROSE), ["short"]);
         // where the source broke a comment is not where a box breaks it
         assert_eq!(wrapped("first\nsecond", PROSE), ["first second"]);
@@ -3555,7 +3849,7 @@ mod tests {
                 (
                     "metadata",
                     "safe : Safety",
-                    vec!["reference level : Level = 3".to_string()]
+                    vec!["ref level : Level = 3".to_string()]
                 ),
                 // a prefix names no usage of its own, so what it is typed
                 // by is the whole of its declaration
@@ -3729,6 +4023,23 @@ mod interconnection_tests {
             .find(|(_, declared)| *declared == name)
             .map(|(id, _)| id)
             .unwrap()
+    }
+
+    #[test]
+    fn a_definition_assembled_from_nothing_is_drawn_as_its_own_boundary() {
+        // there are no parts inside to draw, but the ports on the
+        // boundary are what the view is read for, and an empty canvas
+        // does not say them
+        let ws = resolved("port def Sig;\npart def Edge { port p : Sig; }\n");
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "Edge"));
+        assert_eq!(diagram.nodes.len(), 1);
+        assert_eq!(diagram.nodes[0].name, "Edge");
+        let shown: Vec<&str> = diagram.nodes[0]
+            .compartments
+            .iter()
+            .map(|compartment| compartment.label)
+            .collect();
+        assert!(shown.contains(&"ports"), "{shown:?}");
     }
 
     #[test]
@@ -4813,6 +5124,40 @@ mod behaviour_tests {
             .map(|(id, _)| id)
             .unwrap();
         interconnection_diagram(ws.model(), owner)
+    }
+
+    #[test]
+    fn a_boundary_drawn_on_its_own_still_says_what_it_relates_to() {
+        // the box the whole view is read inside used to be pushed after
+        // the compartments were worked out, so it alone went without them
+        let diagram = internal(
+            "part def Whole;\npart def Millis :> Whole { port p; }\n",
+            "Millis",
+        );
+        let labels: Vec<&str> = diagram.nodes[0]
+            .compartments
+            .iter()
+            .map(|compartment| compartment.label)
+            .collect();
+        assert!(labels.contains(&"relationships"), "{labels:?}");
+    }
+
+    #[test]
+    fn the_internal_view_of_a_usage_shows_what_its_type_is_made_of() {
+        // `--internal vehicle` on a usage used to draw an empty page:
+        // the usage owns no parts of its own, and only its type does
+        let diagram = internal(
+            "part def Wheel;\n\
+             part def Vehicle { part w : Wheel; }\n\
+             part def Fleet { part vehicle : Vehicle; }\n",
+            "vehicle",
+        );
+        let drawn: Vec<&str> = diagram
+            .nodes
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect();
+        assert_eq!(drawn, ["w : Wheel"]);
     }
 
     #[test]

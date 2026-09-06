@@ -141,18 +141,35 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     // edges first, so the boxes paint over the line ends. Ports sit on
     // those borders and must survive, so they are held back until after.
     let mut ports = String::new();
+    // where a line that did not run straight left the box, for the ports
+    // drawn on those borders once every line is down
+    let mut landings: Vec<Leaving> = Vec::new();
+    // where each port's square came to rest, so that the second line to
+    // name a port is drawn to the same square as the first rather than
+    // to a point of its own that nothing is drawn at
+    let mut anchors: Vec<Anchor> = Vec::new();
     // how far down a detour reached, so the canvas can grow to hold it
     let mut floor = 0.0_f64;
     let lanes = lanes(diagram);
     let arrivals = arrivals(diagram);
+    let departures = departures(diagram);
+    // Where every box's ports sit, worked out once. A port is asked
+    // after twice per line that names one and again when the box itself
+    // is drawn, and the answer cannot change between one and the next.
+    let placements: Vec<Vec<Placement>> = (0..layout.placed.len())
+        .map(|at| port_places(diagram, layout, at, &lanes, style))
+        .collect();
     for (index, (edge, &(lane, siblings))) in diagram.edges.iter().zip(&lanes).enumerate() {
         let from = &layout.placed[edge.from];
         let to = &layout.placed[edge.to];
+        // the path the engine chose for this line, if it chose one: read
+        // once, and the same answer for whichever way the line is drawn
+        let routed = given(layout, index);
         match edge.relation {
             // the layering already put the supertype above, so the line
             // runs from the subtype's top edge to the supertype's bottom
-            Relation::Specialization if given(layout, index).is_some() => {
-                let walked = given(layout, index).expect("just checked");
+            Relation::Specialization if routed.is_some() => {
+                let walked = routed.expect("the arm this route matched");
                 writeln!(
                     out,
                     "<path class=\"edge\" fill=\"none\" d=\"{}\" \
@@ -172,14 +189,11 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                     band_below(layout, edge.to, style),
                 );
                 let blocked = hidden(layout, (edge.from, edge.to), (x1, y1), (x2, y2));
+                // only these two: a channel above the supertype's own
+                // row would have to come back down through the
+                // supertype to reach its bottom border
                 let channel = blocked
-                    .then(|| {
-                        channel_for(
-                            layout,
-                            ((x1, y1), (x2, y2)),
-                            &[bands.1, bands.0, band_above(layout, edge.to, style)],
-                        )
-                    })
+                    .then(|| channel_for(layout, ((x1, y1), (x2, y2)), &[bands.1, bands.0]))
                     .flatten();
                 match channel {
                     Some(channel) => writeln!(
@@ -217,7 +231,9 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             // has nowhere to go but back, so it drops into the gap
             // under the row and returns -- downward because that is the
             // one direction the canvas grows to make room in.
-            Relation::Composition | Relation::Reference if edge.from == edge.to => {
+            Relation::Composition | Relation::Reference | Relation::Portion
+                if edge.from == edge.to =>
+            {
                 let (marker, class) = pen(edge.relation);
                 let bottom = from.y + from.height;
                 // a loop has no side to be shifted onto, so what tells
@@ -229,10 +245,42 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 let left = from.x + from.width / 3.0 + inset;
                 let right = from.x + from.width * 2.0 / 3.0 - inset;
                 floor = floor.max(band);
+                // A feature typed by what declares it faces no other
+                // box, so the border point a square would be worked out
+                // from is the box's own middle -- inside it, on no
+                // border at all. The loop sets out from the bottom
+                // border and comes back to it, and that is where the
+                // squares belong.
+                let mut legs = [(left, bottom), (right, bottom)];
+                for (nth, name) in [&edge.ends.0, &edge.ends.1].into_iter().enumerate() {
+                    let (point, toward) = (legs[nth], (legs[nth].0, band));
+                    // a port an earlier line already settled keeps the
+                    // square that line left it on
+                    let Some(name) = name.as_deref().filter(|name| {
+                        anchored(&anchors, edge.from, Some(name)).is_none()
+                            && port_at(&placements[edge.from], Some(name)).is_some()
+                    }) else {
+                        continue;
+                    };
+                    landings.push(Leaving {
+                        at: edge.from,
+                        name: name.to_string(),
+                        point,
+                        toward,
+                    });
+                    anchors.push(Anchor {
+                        at: edge.from,
+                        name: name.to_string(),
+                        point,
+                        away: heading(point, toward),
+                    });
+                    legs[nth] = off_port(point, toward, true, style);
+                }
+                let ((sx, sy), (ex, ey)) = (legs[0], legs[1]);
                 writeln!(
                     out,
-                    "<path{class} fill=\"none\" d=\"M {left:.1} {bottom:.1} V {band:.1} \
-                     H {right:.1} V {bottom:.1}\"{marker}/>"
+                    "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {band:.1} \
+                     H {ex:.1} V {ey:.1}\"{marker}/>"
                 )
             }
             Relation::Composition
@@ -263,25 +311,53 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // box declares one: the standard draws the port on the
                 // border, and a second square beside it would be a
                 // second port that the model never had
-                let ((mut x1, mut y1), first_is_port) = match &edge.ends.0 {
-                    Some(end) => at_port(diagram, layout, edge.from, end, centre_of(to), style),
-                    None => (border_point(from, centre_of(to)), false),
+                //
+                // A port is one square, so a second line naming it is
+                // drawn to where the first line left it rather than to a
+                // place worked out afresh, which would leave one of the
+                // two touching nothing.
+                let held = (
+                    anchored(&anchors, edge.from, edge.ends.0.as_deref()),
+                    anchored(&anchors, edge.to, edge.ends.1.as_deref()),
+                );
+                let places = (
+                    held.0
+                        .or_else(|| port_at(&placements[edge.from], edge.ends.0.as_deref())),
+                    held.1
+                        .or_else(|| port_at(&placements[edge.to], edge.ends.1.as_deref())),
+                );
+                // the line starts on the square's outer face rather than
+                // at its middle, so what it carries there -- a
+                // composition's diamond -- sits against the port instead
+                // of on top of it
+                let clear = port_side(style) / 2.0;
+                let outer = |(at, away): ((f64, f64), (f64, f64))| {
+                    ((at.0 + away.0 * clear, at.1 + away.1 * clear), away)
                 };
-                let ((mut x2, mut y2), second_is_port) = match &edge.ends.1 {
-                    Some(end) => at_port(diagram, layout, edge.to, end, centre_of(from), style),
-                    None => (border_point(to, centre_of(from)), false),
+                let (((mut x1, mut y1), first_away), first_is_port) = match places.0 {
+                    Some(place) => (outer(place), true),
+                    None => (facing(from, centre_of(to)), false),
                 };
-                // shift edges sharing a pair of boxes along the normal, so
-                // two connections do not collapse into one line
-                let (dx, dy) = (x2 - x1, y2 - y1);
-                let length = dx.hypot(dy);
-                if length > 0.0 {
-                    let shift = lane * lane_spacing(from, to, siblings, style);
-                    let (nx, ny) = (-dy / length * shift, dx / length * shift);
-                    x1 += nx;
-                    y1 += ny;
-                    x2 += nx;
-                    y2 += ny;
+                let (((mut x2, mut y2), second_away), second_is_port) = match places.1 {
+                    Some(place) => (outer(place), true),
+                    None => (facing(to, centre_of(from)), false),
+                };
+                // Hold edges sharing a pair of boxes apart, so two
+                // connections do not collapse into one line. A line
+                // leaves through a border, so what holds two of them
+                // apart runs along that border: shifted across the line
+                // instead, an end drifts off the box it belongs to --
+                // outside it at one end, and inside it at the other.
+                //
+                // An end on a port has been slid already, by the same
+                // amount and for the same reason, so that the square it
+                // is drawn as stays on the border it straddles.
+                let shift = lane * lane_spacing(from, to, siblings, style);
+                if !first_is_port {
+                    (x1, y1) = slid(from, (x1, y1), first_away, shift);
+                }
+                if !second_is_port {
+                    (x2, y2) = slid(to, (x2, y2), second_away, shift);
                 }
                 let (marker, class) = pen(edge.relation);
                 // a straight line that runs under an unrelated box reads as
@@ -289,8 +365,18 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // boxes are left downward and joined in a clear channel
                 // beneath the row, one lane per shared pair
                 let lane_shift = lane.abs() * style.line_height;
-                let Facing { detour, bands } = facing_sides(layout, edge, style, lane_shift);
-                let route = match given(layout, index) {
+                let Facing { mut detour, bands } =
+                    facing_sides(layout, edge, style, lane_shift, departures[index]);
+                // a detour would set out from a border of its own
+                // choosing; where the square is already drawn, it sets
+                // out from there instead
+                if let Some((point, _)) = held.0 {
+                    detour.0 = point;
+                }
+                if let Some((point, _)) = held.1 {
+                    detour.1 = point;
+                }
+                let route = match routed {
                     Some(walked) => Some(Detour::Given(walked)),
                     None => hidden(layout, (edge.from, edge.to), (x1, y1), (x2, y2))
                         .then(|| {
@@ -302,6 +388,10 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         })
                         .flatten(),
                 };
+                // a straight line crosses the border where a port is
+                // already drawn; anything else leaves by a side of its
+                // own choosing, and the square has to be told where
+                let bent = route.is_some();
                 let (first_toward, second_toward, label_at) = match route {
                     None => {
                         writeln!(
@@ -314,10 +404,12 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                     }
                     Some(Detour::Channel(channel)) => {
                         ((x1, y1), (x2, y2)) = detour;
+                        let (sx, sy) = off_port((x1, y1), (x1, channel), first_is_port, style);
+                        let (ex, ey) = off_port((x2, y2), (x2, channel), second_is_port, style);
                         writeln!(
                             out,
-                            "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} V {channel:.1} \
-                             H {x2:.1} V {y2:.1}\"{marker}/>"
+                            "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {channel:.1} \
+                             H {ex:.1} V {ey:.1}\"{marker}/>"
                         )
                         .unwrap();
                         floor = floor.max(channel);
@@ -327,30 +419,41 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                             ((x1 + x2) / 2.0, channel - 0.5 * style.line_height),
                         )
                     }
-                    Some(Detour::Given(walked)) => {
+                    Some(Detour::Given(route)) => {
+                        let mut walked = route.to_vec();
+                        let last = walked.len() - 1;
+                        // the engine routed each line to a border point
+                        // of its own, and a port that is already drawn
+                        // pulls the ones after the first back to it
+                        let start = held.0.map_or(route[0], |(point, _)| point);
+                        let finish = held.1.map_or(route[last], |(point, _)| point);
+                        walked[0] = off_port(start, route[1], first_is_port, style);
+                        walked[last] = off_port(finish, route[last - 1], second_is_port, style);
                         writeln!(
                             out,
                             "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
-                            polyline(walked)
+                            polyline(&walked)
                         )
                         .unwrap();
-                        (x1, y1) = walked[0];
-                        (x2, y2) = walked[walked.len() - 1];
+                        (x1, y1) = start;
+                        (x2, y2) = finish;
                         floor = floor.max(walked.iter().map(|&(_, y)| y).fold(0.0, f64::max));
                         let middle = walked[walked.len() / 2];
                         (
-                            walked[1],
-                            walked[walked.len() - 2],
+                            route[1],
+                            route[last - 1],
                             (middle.0, middle.1 - 0.5 * style.line_height),
                         )
                     }
                     Some(Detour::Sidestep(column)) => {
                         ((x1, y1), (x2, y2)) = detour;
                         let (first, second) = bands;
+                        let (sx, sy) = off_port((x1, y1), (x1, first), first_is_port, style);
+                        let (ex, ey) = off_port((x2, y2), (x2, second), second_is_port, style);
                         writeln!(
                             out,
-                            "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} V {first:.1} \
-                             H {column:.1} V {second:.1} H {x2:.1} V {y2:.1}\"{marker}/>"
+                            "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {first:.1} \
+                             H {column:.1} V {second:.1} H {ex:.1} V {ey:.1}\"{marker}/>"
                         )
                         .unwrap();
                         floor = floor.max(first.max(second));
@@ -363,6 +466,58 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         )
                     }
                 };
+                // A detour leaves both boxes downward and a route leaves
+                // by the border it was routed out of, neither of which
+                // is the border a straight line to the other box
+                // crosses. The square is drawn on that border later, so
+                // it is told where the line really left instead.
+                //
+                // Only the first line to name a port says where its
+                // square goes; the lines after it were drawn to that
+                // square and have nothing to add.
+                for (name, at, held, place, point, toward) in [
+                    (
+                        &edge.ends.0,
+                        edge.from,
+                        held.0,
+                        places.0,
+                        (x1, y1),
+                        first_toward,
+                    ),
+                    (
+                        &edge.ends.1,
+                        edge.to,
+                        held.1,
+                        places.1,
+                        (x2, y2),
+                        second_toward,
+                    ),
+                ] {
+                    let (Some(name), None, Some(place)) = (name.as_deref(), held, place) else {
+                        continue;
+                    };
+                    if bent {
+                        landings.push(Leaving {
+                            at,
+                            name: name.to_string(),
+                            point,
+                            toward,
+                        });
+                    }
+                    anchors.push(Anchor {
+                        at,
+                        name: name.to_string(),
+                        // a straight line meets the port where the box
+                        // itself puts it; a bent one leaves the square
+                        // where it left the border
+                        point: if bent { point } else { place.0 },
+                        away: if bent {
+                            heading(point, toward)
+                        } else {
+                            place.1
+                        },
+                    });
+                }
                 // A connection meets each box at a port, drawn the SysML
                 // way: a small square on the border, named beside it.
                 // Where the box declares that port, it is already
@@ -413,12 +568,128 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         // interconnection-view compartment-stack port-l* port-r*
         // port-t* port-b*`. They go in with the other ports, after
         // every box, so a neighbour drawn later cannot cover one.
-        border_ports(&mut ports, diagram, layout, at, style);
+        border_ports(&mut ports, &placements[at], at, &landings, style);
     }
 
     out.push_str(&ports);
     let height = layout.height.max(floor + style.margin);
     document(layout.width, height, style, &out)
+}
+
+/// How far past a border a name set beside a port is put: out along the
+/// way the port faces, then off to one side of the line leaving it.
+fn beside_room(style: &Style) -> f64 {
+    0.45 * style.line_height + across_of(style).abs()
+}
+
+/// The room one box needs outside itself for the names drawn on its
+/// border: its ports, its parameters, and the ends of the lines that
+/// arrive at it, each of which reads outwards, away from the box.
+fn label_room(diagram: &Diagram, at: usize, style: &Style) -> f64 {
+    let node = &diagram.nodes[at];
+    let named = |name: &String| style.text_width(name);
+    let ports = std::iter::once(node)
+        .chain(&node.children)
+        .flat_map(|held| &held.compartments)
+        .filter(|compartment| matches!(compartment.label, "ports" | "parameters"))
+        .flat_map(|compartment| &compartment.lines)
+        .map(|line| named(&line.name));
+    // a connection end names its port whether or not the box declares
+    // one, and a nested part's links are drawn inside this box
+    let ends = diagram
+        .edges
+        .iter()
+        .flat_map(|edge| {
+            [
+                (edge.from == at).then_some(&edge.ends.0),
+                (edge.to == at).then_some(&edge.ends.1),
+            ]
+        })
+        .chain(
+            node.links
+                .iter()
+                .flat_map(|link| [Some(&link.ends.0), Some(&link.ends.1)]),
+        )
+        .flatten()
+        .flatten()
+        .map(named);
+    let mut room = ports.chain(ends).fold(0.0f64, f64::max);
+    if room > 0.0 {
+        room += beside_room(style);
+    }
+    // a marker -- the dot a flow starts at, the bar it splits on -- is
+    // named above itself rather than beside a border, centred, so half
+    // the name hangs off each side of it
+    if !matches!(node.shape, Shape::Box | Shape::Note) && !node.name.is_empty() {
+        room = room.max(named(&node.name) / 2.0 + across_of(style).abs());
+    }
+    // and what a line between two nested parts says is written across
+    // the middle of it, which is inside this box: a transition's trigger
+    // and effect can be longer than everything they run between
+    for link in &node.links {
+        if let Some(label) = &link.label {
+            room = room.max(named(label) / 2.0 + across_of(style).abs());
+        }
+    }
+    room
+}
+
+/// The same layout with the canvas grown to hold the names drawn outside
+/// the boxes, or `None` where it already holds them.
+///
+/// A port is a square on a border with its name reading outwards, and on
+/// the outer border of an outermost box that name reads off the canvas.
+/// The engines place boxes and know nothing of the words drawn round
+/// them, so the room is made here, where the words are: everything is
+/// slid clear of the top left corner and the canvas grows by as much as
+/// it was short.
+pub(crate) fn with_room_for_labels(
+    diagram: &Diagram,
+    layout: &Layout,
+    style: &Style,
+) -> Option<Layout> {
+    // a name reads horizontally, so downwards it reaches only as far as
+    // it was set from the border, plus the half line it is centred on
+    let deep = beside_room(style) + 0.5 * style.font_size;
+    let (mut left, mut top, mut right, mut bottom) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for placed in &layout.placed {
+        let room = label_room(diagram, placed.node, style);
+        if room == 0.0 {
+            continue;
+        }
+        left = left.max(room - placed.x);
+        right = right.max(placed.x + placed.width + room - layout.width);
+        top = top.max(deep - placed.y);
+        bottom = bottom.max(placed.y + placed.height + deep - layout.height);
+    }
+    // whole pixels, because the canvas is written out rounded to them
+    let (left, top) = (left.max(0.0).ceil(), top.max(0.0).ceil());
+    let (right, bottom) = (right.max(0.0).ceil(), bottom.max(0.0).ceil());
+    if left + top + right + bottom == 0.0 {
+        return None;
+    }
+    let mut grown = layout.clone();
+    for placed in &mut grown.placed {
+        placed.x += left;
+        placed.y += top;
+    }
+    for route in &mut grown.routes {
+        for point in route {
+            point.0 += left;
+            point.1 += top;
+        }
+    }
+    for lane in &mut grown.lanes {
+        lane.x += left;
+        lane.top += top;
+    }
+    for frame in &mut grown.packages {
+        frame.x += left;
+        frame.y += top;
+    }
+    grown.width += left + right;
+    grown.height += top + bottom;
+    Some(grown)
 }
 
 /// The glyph the standard gives a node that is not a box: the filled
@@ -566,9 +837,15 @@ fn polyline(walked: &[(f64, f64)]) -> String {
 /// downward and arrives at the part from above. Between boxes in one row
 /// there is no such side, and both are left downward -- the one direction
 /// the canvas grows to make room in.
-fn facing_sides(layout: &Layout, edge: &Edge, style: &Style, lane_shift: f64) -> Facing {
+fn facing_sides(
+    layout: &Layout,
+    edge: &Edge,
+    style: &Style,
+    lane_shift: f64,
+    along: (f64, f64),
+) -> Facing {
     let (from, to) = (&layout.placed[edge.from], &layout.placed[edge.to]);
-    let (middle, other) = (from.x + from.width / 2.0, to.x + to.width / 2.0);
+    let (middle, other) = (from.x + from.width * along.0, to.x + to.width * along.1);
     if from.y + from.height <= to.y {
         return Facing {
             detour: ((middle, from.y + from.height), (other, to.y)),
@@ -982,6 +1259,39 @@ fn arrivals(diagram: &Diagram) -> Vec<f64> {
         .collect()
 }
 
+/// Where along each border a detour sets out from and comes back to, as
+/// a fraction of the width.
+///
+/// Every detour leaving one box would otherwise set out from the middle
+/// of it, so two of them pile their markers -- and the squares of any
+/// ports they name -- on the one point. They are spread the way subtypes
+/// arriving at one supertype are.
+fn departures(diagram: &Diagram) -> Vec<(f64, f64)> {
+    let spread = |edge: &Edge| edge.relation != Relation::Specialization && edge.from != edge.to;
+    let mut total: HashMap<usize, usize> = HashMap::new();
+    for edge in diagram.edges.iter().filter(|edge| spread(edge)) {
+        *total.entry(edge.from).or_default() += 1;
+        *total.entry(edge.to).or_default() += 1;
+    }
+    let mut taken: HashMap<usize, usize> = HashMap::new();
+    diagram
+        .edges
+        .iter()
+        .map(|edge| {
+            if !spread(edge) {
+                return (0.5, 0.5);
+            }
+            let mut share = |at: usize| {
+                let slot = taken.entry(at).or_default();
+                let index = *slot;
+                *slot += 1;
+                (index as f64 + 1.0) / (total[&at] as f64 + 1.0)
+            };
+            (share(edge.from), share(edge.to))
+        })
+        .collect()
+}
+
 /// How far apart to hold edges sharing a pair of boxes.
 ///
 /// A line has to leave through a border, so the whole spread must fit within
@@ -1001,8 +1311,19 @@ fn lane_spacing(from: &Placed, to: &Placed, siblings: usize, style: &Style) -> f
 /// They are spread over the left and right sides, top to bottom, which
 /// is where a reader looks for them and where the gap between columns
 /// leaves room for a name.
-fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize, style: &Style) {
-    for place in port_places(diagram, layout, at) {
+fn border_ports(
+    out: &mut String,
+    places: &[Placement<'_>],
+    at: usize,
+    landings: &[Leaving],
+    style: &Style,
+) {
+    for place in places {
+        // where the line for this port did not run straight it left by
+        // a border of its own choosing, and said so
+        let bent = landings
+            .iter()
+            .find(|landing| landing.at == at && landing.name == place.feature.name);
         // `port-label = QualifiedName (':' QualifiedName)?`: the name
         // alone, because every port drawn on a border was read out of
         // the box's own ports compartment, which says the type an inch
@@ -1010,8 +1331,8 @@ fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize,
         marked(
             out,
             Marked {
-                at: place.at,
-                toward: place.toward,
+                at: bent.map_or(place.at, |landing| landing.point),
+                toward: bent.map_or(place.toward, |landing| landing.toward),
                 peer: place.peer,
                 name: &place.feature.name,
                 direction: place.feature.direction,
@@ -1022,40 +1343,55 @@ fn border_ports(out: &mut String, diagram: &Diagram, layout: &Layout, at: usize,
     }
 }
 
-/// Where a connection meets a box: the port it names, when the box
-/// declares one by that name, and the border otherwise.
-fn at_port(
-    diagram: &Diagram,
-    layout: &Layout,
-    at: usize,
-    end: &str,
-    toward: (f64, f64),
-    style: &Style,
-) -> ((f64, f64), bool) {
-    match port_places(diagram, layout, at)
-        .into_iter()
+/// The port a connection end names, where the box declares one by that
+/// name: the middle of the square it is drawn as, and the way out of the
+/// box through the border it sits on.
+fn port_at(places: &[Placement<'_>], end: Option<&str>) -> Option<((f64, f64), (f64, f64))> {
+    let end = end?;
+    places
+        .iter()
         .find(|place| place.feature.name == end)
-    {
-        // the line starts on the square's outer face rather than at its
-        // middle, so what it carries there -- a composition's diamond --
-        // sits against the port instead of on top of it
-        Some(place) => {
-            let clear = port_side(style) / 2.0;
-            (
-                (
-                    place.at.0 + place.away.0 * clear,
-                    place.at.1 + place.away.1 * clear,
-                ),
-                true,
-            )
-        }
-        None => (border_point(&layout.placed[at], toward), false),
-    }
+        .map(|place| (place.at, place.away))
+}
+
+/// Where a port has already been settled, because an earlier line named
+/// it: the same pair [`port_at`] gives, so that every line after the
+/// first leaves the square rather than a point of its own.
+fn anchored(anchors: &[Anchor], at: usize, end: Option<&str>) -> Option<((f64, f64), (f64, f64))> {
+    let end = end?;
+    anchors
+        .iter()
+        .find(|anchor| anchor.at == at && anchor.name == end)
+        .map(|anchor| (anchor.point, anchor.away))
 }
 
 /// How wide the square the standard draws a port as is.
 fn port_side(style: &Style) -> f64 {
     0.6 * style.line_height
+}
+
+/// Where a line that did not run straight left a box, and which port of
+/// it the line was drawn to: what the square is moved onto, once every
+/// line is down and the box's own ports come to be drawn.
+struct Leaving {
+    at: usize,
+    name: String,
+    point: (f64, f64),
+    toward: (f64, f64),
+}
+
+/// Where one port's square ended up, so that the lines naming it after
+/// the first are drawn to the same point.
+///
+/// A port is one square on one border. Which point that is depends on
+/// how the first line naming it was drawn -- straight, and it is the
+/// port's own place on the border; routed, and it is wherever the route
+/// left the box -- so the first line settles it and the rest follow.
+struct Anchor {
+    at: usize,
+    name: String,
+    point: (f64, f64),
+    away: (f64, f64),
 }
 
 /// One port on a border: what it is, where it sits, and the point its
@@ -1080,7 +1416,13 @@ struct Placement<'a> {
 /// connection at the port it names rather than at a square of its own.
 /// They alternate sides so a box with several does not stack them all
 /// down one edge.
-fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Placement<'a>> {
+fn port_places<'a>(
+    diagram: &'a Diagram,
+    layout: &Layout,
+    at: usize,
+    lanes: &[(f64, usize)],
+    style: &Style,
+) -> Vec<Placement<'a>> {
     let placed = &layout.placed[at];
     let node = &diagram.nodes[placed.node];
     // An action's parameters sit on its border exactly as a part's ports
@@ -1103,29 +1445,54 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
     // on any of the four sides, and the side a reader expects is the
     // one the line comes from. A port nothing reaches falls back to the
     // sides a name has room to grow out of.
+    // Which port faces a line is settled before any of them is placed:
+    // the ones that face nothing are spread evenly down the side they
+    // fall on, and how far apart that is depends on how many there are.
+    let wired: Vec<Option<(usize, usize)>> = listed
+        .iter()
+        .map(|(feature, _)| {
+            diagram.edges.iter().enumerate().find_map(|(index, edge)| {
+                let (mine, theirs) = match (edge.from == at, edge.to == at) {
+                    (true, _) => (0, edge.to),
+                    (_, true) => (1, edge.from),
+                    _ => return None,
+                };
+                let named = if mine == 0 {
+                    &edge.ends.0
+                } else {
+                    &edge.ends.1
+                };
+                (named.as_deref() == Some(feature.name.as_str())).then_some((index, theirs))
+            })
+        })
+        .collect();
+    let free = wired.iter().filter(|joined| joined.is_none()).count();
+
     let mut placements = Vec::new();
     let mut spare = 0usize;
-    for (feature, rounded) in listed {
-        let peer = diagram.edges.iter().find_map(|edge| {
-            let (mine, theirs) = match (edge.from == at, edge.to == at) {
-                (true, _) => (0, edge.to),
-                (_, true) => (1, edge.from),
-                _ => return None,
-            };
-            let named = if mine == 0 {
-                &edge.ends.0
-            } else {
-                &edge.ends.1
-            };
-            (named.as_deref() == Some(feature.name.as_str()))
-                .then(|| centre_of(&layout.placed[theirs]))
-        });
-        let (point, away) = match peer {
-            Some(peer) => facing(placed, peer),
+    for ((feature, rounded), joined) in listed.into_iter().zip(wired) {
+        let peer = joined.map(|(_, theirs)| centre_of(&layout.placed[theirs]));
+        let (point, away) = match joined {
+            // Two features of one type face the same point of the
+            // border, and the shift that keeps their lines apart has to
+            // keep their squares apart too. It runs along the border
+            // rather than across the line: that is the one direction a
+            // square can be moved in and still straddle the border.
+            Some((index, theirs)) => {
+                let other = &layout.placed[theirs];
+                let (point, away) = facing(placed, centre_of(other));
+                let (lane, siblings) = lanes[index];
+                let slide = lane * lane_spacing(placed, other, siblings, style);
+                (slid(placed, point, away, slide), away)
+            }
             None => {
+                // they alternate sides, so the left takes the odd one
+                // out; each side is then divided into as many equal
+                // steps as it has ports, plus one
                 let left = spare % 2 == 0;
-                let down =
-                    placed.y + (spare / 2 + 1) as f64 * placed.height / (spare as f64 / 2.0 + 2.0);
+                let down = placed.y
+                    + (spare / 2 + 1) as f64 * placed.height
+                        / (if left { free.div_ceil(2) } else { free / 2 } + 1) as f64;
                 spare += 1;
                 let x = if left {
                     placed.x
@@ -1144,7 +1511,93 @@ fn port_places<'a>(diagram: &'a Diagram, layout: &Layout, at: usize) -> Vec<Plac
             rounded,
         });
     }
+    // Two features can face two boxes that lie the same way and come to
+    // the same point of the border. Spread whatever has piled up along
+    // the border it sits on -- the lines follow, because this is where
+    // they are told the port is.
+    let points: Vec<(f64, f64)> = placements.iter().map(|place| place.at).collect();
+    for pile in piles(&points).into_iter().filter(|pile| pile.len() > 1) {
+        let spread = (pile.len() as f64 - 1.0) / 2.0;
+        for (nth, &which) in pile.iter().enumerate() {
+            let place = &mut placements[which];
+            let slide = (nth as f64 - spread) * style.line_height;
+            place.at = slid(placed, place.at, place.away, slide);
+            place.toward = (
+                place.at.0 + place.away.0 * 8.0,
+                place.at.1 + place.away.1 * 8.0,
+            );
+        }
+    }
     placements
+}
+
+/// How near two points have to be to count as one place. The drawing is
+/// written out to a tenth of a pixel, so anything closer than half of one
+/// lands on the same spot however the arithmetic came out.
+const TOGETHER: f64 = 0.5;
+
+/// The points that came out on top of each other, as groups of indices
+/// into `points`.
+///
+/// Rounding each point into a bucket instead would separate two points a
+/// tenth of a pixel apart whenever a bucket boundary happened to fall
+/// between them, and leave their squares drawn over one another.
+fn piles(points: &[(f64, f64)]) -> Vec<Vec<usize>> {
+    let mut piles: Vec<Vec<usize>> = Vec::new();
+    for (nth, &at) in points.iter().enumerate() {
+        let together = piles.iter_mut().find(|pile| {
+            let first = points[pile[0]];
+            (first.0 - at.0).abs() < TOGETHER && (first.1 - at.1).abs() < TOGETHER
+        });
+        match together {
+            Some(pile) => pile.push(nth),
+            None => piles.push(vec![nth]),
+        }
+    }
+    piles
+}
+
+/// An end of a line pulled back to the outer face of the square a port
+/// is drawn as, where the end names one.
+///
+/// The square straddles the border the line sets out from, so a line
+/// drawn to the border itself runs under it, and what it carries there
+/// -- a composition's diamond, a reference's -- is drawn half inside the
+/// square. `at_port` holds a straight line off by the same half square.
+fn off_port(at: (f64, f64), toward: (f64, f64), is_port: bool, style: &Style) -> (f64, f64) {
+    if is_port {
+        along(at, toward, port_side(style) / 2.0)
+    } else {
+        at
+    }
+}
+
+/// The point `by` along from `from` towards `to`.
+fn along(from: (f64, f64), to: (f64, f64), by: f64) -> (f64, f64) {
+    let (dx, dy) = heading(from, to);
+    (from.0 + dx * by, from.1 + dy * by)
+}
+
+/// The direction from `at` towards `toward`, as a unit vector. `max`
+/// keeps it finite when the two points coincide.
+fn heading(at: (f64, f64), toward: (f64, f64)) -> (f64, f64) {
+    let (dx, dy) = (toward.0 - at.0, toward.1 - at.1);
+    let length = dx.hypot(dy).max(f64::EPSILON);
+    (dx / length, dy / length)
+}
+
+/// A point on a box's border, slid `by` along it.
+///
+/// It slides rightwards on a top or bottom border and downwards on a left
+/// or right one -- one direction per border, so both ends of a line slide
+/// the same way rather than splaying it -- and stops at the corner, since
+/// past that there is no border left to sit on.
+fn slid(rect: &Placed, at: (f64, f64), away: (f64, f64), by: f64) -> (f64, f64) {
+    let along = (away.1.abs(), away.0.abs());
+    (
+        (at.0 + along.0 * by).clamp(rect.x, rect.x + rect.width),
+        (at.1 + along.1 * by).clamp(rect.y, rect.y + rect.height),
+    )
 }
 
 /// Where on a box's border a port facing `peer` sits, and which way its
@@ -1429,6 +1882,135 @@ mod tests {
     }
 
     #[test]
+    fn a_channel_above_the_supertype_is_no_route_down_to_it() {
+        // the last leg of such a route runs from over the supertype down
+        // to its bottom border, straight through the box it is meant to
+        // arrive at, so it is never one of the channels offered
+        let boxes = |at: usize, y: f64| Placed {
+            node: at,
+            x: 100.0,
+            y,
+            width: 200.0,
+            height: 100.0,
+        };
+        let layout = Layout {
+            placed: vec![boxes(0, 200.0), boxes(1, 0.0)],
+            width: 400.0,
+            height: 400.0,
+            ..Layout::default()
+        };
+        // from the subtype's top border to the supertype's bottom one
+        let ends = ((150.0, 200.0), (200.0, 100.0));
+        assert_eq!(channel_for(&layout, ends, &[-10.0]), None);
+        // where the gap under the supertype's row does carry it
+        assert_eq!(channel_for(&layout, ends, &[150.0]), Some(150.0));
+    }
+
+    #[test]
+    fn making_room_moves_everything_the_drawing_holds() {
+        // routes, swimlanes and package frames are all read in canvas
+        // coordinates, so sliding the boxes clear of the corner has to
+        // slide them too or the drawing comes apart
+        let ws = resolved("port def Fuel;\npart def Tank { port aVeryLongPortName : Fuel; }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let tight = Layout {
+            placed: (0..diagram.nodes.len())
+                .map(|node| Placed {
+                    node,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 80.0,
+                    height: 40.0,
+                })
+                .collect(),
+            width: 80.0,
+            height: 40.0,
+            routes: vec![vec![(1.0, 2.0), (3.0, 4.0)]],
+            lanes: vec![crate::layout::Column {
+                name: "lane".to_string(),
+                x: 5.0,
+                width: 10.0,
+                top: 6.0,
+                height: 10.0,
+            }],
+            packages: vec![crate::layout::Frame {
+                name: "P".to_string(),
+                x: 7.0,
+                y: 8.0,
+                width: 10.0,
+                height: 10.0,
+            }],
+        };
+        let grown = with_room_for_labels(&diagram, &tight, &style).expect("room was needed");
+        let (across, down) = (grown.placed[0].x, grown.placed[0].y);
+        assert!(across > style.text_width("aVeryLongPortName"));
+        assert!(down > 0.0);
+        assert_eq!(
+            grown.routes[0],
+            [(1.0 + across, 2.0 + down), (3.0 + across, 4.0 + down)]
+        );
+        assert_eq!(
+            (grown.lanes[0].x, grown.lanes[0].top),
+            (5.0 + across, 6.0 + down)
+        );
+        assert_eq!(
+            (grown.packages[0].x, grown.packages[0].y),
+            (7.0 + across, 8.0 + down)
+        );
+        assert!(grown.width > tight.width + across && grown.height > tight.height + down);
+
+        // and a drawing with nothing written outside its boxes is left
+        // exactly as it was laid out
+        let plain = resolved("part def A;\n");
+        let plain = definition_diagram(plain.model(), &[plain.root()]);
+        assert!(with_room_for_labels(&plain, &layout(&plain, &style), &style).is_none());
+    }
+
+    #[test]
+    fn two_ports_a_tenth_of_a_pixel_apart_are_one_place() {
+        // 100.4 and 100.6 fall either side of a half-pixel boundary, so
+        // bucketing by one used to leave these two squares drawn over
+        // each other while spreading a pair that straddled no boundary
+        let together = piles(&[(100.4, 5.0), (100.6, 5.0), (300.0, 5.0)]);
+        assert_eq!(together, [vec![0, 1], vec![2]]);
+        // and a point half a pixel off is a place of its own
+        assert_eq!(piles(&[(0.0, 0.0), (0.0, 0.5)]), [vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn the_canvas_leaves_room_for_the_names_written_outside_the_boxes() {
+        let source = "port def Fuel;\n\
+             part def Tank { port aVeryLongPortNameIndeed : Fuel; }\n";
+        let ws = resolved(source);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let placed = layout(&diagram, &style);
+        let tank = diagram
+            .nodes
+            .iter()
+            .position(|it| it.name == "Tank")
+            .unwrap();
+
+        // the box is held clear of the canvas edge by the width of the
+        // name its port writes outside it
+        let room = style.text_width("aVeryLongPortNameIndeed");
+        assert!(placed.placed[tank].x > room, "{:?}", placed.placed[tank]);
+        assert!(placed.width > placed.placed[tank].x + placed.placed[tank].width + room);
+
+        // and the name itself is on the canvas, whichever side it fell on
+        let svg = render(&diagram, &style);
+        let at = svg
+            .split("aVeryLongPortNameIndeed</text>")
+            .next()
+            .and_then(|before| before.rsplit_once("<text class=\"feature\" x=\""))
+            .map(|(_, tag)| tag)
+            .expect("the port's name is drawn");
+        let x: f64 = at.split('"').next().unwrap().parse().unwrap();
+        assert!(x - room > 0.0 && x + room < placed.width, "{svg}");
+    }
+
+    #[test]
     fn the_arrowhead_points_at_the_supertype() {
         let ws = resolved("part def Super;\npart def Sub :> Super;\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
@@ -1513,7 +2095,7 @@ mod tests {
         let Facing {
             detour: (leaves, arrives),
             bands: (first, second),
-        } = facing_sides(&placed, edge, &style, 0.0);
+        } = facing_sides(&placed, edge, &style, 0.0, (0.5, 0.5));
         let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
 
         // down out of the whole and in through the top of the part
@@ -1545,7 +2127,7 @@ mod tests {
         let Facing {
             detour: (leaves, arrives),
             bands: (first, second),
-        } = facing_sides(&placed, edge, &style, 0.0);
+        } = facing_sides(&placed, edge, &style, 0.0, (0.5, 0.5));
         let (one, other) = (&placed.placed[edge.from], &placed.placed[edge.to]);
 
         assert_eq!(leaves.1, one.y + one.height);
@@ -2041,6 +2623,27 @@ mod tests {
     }
 
     #[test]
+    fn a_slide_along_a_border_stops_at_the_corner() {
+        let placed = Placed {
+            node: 0,
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 40.0,
+        };
+        // a top or bottom border slides rightwards
+        assert_eq!(slid(&placed, (50.0, 60.0), (0.0, 1.0), 20.0), (70.0, 60.0));
+        // and no further than the corner, past which there is no border
+        // left to sit on
+        assert_eq!(
+            slid(&placed, (100.0, 60.0), (0.0, 1.0), 40.0),
+            (110.0, 60.0)
+        );
+        // a left or right border slides downwards instead
+        assert_eq!(slid(&placed, (10.0, 30.0), (-1.0, 0.0), 5.0), (10.0, 35.0));
+    }
+
+    #[test]
     fn lane_spacing_shrinks_to_fit_the_boxes() {
         let style = Style::default();
         let boxed = Placed {
@@ -2525,6 +3128,296 @@ mod tests {
     }
 
     #[test]
+    fn a_port_sits_where_the_route_leaves_the_box_not_where_a_straight_line_would() {
+        // An engine that routes for itself bends, and leaves through
+        // whichever border it chose. Placing the square by the straight
+        // line to the other box instead leaves it on a border the line
+        // never touches, with the diamond stranded somewhere else.
+        let ws = resolved("port def Fuel;\npart def Tank { port out1 : Fuel; }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        let at = diagram
+            .edges
+            .iter()
+            .position(|edge| edge.ends.0.as_deref() == Some("out1"))
+            .unwrap();
+        let tank = &layout.placed[diagram.edges[at].from];
+        let leaves = (tank.x + tank.width / 3.0, tank.y + tank.height);
+        layout.routes = vec![Vec::new(); diagram.edges.len()];
+        layout.routes[at] = vec![leaves, (leaves.0, leaves.1 + 40.0), (0.0, leaves.1 + 40.0)];
+        let svg = to_svg(&diagram, &layout, &style);
+        let clear = port_side(&style) / 2.0;
+        assert!(
+            svg.contains(&format!(
+                "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\"",
+                leaves.0 - clear,
+                leaves.1 - clear
+            )),
+            "{svg}"
+        );
+        // and the line starts on the square's outer face, so what it
+        // carries there is against the square rather than under it
+        assert!(
+            svg.contains(&format!("d=\"M {:.1} {:.1} ", leaves.0, leaves.1 + clear)),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn ports_of_one_type_get_a_square_each_rather_than_one_between_them() {
+        // the lines are held apart by a lane each; the squares they end
+        // on have to be held apart by the same amount, or three lines
+        // arrive at one square and two of them look unattached
+        let svg = svg_of(
+            "port def Sig;\n\
+             part def Box {\n\
+             \tport p : Sig;\n\
+             \tport q : Sig;\n\
+             \tport r : Sig;\n\
+             }\n",
+        );
+        let squares: Vec<&str> = svg
+            .match_indices("<rect class=\"port\"")
+            .map(|(at, _)| &svg[at..at + 46])
+            .collect();
+        assert_eq!(squares.len(), 3, "{svg}");
+        assert_eq!(
+            squares
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            3,
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn ports_facing_two_boxes_the_same_way_are_spread_along_the_border() {
+        // two features can be typed by two definitions that lie the same
+        // way, and the border point each faces is then the same point
+        let ws = resolved(
+            "port def One;\n\
+             port def Two;\n\
+             part def Box {\n\
+             \tport p : One;\n\
+             \tport q : Two;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        let box_at = diagram.edges[0].from;
+        layout.placed[box_at].x = 100.0;
+        layout.placed[box_at].y = 0.0;
+        layout.placed[box_at].width = 200.0;
+        layout.placed[box_at].height = 100.0;
+        // both types straight below, so both face the middle of the
+        // bottom border
+        for (nth, edge) in diagram.edges.iter().enumerate() {
+            let peer = &mut layout.placed[edge.to];
+            peer.x = 100.0;
+            peer.y = 400.0 + 400.0 * nth as f64;
+            peer.width = 200.0;
+            peer.height = 100.0;
+        }
+        let svg = to_svg(&diagram, &layout, &style);
+        let squares: Vec<&str> = svg
+            .match_indices("<rect class=\"port\"")
+            .map(|(at, _)| &svg[at..at + 46])
+            .collect();
+        assert_eq!(squares.len(), 2, "{svg}");
+        assert_ne!(squares[0], squares[1], "{svg}");
+    }
+
+    #[test]
+    fn a_feature_typed_by_what_declares_it_sits_on_the_loop_it_draws() {
+        // there is no other box to face, so the border point works out
+        // as the box's own middle -- inside it, on no border at all.
+        // The loop leaves the bottom border, and the square goes there.
+        let svg = svg_of("port def Chain { port next : Chain; }\n");
+        let drawn = svg.split("d=\"M ").nth(1).expect("a loop is drawn");
+        let start: Vec<f64> = drawn
+            .split(' ')
+            .take(2)
+            .map(|word| word.parse().expect("two numbers after the M"))
+            .collect();
+        // the square straddles the border the loop sets out from, and
+        // the loop starts on its outer face
+        let clear = port_side(&Style::default()) / 2.0;
+        assert!(
+            svg.contains(&format!(
+                "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\"",
+                start[0] - clear,
+                start[1] - 2.0 * clear
+            )),
+            "loop starts at {start:?} in {svg}"
+        );
+    }
+
+    #[test]
+    fn a_portion_of_what_declares_it_loops_rather_than_collapsing() {
+        // `timeslice t : Person` inside `item def Person` relates the
+        // box to itself; run centre to centre it would be a line of no
+        // length at all, with its marker adrift in the middle of the box
+        let svg = svg_of("item def Person { timeslice was : Person; }\n");
+        assert!(svg.contains("marker-start=\"url(#portion)\""), "{svg}");
+        assert!(
+            !svg.contains("<line class=\"edge\""),
+            "a loop is a path, not a line of no length: {svg}"
+        );
+    }
+
+    #[test]
+    fn a_parameter_that_detours_is_drawn_where_the_detour_leaves() {
+        // A line that would run under a box in the way goes round it
+        // instead, leaving downward rather than through the border a
+        // straight line would cross. The glyph an action's parameter is
+        // drawn as has to go with it, or it is left on a border the
+        // line never touches.
+        let ws = resolved(
+            "attribute def Millis;\n\
+             action def Wait { in millis : Millis; }\n\
+             part def Wall;\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        let at = diagram
+            .edges
+            .iter()
+            .position(|edge| edge.ends.0.as_deref() == Some("millis"))
+            .unwrap();
+        let (wait, millis) = (diagram.edges[at].from, diagram.edges[at].to);
+        let wall = (0..layout.placed.len())
+            .find(|&at| at != wait && at != millis)
+            .unwrap();
+        // stack them: the wall square between the two, so a straight
+        // line from one to the other runs under it
+        for (at, y) in [(wait, 0.0), (wall, 200.0), (millis, 400.0)] {
+            layout.placed[at].x = 100.0;
+            layout.placed[at].y = y;
+            layout.placed[at].width = 200.0;
+            layout.placed[at].height = 100.0;
+        }
+        let svg = to_svg(&diagram, &layout, &style);
+        // the detour leaves the middle of the border it sets out from
+        let leaves = (200.0, 100.0);
+        let clear = port_side(&style) / 2.0;
+        assert!(
+            svg.contains(&format!(
+                "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\"",
+                leaves.0 - clear,
+                leaves.1 - clear
+            )),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(&format!("d=\"M {:.1} {:.1} V", leaves.0, leaves.1 + clear)),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn two_detours_leaving_one_box_set_out_from_different_points() {
+        // both would leave the middle of the border it faces them
+        // through, piling their markers -- and the square of any port
+        // they name -- on the one point
+        let ws = resolved(
+            "attribute def One;\n\
+             attribute def Two;\n\
+             action def Act {\n\
+             \tin a : One;\n\
+             \tin b : Two;\n\
+             }\n\
+             part def Wall;\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        let act = diagram.edges[0].from;
+        let wall = (0..layout.placed.len())
+            .find(|at| *at != act && diagram.edges.iter().all(|edge| edge.to != *at))
+            .expect("a box nothing is typed by");
+        // stack them, so a straight line to either type runs under the
+        // wall and has to go round it
+        layout.placed[act].x = 100.0;
+        layout.placed[act].y = 0.0;
+        layout.placed[wall].x = 100.0;
+        layout.placed[wall].y = 200.0;
+        for (nth, edge) in diagram.edges.iter().enumerate() {
+            layout.placed[edge.to].x = 100.0;
+            layout.placed[edge.to].y = 400.0 + 200.0 * nth as f64;
+        }
+        for at in [act, wall] {
+            layout.placed[at].width = 300.0;
+            layout.placed[at].height = 100.0;
+        }
+        for edge in &diagram.edges {
+            layout.placed[edge.to].width = 300.0;
+            layout.placed[edge.to].height = 100.0;
+        }
+        let svg = to_svg(&diagram, &layout, &style);
+        let mark = "<path class=\"edge\" fill=\"none\" d=\"M ";
+        let starts: Vec<&str> = svg
+            .match_indices(mark)
+            .map(|(at, _)| &svg[at + mark.len()..at + mark.len() + 11])
+            .collect();
+        assert_eq!(starts.len(), 2, "{svg}");
+        assert_ne!(starts[0], starts[1], "{svg}");
+    }
+
+    #[test]
+    fn a_route_arriving_at_a_port_stops_at_its_square_too() {
+        // the far end of a route names a port as readily as the near
+        // one, and is held off the square by the same half a square
+        let ws = resolved(
+            "port def Fuel;\n\
+             part def Tank { port out1 : Fuel; }\n\
+             part def Engine { port in1 : Fuel; }\n\
+             part def Car {\n\
+             \tpart t : Tank;\n\
+             \tpart e : Engine;\n\
+             \tconnect t.out1 to e.in1;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        let at = diagram
+            .edges
+            .iter()
+            .position(|edge| edge.ends.1.as_deref() == Some("in1"))
+            .unwrap();
+        let edge = &diagram.edges[at];
+        let (from, to) = (&layout.placed[edge.from], &layout.placed[edge.to]);
+        let leaves = (from.x + from.width / 3.0, from.y + from.height);
+        let arrives = (to.x + to.width / 3.0, to.y + to.height);
+        let below = leaves.1.max(arrives.1) + 40.0;
+        layout.routes = vec![Vec::new(); diagram.edges.len()];
+        layout.routes[at] = vec![leaves, (leaves.0, below), (arrives.0, below), arrives];
+        let svg = to_svg(&diagram, &layout, &style);
+        let clear = port_side(&style) / 2.0;
+        assert!(
+            svg.contains(&format!(
+                "<rect class=\"port\" x=\"{:.1}\" y=\"{:.1}\"",
+                arrives.0 - clear,
+                arrives.1 - clear
+            )),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(&format!("L {:.1} {:.1}\"", arrives.0, arrives.1 + clear)),
+            "{svg}"
+        );
+    }
+
+    #[test]
     fn each_compartment_gets_a_rule_a_label_and_one_line_each() {
         let svg = svg_of(
             "part def FuelPort;\n\
@@ -2714,5 +3607,188 @@ mod port_tests {
             "hub is written outside its box"
         );
         let _ = y_of("hub");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod anchor_tests {
+    use super::*;
+    use crate::tests::resolved;
+    use crate::{definition_diagram, interconnection_diagram, layout};
+
+    /// One port named by two connections: the second box lies straight
+    /// ahead of the first, so one line runs straight there and the other
+    /// has to go round it.
+    pub(crate) const TWICE: &str = "port def P;\n\
+                         part def Src { port o : P; }\n\
+                         part def Dst { port i : P; }\n\
+                         part def Sys {\n\
+                         \tpart s : Src;\n\
+                         \tpart d1 : Dst;\n\
+                         \tpart d2 : Dst;\n\
+                         \tconnect s.o to d1.i;\n\
+                         \tconnect s.o to d2.i;\n\
+                         }\n";
+
+    pub(crate) fn diagram_of(source: &str, name: &str) -> Diagram {
+        let ws = resolved(source);
+        let owner = ws
+            .named_elements()
+            .find(|(_, declared)| *declared == name)
+            .map(|(id, _)| id)
+            .expect("the definition is declared");
+        interconnection_diagram(ws.model(), owner)
+    }
+
+    /// The value of one `name="123.4"` attribute.
+    pub(crate) fn number(text: &str, key: &str) -> f64 {
+        text.split(key)
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("`{key}` in `{text}`"))
+    }
+
+    /// The middle of every square a port is drawn as.
+    pub(crate) fn squares(svg: &str) -> Vec<(f64, f64)> {
+        svg.lines()
+            .filter(|line| line.starts_with("<rect class=\"port\""))
+            .map(|line| {
+                let side = number(line, " width=\"");
+                (
+                    number(line, " x=\"") + side / 2.0,
+                    number(line, " y=\"") + side / 2.0,
+                )
+            })
+            .collect()
+    }
+
+    /// Where every edge meets a box, both ends of it: the two ends of a
+    /// straight line, and the first and last point of a routed one.
+    pub(crate) fn edge_ends(svg: &str) -> Vec<((f64, f64), (f64, f64))> {
+        svg.lines()
+            .filter_map(|line| {
+                if line.starts_with("<line class=\"edge\"") {
+                    return Some((
+                        (number(line, " x1=\""), number(line, " y1=\"")),
+                        (number(line, " x2=\""), number(line, " y2=\"")),
+                    ));
+                }
+                let path = line
+                    .starts_with("<path class=\"edge\"")
+                    .then(|| line.split(" d=\"").nth(1))
+                    .flatten()?;
+                let mut walked = path.split('"').next()?.split_whitespace();
+                let mut at = (0.0, 0.0);
+                let mut first = None;
+                while let Some(step) = walked.next() {
+                    let mut number = || walked.next().and_then(|it| it.parse::<f64>().ok());
+                    match step {
+                        "H" => at.0 = number()?,
+                        "V" => at.1 = number()?,
+                        // `M` and `L`, the only other commands the
+                        // renderer writes
+                        _ => at = (number()?, number()?),
+                    }
+                    first = first.or(Some(at));
+                }
+                Some((first?, at))
+            })
+            .collect()
+    }
+
+    /// How many of `squares` the line touching `at` could be said to
+    /// leave from: the square is drawn round the point a line sets out
+    /// from, half a side away.
+    pub(crate) fn leaves(squares: &[(f64, f64)], at: (f64, f64), style: &Style) -> usize {
+        let clear = port_side(style) / 2.0;
+        squares
+            .iter()
+            .filter(|square| (at.0 - square.0).hypot(at.1 - square.1) - clear < 0.05)
+            .count()
+    }
+
+    #[test]
+    fn ports_nothing_reaches_are_spread_evenly_down_their_side() {
+        // they used to be placed at (k + 1) / (k + 2) of the height,
+        // which converges on the bottom corner: the third one on a side
+        // and everything after it piled up there
+        // untyped, so nothing is drawn for the ports to face
+        let mut source = String::from("part def Eight {\n");
+        for nth in 0..8 {
+            source.push_str(&format!("\tport p{nth};\n"));
+        }
+        source.push_str("}\n");
+        let ws = resolved(&source);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let placed = layout(&diagram, &style);
+        let svg = to_svg(&diagram, &placed, &style);
+
+        let squares = squares(&svg);
+        assert_eq!(squares.len(), 8, "{svg}");
+        for side in [
+            placed.placed[0].x,
+            placed.placed[0].x + placed.placed[0].width,
+        ] {
+            let mut down: Vec<f64> = squares
+                .iter()
+                .filter(|square| (square.0 - side).abs() < 0.05)
+                .map(|square| square.1)
+                .collect();
+            down.sort_by(f64::total_cmp);
+            assert_eq!(down.len(), 4, "{squares:?}");
+            let step = down[1] - down[0];
+            for gap in down.windows(2) {
+                assert!((gap[1] - gap[0] - step).abs() < 0.05, "{down:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn both_lines_naming_one_port_set_out_from_its_square() {
+        let diagram = diagram_of(TWICE, "Sys");
+        let style = Style::default();
+        let svg = to_svg(&diagram, &layout(&diagram, &style), &style);
+
+        // one square for `o` and one for each `i`, not two for `o`
+        let squares = squares(&svg);
+        assert_eq!(squares.len(), 3, "{svg}");
+        // one line runs straight and the other is routed round the box
+        // in the way, and both leave `o` where its square is drawn
+        let drawn = edge_ends(&svg);
+        assert_eq!(drawn.len(), 2, "{svg}");
+        for (start, finish) in drawn {
+            assert_eq!(leaves(&squares, start, &style), 1, "{svg}");
+            assert_eq!(leaves(&squares, finish, &style), 1, "{svg}");
+        }
+    }
+
+    #[test]
+    fn both_lines_arriving_at_one_port_meet_the_same_square() {
+        let diagram = diagram_of(
+            "port def P;\n\
+             part def Src { port o : P; }\n\
+             part def Dst { port i : P; }\n\
+             part def Sys {\n\
+             \tpart d : Dst;\n\
+             \tpart s1 : Src;\n\
+             \tpart s2 : Src;\n\
+             \tconnect s1.o to d.i;\n\
+             \tconnect s2.o to d.i;\n\
+             }\n",
+            "Sys",
+        );
+        let style = Style::default();
+        let svg = to_svg(&diagram, &layout(&diagram, &style), &style);
+
+        let squares = squares(&svg);
+        assert_eq!(squares.len(), 3, "{svg}");
+        let drawn = edge_ends(&svg);
+        assert_eq!(drawn.len(), 2, "{svg}");
+        for (start, finish) in drawn {
+            assert_eq!(leaves(&squares, start, &style), 1, "{svg}");
+            assert_eq!(leaves(&squares, finish, &style), 1, "{svg}");
+        }
     }
 }

@@ -61,7 +61,11 @@ pub fn elk_layout(diagram: &Diagram, style: &Style, command: &str) -> Result<Lay
         .map(|node| box_size(node, style))
         .collect();
     let laid_out = run(command, &to_elk(diagram, &sizes, style))?;
-    parse_elk(&laid_out, diagram, &sizes, style)
+    let placed = parse_elk(&laid_out, diagram, &sizes, style)?;
+    // ELK places boxes and knows nothing of the names written outside
+    // them, so the room for those is left here, as the built-in layout
+    // leaves it
+    Ok(crate::svg::with_room_for_labels(diagram, &placed, style).unwrap_or(placed))
 }
 
 /// The diagram as an ELK graph: boxes at their measured sizes and the
@@ -304,19 +308,34 @@ fn parse_elk(
 
     // a frame ELK left out would leave the drawing unable to say where a
     // package is, which is a refusal rather than a package quietly missing
-    let packages = packages
+    let mut packages = packages
         .into_iter()
         .enumerate()
         .map(|(at, slot)| slot.ok_or_else(|| unreadable(format!("no position for package g{at}"))))
         .collect::<Result<Vec<Frame>, ElkError>>()?;
+    // The tab is drawn here and not by the engine, which sizes a package
+    // by what it holds: one small box under a long name comes back as a
+    // frame narrower than the name written across the top of it. Asking
+    // the engine for a minimum size instead is worth less than it looks:
+    // `elkrs` applies one to a nested node along its own axis, so a frame
+    // told to be wide comes back tall.
+    for frame in &mut packages {
+        frame.width = frame
+            .width
+            .max(style.text_width(&frame.name) + 2.0 * style.padding);
+    }
     let placed = placed
         .into_iter()
         .enumerate()
         .map(|(at, slot)| slot.ok_or_else(|| unreadable(format!("no position for node n{at}"))))
         .collect::<Result<Vec<Placed>, ElkError>>()?;
+    let width = packages.iter().fold(
+        number(&graph, "width")? + 2.0 * style.margin,
+        |canvas: f64, frame| canvas.max(frame.x + frame.width + style.margin),
+    );
     Ok(Layout {
         placed,
-        width: number(&graph, "width")? + 2.0 * style.margin,
+        width,
         height: number(&graph, "height")? + 2.0 * style.margin,
         routes: routes_of(&graph, diagram, style),
         // a laned view never reaches here; it is laid out by this crate
@@ -652,6 +671,30 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_comes_back_no_narrower_than_the_name_in_its_tab() {
+        let style = Style::default();
+        let ws = resolved("package AVeryLongPackageNameIndeed { part def A; }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let sizes = vec![(60.0, 40.0); diagram.nodes.len()];
+        // an engine that sized the frame by the one box it holds
+        let layout = parse_elk(
+            "{\"width\":80,\"height\":100,\"children\":[{\"id\":\"g0\",\"x\":0,\"y\":0,\
+             \"width\":80,\"height\":100,\"children\":[{\"id\":\"n0\",\"x\":10,\"y\":47}]}]}",
+            &diagram,
+            &sizes,
+            &style,
+        )
+        .unwrap();
+        let frame = &layout.packages[0];
+        assert!(
+            frame.width >= style.text_width("AVeryLongPackageNameIndeed") + 2.0 * style.padding,
+            "{frame:?}"
+        );
+        // and the canvas holds the frame it was widened to
+        assert!(layout.width >= frame.x + frame.width + style.margin);
+    }
+
+    #[test]
     fn a_box_outside_every_package_still_goes_to_elk() {
         let ws = resolved("package P { part def A; }\npart def Loose;\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
@@ -888,6 +931,43 @@ mod tests {
             layout.routes.iter().all(Vec::is_empty),
             "{:?}",
             layout.routes
+        );
+    }
+
+    #[test]
+    fn a_port_elk_routed_twice_keeps_one_square() {
+        use crate::svg::anchor_tests::{diagram_of, edge_ends, leaves, squares, TWICE};
+
+        // ELK routes each line to a border point of its own, so without
+        // an anchor the second of them would set out beside the square
+        // rather than from it
+        let style = Style::default();
+        let diagram = diagram_of(TWICE, "Sys");
+        assert_eq!((diagram.nodes.len(), diagram.edges.len()), (3, 2));
+        let sizes = [(120.0, 40.0); 3];
+        let laid_out = "{\"width\":400,\"height\":300,\"children\":[\
+             {\"id\":\"n0\",\"x\":0,\"y\":0},{\"id\":\"n1\",\"x\":0,\"y\":200},\
+             {\"id\":\"n2\",\"x\":200,\"y\":200}],\"edges\":[\
+             {\"id\":\"e0\",\"sections\":[{\"startPoint\":{\"x\":60,\"y\":40},\
+             \"bendPoints\":[{\"x\":60,\"y\":120}],\"endPoint\":{\"x\":60,\"y\":200}}]},\
+             {\"id\":\"e1\",\"sections\":[{\"startPoint\":{\"x\":20,\"y\":40},\
+             \"bendPoints\":[{\"x\":20,\"y\":140},{\"x\":260,\"y\":140}],\
+             \"endPoint\":{\"x\":260,\"y\":200}}]}]}";
+        let laid_out = parse_elk(laid_out, &diagram, &sizes, &style).unwrap();
+        let svg = crate::svg::to_svg(&diagram, &laid_out, &style);
+
+        let squares = squares(&svg);
+        assert_eq!(squares.len(), 3, "{svg}");
+        let drawn = edge_ends(&svg);
+        assert_eq!(drawn.len(), 2, "{svg}");
+        for (start, finish) in drawn {
+            assert_eq!(leaves(&squares, start, &style), 1, "{start:?} in {svg}");
+            assert_eq!(leaves(&squares, finish, &style), 1, "{finish:?} in {svg}");
+        }
+        // the square is the one ELK put the first route on
+        assert!(
+            squares.contains(&(60.0 + style.margin, 40.0 + style.margin)),
+            "{squares:?}"
         );
     }
 

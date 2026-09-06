@@ -10,7 +10,7 @@ use std::fmt::Write;
 
 use sysml_model::{ElementId, ElementKind, Model, Value};
 
-use crate::graph::{connector_label, connector_relation, effective_name, keyword, Relation};
+use crate::graph::{assembled_from, connector_label, connector_relation, keyword, Relation};
 use crate::svg::{document, escape, markers};
 use crate::Style;
 
@@ -60,9 +60,14 @@ pub struct Sequence {
 /// A message names the event at each end by the chain that reaches it
 /// (`vehicle.cruiseController.setSpeedReceived`); the participant is that
 /// chain without its last step, which is what a lifeline stands for.
+///
+/// An interaction that specializes another carries on the exchange it
+/// inherits, so the messages are read off the same list the
+/// interconnection view is assembled from -- the definition, whatever it
+/// specializes, and, for a usage, whatever its type does.
 pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
     let mut sequence = Sequence::default();
-    for &child in model.owned(definition) {
+    for child in assembled_from(model, definition) {
         // `sq-graphical-relationship = message | sq-succession`, and both
         // reach an event: `first m1 then m2` orders two messages rather
         // than joining two lifelines, so it is not one of these arrows.
@@ -132,7 +137,7 @@ fn lifeline_at(model: &Model, reach: &Reach, lifelines: &mut Vec<Lifeline>) -> u
     let name = reach
         .taking_part
         .iter()
-        .filter_map(|&step| effective_name(model, step))
+        .filter_map(|&step| model.effective_name(step))
         .collect::<Vec<_>>()
         .join(".");
     if let Some(at) = lifelines.iter().position(|drawn| drawn.name == name) {
@@ -159,7 +164,23 @@ pub fn to_svg(sequence: &Sequence, style: &Style) -> String {
     let left = |at: usize| style.margin + at as f64 * (column + style.h_gap);
     let centre = |at: usize| left(at) + column / 2.0;
 
-    let width = left(sequence.lifelines.len().max(1)) - style.h_gap + style.margin;
+    // A message whose two ends are on one lifeline crosses no distance:
+    // it is drawn as the hook the standard's figures have -- out of the
+    // lifeline, down a step and back into it -- rather than as a line of
+    // no length under an arrowhead.
+    let hook = 2.0 * style.line_height;
+    let drop = 0.8 * style.line_height;
+    let beside = 0.35 * style.line_height;
+    let mut width = left(sequence.lifelines.len().max(1)) - style.h_gap + style.margin;
+    for moment in sequence.moments.iter().filter(|it| it.from == it.to) {
+        // the hook and the name beside it reach past the lifeline they
+        // leave, and the canvas has to hold them
+        let named = moment
+            .label
+            .as_ref()
+            .map_or(0.0, |label| beside + style.text_width(label));
+        width = width.max(centre(moment.from) + hook + named + style.margin);
+    }
     let height =
         style.margin + head_height + (sequence.moments.len() as f64 + 1.0) * step + style.margin;
     let foot = height - style.margin;
@@ -199,6 +220,29 @@ pub fn to_svg(sequence: &Sequence, style: &Style) -> String {
         let y = style.margin + head_height + (nth as f64 + 1.0) * step;
         let (from, to) = (centre(moment.from), centre(moment.to));
         let class = if moment.dashed { "succession" } else { "edge" };
+        if moment.from == moment.to {
+            writeln!(
+                body,
+                "<path class=\"{class}\" d=\"M {from:.1} {y:.1} H {:.1} V {:.1} H {from:.1}\" \
+                 marker-end=\"url(#message)\"/>",
+                from + hook,
+                y + drop,
+            )
+            .unwrap();
+            if let Some(label) = &moment.label {
+                // beside the hook rather than over it: there is no span
+                // of lifeline between two ends to write it across
+                writeln!(
+                    body,
+                    "<text class=\"feature\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+                    from + hook + beside,
+                    y + drop / 2.0 + 0.35 * style.font_size,
+                    escape(label),
+                )
+                .unwrap();
+            }
+            continue;
+        }
         writeln!(
             body,
             "<line class=\"{class}\" x1=\"{from:.1}\" y1=\"{y:.1}\" x2=\"{to:.1}\" y2=\"{y:.1}\" \
@@ -328,6 +372,69 @@ mod tests {
     fn a_definition_with_no_interaction_draws_nothing() {
         let sequence = interaction("part def P;\noccurrence def Interaction { part p : P; }\n");
         assert!(sequence.lifelines.is_empty() && sequence.moments.is_empty());
+    }
+
+    #[test]
+    fn an_interaction_carries_on_the_exchange_it_specializes() {
+        let sequence = interaction(
+            "part def A { event occurrence sent; event occurrence got; }\n\
+             part def B { event occurrence heard; }\n\
+             occurrence def Base {\n\
+             \tref part a : A;\n\
+             \tref part b : B;\n\
+             \tmessage reported from a.sent to b.heard;\n\
+             }\n\
+             occurrence def Interaction :> Base {\n\
+             \tmessage answered from a.got to a.sent;\n\
+             }\n",
+        );
+        // the inherited message is drawn, and so are the participants it
+        // is the only thing to name
+        assert_eq!(
+            sequence
+                .moments
+                .iter()
+                .map(|moment| (moment.from, moment.to, moment.label.as_deref()))
+                .collect::<Vec<_>>(),
+            [(0, 0, Some("answered")), (0, 1, Some("reported"))]
+        );
+        assert_eq!(
+            sequence
+                .lifelines
+                .iter()
+                .map(|line| line.name.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    }
+
+    #[test]
+    fn a_message_between_two_events_of_one_participant_is_drawn_as_a_hook() {
+        let sequence = interaction(
+            "part def A { event occurrence sent; event occurrence got; }\n\
+             occurrence def Interaction {\n\
+             \tref part a : A;\n\
+             \tmessage answered from a.sent to a.got;\n\
+             }\n",
+        );
+        assert_eq!(sequence.moments[0].from, sequence.moments[0].to);
+        let style = Style::default();
+        let svg = to_svg(&sequence, &style);
+        // out of the lifeline, down a step and back into it, rather than
+        // a line from a point to itself
+        assert!(!svg.contains("<line class=\"edge\""), "{svg}");
+        assert!(svg.contains("<path class=\"edge\""), "{svg}");
+        // and the canvas holds the hook and the name written beside it
+        let width: f64 = svg
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        let label = svg.split("class=\"feature\" x=\"").nth(1).unwrap();
+        let x: f64 = label.split('"').next().unwrap().parse().unwrap();
+        assert!(x + style.text_width("answered") <= width, "{svg}");
     }
 
     #[test]

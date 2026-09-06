@@ -59,23 +59,6 @@ fn loaded(path: &std::path::Path) -> Workspace {
     ws
 }
 
-/// The name an element answers to: its own, or -- for `part redefines
-/// mcu : Atmega328p;`, which declares none -- that of what it redefines.
-fn answers_to(model: &Model, element: ElementId) -> Option<String> {
-    if let Some(name) = model.name(element) {
-        return Some(name.to_string());
-    }
-    model.owned(element).iter().find_map(|&rel| {
-        if model.kind(rel) != ElementKind::Redefinition {
-            return None;
-        }
-        match model.get(rel, "redefinedFeature") {
-            Some(sysml_model::Value::Ref(target)) => model.name(*target).map(str::to_string),
-            _ => None,
-        }
-    })
-}
-
 /// Properties every drawing must have, whatever it is a drawing of.
 fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
     let mut drawn = HashSet::new();
@@ -90,7 +73,7 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             // the model does: the name first, then the type it was
             // declared with and how many of it there are, if either
             Shape::Box => {
-                let name = answers_to(model, node.id).unwrap_or_default();
+                let name = model.effective_name(node.id).unwrap_or_default();
                 // `if c { ... }` is a node whether or not it was given a
                 // name, and the keyword above it says what it is; every
                 // other box has to name what it stands for
@@ -104,7 +87,7 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
                     !node.name.is_empty() || may_be_nameless,
                     "{where_}: a box with no name"
                 );
-                let said = node.name.strip_prefix(&name).is_some_and(|rest| {
+                let said = node.name.strip_prefix(name).is_some_and(|rest| {
                     rest.is_empty() || rest.starts_with(" :") || rest.starts_with('[')
                 });
                 assert!(
@@ -126,7 +109,7 @@ fn check_shape(diagram: &Diagram, model: &Model, where_: &str) {
             // the dot three or more ends meet at, named -- when it is
             // named at all -- by the connection itself
             Shape::ConnectionDot => {
-                let name = answers_to(model, node.id).unwrap_or_default();
+                let name = model.effective_name(node.id).unwrap_or_default();
                 assert_eq!(
                     node.name, name,
                     "{where_}: a connection dot that is not named by its connection"
@@ -267,8 +250,10 @@ fn definition_diagrams_are_faithful_to_their_models() {
     }
 }
 
-/// Whether `sub` reaches `sup` through the specializations the model
-/// reified, so that an inherited member can be told from a stray one.
+/// Whether `sub` reaches `sup` through what the model reified, so that
+/// an inherited member can be told from a stray one: the
+/// specializations, and the type a usage was declared with, since
+/// `part v : Vehicle` is assembled from whatever a `Vehicle` is.
 fn specializes(model: &Model, sub: ElementId, sup: ElementId) -> bool {
     let mut queue = vec![sub];
     let mut visited = std::collections::HashSet::new();
@@ -279,6 +264,7 @@ fn specializes(model: &Model, sub: ElementId, sup: ElementId) -> bool {
         if current == sup {
             return true;
         }
+        queue.extend(model.type_of(current));
         for &rel in model.owned(current) {
             if model.kind(rel) != sysml_model::ElementKind::Subclassification {
                 continue;
@@ -322,11 +308,14 @@ fn interconnection_diagrams_only_draw_what_is_in_scope() {
 
             // an internal view shows what the element is assembled
             // from: what it holds, and what it inherits from what it
-            // specializes -- and nothing from anywhere else
+            // specializes -- and nothing from anywhere else. The
+            // element itself stands for the boundary the rest is drawn
+            // inside, where it is assembled from nothing and all there
+            // is to show is what sits on that boundary.
             for node in &diagram.nodes {
                 let holder = model.owner(node.id).expect("a drawn member has an owner");
                 assert!(
-                    holder == owner || specializes(model, owner, holder),
+                    node.id == owner || holder == owner || specializes(model, owner, holder),
                     "{where_}: `{}` is neither its own nor inherited",
                     node.name
                 );

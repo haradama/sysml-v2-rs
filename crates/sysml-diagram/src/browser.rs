@@ -76,13 +76,14 @@ pub fn to_svg(browser: &Browser, style: &Style) -> String {
     let height = browser.rows.len() as f64 * style.line_height + 2.0 * style.margin;
 
     let mut body = String::new();
+    let ends = last_descendants(&browser.rows);
     for (index, row) in browser.rows.iter().enumerate() {
         let x = style.margin + row.depth as f64 * style.indent;
         let y = style.margin + (index as f64 + 0.5) * style.line_height;
 
         // a rule down the left of everything this row contains, so a deep
         // tree still shows what belongs to what
-        let last = last_descendant(&browser.rows, index);
+        let last = ends[index];
         if last > index {
             writeln!(
                 body,
@@ -115,15 +116,28 @@ pub fn to_svg(browser: &Browser, style: &Style) -> String {
     document(width, height, style, &body)
 }
 
-/// Index of the last row nested under the one at `index`.
-fn last_descendant(rows: &[Row], index: usize) -> usize {
-    let depth = rows[index].depth;
-    let mut last = index;
-    for (offset, row) in rows.iter().enumerate().skip(index + 1) {
-        if row.depth <= depth {
-            break;
+/// For each row, the index of the last row nested under it -- its own,
+/// where it holds nothing.
+///
+/// The rows are the ownership tree flattened in order, so one pass down
+/// them settles every row at once: a row is closed by the first row after
+/// it that is no deeper than it is, and by the end of the list otherwise.
+fn last_descendants(rows: &[Row]) -> Vec<usize> {
+    let mut last: Vec<usize> = (0..rows.len()).collect();
+    // the rows still open, deepest last
+    let mut open: Vec<usize> = Vec::new();
+    for (at, row) in rows.iter().enumerate() {
+        while let Some(&holding) = open.last() {
+            if rows[holding].depth < row.depth {
+                break;
+            }
+            last[holding] = at - 1;
+            open.pop();
         }
-        last = offset;
+        open.push(at);
+    }
+    for holding in open {
+        last[holding] = rows.len() - 1;
     }
     last
 }
@@ -204,6 +218,22 @@ mod tests {
     #[test]
     fn a_leaf_has_no_descendants() {
         let rows = tree("part def A;\n").rows;
-        assert_eq!(last_descendant(&rows, 0), 0);
+        assert_eq!(last_descendants(&rows), [0]);
+    }
+
+    #[test]
+    fn a_row_ends_where_what_it_holds_does() {
+        // P holds Wheel, which holds hub, and then Car beside Wheel: the
+        // package runs to the last row, Wheel to its own port, and the
+        // rows that hold nothing end where they begin
+        let rows = tree(
+            "package P {\n\
+             \tpart def Wheel { port hub; }\n\
+             \tpart def Car;\n\
+             }\n",
+        )
+        .rows;
+        assert_eq!(rows.len(), 4);
+        assert_eq!(last_descendants(&rows), [3, 2, 2, 3]);
     }
 }

@@ -67,7 +67,18 @@ pub struct Column {
 }
 
 /// Assign every node of `diagram` a position.
+///
+/// The canvas made here holds the names drawn outside the boxes as well
+/// as the boxes themselves: a port's name reads outwards from the border
+/// it sits on, and on an outermost box that is off the canvas unless the
+/// room is left for it.
 pub fn layout(diagram: &Diagram, style: &Style) -> Layout {
+    let laid_out = arranged_by_rank(diagram, style);
+    crate::svg::with_room_for_labels(diagram, &laid_out, style).unwrap_or(laid_out)
+}
+
+/// The positions themselves, before any room is left round the drawing.
+fn arranged_by_rank(diagram: &Diagram, style: &Style) -> Layout {
     let sizes: Vec<(f64, f64)> = diagram
         .nodes
         .iter()
@@ -107,10 +118,39 @@ fn packages(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
         .collect();
     let mut frames = vec![Frame::default(); diagram.groups.len()];
 
-    // one frame per package, stacked in document order, each holding its
-    // own definitions in wrapped rows and then the packages below it
     let mut down = style.margin;
     let mut widest: f64 = 0.0;
+
+    // What no package holds is drawn above the frames, the way the
+    // swimlane view puts what no lane covers above the columns. It is
+    // laid out among itself, as a package's own definitions are, so that
+    // a file with one package and one loose definition draws both rather
+    // than leaving the loose one at the origin under the first frame.
+    let held: HashSet<usize> = diagram
+        .groups
+        .iter()
+        .flat_map(|group| group.nodes.iter().copied())
+        .collect();
+    let loose: Vec<usize> = (0..sizes.len()).filter(|at| !held.contains(at)).collect();
+    if !loose.is_empty() {
+        let within = arranged(diagram, &loose, style);
+        // laid out with the margin the canvas itself has, so the block
+        // arrives at the top left where the first frame would have been
+        for spot in &within.placed {
+            let node = loose[spot.node];
+            placed[node] = Placed {
+                node,
+                x: spot.x,
+                y: spot.y,
+                ..*spot
+            };
+        }
+        widest = widest.max(within.width - 2.0 * style.margin);
+        down += within.height - 2.0 * style.margin + style.v_gap;
+    }
+
+    // one frame per package, stacked in document order, each holding its
+    // own definitions in wrapped rows and then the packages below it
     for at in 0..diagram.groups.len() {
         if diagram.groups[at].depth > 0 {
             continue; // drawn inside the package that encloses it
@@ -224,7 +264,9 @@ fn arranged(diagram: &Diagram, nodes: &[usize], style: &Style) -> Layout {
         groups: Vec::new(),
         lanes: Vec::new(),
     };
-    layout(&alone, style)
+    // the un-grown positions: the room for what is written outside the
+    // boxes is left once, round the whole drawing
+    arranged_by_rank(&alone, style)
 }
 
 /// The packages one package encloses, in document order.
@@ -532,6 +574,11 @@ fn specializations(diagram: &Diagram) -> impl Iterator<Item = &Edge> {
 /// a message runs between peers, and stacking one on the other would say
 /// something about them that the model does not.
 fn above(edge: &Edge) -> Option<(usize, usize)> {
+    // a feature typed by what declares it is drawn as one box looping
+    // back to itself, and nothing is above itself
+    if edge.from == edge.to {
+        return None;
+    }
     match edge.relation {
         Relation::Specialization
         | Relation::Subsetting
@@ -544,24 +591,50 @@ fn above(edge: &Edge) -> Option<(usize, usize)> {
     }
 }
 
-/// Layer index of each node: 0 when it has no supertype inside the diagram,
-/// otherwise one below its deepest supertype.
+/// Layer index of each node: 0 when nothing in the diagram is above it,
+/// otherwise one below the deepest of whatever lies above it.
 ///
-/// Relaxation runs at most once per node, so a specialization cycle -- which
-/// the parser accepts and name resolution happily reifies -- settles instead
-/// of looping forever.
+/// What reads down the page is a graph and not a tree: a specialization
+/// written in a circle, or a chain of parts that comes back round, closes
+/// a cycle that the parser accepts and name resolution reifies. A cycle
+/// has no top to hang the layers from, so the walk below drops the edge
+/// that closes one -- it never steps back into the branch it is already
+/// in -- and ranks what is left in a single pass, which terminates
+/// whatever the model says.
 fn ranks(diagram: &Diagram) -> Vec<usize> {
-    let mut ranks = vec![0usize; diagram.nodes.len()];
-    for _ in 0..diagram.nodes.len() {
-        let mut changed = false;
-        for (upper, lower) in diagram.edges.iter().filter_map(above) {
-            if ranks[lower] <= ranks[upper] {
-                ranks[lower] = ranks[upper] + 1;
-                changed = true;
+    let count = diagram.nodes.len();
+    let mut below: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (upper, lower) in diagram.edges.iter().filter_map(above) {
+        below[upper].push(lower);
+    }
+    // Depth-first, finishing a node only once everything under it is
+    // finished. Read backwards, the list that leaves visits every node
+    // before anything it is above, so one relaxation is enough.
+    let mut finished: Vec<usize> = Vec::with_capacity(count);
+    let mut seen = vec![false; count];
+    for start in 0..count {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        let mut walking = vec![(start, 0usize)];
+        while let Some((node, step)) = walking.pop() {
+            match below[node].get(step) {
+                Some(&next) => {
+                    walking.push((node, step + 1));
+                    if !seen[next] {
+                        seen[next] = true;
+                        walking.push((next, 0));
+                    }
+                }
+                None => finished.push(node),
             }
         }
-        if !changed {
-            break;
+    }
+    let mut ranks = vec![0usize; count];
+    for &node in finished.iter().rev() {
+        for &lower in &below[node] {
+            ranks[lower] = ranks[lower].max(ranks[node] + 1);
         }
     }
     ranks
@@ -575,6 +648,10 @@ fn order_layers(diagram: &Diagram, ranks: &[usize]) -> Vec<Vec<usize>> {
     for (node, &rank) in ranks.iter().enumerate() {
         layers[rank].push(node);
     }
+    // a cycle leaves the ranks it was broken out of with gaps in them,
+    // and a layer with nothing in it is a band of blank canvas the
+    // drawing has no use for
+    layers.retain(|layer| !layer.is_empty());
 
     let mut position = vec![0.0f64; ranks.len()];
     for layer in &layers {
@@ -772,6 +849,28 @@ mod tests {
     }
 
     #[test]
+    fn what_no_package_holds_is_drawn_above_the_frames() {
+        let (diagram, layout) = laid_out(
+            "package P {\n\tpart def Inside;\n}\npart def Loose;\n\
+             part def Alongside;\n",
+        );
+        let loose = placed_by_name(&diagram, &layout, "Loose");
+        let alongside = placed_by_name(&diagram, &layout, "Alongside");
+        let frame = &layout.packages[0];
+        // both loose definitions are placed, side by side and clear of
+        // each other, and the package's frame is below them
+        assert!(loose.x > 0.0 && loose.y > 0.0, "{loose:?}");
+        assert!(
+            loose.x + loose.width <= alongside.x || alongside.x + alongside.width <= loose.x,
+            "{loose:?} {alongside:?}"
+        );
+        assert!(loose.y + loose.height <= frame.y, "{loose:?} {frame:?}");
+        // and the canvas holds them
+        assert!(loose.x + loose.width < layout.width);
+        assert!(frame.y + frame.height < layout.height);
+    }
+
+    #[test]
     fn supertypes_sit_above_their_subtypes() {
         let (diagram, layout) = laid_out(
             "part def PowerSource;\n\
@@ -806,6 +905,25 @@ mod tests {
         }
         // all three are unconnected, so they share one layer
         assert!(row.iter().all(|p| p.y == row[0].y));
+    }
+
+    #[test]
+    fn a_specialization_written_in_a_circle_costs_no_empty_layers() {
+        // the parser accepts a circle and name resolution reifies it;
+        // relaxing the ranks once per node used to raise both ends once
+        // per pass, and every rank nothing landed on is a blank band
+        let ws = resolved("part def A :> B;\npart def B :> A;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let layers = order_layers(&diagram, &ranks(&diagram));
+        assert_eq!(layers.len(), 2);
+        assert!(layers.iter().all(|layer| !layer.is_empty()));
+    }
+
+    #[test]
+    fn a_part_typed_by_what_declares_it_is_above_nothing() {
+        let ws = resolved("part def A { part a : A; }\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(ranks(&diagram), vec![0]);
     }
 
     #[test]
