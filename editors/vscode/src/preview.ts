@@ -155,12 +155,20 @@ export class Preview {
       this.uri.scheme === "file"
         ? vscode.Uri.joinPath(this.uri, "..")
         : vscode.workspace.workspaceFolders?.[0]?.uri;
+    // PNG is offered only when the page managed to make one. Offering it
+    // regardless would take the reader through the dialog to be told
+    // afterwards that it cannot be written.
+    const filters: { [name: string]: string[] } = { "SVG image": ["svg"] };
+    if (png) {
+      filters["PNG image"] = ["png"];
+    }
     const target = await vscode.window.showSaveDialog({
       title: "Save diagram",
+      saveLabel: "Save diagram",
       ...(beside
         ? { defaultUri: vscode.Uri.joinPath(beside, `${named}.svg`) }
         : {}),
-      filters: { "SVG image": ["svg"], "PNG image": ["png"] },
+      filters,
     });
     if (!target) {
       return;

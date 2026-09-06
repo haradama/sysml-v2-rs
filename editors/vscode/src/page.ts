@@ -259,16 +259,39 @@ export function page(): string {
     });
   }
 
-  document.getElementById("save").addEventListener("click", () => {
-    const svg = canvas.querySelector("svg");
-    if (!svg) {
-      vscode.postMessage({ command: "save" });
+  /// Ask the editor where to put the drawing.
+  ///
+  /// The dialog belongs to the editor, and this message is what opens
+  /// it. Turning the drawing into a PNG is the page's part, and it can
+  /// hang: an image that neither loads nor fails leaves a promise that
+  /// never settles, and the reader who pressed the button is left
+  /// looking at nothing at all. So the request goes either way -- with
+  /// the PNG if it arrived in time, without it if it did not, in which
+  /// case the editor says so rather than the button doing nothing.
+  function askWhereToSave(rasterising) {
+    let asked = false;
+    const ask = (png) => {
+      if (asked) {
+        return;
+      }
+      asked = true;
+      vscode.postMessage(png ? { command: "save", png: png } : { command: "save" });
+    };
+    if (!rasterising) {
+      ask();
       return;
     }
-    rasterise(svg).then(
-      (png) => vscode.postMessage({ command: "save", png: png }),
-      () => vscode.postMessage({ command: "save" })
-    );
+    const patience = setTimeout(ask, 5000);
+    const settled = (png) => {
+      clearTimeout(patience);
+      ask(png);
+    };
+    rasterising.then(settled, () => settled());
+  }
+
+  document.getElementById("save").addEventListener("click", () => {
+    const svg = canvas.querySelector("svg");
+    askWhereToSave(svg ? rasterise(svg) : undefined);
   });
 
   window.addEventListener("message", (event) => {

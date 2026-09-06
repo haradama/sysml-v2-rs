@@ -286,6 +286,28 @@ test("saving without a drawing still asks, so it can be refused by name", () => 
   assert.deepEqual(it.last(), { command: "save" });
 });
 
+test("a drawing that will not rasterise still asks where to put it", () => {
+  // jsdom loads nothing, so the image the page rasterises through never
+  // loads and never fails -- which is the shape of the hang this
+  // guards: a reader who pressed Save and got no dialog at all
+  const it = open();
+  it.draw("svg", DRAWING);
+  const waits = [];
+  it.window.setTimeout = (run) => {
+    waits.push(run);
+    return waits.length;
+  };
+  it.window.clearTimeout = () => {};
+  const before = it.posted.length;
+  it.click("save");
+  assert.equal(it.posted.length, before, "it waits for the drawing first");
+  waits.forEach((run) => run());
+  assert.deepEqual(it.last(), { command: "save" });
+  // and it asks once, however often the wait is run
+  waits.forEach((run) => run());
+  assert.equal(it.posted.length, before + 1);
+});
+
 test("anything but a drawing is ignored", () => {
   const it = open();
   it.draw("svg", DRAWING);
