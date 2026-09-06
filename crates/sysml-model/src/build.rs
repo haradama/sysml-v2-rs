@@ -6,7 +6,7 @@
 //! reified with resolved targets by `sysml-semantics`; expression trees are
 //! not represented as elements.
 
-use sysml_syntax::{Parse, SyntaxKind, SyntaxNode};
+use sysml_syntax::{unquote, Parse, SyntaxKind, SyntaxNode};
 
 use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 
@@ -37,12 +37,37 @@ pub fn build_into(model: &mut Model, parse: &Parse) -> Built {
     built
 }
 
-fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, built: &mut Built) {
+/// Build one syntax node into the model, returning the element it became
+/// where it became one.
+fn build_node(
+    model: &mut Model,
+    node: &SyntaxNode,
+    owner: Option<ElementId>,
+    built: &mut Built,
+) -> Option<ElementId> {
     use SyntaxKind::*;
+    // `variant part optA;` parses as an anonymous usage carrying only the
+    // prefix keywords, wrapped around the usage that carries the name.
+    // The wrapper is nothing on its own: making an element of it puts a
+    // nameless twin beside every variant and every directed occurrence.
+    // What it says belongs to the declaration inside it, which reads it
+    // back through `with_wrapper` and `usage_kind`.
+    if is_prefix_wrapper(node) {
+        for child in node.children() {
+            if matches!(child.kind(), DEFINITION | USAGE) {
+                build_node(model, &child, owner, built);
+            }
+        }
+        return None;
+    }
     let kind = match node.kind() {
         PACKAGE => Some(package_kind(node)),
         DEFINITION => Some(definition_kind(node)),
-        USAGE => Some(usage_kind(node)),
+        USAGE => Some(usage_kind(node, owner, model)),
+        // `specialization s subtype A :> B;` and its kin relate two types
+        // written elsewhere. They are relationships in their own right,
+        // with names of their own, and nothing stood for them at all.
+        RELATION_STMT => relation_kind(node),
         CONNECTOR_STMT => connector_kind(node),
         CONTROL_STMT => control_kind(node),
         IMPORT | EXPOSE => Some(import_kind(node)),
@@ -91,9 +116,15 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         }
         // other statements, filters, expressions: no structural element of
         // their own — their references are handled during name resolution
-        return;
+        return None;
     };
 
+    // `EnumerationUsageMember : VariantMembership = MemberPrefix
+    // ownedRelatedElement += EnumeratedValue` -- every value written in an
+    // enumeration body is one of its variants, whether or not it repeats
+    // the `enum` keyword.
+    let enumerated = kind.is_a(ElementKind::EnumerationUsage)
+        && owner.is_some_and(|owner| model.kind(owner).is_a(ElementKind::EnumerationDefinition));
     let id = model.create(kind);
     built.source.push((id, node.clone()));
     match owner {
@@ -107,7 +138,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if let Some(visibility) = member_visibility(node) {
         model.set_member_visibility(id, visibility);
     }
-    if let Some(role) = member_role(node) {
+    if let Some(role) = member_role(node).or_else(|| enumerated.then_some(Role::Variant)) {
         model.set_member_role(id, role);
     }
     if let Some(direction) = declared_direction(node) {
@@ -141,7 +172,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
         (VAR_KW, "isVariable"),
         (VARIATION_KW, "isVariation"),
     ] {
-        if has_token(node, keyword) && kind.feature(flag).is_some() {
+        if scope_has(node, keyword) && kind.feature(flag).is_some() {
             model.set(id, flag, Value::Bool(true));
         }
     }
@@ -149,7 +180,7 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     // { isPortion = true }` -- `snapshot s : O;` says both which portion
     // it is and that it is one, and neither was arriving.
     for (keyword, portion) in [(SNAPSHOT_KW, "snapshot"), (TIMESLICE_KW, "timeslice")] {
-        if has_token(node, keyword) && kind.feature("portionKind").is_some() {
+        if scope_has(node, keyword) && kind.feature("portionKind").is_some() {
             model.set(id, "portionKind", Value::EnumLit(portion));
             model.set(id, "isPortion", Value::Bool(true));
         }
@@ -157,13 +188,13 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     // `nonunique` is the only one of these that turns a flag off: the
     // standard's default is that a feature's values are unique, and a
     // model saying they are not must not arrive saying they are.
-    if has_token(node, NONUNIQUE_KW) && kind.feature("isUnique").is_some() {
+    if scope_has(node, NONUNIQUE_KW) && kind.feature("isUnique").is_some() {
         model.set(id, "isUnique", Value::Bool(false));
     }
     // `not satisfy r by p;` asserts that it does not, which is the
     // opposite of what the drawing and the generated stub would say of
     // it otherwise. `assert not` negates in the same way.
-    if has_token(node, NOT_KW) && kind.feature("isNegated").is_some() {
+    if scope_has(node, NOT_KW) && kind.feature("isNegated").is_some() {
         model.set(id, "isNegated", Value::Bool(true));
     }
     // `end #original r1 : Req1;` -- what a connector relates, as opposed to
@@ -187,6 +218,27 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     if kind.is_a(ElementKind::Comment) {
         if let Some(body) = comment_body(node) {
             model.set(id, "body", Value::String(body));
+        }
+        // `comment C locale "en-GB" /* ... */` says which language its
+        // prose is written in, and `Comment::locale` is where the
+        // standard keeps that.
+        if let Some(locale) = string_token(node) {
+            model.set(id, "locale", Value::String(locale));
+        }
+    }
+    // `import all P::*` brings in what is private as well, and `import
+    // P::**` everything nested under what it names. Neither was
+    // arriving, so both went out as the plain import they are not.
+    if kind.is_a(ElementKind::Import) {
+        if has_token(node, ALL_KW) {
+            model.set(id, "isImportAll", Value::Bool(true));
+        }
+        if node
+            .descendants_with_tokens()
+            .filter_map(|part| part.into_token())
+            .any(|token| token.kind() == STAR_STAR)
+        {
+            model.set(id, "isRecursive", Value::Bool(true));
         }
     }
     if kind == ElementKind::TextualRepresentation {
@@ -256,7 +308,11 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     // every feature, not only the usages SysML layers on them: the
     // standard puts a `FeatureValue` on `Feature`, and KerML writes
     // `feature x = 5;` as readily as SysML writes `attribute x = 5;`
-    if kind.is_a(ElementKind::Feature) {
+    //
+    // An assignment is the exception: `assign x := 1;` gives the value to
+    // `x`, and reading it as the assignment's own value says the action
+    // itself is one.
+    if kind.is_a(ElementKind::Feature) && !kind.is_a(ElementKind::AssignmentActionUsage) {
         reify_feature_value(model, node, id);
     }
 
@@ -265,32 +321,48 @@ fn build_node(model: &mut Model, node: &SyntaxNode, owner: Option<ElementId>, bu
     for child in node.children() {
         match child.kind() {
             BODY | PARAM_LIST => {
+                let mut loop_before = None;
                 for member in child.children() {
-                    build_node(model, &member, Some(id), built);
+                    // `loop { ... } until c;` is one node written as two
+                    // statements: `WhileLoopNode : WhileLoopActionUsage =
+                    // ... ( 'until' ExpressionParameterMember ';' )?`.
+                    // What it asks belongs to the loop before it, and a
+                    // second loop standing for it says the flow repeats
+                    // twice over.
+                    if let Some(repeats) = loop_before.filter(|_| closes_a_loop(&member)) {
+                        reify_condition(model, &member, repeats);
+                        continue;
+                    }
+                    loop_before = build_node(model, &member, Some(id), built)
+                        .filter(|&member| model.kind(member) == ElementKind::WhileLoopActionUsage);
                 }
             }
-            PAYLOAD | PREFIX_METADATA => build_node(model, &child, Some(id), built),
-            // Two shapes wrap the declaration the author wrote in an
-            // element of their own: `then action b;` (a succession) and
-            // `in event occurrence ieo;` (an anonymous direction/adapter
-            // wrapper). In both the name belongs to the enclosing scope,
-            // not one level in.
-            //
-            // A connector end really does own what it nests, though --
-            // `end [1] feature transferTarget references target;` is an
-            // anonymous end whose feature is its own member -- so `end`
-            // keeps the nesting.
+            PAYLOAD | PREFIX_METADATA => {
+                build_node(model, &child, Some(id), built);
+            }
+            // `then action b;` writes the declaration inside the
+            // succession it starts, but what it declares belongs to the
+            // enclosing scope, not one level in. An anonymous prefix
+            // wrapper does the same and never gets this far: it is not
+            // an element, so its children were hoisted on the way in.
             DEFINITION | USAGE => {
-                let wrapper = node.kind() == CONTROL_STMT
-                    || (!has_token(node, END_KW)
-                        && declared_name(node).is_none()
-                        && statement_declared_name(node).is_none());
-                let parent = if wrapper { owner } else { Some(id) };
+                let parent = if node.kind() == CONTROL_STMT {
+                    owner
+                } else {
+                    Some(id)
+                };
                 build_node(model, &child, parent, built);
             }
             _ => {}
         }
     }
+    Some(id)
+}
+
+/// Whether a statement is the `until` clause that closes the loop written
+/// before it, rather than a loop of its own.
+fn closes_a_loop(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::CONTROL_STMT && tokens(node).next() == Some(SyntaxKind::UNTIL_KW)
 }
 
 /// Reify a `[4]` or `[0..*]` clause as the `MultiplicityRange` the standard
@@ -493,7 +565,7 @@ fn literal_value(written: &SyntaxNode) -> Option<(ElementKind, Value)> {
         FALSE_KW => Some((ElementKind::LiteralBoolean, Value::Bool(false))),
         STRING => Some((
             ElementKind::LiteralString,
-            Value::String(token.text().trim_matches('"').to_string()),
+            Value::String(sysml_syntax::unquote_string(token.text())),
         )),
         _ => None,
     }
@@ -582,8 +654,16 @@ fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
 /// repeats without saying on what.
 fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     use SyntaxKind::*;
+    // `for i in xs` asks for `xs`: what comes before `in` is the variable
+    // it binds, which `reify_loop_variable` declares. Kept whole, the
+    // loop arrives asking for `i in xs`, which is a comparison.
     let mut asked = String::new();
+    let mut started = !has_token(node, FOR_KW);
     for part in node.children_with_tokens() {
+        if !started {
+            started = part.kind() == IN_KW;
+            continue;
+        }
         match part.kind() {
             // the keyword that introduces the node is not part of what
             // it asks, and what follows the condition is the body
@@ -699,30 +779,123 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     // `then merge continue;` is written as one statement but declares the
     // node; the declaration is what the rest of the flow refers to, so it
     // wins over the succession the leading `then` would otherwise make.
-    let declaration = tokens(node).find_map(control_node_kind);
-    declaration.or_else(|| {
-        tokens(node).find_map(|token| match token {
-            SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
-            // `while x > 0 { ... }` and `for t in xs { ... }` are action
-            // usages of their own (`WhileLoopActionUsage`,
-            // `ForLoopActionUsage`). Without them the statement built
-            // nothing, and what the loop body declared went with it.
-            // `WhileLoopNode : WhileLoopActionUsage = ... ( 'while'
-            // ExpressionParameterMember | 'loop' EmptyParameterMember ) ...`
-            // -- a bare `loop { ... }` is the same node, asking nothing
-            SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW | SyntaxKind::LOOP_KW => {
-                Some(ElementKind::WhileLoopActionUsage)
-            }
-            SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
-            SyntaxKind::IF_KW => Some(ElementKind::IfActionUsage),
-            // `terminate c1;` -- unlike `merge m`, the name of a terminate
-            // node comes before the keyword, so it is not one of the
-            // declaring keywords a name is looked for after
-            SyntaxKind::TERMINATE_KW => Some(ElementKind::TerminateActionUsage),
-            SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW => Some(ElementKind::SuccessionAsUsage),
-            _ => None,
-        })
+    if let Some(declaration) = tokens(node).find_map(control_node_kind) {
+        return Some(declaration);
+    }
+    // `accept Go then s2;` in a state body is a transition out of the
+    // state it is written in: `TargetTransitionUsage : TransitionUsage =
+    // ... TriggerActionMember ... 'then' TransitionSuccessionMember`.
+    // Read as the succession its `then` would otherwise make, the trigger
+    // has nothing standing for it and the transition nothing to be found
+    // by.
+    if is_target_transition(node) {
+        return Some(ElementKind::TransitionUsage);
+    }
+    let node_kind = tokens(node).find_map(|token| match token {
+        SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
+        // `while x > 0 { ... }` and `for t in xs { ... }` are action
+        // usages of their own (`WhileLoopActionUsage`,
+        // `ForLoopActionUsage`). Without them the statement built
+        // nothing, and what the loop body declared went with it.
+        // `WhileLoopNode : WhileLoopActionUsage = ... ( 'while'
+        // ExpressionParameterMember | 'loop' EmptyParameterMember ) ...`
+        // -- a bare `loop { ... }` is the same node, asking nothing
+        SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW | SyntaxKind::LOOP_KW => {
+            Some(ElementKind::WhileLoopActionUsage)
+        }
+        SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
+        SyntaxKind::IF_KW => Some(ElementKind::IfActionUsage),
+        // `terminate c1;` -- unlike `merge m`, the name of a terminate
+        // node comes before the keyword, so it is not one of the
+        // declaring keywords a name is looked for after
+        SyntaxKind::TERMINATE_KW => Some(ElementKind::TerminateActionUsage),
+        // `send x via p;`, `accept sig : Sig;` and `assign x := 1;`
+        // are action nodes of their own -- `SendNode :
+        // SendActionUsage`, `AcceptNode : AcceptActionUsage`,
+        // `AssignmentNode : AssignmentActionUsage` -- and each of them
+        // was building nothing at all
+        SyntaxKind::SEND_KW => Some(ElementKind::SendActionUsage),
+        SyntaxKind::ACCEPT_KW => Some(ElementKind::AcceptActionUsage),
+        SyntaxKind::ASSIGN_KW => Some(ElementKind::AssignmentActionUsage),
+        SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW => Some(ElementKind::SuccessionAsUsage),
+        _ => None,
+    });
+    node_kind.or_else(|| {
+        // `entry performSelfTest { ... }` and `do providePower;` are the
+        // action itself, named as the one it performs
+        // (`StatePerformActionUsage : PerformActionUsage`) rather than as
+        // a wrapper around a declaration. Without this the subaction of
+        // every state written that way was dropped, body and all.
+        let subaction = tokens(node).next().is_some_and(|token| {
+            matches!(
+                token,
+                SyntaxKind::ENTRY_KW | SyntaxKind::DO_KW | SyntaxKind::EXIT_KW
+            )
+        });
+        let nests = node
+            .children()
+            .any(|child| matches!(child.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE));
+        let performs = node
+            .children()
+            .any(|child| child.kind() == SyntaxKind::NAME_REF);
+        (subaction && !nests && performs).then_some(ElementKind::PerformActionUsage)
     })
+}
+
+/// Whether a control statement is a transition out of the state it is
+/// written in rather than the succession its `then` reads as.
+///
+/// `TargetTransitionUsage` puts a trigger, a guard or both before the
+/// `then`; a bare `then b` and a `first a then b` are successions. The
+/// guard alone (`if hot then cool;`) is left out here: an action body
+/// writes an `if` node with no `then` at all, and telling the two apart
+/// needs the owner rather than the statement.
+fn is_target_transition(node: &SyntaxNode) -> bool {
+    tokens(node)
+        .take_while(|token| *token != SyntaxKind::THEN_KW)
+        .any(|token| token == SyntaxKind::ACCEPT_KW)
+        && has_token(node, SyntaxKind::THEN_KW)
+}
+
+/// The relationship a `RELATION_STMT` reifies, keyed on the keyword that
+/// says which two things it relates.
+///
+/// `specialization s subtype A :> B;` writes as a statement of its own
+/// what `classifier A :> B` writes as a clause, and KerML gives each form
+/// the same metaclass. The leading `specialization`, `disjoining`,
+/// `conjugation` and `inverting` only introduce a name for it, so the
+/// keyword after them is what says which relationship it is.
+fn relation_kind(node: &SyntaxNode) -> Option<ElementKind> {
+    relation_tokens(node).find_map(|token| match token {
+        SyntaxKind::SUBTYPE_KW => Some(ElementKind::Specialization),
+        SyntaxKind::SUBCLASSIFIER_KW => Some(ElementKind::Subclassification),
+        SyntaxKind::SUBSET_KW => Some(ElementKind::Subsetting),
+        SyntaxKind::REDEFINITION_KW => Some(ElementKind::Redefinition),
+        SyntaxKind::TYPING_KW => Some(ElementKind::FeatureTyping),
+        SyntaxKind::CONJUGATE_KW => Some(ElementKind::Conjugation),
+        SyntaxKind::DISJOINT_KW => Some(ElementKind::Disjoining),
+        SyntaxKind::INVERSE_KW => Some(ElementKind::FeatureInverting),
+        SyntaxKind::FEATURING_KW => Some(ElementKind::TypeFeaturing),
+        _ => None,
+    })
+}
+
+/// The keywords a relationship statement writes outside its body.
+///
+/// `disjoining d disjoint A from B;` puts `disjoint` and the first of the
+/// two types it relates in a clause of their own, so the keyword that
+/// says which relationship this is sits one level in.
+fn relation_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
+    node.children_with_tokens()
+        .flat_map(|part| match part {
+            sysml_syntax::SyntaxElement::Token(token) => vec![token.kind()],
+            sysml_syntax::SyntaxElement::Node(child) if child.kind() != SyntaxKind::BODY => {
+                tokens(&child).collect()
+            }
+            sysml_syntax::SyntaxElement::Node(_) => Vec::new(),
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 /// The element a keyword declares when it appears inside a control
@@ -752,6 +925,23 @@ fn control_node_kind(token: SyntaxKind) -> Option<ElementKind> {
 /// only takes a name this way when such a keyword is present, leaving
 /// `perform pp.gt;` to the effective name resolution gives it.
 fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
+    // the keywords a relationship statement writes between its name and
+    // the two things it relates
+    let relates = |kind| {
+        matches!(
+            kind,
+            SyntaxKind::SUBTYPE_KW
+                | SyntaxKind::SUBCLASSIFIER_KW
+                | SyntaxKind::SUBSET_KW
+                | SyntaxKind::REDEFINITION_KW
+                | SyntaxKind::TYPING_KW
+                | SyntaxKind::CONJUGATE_KW
+                | SyntaxKind::DISJOINT_KW
+                | SyntaxKind::INVERSE_KW
+                | SyntaxKind::OF_KW
+                | SyntaxKind::FROM_KW
+        )
+    };
     let introduces_operands = |kind| {
         matches!(
             kind,
@@ -761,8 +951,24 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
                 | SyntaxKind::SEND_KW
                 | SyntaxKind::TERMINATE_KW
                 | SyntaxKind::ASSIGN_KW
+                // `do providePower;` performs the action it names; the
+                // name is what it is about, not what it is called
+                | SyntaxKind::ENTRY_KW
+                | SyntaxKind::DO_KW
+                | SyntaxKind::EXIT_KW
         )
     };
+    // `specialization s subtype A :> B;` and `featuring feat of f by A;`
+    // name themselves before the clause that says what they relate;
+    // `disjoint A from B;` leaves the place empty and stays unnamed.
+    if node.kind() == SyntaxKind::RELATION_STMT {
+        return node
+            .children_with_tokens()
+            .take_while(|part| !relates(part.kind()) && part.kind() != SyntaxKind::RELATION)
+            .filter_map(|part| part.into_node())
+            .find(|child| child.kind() == SyntaxKind::NAME_REF)
+            .and_then(|name| Some(unquote(name.first_token()?.text())));
+    }
     // `dependency Use from A to B;` names itself before `from`, and
     // `Dependency = 'dependency' ( Identification? 'from' )? ...` says a
     // name is only there when `from` is: `dependency Z to A;` starts
@@ -912,17 +1118,26 @@ fn definition_kind(node: &SyntaxNode) -> ElementKind {
     kind_or(name, ElementKind::Classifier)
 }
 
-fn usage_kind(node: &SyntaxNode) -> ElementKind {
+fn usage_kind(node: &SyntaxNode, owner: Option<ElementId>, model: &Model) -> ElementKind {
     use SyntaxKind::*;
+    let kws = kind_keywords(node);
+    let scope: Vec<SyntaxKind> = scope_tokens(node).chain(leading_keywords(node)).collect();
+    // `assert not satisfy R by p;` asserts a satisfaction, which the
+    // grammar makes a `SatisfyRequirementUsage`; `assert` says how
+    // strongly it is claimed, not what kind of usage it is. Reading the
+    // keywords in the order they were written answers with whichever came
+    // first, and `assert` always comes first.
+    if scope.contains(&SATISFY_KW) {
+        return kind_or("SatisfyRequirementUsage", ElementKind::Usage);
+    }
     // adapter keywords take precedence: `perform action a` is a
     // PerformActionUsage, not an ActionUsage
-    for token in tokens(node).chain(leading_keywords(node)) {
+    for token in scope {
         let candidate = match token {
             PERFORM_KW => Some("PerformActionUsage"),
             EXHIBIT_KW => Some("ExhibitStateUsage"),
             EVENT_KW => Some("EventOccurrenceUsage"),
             INCLUDE_KW => Some("IncludeUseCaseUsage"),
-            SATISFY_KW => Some("SatisfyRequirementUsage"),
             ASSERT_KW => Some("AssertConstraintUsage"),
             MESSAGE_KW => Some("FlowUsage"),
             // `action stop terminate;` -- `TerminateNode :
@@ -933,6 +1148,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             // parameters (sentMessage, acceptedMessage)
             SEND_KW => Some("SendActionUsage"),
             ACCEPT_KW => Some("AcceptActionUsage"),
+            // `action a1 assign x := 2;` assigns to `x`; it is not an
+            // action that happens to have a value of its own
+            // (`AssignmentNode : AssignmentActionUsage`)
+            ASSIGN_KW => Some("AssignmentActionUsage"),
             // roles that fix the metaclass without a kind keyword of
             // their own: an actor or stakeholder is a part, an objective
             // a requirement
@@ -946,8 +1165,10 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             // keyword would, and without it `snapshot s : O;` arrives as
             // the bare reference a usage with no keyword at all would
             // `IndividualUsage : OccurrenceUsage = ... isIndividual ?=
-            // 'individual' ...` the same way
-            SNAPSHOT_KW | TIMESLICE_KW | INDIVIDUAL_KW => Some("OccurrenceUsage"),
+            // 'individual' ...` the same way. Only where there is no kind
+            // keyword: `individual part x : X;` is a part that is one
+            // individual, and it says so before it says `part`.
+            SNAPSHOT_KW | TIMESLICE_KW | INDIVIDUAL_KW if kws.is_empty() => Some("OccurrenceUsage"),
             OBJECTIVE_KW => Some("RequirementUsage"),
             _ => None,
         };
@@ -955,7 +1176,6 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
             return kind_or(name, ElementKind::Usage);
         }
     }
-    let kws = kind_keywords(node);
     let name = match kws.first() {
         Some(PART_KW) => "PartUsage",
         Some(ATTRIBUTE_KW) => "AttributeUsage",
@@ -995,6 +1215,14 @@ fn usage_kind(node: &SyntaxNode) -> ElementKind {
         Some(CONNECTOR_KW) => "Connector",
         Some(BINDING_KW) => "BindingConnector",
         Some(MULTIPLICITY_KW) => "Multiplicity",
+        // `EnumeratedValue : EnumerationUsage = 'enum'? Usage` -- a value
+        // written in an enumeration body names no kind, and reading it as
+        // a plain reference leaves the enumeration with no values at all.
+        _ if owner
+            .is_some_and(|owner| model.kind(owner).is_a(ElementKind::EnumerationDefinition)) =>
+        {
+            "EnumerationUsage"
+        }
         // A usage that names no kind is a reference: `ref x;` spells it
         // out, and `subject s;` or a bare `x : T;` mean the same thing.
         _ => "ReferenceUsage",
@@ -1051,6 +1279,18 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
             _ => break,
         }
     }
+    // `do providePower;` is the subaction itself rather than a wrapper
+    // around one, so its keyword is on the statement. It only says which
+    // subaction it is when it leads: the `do` in `transition ... do send
+    // x then b` says what that transition does on the way across.
+    if node.kind() == CONTROL_STMT {
+        match tokens(node).next() {
+            Some(ENTRY_KW) => return Some(Role::Entry),
+            Some(DO_KW) => return Some(Role::Do),
+            Some(EXIT_KW) => return Some(Role::Exit),
+            _ => {}
+        }
+    }
     with_wrapper(node).find_map(|scope| {
         tokens(&scope).find_map(|token| match token {
             SUBJECT_KW => Some(Role::Subject),
@@ -1066,6 +1306,10 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
             REQUIRE_KW => Some(Role::Require),
             FRAME_KW => Some(Role::Frame),
             VERIFY_KW => Some(Role::Verify),
+            // `ViewRenderingMembership` -- how a view is drawn is a
+            // member of it, and the standard has a membership of its own
+            // for saying so
+            RENDER_KW => Some(Role::Render),
             _ => None,
         })
     })
@@ -1088,7 +1332,7 @@ fn is_composite(
     owner: Option<ElementId>,
     model: &Model,
 ) -> bool {
-    if has_token(node, SyntaxKind::REF_KW)
+    if scope_has(node, SyntaxKind::REF_KW)
         || kind == ElementKind::ReferenceUsage
         || has_token(node, SyntaxKind::END_KW)
         || declared_direction(node).is_some()
@@ -1111,6 +1355,12 @@ fn is_composite(
 /// The direction a feature was declared with (`in`, `out`, `inout`).
 fn declared_direction(node: &SyntaxNode) -> Option<&'static str> {
     use SyntaxKind::*;
+    // `for i in xs { ... }` writes `in` to say what it iterates over, not
+    // which way anything is passed. A control statement declares no
+    // feature of its own, so it has no direction to read.
+    if node.kind() == CONTROL_STMT {
+        return None;
+    }
     with_wrapper(node).find_map(|scope| {
         tokens(&scope).find_map(|token| match token {
             INOUT_KW => Some("inout"),
@@ -1150,17 +1400,47 @@ fn leading_keywords(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
     leading.into_iter()
 }
 
+/// Whether this node is an anonymous prefix wrapper: a declaration that
+/// carries only the keywords written before another declaration, which is
+/// its one child.
+///
+/// `variant part optA;` and `in event occurrence ieo;` parse this way. The
+/// wrapper names nothing and stands for nothing; what it says describes
+/// the declaration it wraps.
+///
+/// A connector end really does own what it nests, though -- `end [1]
+/// feature transferTarget references target;` is an anonymous end whose
+/// feature is its own member -- so `end` is never a wrapper.
+fn is_prefix_wrapper(node: &SyntaxNode) -> bool {
+    use SyntaxKind::*;
+    matches!(node.kind(), DEFINITION | USAGE)
+        && !has_token(node, END_KW)
+        && declared_name(node).is_none()
+        && statement_declared_name(node).is_none()
+        && node
+            .children()
+            .any(|child| matches!(child.kind(), DEFINITION | USAGE))
+}
+
 /// The node and, when the node was hoisted out of an anonymous wrapper
 /// (`variant part optA;` parses as a wrapper around `part optA`), the
 /// wrapper too -- the keywords that describe the member sit on it.
 fn with_wrapper(node: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> {
-    use SyntaxKind::*;
-    let wrapper = node.parent().filter(|parent| {
-        matches!(parent.kind(), DEFINITION | USAGE)
-            && declared_name(parent).is_none()
-            && statement_declared_name(parent).is_none()
-    });
+    let wrapper = node.parent().filter(is_prefix_wrapper);
     std::iter::once(node.clone()).chain(wrapper)
+}
+
+/// Every keyword that describes this declaration, wherever it was
+/// written: on the declaration itself or on the wrapper around it.
+fn scope_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
+    with_wrapper(node)
+        .flat_map(|scope| tokens(&scope).collect::<Vec<_>>())
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+fn scope_has(node: &SyntaxNode, kind: SyntaxKind) -> bool {
+    scope_tokens(node).any(|token| token == kind)
 }
 
 fn kind_keywords(node: &SyntaxNode) -> Vec<SyntaxKind> {
@@ -1215,30 +1495,11 @@ fn string_token(node: &SyntaxNode) -> Option<String> {
         .children_with_tokens()
         .filter_map(|e| e.into_token())
         .find(|t| t.kind() == SyntaxKind::STRING)?;
-    let text = token.text();
-    Some(
-        text.strip_prefix('"')
-            .and_then(|t| t.strip_suffix('"'))
-            .unwrap_or(text)
-            .to_string(),
-    )
-}
-
-fn unquote(text: &str) -> String {
-    text.strip_prefix('\'')
-        .and_then(|t| t.strip_suffix('\''))
-        .unwrap_or(text)
-        .to_string()
+    Some(sysml_syntax::unquote_string(token.text()))
 }
 
 #[cfg(test)]
 mod tests {
-    /// `in event occurrence x;` parses as an anonymous wrapper around the
-    /// usage carrying the name, unlike `event occurrence x;`. The name has
-    /// to end up where it was written either way.
-    /// The guard is an expression tree, which is not made of elements, so
-    /// its source text is kept as a textual representation instead.
-    /// `ref x;` names no kind of its own; `ref part x;` does.
     #[test]
     fn a_named_bound_is_kept_as_the_expression_it_denotes() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -1429,10 +1690,10 @@ mod tests {
         }
     }
 
+    /// `ref b;`, `subject s;` and a bare `c;` all name no kind of their
+    /// own; `ref part a;` does, so it keeps it.
     #[test]
     fn a_usage_without_a_kind_keyword_is_a_reference() {
-        // `ref b;`, `subject s;` and a bare `c;` all name no kind of their
-        // own; `ref part a;` does, so it keeps it
         let (model, roots) = build_model(&sysml_syntax::parse(
             "requirement def R {\n\tref part a;\n\tref b;\n\tsubject s;\n\tc;\n}\n",
         ));
@@ -1465,6 +1726,8 @@ mod tests {
         assert_eq!(model.name(payload), Some("cmd"));
     }
 
+    /// The guard is an expression tree, which is not made of elements, so
+    /// its source text is kept as a textual representation instead.
     #[test]
     fn a_transition_guard_is_kept_as_written() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -1495,17 +1758,414 @@ mod tests {
         );
     }
 
+    /// `in event occurrence x;` parses as an anonymous wrapper around the
+    /// usage carrying the name, unlike `event occurrence x;`. The name has
+    /// to end up where it was written either way, and the wrapper must
+    /// leave nothing of its own beside it.
     #[test]
     fn a_direction_wrapper_does_not_swallow_the_name_it_wraps() {
         let (model, roots) = build_model(&sysml_syntax::parse(
             "part def M {\n\tevent occurrence eo;\n\tin event occurrence ieo;\n}\n",
         ));
-        let names: Vec<&str> = model
+        let members: Vec<(Option<&str>, ElementKind)> = model
             .owned(roots[0])
             .iter()
-            .filter_map(|&id| model.name(id))
+            .map(|&id| (model.name(id), model.kind(id)))
             .collect();
-        assert_eq!(names, ["eo", "ieo"]);
+        // the wrapper's `event` says what `ieo` is, and its `in` which way
+        // the occurrence is passed -- neither leaves an element behind
+        assert_eq!(
+            members,
+            [
+                (Some("eo"), ElementKind::EventOccurrenceUsage),
+                (Some("ieo"), ElementKind::EventOccurrenceUsage),
+            ]
+        );
+        let ieo = model.owned(roots[0])[1];
+        assert_eq!(
+            model.get(ieo, "direction"),
+            Some(&Value::EnumLit("in")),
+            "the wrapper's direction belongs to what it wraps"
+        );
+    }
+
+    /// `variant part optA;` wraps the declaration the same way, and a
+    /// phantom beside it would double every variant a variation offers.
+    #[test]
+    fn a_variant_wrapper_leaves_one_element_per_variant() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "variation part def Choice {\n\tvariant part optA;\n\tvariant part optB;\n}\n",
+        ));
+        let members: Vec<(Option<&str>, ElementKind, Option<Role>)> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| (model.name(id), model.kind(id), model.member_role(id)))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (Some("optA"), ElementKind::PartUsage, Some(Role::Variant)),
+                (Some("optB"), ElementKind::PartUsage, Some(Role::Variant)),
+            ]
+        );
+    }
+
+    /// `EnumeratedValue : EnumerationUsage = 'enum'? Usage` -- a literal
+    /// that leaves the keyword out is still one of the enumeration's
+    /// values, and a reference usage is not one.
+    #[test]
+    fn an_enumeration_literal_is_a_variant_with_or_without_the_keyword() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "enum def Color {\n\tred;\n\tenum green;\n}\n",
+        ));
+        let values: Vec<(Option<&str>, ElementKind, Option<Role>)> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| (model.name(id), model.kind(id), model.member_role(id)))
+            .collect();
+        assert_eq!(
+            values,
+            [
+                (
+                    Some("red"),
+                    ElementKind::EnumerationUsage,
+                    Some(Role::Variant)
+                ),
+                (
+                    Some("green"),
+                    ElementKind::EnumerationUsage,
+                    Some(Role::Variant)
+                ),
+            ]
+        );
+        // outside an enumeration body a bare name still names no kind
+        let (model, roots) = build_model(&sysml_syntax::parse("part def P {\n\tred;\n}\n"));
+        assert_eq!(
+            model.kind(model.owned(roots[0])[0]),
+            ElementKind::ReferenceUsage
+        );
+    }
+
+    /// `individual part x : X;` is a part that is one individual, and
+    /// `assert not satisfy R by p;` a satisfaction that is asserted: in
+    /// both the first keyword written says how, not what.
+    #[test]
+    fn a_prefix_keyword_does_not_outrank_the_kind_that_follows_it() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def X;\n\
+             requirement def R;\n\
+             part def Rig {\n\
+             \tindividual part x : X;\n\
+             \tsnapshot s;\n\
+             \tpart p : X;\n\
+             \tassert not satisfy R by p;\n\
+             }\n",
+        ));
+        let kinds: Vec<ElementKind> = model
+            .owned(roots[2])
+            .iter()
+            .map(|&id| model.kind(id))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ElementKind::PartUsage,
+                ElementKind::OccurrenceUsage,
+                ElementKind::PartUsage,
+                ElementKind::SatisfyRequirementUsage,
+            ]
+        );
+        let individual = model.owned(roots[2])[0];
+        assert_eq!(
+            model.get(individual, "isIndividual"),
+            Some(&Value::Bool(true))
+        );
+        let snapshot = model.owned(roots[2])[1];
+        assert_eq!(
+            model.get(snapshot, "portionKind"),
+            Some(&Value::EnumLit("snapshot"))
+        );
+        let asserted = model.owned(roots[2])[3];
+        assert_eq!(model.get(asserted, "isNegated"), Some(&Value::Bool(true)));
+    }
+
+    /// `TargetTransitionUsage` puts the trigger before the `then`, so a
+    /// statement read as the succession its `then` spells leaves the
+    /// trigger with nothing standing for it.
+    #[test]
+    fn an_accept_before_then_is_a_transition_and_keeps_its_trigger() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "state def S {\n\
+             \tstate off;\n\
+             \tstate on;\n\
+             \taccept go if ready do send m via p then on;\n\
+             }\n",
+        ));
+        let transition = model.owned(roots[0])[2];
+        assert_eq!(model.kind(transition), ElementKind::TransitionUsage);
+        let trigger = reference_list(&model, transition, "triggerAction")[0];
+        assert_eq!(model.name(trigger), Some("go"));
+        let guard = reference_list(&model, transition, "guardExpression")[0];
+        let written = model.owned(guard)[0];
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("ready")
+        );
+        let effect = reference_list(&model, transition, "effectAction")[0];
+        assert_eq!(model.kind(effect), ElementKind::SendActionUsage);
+    }
+
+    /// `StateActionUsage` is the action itself, not a wrapper around a
+    /// declaration: `do providePower;` performs what it names, and the
+    /// keyword before it says in which of a state's three roles.
+    #[test]
+    fn a_state_subaction_written_as_a_reference_still_becomes_one() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "state def S {\n\
+             \tentry performSelfTest { in vehicle = 1; }\n\
+             \tdo providePower;\n\
+             \texit shutDown;\n\
+             \texit action tidyUp;\n\
+             }\n",
+        ));
+        let members: Vec<(ElementKind, Option<Role>)> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| (model.kind(id), model.member_role(id)))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (ElementKind::PerformActionUsage, Some(Role::Entry)),
+                (ElementKind::PerformActionUsage, Some(Role::Do)),
+                (ElementKind::PerformActionUsage, Some(Role::Exit)),
+                // an `exit` that declares an action rather than naming
+                // one keeps the declaration, and the role with it
+                (ElementKind::ActionUsage, Some(Role::Exit)),
+            ]
+        );
+        // what a performed action's body declares is its own member, and
+        // the name it performs by is a reference rather than a name of
+        // its own
+        let entry = model.owned(roots[0])[0];
+        assert_eq!(model.name(entry), None);
+        assert_eq!(
+            model
+                .owned(entry)
+                .iter()
+                .filter_map(|&id| model.name(id))
+                .collect::<Vec<_>>(),
+            ["vehicle"]
+        );
+    }
+
+    /// `SendNode`, `AcceptNode` and `AssignmentNode` are metaclasses of
+    /// their own; written on their own line they were building nothing at
+    /// all, and an assignment written after an action name was arriving
+    /// as if the action had a value.
+    #[test]
+    fn a_bare_action_node_becomes_the_node_it_is() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tsend x via p;\n\
+             \taccept sig : Sig;\n\
+             \tassign x := 1;\n\
+             \taction a1 assign y := 2;\n\
+             }\n",
+        ));
+        let members: Vec<ElementKind> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| model.kind(id))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ElementKind::SendActionUsage,
+                ElementKind::AcceptActionUsage,
+                ElementKind::AssignmentActionUsage,
+                ElementKind::AssignmentActionUsage,
+            ]
+        );
+        // `assign y := 2` gives the value to `y`; the assignment is not a
+        // feature that has one
+        let assignment = model.owned(roots[0])[3];
+        assert!(model
+            .owned(assignment)
+            .iter()
+            .all(|&id| model.kind(id) != ElementKind::FeatureValue));
+    }
+
+    /// `specialization s subtype A :> B;` writes as a statement of its own
+    /// what a declaration writes as a clause, and the model had nothing
+    /// standing for any of them.
+    #[test]
+    fn a_relationship_written_as_a_statement_is_an_element() {
+        let text = "package K {\n\
+                    \tclassifier A;\n\
+                    \tclassifier B;\n\
+                    \tspecialization s subtype A :> B;\n\
+                    \tdisjoining d disjoint A from B;\n\
+                    \tsubtype A :> B;\n\
+                    }\n";
+        let parse = sysml_syntax::parse_dialect(text, sysml_syntax::Dialect::KerML);
+        assert!(parse.ok());
+        let (model, roots) = build_model(&parse);
+        let members: Vec<(Option<&str>, ElementKind)> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| (model.name(id), model.kind(id)))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                (Some("A"), ElementKind::Classifier),
+                (Some("B"), ElementKind::Classifier),
+                (Some("s"), ElementKind::Specialization),
+                (Some("d"), ElementKind::Disjoining),
+                // `Specialization = ( 'specialization' Identification )?
+                // 'subtype' ...` -- the name is optional
+                (None, ElementKind::Specialization),
+            ]
+        );
+    }
+
+    /// `ForLoopNode = 'for' ForVariableDeclarationMember 'in'
+    /// ExpressionParameterMember ...` -- what the loop asks for is the
+    /// sequence after `in`. Kept whole it arrives as a comparison, and
+    /// the `in` was being read as a direction besides.
+    #[test]
+    fn a_for_loop_asks_for_what_it_iterates_over() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\tfor t in 1..3 { action each; }\n}\n",
+        ));
+        let loop_node = model.owned(roots[0])[0];
+        assert_eq!(model.kind(loop_node), ElementKind::ForLoopActionUsage);
+        assert_eq!(model.get(loop_node, "direction"), None);
+        let variable = model
+            .owned(loop_node)
+            .iter()
+            .find_map(|&id| (model.name(id) == Some("t")).then_some(id))
+            .expect("the loop declares what it binds");
+        assert_eq!(model.kind(variable), ElementKind::ReferenceUsage);
+        let asked = model
+            .owned(loop_node)
+            .iter()
+            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .copied()
+            .expect("the loop says what it iterates over");
+        let written = model.owned(asked)[0];
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("1..3")
+        );
+    }
+
+    #[test]
+    fn a_condition_the_parser_pieced_together_is_kept_whole() {
+        // `if x , y then b;` is not a condition anybody meant, but the
+        // parser recovers it as several pieces rather than one
+        // expression, and what the model keeps has to be all of them --
+        // reading only the first would say the loop asks about `x`
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\tif x , y then b;\n}\n",
+        ));
+        let branch = model.owned(roots[0])[0];
+        assert_eq!(model.kind(branch), ElementKind::IfActionUsage);
+        let asked = model
+            .owned(branch)
+            .iter()
+            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .copied()
+            .expect("the branch says what it asks");
+        let written = model.owned(asked)[0];
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("x , y")
+        );
+    }
+
+    /// `WhileLoopNode : WhileLoopActionUsage = ... ( 'until'
+    /// ExpressionParameterMember ';' )?` -- the parser writes the `until`
+    /// as a statement of its own, and a second loop standing for it says
+    /// the flow repeats twice over.
+    #[test]
+    fn an_until_closes_the_loop_written_before_it() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\tloop { action tick; } until done;\n}\n",
+        ));
+        let members: Vec<ElementKind> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&id| model.kind(id))
+            .collect();
+        assert_eq!(members, [ElementKind::WhileLoopActionUsage]);
+        let repeats = model.owned(roots[0])[0];
+        let asked = model
+            .owned(repeats)
+            .iter()
+            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .copied()
+            .expect("the loop says what ends it");
+        let written = model.owned(asked)[0];
+        assert_eq!(
+            model.get(written, "body").and_then(Value::as_str),
+            Some("done")
+        );
+    }
+
+    /// `import all P::*` brings in what is private as well and `import
+    /// P::**` everything nested under what it names. Neither was
+    /// arriving, so both went out as the plain import they are not.
+    #[test]
+    fn an_import_keeps_what_it_says_it_brings_in() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "package P {\n\timport all Q::*;\n\timport Q::**;\n}\n",
+        ));
+        let imports = model.owned(roots[0]).to_vec();
+        assert_eq!(
+            model.get(imports[0], "isImportAll"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(model.get(imports[0], "isRecursive"), None);
+        assert_eq!(
+            model.get(imports[1], "isRecursive"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    /// A string literal is what stands between its quotes with the
+    /// escapes resolved: trimming the quotes off ate the escaped one at
+    /// the end, and the backslash before it stayed.
+    #[test]
+    fn a_string_is_read_with_its_escapes_resolved() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "package P {\n\
+             \tcomment C locale \"en-GB\" /* said */\n\
+             \tpart def V { attribute greeting = \"say \\\"hi\\\"\"; }\n\
+             }\n",
+        ));
+        let comment = model.owned(roots[0])[0];
+        assert_eq!(
+            model.get(comment, "locale").and_then(Value::as_str),
+            Some("en-GB")
+        );
+        let greeting = model.owned(model.owned(roots[0])[1])[0];
+        let literal = reference(&model, model.owned(greeting)[0], "value").unwrap();
+        assert_eq!(model.kind(literal), ElementKind::LiteralString);
+        assert_eq!(
+            model.get(literal, "value").and_then(Value::as_str),
+            Some("say \"hi\"")
+        );
+    }
+
+    /// The elements a property points at, which a caller has just asked
+    /// the builder to have written.
+    fn reference_list<'a>(model: &'a Model, of: ElementId, property: &str) -> &'a [ElementId] {
+        model
+            .get(of, property)
+            .and_then(Value::as_ids)
+            .unwrap_or_default()
     }
 
     /// A connector end is an anonymous wrapper too, but the feature it

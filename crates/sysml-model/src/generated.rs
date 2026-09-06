@@ -1421,7 +1421,7 @@ impl ElementKind {
                 FeatureMeta { name: "payloadType", ty: FeatureType::Class(ElementKind::Classifier), many: true, derived: true },
                 FeatureMeta { name: "targetInputFeature", ty: FeatureType::Class(ElementKind::Feature), many: false, derived: true },
                 FeatureMeta { name: "sourceOutputFeature", ty: FeatureType::Class(ElementKind::Feature), many: false, derived: true },
-                FeatureMeta { name: "flowEnd", ty: FeatureType::Class(ElementKind::FlowEnd), many: false, derived: true },
+                FeatureMeta { name: "flowEnd", ty: FeatureType::Class(ElementKind::FlowEnd), many: true, derived: true },
                 FeatureMeta { name: "payloadFeature", ty: FeatureType::Class(ElementKind::PayloadFeature), many: false, derived: true },
                 FeatureMeta { name: "interaction", ty: FeatureType::Class(ElementKind::Interaction), many: true, derived: true },
             ],
@@ -1550,7 +1550,7 @@ impl ElementKind {
             ElementKind::MultiplicityRange => &[
                 FeatureMeta { name: "lowerBound", ty: FeatureType::Class(ElementKind::Expression), many: false, derived: true },
                 FeatureMeta { name: "upperBound", ty: FeatureType::Class(ElementKind::Expression), many: false, derived: true },
-                FeatureMeta { name: "bound", ty: FeatureType::Class(ElementKind::Expression), many: false, derived: true },
+                FeatureMeta { name: "bound", ty: FeatureType::Class(ElementKind::Expression), many: true, derived: true },
             ],
             ElementKind::Namespace => &[
                 FeatureMeta { name: "membership", ty: FeatureType::Class(ElementKind::Membership), many: true, derived: true },
@@ -2229,8 +2229,12 @@ impl Model {
         match self.get(id, "bodyAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `bound`, as MultiplicityRange declares it.
-    pub fn bound(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "bound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+    pub fn bound(&self, id: ElementId) -> &[ElementId] {
+        match self.get(id, "bound") {
+            Some(Value::RefList(list)) => list,
+            Some(Value::Ref(to)) => std::slice::from_ref(to),
+            _ => &[],
+        }
     }
     /// `calculation`, as CalculationDefinition declares it.
     pub fn calculation(&self, id: ElementId) -> &[ElementId] {
@@ -2340,7 +2344,7 @@ impl Model {
             _ => &[],
         }
     }
-    /// `differencingType`, as Differencing declares it.
+    /// `differencingType`, as Type declares it.
     pub fn differencing_type(&self, id: ElementId) -> &[ElementId] {
         match self.get(id, "differencingType") {
             Some(Value::RefList(list)) => list,
@@ -2564,7 +2568,7 @@ impl Model {
     pub fn imported_element(&self, id: ElementId) -> Option<ElementId> {
         match self.get(id, "importedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
-    /// `importedMembership`, as MembershipImport declares it.
+    /// `importedMembership`, as Namespace declares it.
     pub fn imported_membership(&self, id: ElementId) -> &[ElementId] {
         match self.get(id, "importedMembership") {
             Some(Value::RefList(list)) => list,
@@ -2640,7 +2644,7 @@ impl Model {
             _ => &[],
         }
     }
-    /// `intersectingType`, as Intersecting declares it.
+    /// `intersectingType`, as Type declares it.
     pub fn intersecting_type(&self, id: ElementId) -> &[ElementId] {
         match self.get(id, "intersectingType") {
             Some(Value::RefList(list)) => list,
@@ -3643,7 +3647,7 @@ impl Model {
     pub fn performed_action(&self, id: ElementId) -> Option<ElementId> {
         match self.get(id, "performedAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
-    /// `portDefinition`, as ConjugatedPortTyping declares it.
+    /// `portDefinition`, as PortUsage declares it.
     pub fn port_definition(&self, id: ElementId) -> &[ElementId] {
         match self.get(id, "portDefinition") {
             Some(Value::RefList(list)) => list,
@@ -4032,7 +4036,7 @@ impl Model {
     pub fn verification_case_definition(&self, id: ElementId) -> Option<ElementId> {
         match self.get(id, "verificationCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
-    /// `verifiedRequirement`, as RequirementVerificationMembership declares it.
+    /// `verifiedRequirement`, as VerificationCaseDefinition declares it.
     pub fn verified_requirement(&self, id: ElementId) -> &[ElementId] {
         match self.get(id, "verifiedRequirement") {
             Some(Value::RefList(list)) => list,
@@ -4521,6 +4525,8 @@ mod accessor_tests {
         model.set(id, "bodyAction", Value::Ref(other));
         let _ = model.body_action(id);
         let id = model.create(ElementKind::MultiplicityRange);
+        model.set(id, "bound", Value::RefList(vec![other]));
+        let _ = model.bound(id);
         model.set(id, "bound", Value::Ref(other));
         let _ = model.bound(id);
         let id = model.create(ElementKind::CalculationDefinition);
@@ -4597,7 +4603,7 @@ mod accessor_tests {
         let _ = model.definition(id);
         model.set(id, "definition", Value::Ref(other));
         let _ = model.definition(id);
-        let id = model.create(ElementKind::Differencing);
+        let id = model.create(ElementKind::Type);
         model.set(id, "differencingType", Value::RefList(vec![other]));
         let _ = model.differencing_type(id);
         model.set(id, "differencingType", Value::Ref(other));
@@ -4613,7 +4619,7 @@ mod accessor_tests {
         model.set(id, "directedUsage", Value::Ref(other));
         let _ = model.directed_usage(id);
         let id = model.create(ElementKind::Feature);
-        model.set(id, "direction", Value::String(String::from("x")));
+        model.set(id, "direction", Value::EnumLit("x"));
         let _ = model.direction(id);
         let id = model.create(ElementKind::Disjoining);
         model.set(id, "disjoiningType", Value::Ref(other));
@@ -4748,7 +4754,7 @@ mod accessor_tests {
         let id = model.create(ElementKind::Import);
         model.set(id, "importedElement", Value::Ref(other));
         let _ = model.imported_element(id);
-        let id = model.create(ElementKind::MembershipImport);
+        let id = model.create(ElementKind::Namespace);
         model.set(id, "importedMembership", Value::RefList(vec![other]));
         let _ = model.imported_membership(id);
         model.set(id, "importedMembership", Value::Ref(other));
@@ -4797,7 +4803,7 @@ mod accessor_tests {
         let _ = model.interface_end(id);
         model.set(id, "interfaceEnd", Value::Ref(other));
         let _ = model.interface_end(id);
-        let id = model.create(ElementKind::Intersecting);
+        let id = model.create(ElementKind::Type);
         model.set(id, "intersectingType", Value::RefList(vec![other]));
         let _ = model.intersecting_type(id);
         model.set(id, "intersectingType", Value::Ref(other));
@@ -5461,13 +5467,13 @@ mod accessor_tests {
         let id = model.create(ElementKind::PerformActionUsage);
         model.set(id, "performedAction", Value::Ref(other));
         let _ = model.performed_action(id);
-        let id = model.create(ElementKind::ConjugatedPortTyping);
+        let id = model.create(ElementKind::PortUsage);
         model.set(id, "portDefinition", Value::RefList(vec![other]));
         let _ = model.port_definition(id);
         model.set(id, "portDefinition", Value::Ref(other));
         let _ = model.port_definition(id);
         let id = model.create(ElementKind::OccurrenceUsage);
-        model.set(id, "portionKind", Value::String(String::from("x")));
+        model.set(id, "portionKind", Value::EnumLit("x"));
         let _ = model.portion_kind(id);
         let id = model.create(ElementKind::BooleanExpression);
         model.set(id, "predicate", Value::Ref(other));
@@ -5729,7 +5735,7 @@ mod accessor_tests {
         let id = model.create(ElementKind::VerificationCaseUsage);
         model.set(id, "verificationCaseDefinition", Value::Ref(other));
         let _ = model.verification_case_definition(id);
-        let id = model.create(ElementKind::RequirementVerificationMembership);
+        let id = model.create(ElementKind::VerificationCaseDefinition);
         model.set(id, "verifiedRequirement", Value::RefList(vec![other]));
         let _ = model.verified_requirement(id);
         model.set(id, "verifiedRequirement", Value::Ref(other));
@@ -5759,7 +5765,7 @@ mod accessor_tests {
         model.set(id, "viewpointStakeholder", Value::Ref(other));
         let _ = model.viewpoint_stakeholder(id);
         let id = model.create(ElementKind::Expose);
-        model.set(id, "visibility", Value::String(String::from("x")));
+        model.set(id, "visibility", Value::EnumLit("x"));
         let _ = model.visibility(id);
         let id = model.create(ElementKind::WhileLoopActionUsage);
         model.set(id, "whileArgument", Value::Ref(other));

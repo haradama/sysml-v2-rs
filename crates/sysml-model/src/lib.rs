@@ -30,15 +30,6 @@ pub mod codegen;
 #[rustfmt::skip]
 pub mod generated;
 
-/// What a membership makes of the element it owns.
-///
-/// The keyword that declared the member decides it here, and two other
-/// crates read it back: the resolver, to know which members stand for
-/// the ones their type declares, and the interchange, to write the
-/// membership metaclass the standard names for each. It is an enum
-/// rather than a string so that adding one is a compile error in both
-/// until they say what it means -- the three used to spell the same
-/// dozen words separately.
 /// How visible a member is from outside what owns it.
 ///
 /// Written from the keyword that declared it, so that the resolver and
@@ -56,6 +47,15 @@ pub enum Vis {
     Private,
 }
 
+/// What a membership makes of the element it owns.
+///
+/// The keyword that declared the member decides it here, and two other
+/// crates read it back: the resolver, to know which members stand for
+/// the ones their type declares, and the interchange, to write the
+/// membership metaclass the standard names for each. It is an enum
+/// rather than a string so that adding one is a compile error in both
+/// until they say what it means -- the three used to spell the same
+/// dozen words separately.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     /// `subject x;` -- what a requirement, use case or verification is about
@@ -86,10 +86,35 @@ pub enum Role {
     Frame,
     /// `verify r;` -- the requirement a verification case answers for
     Verify,
+    /// `render asTreeDiagram;` -- how a view is drawn
+    Render,
 }
 
 pub use build::{build_into, build_model, Built};
 pub use generated::{ElementKind, EnumType, FeatureMeta, FeatureType, PrimitiveType};
+
+/// Whether a value has the shape the metamodel gives a property.
+///
+/// A primitive property holds a value of that primitive type and an
+/// enumerated one the literal it names. A property whose type is a class
+/// holds a reference either way -- a list only where the metamodel gives
+/// it an upper bound above one, though a single reference stands for a
+/// list of one and every reader takes it as such.
+fn fits(meta: &FeatureMeta, value: &Value) -> bool {
+    match (meta.ty, value) {
+        (FeatureType::Data(PrimitiveType::Boolean), Value::Bool(_)) => true,
+        (
+            FeatureType::Data(PrimitiveType::Integer | PrimitiveType::UnlimitedNatural),
+            Value::Int(_),
+        ) => true,
+        (FeatureType::Data(PrimitiveType::Real), Value::Real(_)) => true,
+        (FeatureType::Data(PrimitiveType::String), Value::String(_)) => true,
+        (FeatureType::Enumeration(_), Value::EnumLit(_)) => true,
+        (FeatureType::Class(_), Value::Ref(_)) => true,
+        (FeatureType::Class(_), Value::RefList(_)) => meta.many,
+        _ => false,
+    }
+}
 
 /// Identifies an element within one [`Model`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -130,6 +155,14 @@ impl Value {
             _ => None,
         }
     }
+
+    /// The elements a multi-valued reference points at.
+    pub fn as_ids(&self) -> Option<&[ElementId]> {
+        match self {
+            Value::RefList(ids) => Some(ids),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -152,8 +185,8 @@ struct ElementData {
 struct MemberSide {
     /// What the member was declared with; `None` is nothing written.
     visibility: Option<Vis>,
-    /// The syntactic role that picks the membership's metaclass:
-    /// `subject`, `actor`, `stakeholder`, `objective`, `variant`, `return`.
+    /// The syntactic role that picks the membership's metaclass, when
+    /// the member was declared in one. See [`Role`] for the roles.
     role: Option<Role>,
 }
 
@@ -184,7 +217,11 @@ impl Model {
         self.elements.len()
     }
 
-    /// Record that the membership owning `id` is not public.
+    /// Record the visibility written for the membership owning `id`.
+    ///
+    /// `public` is the default for a member, so writing it says nothing
+    /// new -- but the source did write it, and an interchange that says
+    /// so writes what the author wrote.
     pub fn set_member_visibility(&mut self, id: ElementId, visibility: Vis) {
         self.elements[id.index()].membership.visibility = Some(visibility);
     }
@@ -194,9 +231,8 @@ impl Model {
         self.elements[id.index()].membership.visibility
     }
 
-    /// Record the syntactic role `id` was declared in (`subject`, `actor`,
-    /// `stakeholder`, `objective`, `variant`, `return`), which decides the
-    /// metaclass of the membership owning it.
+    /// Record the syntactic role `id` was declared in, which decides the
+    /// metaclass of the membership owning it. See [`Role`].
     pub fn set_member_role(&mut self, id: ElementId, role: Role) {
         self.elements[id.index()].membership.role = Some(role);
     }
@@ -227,7 +263,21 @@ impl Model {
     }
 
     /// Make `child` an owned element of `parent` (removing any prior owner).
+    ///
+    /// Ownership is a tree. An element made to own itself, or one of its
+    /// own ancestors, would send every walk of that tree round for ever,
+    /// so closing such a loop is refused here, at the one place that
+    /// writes ownership, rather than guarded against by every reader.
+    /// What builds a model from foreign data checks for it first.
     pub fn add_owned(&mut self, parent: ElementId, child: ElementId) {
+        let mut ancestor = Some(parent);
+        while let Some(id) = ancestor {
+            assert!(
+                id != child,
+                "{child:?} would own {parent:?}, which is itself or one of its own ancestors"
+            );
+            ancestor = self.owner(id);
+        }
         if let Some(old) = self.elements[child.index()].owner {
             self.elements[old.index()].owned.retain(|c| *c != child);
         }
@@ -237,11 +287,20 @@ impl Model {
 
     /// Set a property. The name is validated against the metamodel; setting
     /// a property the metaclass does not have is an error.
+    ///
+    /// So is a value of the wrong shape, where the assertions are on: the
+    /// metamodel says what each property holds, and until this checked it
+    /// `set(part, "isAbstract", Value::String("yes"))` was accepted and
+    /// written back out as a string where every reader expects a boolean.
     pub fn set(&mut self, id: ElementId, prop: &str, value: Value) -> &mut Model {
         let kind = self.kind(id);
         let meta = kind
             .feature(prop)
             .unwrap_or_else(|| panic!("{:?} has no property `{prop}`", kind));
+        debug_assert!(
+            fits(meta, &value),
+            "{kind:?}::{prop} holds {meta:?}, not {value:?}"
+        );
         let data = &mut self.elements[id.index()];
         if let Some(slot) = data.props.iter_mut().find(|(n, _)| *n == meta.name) {
             slot.1 = value;
@@ -287,6 +346,75 @@ impl Model {
     /// `declaredName`, the primary name of an element (if any).
     pub fn name(&self, id: ElementId) -> Option<&str> {
         self.get(id, "declaredName").and_then(Value::as_str)
+    }
+
+    /// The name an element answers to.
+    ///
+    /// Its `declaredName`; or, for a feature that declares neither a name
+    /// nor a short name, the name of the feature it is named after --
+    /// KerML's `effectiveName()`, by which `attribute :>> mass;` is a
+    /// feature named `mass`. Declaring only a short name is still
+    /// declaring: such a feature borrows nothing and has no name. The
+    /// rule follows a chain of borrowed names to the one that finally
+    /// declares something, and a chain that comes back round to where it
+    /// began -- illegal, but representable -- names nothing.
+    ///
+    /// KerML names a feature after what it redefines; SysML adds what it
+    /// references, for a variant, a requirement's `assume`/`require`, and
+    /// a `perform`. This follows any reference subsetting rather than
+    /// those three cases, which is what the resolver has always done and
+    /// what the whole corpus resolves under -- `part ::> v;` answers to
+    /// `v` wherever it is written.
+    ///
+    /// It reads the reified `Redefinition` and `ReferenceSubsetting`
+    /// elements, so it answers only once those have been resolved. The
+    /// interchange, the diagram and the Rust generator each kept a copy
+    /// of this rule, and no two of them agreed on the reference case.
+    pub fn effective_name(&self, id: ElementId) -> Option<&str> {
+        self.named_after(id, "declaredName")
+    }
+
+    /// [`Model::effective_name`], for the short name.
+    pub fn effective_short_name(&self, id: ElementId) -> Option<&str> {
+        self.named_after(id, "declaredShortName")
+    }
+
+    /// The element whose declaration [`Model::effective_name`] reads: `id`
+    /// itself where it declares a name, and otherwise the far end of the
+    /// chain of features it borrows one along.
+    ///
+    /// What renames a feature has to reach this one. `part :>> component;`
+    /// declares no name of its own, so there is nothing in it to rewrite:
+    /// an edit that treated it as the declaration would replace the whole
+    /// line with the new name.
+    pub fn naming_element(&self, id: ElementId) -> Option<ElementId> {
+        let mut at = id;
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            // one that declared either name is named, and borrows nothing
+            let declares = ["declaredName", "declaredShortName"]
+                .iter()
+                .any(|declared| self.get(at, declared).is_some());
+            if declares {
+                return Some(at);
+            }
+            if !visited.insert(at) {
+                return None;
+            }
+            at = self.owned(at).iter().find_map(|&rel| {
+                let target = match self.kind(rel) {
+                    ElementKind::Redefinition => "redefinedFeature",
+                    ElementKind::ReferenceSubsetting => "referencedFeature",
+                    _ => return None,
+                };
+                self.get(rel, target).and_then(Value::as_id)
+            })?;
+        }
+    }
+
+    fn named_after(&self, id: ElementId, prop: &str) -> Option<&str> {
+        let names = self.naming_element(id)?;
+        self.get(names, prop).and_then(Value::as_str)
     }
 
     /// Depth-first traversal of the ownership tree from `root`.
@@ -356,6 +484,11 @@ mod tests {
         // only a reference names an element
         assert_eq!(Value::Ref(definition).as_id(), Some(definition));
         assert_eq!(Value::Bool(true).as_id(), None);
+        assert_eq!(
+            Value::RefList(vec![definition]).as_ids(),
+            Some([definition].as_slice())
+        );
+        assert_eq!(Value::Ref(definition).as_ids(), None);
     }
 
     #[test]
@@ -401,5 +534,120 @@ mod tests {
         let mut model = Model::new();
         let pkg = model.create(ElementKind::Package);
         model.set(pkg, "notAProperty", Value::Bool(true));
+    }
+
+    #[test]
+    #[should_panic(expected = "itself or one of its own ancestors")]
+    fn an_element_cannot_own_itself() {
+        let mut model = Model::new();
+        let pkg = model.create(ElementKind::Package);
+        model.add_owned(pkg, pkg);
+    }
+
+    #[test]
+    #[should_panic(expected = "itself or one of its own ancestors")]
+    fn an_element_cannot_own_its_own_ancestor() {
+        let mut model = Model::new();
+        let outer = model.create(ElementKind::Package);
+        let inner = model.create(ElementKind::Package);
+        let leaf = model.create(ElementKind::PartDefinition);
+        model.add_owned(outer, inner);
+        model.add_owned(inner, leaf);
+        // closing the loop three levels up is refused the same way
+        model.add_owned(leaf, outer);
+    }
+
+    fn named_feature(model: &mut Model, name: &str) -> ElementId {
+        let feature = model.create(ElementKind::AttributeUsage);
+        model.set(feature, "declaredName", Value::String(name.into()));
+        feature
+    }
+
+    fn borrowing(model: &mut Model, kind: ElementKind, prop: &str, from: ElementId) -> ElementId {
+        let feature = model.create(ElementKind::AttributeUsage);
+        let rel = model.create(kind);
+        model.set(rel, prop, Value::Ref(from));
+        model.add_owned(feature, rel);
+        feature
+    }
+
+    #[test]
+    fn an_unnamed_feature_answers_to_the_name_of_what_it_redefines_or_references() {
+        let mut model = Model::new();
+        let mass = named_feature(&mut model, "mass");
+        model.set(mass, "declaredShortName", Value::String("m".into()));
+        assert_eq!(model.effective_name(mass), Some("mass"));
+        assert_eq!(model.effective_short_name(mass), Some("m"));
+
+        // `attribute :>> mass;`
+        let redefining = borrowing(
+            &mut model,
+            ElementKind::Redefinition,
+            "redefinedFeature",
+            mass,
+        );
+        assert_eq!(model.effective_name(redefining), Some("mass"));
+        assert_eq!(model.effective_short_name(redefining), Some("m"));
+
+        // `ref ::> <the redefining one>` -- a chain, through a reference
+        let referencing = borrowing(
+            &mut model,
+            ElementKind::ReferenceSubsetting,
+            "referencedFeature",
+            redefining,
+        );
+        assert_eq!(model.effective_name(referencing), Some("mass"));
+
+        // a redefinition whose target never resolved names nothing
+        let unresolved = model.create(ElementKind::AttributeUsage);
+        let rel = model.create(ElementKind::Redefinition);
+        model.add_owned(unresolved, rel);
+        assert_eq!(model.effective_name(unresolved), None);
+
+        // `attribute :> Mass;` -- a subsetting says what a feature is a
+        // kind of, not what it is called, so there is no name to borrow
+        let subsetting = borrowing(
+            &mut model,
+            ElementKind::Subsetting,
+            "subsettedFeature",
+            mass,
+        );
+        assert_eq!(model.effective_name(subsetting), None);
+
+        // one that declares only a short name is named, and borrows nothing
+        let short = model.create(ElementKind::AttributeUsage);
+        model.set(short, "declaredShortName", Value::String("s".into()));
+        let rel = model.create(ElementKind::Redefinition);
+        model.set(rel, "redefinedFeature", Value::Ref(mass));
+        model.add_owned(short, rel);
+        assert_eq!(model.effective_name(short), None);
+        assert_eq!(model.effective_short_name(short), Some("s"));
+    }
+
+    #[test]
+    fn a_redefinition_cycle_names_nothing_rather_than_never_answering() {
+        let mut model = Model::new();
+        let a = model.create(ElementKind::AttributeUsage);
+        let b = borrowing(&mut model, ElementKind::Redefinition, "redefinedFeature", a);
+        let rel = model.create(ElementKind::Redefinition);
+        model.set(rel, "redefinedFeature", Value::Ref(b));
+        model.add_owned(a, rel);
+        assert_eq!(model.effective_name(a), None);
+        assert_eq!(model.effective_name(b), None);
+    }
+
+    /// The metamodel says what each property holds. A value of another
+    /// shape used to be kept and written back out as itself -- an
+    /// `isAbstract` of `"yes"` where every reader expects a boolean.
+    ///
+    /// Only where the assertions are on: this is a check on the code
+    /// that builds a model, not on the models it builds.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "PartDefinition::isAbstract")]
+    fn a_property_refuses_a_value_of_the_wrong_shape() {
+        let mut model = Model::new();
+        let part = model.create(ElementKind::PartDefinition);
+        model.set(part, "isAbstract", Value::String("yes".to_string()));
     }
 }

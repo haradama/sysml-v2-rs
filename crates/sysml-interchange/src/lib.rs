@@ -385,6 +385,10 @@ fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
             Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
             Role::Frame => ElementKind::FramedConcernMembership,
             Role::Verify => ElementKind::RequirementVerificationMembership,
+            // the membership the standard names for a rendering
+            // references it rather than owning it, which is a shape this
+            // exporter does not write yet
+            Role::Render => ElementKind::FeatureMembership,
         };
     }
     let owner_kind = match model.owner(owned) {

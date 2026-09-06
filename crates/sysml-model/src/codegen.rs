@@ -183,11 +183,15 @@ fn parse_feature(attr: &roxmltree::Node, ids: &BTreeMap<String, String>) -> Feat
         }
         _ => FeatureTy::Named(resolve_ref(&type_node, ids)),
     };
+    // A property holds a collection wherever its upper bound is not one.
+    // `MultiplicityRange::bound [1..2]` holds a pair as readily as
+    // `[0..*]` holds any number, and reading only `*` as many left that
+    // one and `Flow::flowEnd [0..2]` looking like single values.
     let many = attr
         .children()
         .find(|c| c.has_tag_name("upperValue"))
         .and_then(|u| u.attribute("value"))
-        .is_some_and(|v| v == "-1" || v == "*");
+        .is_some_and(|v| v != "1");
     Feature {
         name: name.to_string(),
         ty,
@@ -540,11 +544,18 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 FeatureTy::Named(n) if enums.contains_key(n) => "Enumeration".to_string(),
                 FeatureTy::Named(_) => "Class".to_string(),
             };
-            features
+            let declared = features
                 .entry(f.name.as_str())
-                .or_insert_with(|| (BTreeSet::new(), class_name.as_str()))
-                .0
-                .insert((shape, f.many));
+                .or_insert_with(|| (BTreeSet::new(), class_name.as_str()));
+            // The generated test writes each value through the metaclass
+            // named here, and the model checks it against that
+            // metaclass's own declaration. Where one class declares the
+            // feature as a list and another as a single value, name one
+            // that declares the list -- it accepts both readings.
+            if f.many && !declared.0.iter().any(|(_, many)| *many) {
+                declared.1 = class_name.as_str();
+            }
+            declared.0.insert((shape, f.many));
         }
     }
 
@@ -703,6 +714,9 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
             "Boolean" => "Value::Bool(true)".to_string(),
             "Integer" | "UnlimitedNatural" => "Value::Int(1)".to_string(),
             "Real" => "Value::Real(1.0)".to_string(),
+            // an enumerated property holds the literal it names, which
+            // reads back as a string but is not one
+            "Enumeration" => "Value::EnumLit(\"x\")".to_string(),
             _ => format!("Value::String(String::from({}))", "\"x\""),
         };
         if entry.kind == "Class" && entry.many {

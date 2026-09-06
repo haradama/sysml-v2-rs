@@ -180,6 +180,7 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
             Role::Actor => "actors",
             Role::Stakeholder => "stakeholders",
             Role::Objective => "objective",
+            Role::Render => "rendering",
             Role::Frame => "frames",
             Role::Verify => "verifies",
             Role::Assume => "assume constraints",
