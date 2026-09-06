@@ -374,3 +374,143 @@ fn a_model_that_spans_files_is_checked_against_the_rest_of_it() {
         );
     }
 }
+
+/// JSON-RPC lets a server fall silent only for a notification. Anything
+/// else that carries an id is waited on, so an answer has to come back
+/// even when there is nothing sensible to answer.
+#[test]
+fn a_message_that_carries_an_id_is_always_answered() {
+    // an id and no method: nothing to do, and something to say
+    let answers = session(&[json!({"jsonrpc": "2.0", "id": 1})]);
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0]["error"]["code"], -32600);
+    assert_eq!(answers[0]["id"], 1);
+
+    // a method that is not a name is no method at all
+    let answers = session(&[json!({"jsonrpc": "2.0", "id": 2, "method": 42})]);
+    assert_eq!(answers[0]["error"]["code"], -32600);
+    assert_eq!(answers[0]["id"], 2);
+
+    // MCP carries no batches, and a client that sent one is waiting
+    for message in [
+        "[]",
+        "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}]",
+        "7",
+    ] {
+        let answers = talk(&format!("{message}\n"));
+        assert_eq!(answers.len(), 1, "{message}");
+        assert_eq!(answers[0]["error"]["code"], -32600, "{message}");
+        assert_eq!(answers[0]["id"], Value::Null, "{message}");
+    }
+}
+
+/// A line of bytes that are not UTF-8 is not JSON either, and saying so
+/// is the answer; ending the session would take down whatever else the
+/// client had in flight.
+#[test]
+fn a_line_that_is_not_text_is_a_parse_error_not_the_end() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut out: Vec<u8> = Vec::new();
+    let mut input: Vec<u8> = b"\xff\xfe not text\n".to_vec();
+    input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
+    sysml_cli::mcp::serve(&mut server, Cursor::new(input), &mut out).unwrap();
+    let answers: Vec<Value> = String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0]["error"]["code"], -32700);
+    assert_eq!(answers[1]["id"], 7, "the session went on");
+}
+
+/// A version this server cannot speak is not promised back.
+#[test]
+fn only_a_revision_the_server_speaks_is_echoed() {
+    let answers = session(&[
+        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": "2999-01-01"}}),
+        json!({"jsonrpc": "2.0", "id": 2, "method": "initialize",
+               "params": {"protocolVersion": "2025-03-26"}}),
+    ]);
+    assert_eq!(answers[0]["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(answers[1]["result"]["protocolVersion"], "2025-03-26");
+}
+
+/// Where the library is, and whether there is one at all, decides how
+/// much of an answer is worth believing -- so `check` says.
+#[test]
+fn check_says_which_library_it_answered_against() {
+    let without = answered(&session(&[call("check", json!({ "text": "package P;\n" }))])[0]);
+    assert!(without["library"].is_null(), "{without}");
+
+    let dir = std::env::temp_dir().join("sysml-mcp-library-said");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("tiny.sysml"), "package Tiny {\n\tpart def W;\n}\n").unwrap();
+    let mut server = sysml_cli::mcp::Server::new(Some(&dir));
+    let response = server
+        .handle(&call("check", json!({ "text": "package P;\n" })))
+        .expect("a request is answered");
+    assert_eq!(answered(&response)["library"], dir.to_str().unwrap());
+
+    // and one that will not load leaves the server without a library:
+    // a path that is not there, and a file that will not open
+    let mut nowhere = sysml_cli::mcp::Server::new(Some(std::path::Path::new("/nowhere/library")));
+    let response = nowhere
+        .handle(&call("check", json!({ "text": "package P;\n" })))
+        .expect("a request is answered");
+    assert!(answered(&response)["library"].is_null());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let shut = std::env::temp_dir().join("sysml-mcp-library-shut");
+        std::fs::create_dir_all(&shut).unwrap();
+        let hidden = shut.join("hidden.sysml");
+        std::fs::write(&hidden, "package Hidden;\n").unwrap();
+        std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let mut server = sysml_cli::mcp::Server::new(Some(&shut));
+        let response = server
+            .handle(&call("check", json!({ "text": "package P;\n" })))
+            .expect("a request is answered");
+        assert!(answered(&response)["library"].is_null());
+        std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+}
+
+/// The reference counts cover every file the check opened, so the
+/// findings do too -- each under the path of the file it is in. An
+/// `alongside` file whose own names resolve to nothing used to be
+/// counted and then left out, so the answer read `ok` with a reference
+/// missing from it.
+#[test]
+fn a_finding_in_a_companion_file_is_reported_under_its_own_path() {
+    let dir = std::env::temp_dir().join("sysml-mcp-companion");
+    std::fs::create_dir_all(&dir).unwrap();
+    let other = dir.join("parts.sysml");
+    std::fs::write(&other, "package Parts {\n\tpart w : Nowhere;\n}\n").unwrap();
+    let text = "package Car {\n\tpart def Body;\n}\n";
+
+    let found = answered(
+        &session(&[call(
+            "check",
+            json!({ "text": text, "alongside": [other.to_str().unwrap()] }),
+        )])[0],
+    );
+    assert_eq!(found["ok"], false, "{found}");
+    assert_eq!(found["references"], 1, "{found}");
+    assert_eq!(found["unresolved"][0]["name"], "Nowhere", "{found}");
+    assert_eq!(found["unresolved"][0]["path"], other.to_str().unwrap());
+    assert_eq!(found["unresolved"][0]["line"], 2, "{found}");
+
+    // and a syntax error in one is placed in that file, not in this one
+    std::fs::write(&other, "package Parts {\n\tpart w : ;\n").unwrap();
+    let found = answered(
+        &session(&[call(
+            "check",
+            json!({ "text": text, "alongside": [other.to_str().unwrap()] }),
+        )])[0],
+    );
+    assert_eq!(found["ok"], false, "{found}");
+    assert_eq!(found["parseErrors"][0]["path"], other.to_str().unwrap());
+}

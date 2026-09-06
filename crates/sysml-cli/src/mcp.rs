@@ -23,14 +23,26 @@ use serde_json::{json, Value};
 
 use sysml_semantics::Workspace;
 
-/// What this server answers to. Newer clients may ask for a later
-/// revision; the one they ask for is echoed back when we can speak it.
+/// What this server speaks when the client asks for something else.
 const PROTOCOL_VERSION: &str = "2025-06-18";
+
+/// The revisions this server can speak. A client names the one it wants
+/// and that one is echoed back; a client that names anything else --
+/// including a revision from after this server was written -- is told
+/// what the server does speak, and decides for itself whether it can
+/// live with that. Echoing back whatever was asked for promised to speak
+/// revisions that do not exist.
+const SPOKEN: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// The library and open documents, answered against.
 pub struct Server {
     /// the standard library, parsed and resolved once
     base: Workspace,
+    /// Where the standard library was loaded from, or nothing when there
+    /// is none. Without it every reference into the library reads as
+    /// unresolved, so `check` says which it is rather than leaving a
+    /// client to read a page of false alarms.
+    library: Option<String>,
 }
 
 impl Server {
@@ -40,21 +52,55 @@ impl Server {
     /// has the library should say where it is.
     pub fn new(library: Option<&Path>) -> Server {
         let mut base = Workspace::new();
+        let mut loaded = None;
         if let Some(dir) = library {
-            // an unreadable directory degrades to no library, which is
-            // worth saying nothing about: the findings say it loudly
-            let _ = base.load_dir(dir);
-            base.resolve_all();
+            // A library that does not load degrades to no library, and
+            // every reference into it then reads as unresolved -- a page
+            // of false alarms over one wrong path. stderr is where an
+            // MCP server logs, so its launcher sees this; `check`
+            // carries it too, for the client that never reads the log.
+            match base.load_dir(dir) {
+                // the walk takes what it can reach, so a path that is
+                // not there is a directory with nothing under it
+                Ok(0) => eprintln!(
+                    "warning: no .sysml/.kerml files under the library at {}",
+                    dir.display()
+                ),
+                Ok(_) => {
+                    base.resolve_all();
+                    loaded = Some(dir.display().to_string());
+                }
+                Err(err) => eprintln!(
+                    "warning: cannot load the standard library at {}: {err}",
+                    dir.display()
+                ),
+            }
         }
-        Server { base }
+        Server {
+            base,
+            library: loaded,
+        }
     }
 
     /// One request in, one response out -- or nothing, for a
     /// notification, which by JSON-RPC has no reply.
     pub fn handle(&mut self, request: &Value) -> Option<Value> {
-        let method = request.get("method")?.as_str()?;
-        let id = request.get("id").cloned();
-        let params = request.get("params").cloned().unwrap_or(json!({}));
+        // Anything that is not a request object cannot be acted on, and
+        // JSON-RPC has the server say so rather than fall silent: a
+        // client that sent an id is waiting for an answer and would wait
+        // for ever. MCP carries no batches, so an array -- empty or not
+        // -- is refused the same way, under the null id that the spec
+        // gives an unidentifiable request.
+        let Some(fields) = request.as_object() else {
+            return Some(invalid("a request is a JSON object", Value::Null));
+        };
+        let id = fields.get("id").cloned();
+        let Some(method) = fields.get("method").and_then(Value::as_str) else {
+            // with no id and no method there is nobody waiting, and
+            // nothing to answer about
+            return id.map(|id| invalid("a request names a `method`", id));
+        };
+        let params = fields.get("params").cloned().unwrap_or(json!({}));
 
         // a notification is told, not asked
         let id = id?;
@@ -63,13 +109,14 @@ impl Server {
                 "protocolVersion": params
                     .get("protocolVersion")
                     .and_then(Value::as_str)
+                    .filter(|asked| SPOKEN.contains(asked))
                     .unwrap_or(PROTOCOL_VERSION),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "sysml-mcp", "version": env!("CARGO_PKG_VERSION") },
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),
-            "tools/call" => Some(self.call(&params)).transpose().map(Option::unwrap),
+            "tools/call" => self.call(&params),
             _ => {
                 return Some(json!({
                     "jsonrpc": "2.0",
@@ -127,39 +174,61 @@ impl Server {
         let file = ws.add_file(name.clone(), &text);
         open.push(file);
 
+        // The answer is about the whole model that was opened -- the
+        // file asked about and the `alongside` ones it is spread over --
+        // because that is what the reference counts are over. Each
+        // finding says which file it is in, so a sibling that does not
+        // resolve is reported under its own path instead of being
+        // counted in `references` and then left out of `unresolved`.
+        //
+        // The name and the text of each open file are held here so that
+        // a finding can be placed after `ws` has been borrowed to
+        // resolve.
+        let opened: Vec<(String, String)> = open
+            .iter()
+            .map(|&f| {
+                (
+                    ws.file_name(f).to_string(),
+                    ws.file_parse(f).syntax().text().to_string(),
+                )
+            })
+            .collect();
+        let place = |finding: &sysml_semantics::Finding, mut extra: Value| {
+            let which = open
+                .iter()
+                .position(|&f| f == finding.file)
+                .expect("a finding in a file that was opened");
+            let (name, text) = &opened[which];
+            extra["path"] = json!(name);
+            crate::at(text, usize::from(finding.range.start()), extra)
+        };
+
         // syntax first: a file that does not parse has no names worth
         // resolving, so what would be said about them is about a tree
         // the parser guessed at
-        let broken = ws.findings(&[file]).syntax;
+        let broken = ws.findings(&open).syntax;
         if !broken.is_empty() {
             let errors: Vec<Value> = broken
                 .iter()
-                .map(|f| {
-                    at(
-                        &text,
-                        usize::from(f.range.start()),
-                        json!({ "message": f.what }),
-                    )
-                })
+                .map(|f| place(f, json!({ "message": f.what })))
                 .collect();
-            return Ok(json!({ "ok": false, "parseErrors": errors }));
+            return Ok(json!({
+                "ok": false,
+                "library": self.library,
+                "parseErrors": errors,
+            }));
         }
 
         let stats = ws.resolve_files(&open);
         let unresolved: Vec<Value> = ws
-            .findings(&[file])
+            .findings(&open)
             .names
             .iter()
-            .map(|f| {
-                at(
-                    &text,
-                    usize::from(f.range.start()),
-                    json!({ "name": f.what }),
-                )
-            })
+            .map(|f| place(f, json!({ "name": f.what })))
             .collect();
         Ok(json!({
             "ok": unresolved.is_empty(),
+            "library": self.library,
             "parseErrors": [],
             "resolved": stats.resolved,
             "references": stats.resolved + stats.unresolved,
@@ -268,16 +337,14 @@ fn number(arguments: &Value, key: &str) -> Result<usize, String> {
         .ok_or_else(|| format!("`{key}` must be a number"))
 }
 
-/// A finding with its place in the text: the byte offset the model sees,
-/// and the line and column an editor counts, both from one.
-fn at(text: &str, offset: usize, mut value: Value) -> Value {
-    let offset = offset.min(text.len());
-    let (line, column) = sysml_syntax::line_col(text, offset);
-    let map = value.as_object_mut().expect("built as an object");
-    map.insert("offset".into(), offset.into());
-    map.insert("line".into(), line.into());
-    map.insert("column".into(), column.into());
-    value
+/// A message JSON-RPC calls an invalid request: what came in was not
+/// something the server could act on.
+fn invalid(why: &str, id: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": -32600, "message": why },
+    })
 }
 
 /// A one-based line and column as a byte offset, or nothing where the
@@ -318,7 +385,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "check",
-            "description": "Parse a SysML v2 / KerML model and resolve every name in it against the standard library. Answers which references resolve to nothing, and where. Use this on anything you write before believing it.",
+            "description": "Parse a SysML v2 / KerML model and resolve every name in it against the standard library. Answers which references resolve to nothing, and where -- across the file asked about and every `alongside` file, each finding under its own path. `library` says where the standard library was loaded from, or is null when there is none and references into it will read as unresolved. Use this on anything you write before believing it.",
             "inputSchema": {
                 "type": "object",
                 "properties": source_properties,
@@ -360,20 +427,34 @@ fn tools() -> Value {
 /// as JSON-RPC asks, rather than ending the session.
 pub fn serve(
     server: &mut Server,
-    input: impl BufRead,
+    mut input: impl BufRead,
     mut output: impl Write,
 ) -> std::io::Result<()> {
-    for line in input.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
-            continue;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if input.read_until(b'\n', &mut line)? == 0 {
+            return Ok(());
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => server.handle(&request),
-            Err(err) => Some(json!({
+        // Bytes rather than lines: a line that is not UTF-8 is not JSON
+        // either, and saying so is the same answer as for any other
+        // unreadable line. Ending the session over it would take down
+        // whatever else the client had in flight.
+        let read = std::str::from_utf8(&line)
+            .map_err(|err| err.to_string())
+            .and_then(|line| match line.trim() {
+                "" => Ok(None),
+                line => serde_json::from_str::<Value>(line)
+                    .map(Some)
+                    .map_err(|err| err.to_string()),
+            });
+        let response = match read {
+            Ok(None) => continue,
+            Ok(Some(request)) => server.handle(&request),
+            Err(why) => Some(json!({
                 "jsonrpc": "2.0",
                 "id": Value::Null,
-                "error": { "code": -32700, "message": err.to_string() },
+                "error": { "code": -32700, "message": why },
             })),
         };
         if let Some(response) = response {
@@ -381,5 +462,4 @@ pub fn serve(
             output.flush()?;
         }
     }
-    Ok(())
 }

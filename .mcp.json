@@ -1,16 +1,11 @@
 {
   "mcpServers": {
     "sysml": {
-      "command": "cargo",
+      "command": "sh",
       "args": [
-        "run",
-        "--quiet",
-        "--release",
-        "--manifest-path",
-        "${CLAUDE_PROJECT_DIR}/Cargo.toml",
-        "-p",
-        "sysml-cli",
-        "--",
+        "-c",
+        "for b in \"$0/target/release/sysml\" \"$0/target/debug/sysml\"; do [ -x \"$b\" ] && exec \"$b\" \"$@\"; done; exec cargo run -q --release --manifest-path \"$0/Cargo.toml\" -p sysml-cli -- \"$@\"",
+        "${CLAUDE_PROJECT_DIR}",
         "mcp",
         "--library",
         "${CLAUDE_PROJECT_DIR}/vendor/sysml-v2-release/sysml.library"

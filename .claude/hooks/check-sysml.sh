@@ -61,14 +61,20 @@ fi
 # without the standard library every reference into it reads as
 # unresolved, which would be a false alarm on every file
 library="$repo/vendor/sysml-v2-release/sysml.library"
-args=(--format json check "$file")
+# A model of any size is spread over files, and a name this file uses
+# is as likely declared in the one beside it. Checking the file alone
+# reported every such name as resolving to nothing, so the directory
+# is checked, and only this file's findings are reported.
+dir="$(dirname "$file")"
+args=(--format json check "$dir")
 [ -d "$library" ] && args+=("$library")
 
 if ! checked="$("${sysml[@]}" "${args[@]}" 2>/dev/null)"; then
 	finding "$checked" || exit 0
-	# only what this file is answerable for
+	# only what this file is answerable for -- by the path the walk of
+	# the directory spells it, which is the directory joined to the name
 	mine="$(printf '%s' "$checked" |
-		jq -c --arg f "$file" '[.unresolved[]? | select(.path == $f)]')"
+		jq -c --arg f "$dir/$(basename "$file")" '[.unresolved[]? | select(.path == $f)]')"
 	[ "$mine" = "[]" ] && exit 0
 	say "sysml check: these references resolve to nothing. $mine"
 fi

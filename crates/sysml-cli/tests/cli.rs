@@ -85,11 +85,13 @@ fn export_writes_interchange_json() {
     assert!(out.status.success());
     assert!(std::fs::read_to_string(&json).unwrap().contains("Vehicle"));
 
-    // parse diagnostics still get printed while exporting
+    // a file the parser could not follow is missing declarations, and
+    // what would be exported is not the model that was written
     let bad = write(&dir, "bad.sysml", "part def {{{\n");
     let out = sysml(&["export", bad.to_str().unwrap()]);
-    assert!(out.status.success());
+    assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("error:"));
+    assert!(out.stdout.is_empty(), "nothing partial is written out");
 
     let out = sysml(&["export", dir.join("missing.sysml").to_str().unwrap()]);
     assert!(!out.status.success());
@@ -190,6 +192,53 @@ fn import_rust_writes_a_package_from_rustdoc_json() {
 }
 
 #[test]
+fn what_a_crate_imported_as_is_counted_off_the_tree() {
+    // the count used to be occurrences of `" def "` in the text it wrote,
+    // so a doc comment saying the words was read as another definition
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../sysml-rust/tests/fixtures/inventory_store.rustdoc.json");
+    let dir = temp_dir("import-rust-count");
+    let plain = dir.join("plain.sysml");
+    let honest = sysml(&[
+        "import-rust",
+        fixture.to_str().unwrap(),
+        "-o",
+        plain.to_str().unwrap(),
+    ]);
+    let counted = String::from_utf8_lossy(&honest.stderr);
+    let said = counted.split_once(" to ").unwrap().0.to_string();
+    let n: usize = said
+        .trim_start_matches("wrote ")
+        .split_whitespace()
+        .next()
+        .and_then(|word| word.parse().ok())
+        .expect("a count to compare against");
+    assert!(n > 0, "{said}");
+
+    let mut doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).unwrap()).unwrap();
+    let index = doc["index"].as_object_mut().unwrap();
+    let first = index.keys().next().unwrap().clone();
+    index.get_mut(&first).unwrap()["docs"] =
+        serde_json::json!("a part def in prose, and an item def too");
+    let talkative = write(&dir, "talkative.json", &doc.to_string());
+    let written = dir.join("talkative.sysml");
+    let out = sysml(&[
+        "import-rust",
+        talkative.to_str().unwrap(),
+        "-o",
+        written.to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    // the prose really did reach the file, so the count had every chance
+    // to be fooled by it
+    let text = std::fs::read_to_string(&written).unwrap();
+    assert!(text.contains("a part def in prose"), "{text}");
+    let counted = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(counted.split_once(" to ").unwrap().0, said);
+}
+
+#[test]
 fn rustgen_generates_and_says_what_stopped_it() {
     let dir = temp_dir("rustgen");
     let out_path = dir.join("generated.rs");
@@ -203,7 +252,9 @@ fn rustgen_generates_and_says_what_stopped_it() {
         "planner.sysml",
         "package Planner {\n\
          \tprivate import ScalarValues::*;\n\
-         \tpart def OrderPlanner {\n\t\tattribute threshold : Real;\n\t}\n\
+         \tpart def OrderPlanner {\n\
+         \t\tdoc /* Stands in for the pub struct Ghost it replaces. */\n\
+         \t\tattribute threshold : Real;\n\t}\n\
          }\n",
     );
     let out = sysml(&[
@@ -219,7 +270,12 @@ fn rustgen_generates_and_says_what_stopped_it() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stderr).contains("1 struct(s)"));
+    // one struct, not two: the `doc` that mentions another is prose
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("1 struct(s)"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(std::fs::read_to_string(&out_path)
         .unwrap()
         .contains("pub struct OrderPlanner"));
@@ -791,10 +847,24 @@ fn json_reports_what_a_program_works_from() {
     assert_eq!(v["counts"]["PartDefinition"], 1);
     assert_eq!(v["parseErrors"], 0);
 
-    // a file that cannot be read is a finding, not a stray line
-    let out = sysml(&["--format", "json", "parse", "no-such-file.sysml"]);
-    assert!(!out.status.success());
-    assert!(json(&out)["files"][0]["unreadable"].is_string());
+    // a file that cannot be read is a finding, not a stray line, and
+    // every command says so in the same place
+    for command in ["parse", "check", "stats", "fmt"] {
+        let mut args = vec!["--format", "json", command, "no-such-file.sysml"];
+        if command == "fmt" {
+            args.push("--check");
+        }
+        let out = sysml(&args);
+        assert!(!out.status.success(), "{command}");
+        let v = json(&out);
+        assert_eq!(v["command"], command);
+        assert_eq!(v["ok"], false, "{command}");
+        assert_eq!(
+            v["unreadable"][0]["path"], "no-such-file.sysml",
+            "{command}"
+        );
+        assert!(v["unreadable"][0]["error"].is_string(), "{command}");
+    }
 
     // fmt --check names the files a program would rewrite
     let ugly = write(&dir, "ugly.sysml", "package  P {  }\n");
@@ -812,6 +882,11 @@ fn json_reports_what_a_program_works_from() {
 /// headers and any body -- then answers with `body`. Returns the base
 /// URL to point the CLI at.
 fn serve_once(body: &'static str) -> String {
+    serve_with("200 OK", body)
+}
+
+/// The same, for a server that refuses.
+fn serve_with(status: &'static str, body: &'static str) -> String {
     use std::io::{BufRead, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -836,7 +911,7 @@ fn serve_once(body: &'static str) -> String {
         let mut stream = stream;
         let _ = stream.write_all(
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             )
@@ -917,8 +992,268 @@ fn api_talks_to_a_model_server() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
 
-    // a server that is not there is reported, not swallowed
-    let out = sysml(&["api", "--server", "http://127.0.0.1:1", "projects"]);
+    // a server that is not there is reported, not swallowed, and the
+    // password it was reached with stays out of the message
+    let out = sysml(&[
+        "api",
+        "--server",
+        "http://user:secret@127.0.0.1:1",
+        "projects",
+    ]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("error:"));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("error:"), "{said}");
+    assert!(!said.contains("secret"), "{said}");
+
+    // a refusal says what the server said, which is where a model server
+    // explains itself, and names the server once
+    let base = serve_with("404 Not Found", r#"{"error":"no project p9"}"#);
+    let out = sysml(&["api", "--server", &base, "project", "p9"]);
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("HTTP 404 Not Found"), "{said}");
+    assert!(said.contains("no project p9"), "{said}");
+    assert_eq!(said.matches(&base).count(), 1, "{said}");
+
+    // and a server that accepts and then says nothing is given up on
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let held = format!("http://{}", listener.local_addr().unwrap());
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        let _ = wait.recv();
+    });
+    let out = sysml(&["api", "--server", &held, "--timeout", "1", "projects"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("timed out"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    drop(done);
+}
+
+/// A diagnostic points at what it is about, and a column counted in
+/// bytes puts the caret past it as soon as a name is not ASCII.
+#[test]
+fn the_caret_lands_under_the_character_it_points_at() {
+    let dir = temp_dir("caret");
+    let bad = write(&dir, "wide.sysml", "part def 'あいう' {{{\n");
+    let out = sysml(&["parse", bad.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let (written, caret) = stderr
+        .lines()
+        .zip(stderr.lines().skip(1))
+        .find(|(_, next)| next.contains('^'))
+        .expect("a caret under the line it is about");
+    let column = caret.find('^').unwrap() - "    | ".len();
+    assert!(
+        column < written.chars().count() - "    | ".len(),
+        "{stderr}"
+    );
+}
+
+/// A directory that is not there is unreadable, not empty: the walk
+/// takes what it can reach, so the two used to read the same.
+#[test]
+fn corpus_tells_an_unreadable_directory_from_an_empty_one() {
+    let out = sysml(&["corpus", "/nowhere/at/all"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot read"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let empty = temp_dir("corpus-empty");
+    let out = sysml(&["corpus", empty.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no .sysml/.kerml files"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// One unreadable file in a directory refuses the directory, and the
+/// message says which file: a corpus of hundreds is otherwise a refusal
+/// with nothing to act on.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_file_in_a_directory_is_named() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("check-names-the-file");
+    write(&dir, "ok.sysml", OK_MODEL);
+    let hidden = write(&dir, "hidden.sysml", OK_MODEL);
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = sysml(&["check", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("hidden.sysml"), "{said}");
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+/// The JSON is one document on stdout and the exit code agrees with it,
+/// whichever subcommand a program is running.
+#[test]
+fn a_program_reads_one_document_and_an_exit_code_that_agrees() {
+    let dir = temp_dir("json-shape");
+    let broken = write(&dir, "broken.sysml", "part def {{{\n");
+    let json = |out: &Output| -> serde_json::Value {
+        serde_json::from_slice(&out.stdout).expect("stdout is one JSON document")
+    };
+
+    // --tree writes the tree where it cannot spoil the document
+    let out = sysml(&[
+        "--format",
+        "json",
+        "parse",
+        "--tree",
+        broken.to_str().unwrap(),
+    ]);
+    assert_eq!(json(&out)["command"], "parse");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("SOURCE_FILE"));
+
+    // counting the elements of a file that did not parse is counting
+    // what the parser guessed at
+    let out = sysml(&["stats", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let out = sysml(&["--format", "json", "stats", broken.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert_eq!(json(&out)["ok"], false);
+
+    // `fmt --write` refuses a file it could not parse, and says which
+    let out = sysml(&[
+        "--format",
+        "json",
+        "fmt",
+        "--check",
+        "--write",
+        broken.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    let v = json(&out);
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["broken"].as_array().unwrap().len(), 1);
+    assert_eq!(v["unformatted"].as_array().unwrap().len(), 0);
+}
+
+/// A path is bytes, and `check` used to place its findings by re-reading
+/// the file under a lossy rendering of that path -- which named no file
+/// at all, so every finding landed at 1:1.
+#[cfg(unix)]
+#[test]
+fn findings_are_placed_in_a_file_whose_name_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = temp_dir("check-not-utf8");
+    let path = dir.join(std::ffi::OsStr::from_bytes(b"caf\xffe.sysml"));
+    std::fs::write(
+        &path,
+        "package P {\n\tpart def A;\n\tpart b : Missing;\n}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(["--format", "json", "check"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["unresolved"][0]["name"], "Missing", "{v}");
+    assert_eq!(v["unresolved"][0]["line"], 3, "{v}");
+    assert_eq!(v["unresolved"][0]["column"], 11, "{v}");
+}
+
+/// Two definitions can share a declared name -- one in the library, one
+/// in the model, or two in the model itself. Taking whichever came
+/// first drew a picture of something the modeller had not asked about.
+#[test]
+fn a_name_that_two_definitions_share_is_settled_before_it_is_drawn() {
+    let dir = temp_dir("internal-ambiguous");
+    let lib = write(
+        &dir,
+        "lib.sysml",
+        "package L {\n\tpart def Car {\n\t\tpart fromLibrary;\n\t}\n}\n",
+    );
+    let model = write(
+        &dir,
+        "car.sysml",
+        "package M {\n\tpart def Car {\n\t\tpart fromModel;\n\t}\n}\n",
+    );
+
+    // the model's own `Car` is the one it meant
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--library",
+        lib.to_str().unwrap(),
+        "--internal",
+        "Car",
+    ]);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("fromModel"), "{stdout}");
+    assert!(!stdout.contains("fromLibrary"), "{stdout}");
+
+    // and a qualified name says which when the plain one will not
+    let out = sysml(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--library",
+        lib.to_str().unwrap(),
+        "--internal",
+        "L::Car",
+    ]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("fromLibrary"));
+
+    // two of them in the model itself is a choice nobody can make, and
+    // it is said rather than made quietly
+    let both = write(
+        &dir,
+        "both.sysml",
+        "package M {\n\tpart def Car {\n\t\tpart fromModel;\n\t}\n}\n\
+         package N {\n\tpart def Car {\n\t\tpart fromOther;\n\t}\n}\n",
+    );
+    let out = sysml(&["diagram", both.to_str().unwrap(), "--internal", "Car"]);
+    assert!(out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("names 2 elements"), "{said}");
+    assert!(said.contains("qualified name"), "{said}");
+}
+
+/// A root package of one's own named after one of the standard
+/// library's still resolves -- each side reads its own -- so `check`
+/// says so rather than counting it among the unresolved names.
+#[test]
+fn check_reports_a_package_named_after_a_library_one() {
+    let dir = temp_dir("check-collision");
+    write(
+        &dir,
+        "lib.sysml",
+        "standard library package Requirements {\n    part def RequirementCheck;\n}\n",
+    );
+    write(
+        &dir,
+        "mine.sysml",
+        "package Requirements {\n    part def Safe;\n}\n",
+    );
+    let out = sysml(&["check", dir.to_str().unwrap()]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`Requirements` is also a root package of the standard library"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("mine.sysml:1:9"), "{stderr}");
+
+    let out = sysml(&["--format", "json", "check", dir.to_str().unwrap()]);
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["collisions"].as_array().unwrap().len(), 1);
+    assert!(v["collisions"][0]["path"]
+        .as_str()
+        .unwrap()
+        .ends_with("mine.sysml"));
 }

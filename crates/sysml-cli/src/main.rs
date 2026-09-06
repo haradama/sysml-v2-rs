@@ -164,6 +164,9 @@ enum Command {
         /// Base URL of the model server
         #[arg(long, default_value = "http://localhost:9000", global = true)]
         server: String,
+        /// Give up on a request that has taken this long, in seconds
+        #[arg(long, default_value_t = 30, global = true, value_name = "SECONDS")]
+        timeout: u64,
     },
     /// Parse every .sysml/.kerml file under a directory and report the
     /// success rate (used to track grammar coverage against the official
@@ -293,7 +296,16 @@ fn main() -> ExitCode {
             )
             .map_or(ExitCode::FAILURE, |()| ExitCode::SUCCESS)
         }
-        Command::Api { what, server } => api_command(&server, &what, format),
+        Command::Api {
+            what,
+            server,
+            timeout,
+        } => api_command(
+            &server,
+            std::time::Duration::from_secs(timeout),
+            &what,
+            format,
+        ),
         Command::Corpus {
             dir,
             worst,
@@ -309,10 +321,7 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
-            Err(err) => {
-                eprintln!("error: cannot read {}: {err}", path.display());
-                return ExitCode::FAILURE;
-            }
+            Err(err) => return Unreadable::refuse(path, err, "stats", format),
         };
         let parse = parse_file(path, &text);
         errors += parse.errors().len();
@@ -326,19 +335,27 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
         report(serde_json::json!({
             "command": "stats",
             "ok": errors == 0,
+            "unreadable": [],
             "elements": total,
             "parseErrors": errors,
             "counts": counts,
         }));
-        return ExitCode::SUCCESS;
+    } else {
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        for (kind, n) in rows {
+            println!("{n:6}  {kind}");
+        }
+        println!("{total:6}  total elements ({errors} parse error(s))");
     }
-    let mut rows: Vec<_> = counts.into_iter().collect();
-    rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    for (kind, n) in rows {
-        println!("{n:6}  {kind}");
+    // counting the elements of a file that did not parse is counting
+    // what the parser guessed at, and `parse` and `check` already exit
+    // non-zero on one; a script that runs all three reads them alike
+    if errors == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
-    println!("{total:6}  total elements ({errors} parse error(s))");
-    ExitCode::SUCCESS
 }
 
 fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
@@ -367,20 +384,26 @@ fn exported(files: &[PathBuf], library: &[PathBuf]) -> Option<(serde_json::Value
     // resolve before serializing: the reified typings and specializations
     // are what the interchange derives inheritance and types from
     let mut ws = sysml_semantics::Workspace::new();
-    if !load_paths(&mut ws, files) {
-        return None;
-    }
+    load_paths(&mut ws, files).map_err(|e| e.say()).ok()?;
     let own = ws.file_count();
-    if !load_paths(&mut ws, library) {
-        return None;
-    }
+    load_paths(&mut ws, library).map_err(|e| e.say()).ok()?;
     // parse diagnostics still get printed while exporting
+    let mut broken = false;
     for file in 0..own {
         let parse = ws.file_parse(file);
         let text = parse.syntax().text().to_string();
         for diagnostic in parse.errors() {
             print_diagnostic(Path::new(ws.file_name(file)), &text, diagnostic);
+            broken = true;
         }
+    }
+    // A file the parser could not follow is missing whole declarations,
+    // so what would be exported is not the model that was written. In a
+    // file of its own that is merely wrong; `api push` sends the same
+    // export to a server, where a declaration that failed to parse and
+    // one that was deleted look exactly alike.
+    if broken {
+        return None;
     }
     ws.resolve_all();
     // the implied specializations resolution reasons with become part of
@@ -418,10 +441,7 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
-            Err(err) => {
-                eprintln!("error: cannot read {}: {err}", path.display());
-                return ExitCode::FAILURE;
-            }
+            Err(err) => return Unreadable::refuse(path, err, "fmt", format),
         };
         // Re-spacing a file the parser could not follow can move where a
         // quote or a comment ends -- `package Name' {` runs the quote on
@@ -430,7 +450,8 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
         // is harmless, since every character is still there to read.
         // Writing it over the modeller's file is not, so `--write`
         // reports such a file instead of rewriting it.
-        if write && !parse_file(path, &text).ok() {
+        let parse = parse_file(path, &text);
+        if write && !parse.ok() {
             eprintln!(
                 "error: {} does not parse; `sysml parse` says where",
                 path.display()
@@ -438,7 +459,9 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
             broken.push(path.display().to_string());
             continue;
         }
-        let formatted = sysml_syntax::fmt::format_file(&path.to_string_lossy(), &text);
+        // the tree is what the formatter reads, and this one is already in
+        // hand: formatting from the text would parse the file again
+        let formatted = sysml_syntax::fmt::format_parsed(&parse);
         if check_only {
             if formatted != text {
                 if format == Format::Text {
@@ -459,11 +482,16 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
             print!("{formatted}");
         }
     }
-    if check_only && format == Format::Json {
+    // `--write` refuses a file it could not parse and exits non-zero
+    // for it, so the JSON has to name it too -- otherwise a program is
+    // told nothing is wrong and handed a failure
+    if format == Format::Json && (check_only || write) {
         report(serde_json::json!({
             "command": "fmt",
-            "ok": dirty == 0,
+            "ok": dirty == 0 && broken.is_empty(),
+            "unreadable": [],
             "unformatted": unformatted,
+            "broken": broken,
         }));
     }
     if dirty > 0 || !broken.is_empty() {
@@ -473,41 +501,112 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
     }
 }
 
-/// Load every path -- file or directory -- into `ws`. Reports the first path
-/// that cannot be read and returns `false`.
-fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> bool {
+/// A path a command was given and could not take in. The command says
+/// so in the form its `--format` calls for, which is why this is handed
+/// back rather than printed here.
+struct Unreadable {
+    path: String,
+    /// `read` for a file, `load` for a directory -- a directory is read
+    /// as a whole, and the error names the file that stopped it
+    verb: &'static str,
+    error: String,
+}
+
+impl Unreadable {
+    /// Refuse to go on because `path` could not be read, said the way
+    /// `command` says things. Every command's JSON carries an
+    /// `unreadable` list, so a program that watches for one watches for
+    /// all of them.
+    fn refuse(path: &Path, error: std::io::Error, command: &str, format: Format) -> ExitCode {
+        let unreadable = Unreadable {
+            path: path.display().to_string(),
+            verb: "read",
+            error: error.to_string(),
+        };
+        unreadable.say();
+        if format == Format::Json {
+            report(serde_json::json!({
+                "command": command,
+                "ok": false,
+                "unreadable": [unreadable.json()],
+            }));
+        }
+        ExitCode::FAILURE
+    }
+
+    fn say(&self) {
+        let Unreadable { path, verb, error } = self;
+        eprintln!("error: cannot {verb} {path}: {error}");
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({ "path": self.path, "error": self.error })
+    }
+}
+
+/// Load every path -- file or directory -- into `ws`, stopping at the
+/// first one that cannot be read.
+fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<(), Unreadable> {
     for path in paths {
+        let failed = |verb, error: std::io::Error| Unreadable {
+            path: path.display().to_string(),
+            verb,
+            error: error.to_string(),
+        };
         if path.is_dir() {
-            if let Err(err) = ws.load_dir(path) {
-                eprintln!("error: cannot load {}: {err}", path.display());
-                return false;
-            }
+            ws.load_dir(path).map_err(|err| failed("load", err))?;
         } else {
-            match std::fs::read_to_string(path) {
-                Ok(text) => {
-                    ws.add_file(path.to_string_lossy(), &text);
-                }
-                Err(err) => {
-                    eprintln!("error: cannot read {}: {err}", path.display());
-                    return false;
-                }
-            }
+            let text = std::fs::read_to_string(path).map_err(|err| failed("read", err))?;
+            ws.add_file(path.to_string_lossy(), &text);
         }
     }
-    true
+    Ok(())
 }
 
 /// The element a `--internal`/`--sequence` argument names, or a message
-/// saying there is none.
-fn named(ws: &sysml_semantics::Workspace, name: &str) -> Option<sysml_model::ElementId> {
-    let found = ws
+/// saying there is none. `own` is what the modeller asked to draw, as
+/// against a library loaded behind it.
+fn named(
+    ws: &sysml_semantics::Workspace,
+    own: &std::collections::HashSet<sysml_model::ElementId>,
+    name: &str,
+) -> Option<sysml_model::ElementId> {
+    let mut found: Vec<_> = ws
         .named_elements()
-        .find(|(_, declared)| *declared == name)
-        .map(|(id, _)| id);
-    if found.is_none() {
-        eprintln!("error: no element named `{name}`");
+        .filter(|(_, declared)| *declared == name)
+        .map(|(id, _)| id)
+        .collect();
+    // a qualified name where a declared one finds nothing: `Vehicles::Car`
+    // is how a modeller says which `Car` when the plain name will not
+    if found.is_empty() {
+        found = ws
+            .named_elements()
+            .map(|(id, _)| id)
+            .filter(|id| ws.qualified_name_of(*id) == name)
+            .collect();
     }
-    found
+    // the modeller's own files come first: a name they declared is the
+    // one they meant, even where the library declares it too
+    if found.iter().any(|id| own.contains(id)) {
+        found.retain(|id| own.contains(id));
+    }
+    match found.as_slice() {
+        [] => {
+            eprintln!("error: no element named `{name}`");
+            None
+        }
+        [one] => Some(*one),
+        // drawing one of several without a word would answer about a
+        // model the modeller did not mean to ask about
+        [first, rest @ ..] => {
+            eprintln!(
+                "warning: `{name}` names {} elements; drawing {}; a qualified name says which",
+                rest.len() + 1,
+                ws.qualified_name_of(*first)
+            );
+            Some(*first)
+        }
+    }
 }
 
 fn diagram(
@@ -520,13 +619,15 @@ fn diagram(
     output: Option<&Path>,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
-    if !load_paths(&mut ws, paths) {
+    if let Err(unreadable) = load_paths(&mut ws, paths) {
+        unreadable.say();
         return ExitCode::FAILURE;
     }
     // everything loaded so far is drawn; the library that follows only has
     // to be resolvable, so its definitions never become boxes
     let drawn = ws.file_count();
-    if !load_paths(&mut ws, library) {
+    if let Err(unreadable) = load_paths(&mut ws, library) {
+        unreadable.say();
         return ExitCode::FAILURE;
     }
     // only what is drawn, and what it reaches: a library is loaded so
@@ -535,6 +636,11 @@ fn diagram(
     ws.resolve_reached(&files);
     let roots: Vec<_> = (0..drawn)
         .flat_map(|file| ws.file_roots(file).to_vec())
+        .collect();
+    // what was asked for, as against what was loaded to resolve against
+    let own: std::collections::HashSet<_> = roots
+        .iter()
+        .flat_map(|&root| std::iter::once(root).chain(ws.model().descendants(root)))
         .collect();
     if browser {
         let view = sysml_diagram::browser_view(ws.model(), &roots);
@@ -546,7 +652,7 @@ fn diagram(
         return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
     }
     if let Some(name) = sequence {
-        let Some(target) = named(&ws, name) else {
+        let Some(target) = named(&ws, &own, name) else {
             return ExitCode::FAILURE;
         };
         let view = sysml_diagram::sequence_view(ws.model(), target);
@@ -567,7 +673,7 @@ fn diagram(
     }
     let diagram = match internal {
         Some(name) => {
-            let Some(target) = named(&ws, name) else {
+            let Some(target) = named(&ws, &own, name) else {
                 return ExitCode::FAILURE;
             };
             sysml_diagram::interconnection_diagram(ws.model(), target)
@@ -633,12 +739,14 @@ fn diagram(
 /// Write a rendered view to `output`, or to stdout when there is none.
 fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
-    if !load_paths(&mut ws, paths) {
+    if let Err(unreadable) = load_paths(&mut ws, paths) {
+        unreadable.say();
         return ExitCode::FAILURE;
     }
     // generation covers what was named; the library only resolves
     let own = ws.file_count();
-    if !load_paths(&mut ws, library) {
+    if let Err(unreadable) = load_paths(&mut ws, library) {
+        unreadable.say();
         return ExitCode::FAILURE;
     }
     // what is generated is what was named, and what that reaches; the
@@ -662,9 +770,17 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
         .collect();
     match sysml_rust::generate(ws.model(), &roots) {
         Ok(rust) => {
-            let structs = rust.matches("pub struct ").count();
-            let methods =
-                rust.matches("    pub fn ").count() + rust.matches("    pub async fn ").count();
+            // counted by the lines that declare them: a `doc` in the
+            // model becomes a `///` line, and counting substrings read
+            // whatever it happened to say as another declaration
+            let structs = rust
+                .lines()
+                .filter(|l| l.starts_with("pub struct "))
+                .count();
+            let methods = rust
+                .lines()
+                .filter(|l| l.starts_with("    pub fn ") || l.starts_with("    pub async fn "))
+                .count();
             emit(
                 &rust,
                 output,
@@ -688,7 +804,15 @@ fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> Exi
     };
     match sysml_rust::rustdoc_to_sysml(&text, package) {
         Ok(sysml) => {
-            let definitions = sysml.matches(" def ").count();
+            // counted off the tree, not the text: a `doc` that happens to
+            // say "def" between two spaces is not a definition, and this
+            // number is what a person checks the import by
+            let written = sysml_syntax::parse(&sysml);
+            let definitions = written
+                .syntax()
+                .descendants()
+                .filter(|node| node.kind() == sysml_syntax::SyntaxKind::DEFINITION)
+                .count();
             emit(&sysml, output, &format!("{definitions} definition(s)"))
         }
         Err(err) => {
@@ -713,7 +837,15 @@ fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
 
 fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
-    if !load_paths(&mut ws, paths) {
+    if let Err(unreadable) = load_paths(&mut ws, paths) {
+        unreadable.say();
+        if format == Format::Json {
+            report(serde_json::json!({
+                "command": "check",
+                "ok": false,
+                "unreadable": [unreadable.json()],
+            }));
+        }
         return ExitCode::FAILURE;
     }
     // A file that does not parse has no names to resolve, so resolution
@@ -721,26 +853,19 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     // running only `check` -- which is most of the reason it exists --
     // would be told a broken model was fine. Syntax comes first, as it
     // does in the MCP server's tool of the same name.
-    // the file each finding is in, read once and kept: `ws` is borrowed
-    // mutably in between to resolve
-    let mut texts: std::collections::HashMap<usize, String> = Default::default();
-    let mut read = |file: usize, name: &str| -> String {
-        texts
-            .entry(file)
-            .or_insert_with(|| std::fs::read_to_string(name).unwrap_or_default())
-            .clone()
-    };
+    let syntax = ws.findings(&[]).syntax;
+    let texts = held_texts(&ws, &syntax);
     let mut broken = Vec::new();
-    for finding in &ws.findings(&[]).syntax {
-        let name = ws.file_name(finding.file).to_string();
-        let text = read(finding.file, &name);
-        let offset = usize::from(finding.range.start()).min(text.len());
+    for finding in &syntax {
+        let name = ws.file_name(finding.file);
+        let text = &texts[&finding.file];
+        let offset = usize::from(finding.range.start());
         if format == Format::Text {
-            let (line, col) = sysml_syntax::line_col(&text, offset);
+            let (line, col) = sysml_syntax::line_col(text, offset.min(text.len()));
             eprintln!("{name}:{line}:{col}: {}", finding.what);
         }
-        broken.push(at(
-            &text,
+        broken.push(sysml_cli::at(
+            text,
             offset,
             serde_json::json!({ "path": name, "message": finding.what }),
         ));
@@ -750,6 +875,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             report(serde_json::json!({
                 "command": "check",
                 "ok": false,
+                "unreadable": [],
                 "elements": ws.model().len(),
                 "parseErrors": broken,
             }));
@@ -773,21 +899,45 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     };
     // the names are asked for after resolving, the syntax before it:
     // there is nothing to resolve in a file that did not parse
-    let names = ws.findings(&[]).names;
+    let found = ws.findings(&[]);
+    let names = found.names;
+    let shown = &names[..limit.min(names.len())];
+    let texts = held_texts(&ws, shown);
     let mut unresolved = Vec::new();
-    for u in names.iter().take(limit) {
-        let file = ws.file_name(u.file).to_string();
-        let text = &read(u.file, &file);
-        let offset = usize::from(u.range.start()).min(text.len());
+    for u in shown {
+        let file = ws.file_name(u.file);
+        let text = &texts[&u.file];
+        let offset = usize::from(u.range.start());
         match format {
             Format::Text => {
-                let (line, col) = sysml_syntax::line_col(text, offset);
+                let (line, col) = sysml_syntax::line_col(text, offset.min(text.len()));
                 eprintln!("{file}:{line}:{col}: unresolved `{}`", u.what);
             }
-            Format::Json => unresolved.push(at(
+            Format::Json => unresolved.push(sysml_cli::at(
                 text,
                 offset,
                 serde_json::json!({ "path": file, "name": u.what.clone() }),
+            )),
+        }
+    }
+    // A root package of one's own named after one of the standard
+    // library's resolves -- each side reads its own -- so it is said
+    // alongside the names rather than counted among them.
+    let mut collisions = Vec::new();
+    let clashing = held_texts(&ws, &found.collisions);
+    for c in &found.collisions {
+        let file = ws.file_name(c.file);
+        let text = &clashing[&c.file];
+        let offset = usize::from(c.range.start()).min(text.len());
+        match format {
+            Format::Text => {
+                let (line, col) = sysml_syntax::line_col(text, offset);
+                eprintln!("{file}:{line}:{col}: {}", c.what);
+            }
+            Format::Json => collisions.push(sysml_cli::at(
+                text,
+                offset,
+                serde_json::json!({ "path": file, "message": c.what.clone() }),
             )),
         }
     }
@@ -795,11 +945,13 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
         report(serde_json::json!({
             "command": "check",
             "ok": stats.unresolved == 0,
+            "unreadable": [],
             "elements": ws.model().len(),
             "parseErrors": [],
             "resolved": stats.resolved,
             "references": total,
             "unresolved": unresolved,
+            "collisions": collisions,
         }));
         return if stats.unresolved == 0 {
             ExitCode::SUCCESS
@@ -822,12 +974,34 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     }
 }
 
+/// The text of each file these findings are in, so that they can be
+/// placed after `ws` has been borrowed again to resolve. It comes from
+/// the workspace rather than from a second read of the file: `file_name`
+/// is a lossy rendering of the path, so a path that is not UTF-8 names
+/// no file, and the second read would find nothing and place every
+/// finding at 1:1.
+fn held_texts(
+    ws: &sysml_semantics::Workspace,
+    findings: &[sysml_semantics::Finding],
+) -> std::collections::HashMap<usize, String> {
+    findings
+        .iter()
+        .map(|f| f.file)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|file| (file, ws.file_parse(file).syntax().text().to_string()))
+        .collect()
+}
+
 fn corpus(dir: &Path, worst: usize, list_failures: bool) -> ExitCode {
-    let mut files = Vec::new();
-    collect_files(dir, &mut files);
-    files.sort();
+    let files = sysml_semantics::model_files(dir);
     if files.is_empty() {
-        eprintln!("no .sysml/.kerml files found under {}", dir.display());
+        // the walk takes what it can reach, so a directory that is not
+        // there and one with nothing under it look the same from here
+        match std::fs::read_dir(dir) {
+            Ok(_) => eprintln!("no .sysml/.kerml files found under {}", dir.display()),
+            Err(err) => eprintln!("error: cannot read {}: {err}", dir.display()),
+        }
         return ExitCode::FAILURE;
     }
 
@@ -888,44 +1062,34 @@ fn corpus(dir: &Path, worst: usize, list_failures: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
-            out.push(path);
-        }
-    }
-}
-
 fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
     let mut total_errors = 0usize;
     let mut reported = Vec::new();
+    let mut unreadable = Vec::new();
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(err) => {
                 total_errors += 1;
-                match format {
-                    Format::Text => eprintln!("error: cannot read {}: {err}", path.display()),
-                    Format::Json => reported.push(serde_json::json!({
-                        "path": path.display().to_string(),
-                        "unreadable": err.to_string(),
-                    })),
-                }
+                let failed = Unreadable {
+                    path: path.display().to_string(),
+                    verb: "read",
+                    error: err.to_string(),
+                };
+                failed.say();
+                unreadable.push(failed.json());
                 continue;
             }
         };
         let parse = parse_file(path, &text);
         if dump_tree {
-            println!("{:#?}", parse.syntax());
+            // stdout is one JSON document when a program is reading, and
+            // a tree in front of it would spoil that; a person reading
+            // the tree can have it either way round
+            match format {
+                Format::Text => println!("{:#?}", parse.syntax()),
+                Format::Json => eprintln!("{:#?}", parse.syntax()),
+            }
         }
         total_errors += parse.errors().len();
         match format {
@@ -946,7 +1110,7 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
                 "errors": parse
                     .errors()
                     .iter()
-                    .map(|d| at(&text, usize::from(d.range.start()), serde_json::json!({
+                    .map(|d| sysml_cli::at(&text, usize::from(d.range.start()), serde_json::json!({
                         "message": d.message.clone(),
                     })))
                     .collect::<Vec<_>>(),
@@ -957,6 +1121,7 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
         report(serde_json::json!({
             "command": "parse",
             "ok": total_errors == 0,
+            "unreadable": unreadable,
             "errors": total_errors,
             "files": reported,
         }));
@@ -966,17 +1131,6 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
-}
-
-/// A finding with its place in the file: byte offset as the model sees
-/// it, line and column as an editor counts them (from one).
-fn at(text: &str, offset: usize, mut value: serde_json::Value) -> serde_json::Value {
-    let (line, column) = sysml_syntax::line_col(text, offset);
-    let map = value.as_object_mut().expect("built as an object");
-    map.insert("offset".into(), offset.into());
-    map.insert("line".into(), line.into());
-    map.insert("column".into(), column.into());
-    value
 }
 
 /// One JSON document per run, on stdout.
@@ -996,16 +1150,28 @@ fn print_diagnostic(path: &Path, text: &str, diagnostic: &Diagnostic) {
         diagnostic.message
     );
     if let Some(written) = text.lines().nth(line - 1) {
+        // `col` counts bytes, as an editor's offsets do, and the caret
+        // counts characters: a name written in Japanese is three bytes a
+        // letter, and the caret landed well past what it points at
+        let before = written
+            .char_indices()
+            .take_while(|(byte, _)| *byte < col - 1)
+            .count();
         eprintln!("    | {written}");
-        eprintln!("    | {}^", " ".repeat(col - 1));
+        eprintln!("    | {}^", " ".repeat(before));
     }
 }
 
 /// Talk to a model server. Every answer is the server's own JSON, so
 /// what comes back is what the standard says came back; the text form
 /// lists the one line a person reads it for.
-fn api_command(server: &str, what: &ApiCommand, format: Format) -> ExitCode {
-    let client = api::Client::new(server);
+fn api_command(
+    server: &str,
+    timeout: std::time::Duration,
+    what: &ApiCommand,
+    format: Format,
+) -> ExitCode {
+    let client = api::Client::new(server, timeout);
     let answered = match what {
         ApiCommand::Projects => client
             .projects()
@@ -1061,7 +1227,7 @@ fn api_command(server: &str, what: &ApiCommand, format: Format) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("error: {server}: {err}");
+            eprintln!("error: {}: {err}", api::redacted(server));
             ExitCode::FAILURE
         }
     }
