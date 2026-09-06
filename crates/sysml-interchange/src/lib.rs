@@ -4,7 +4,9 @@
 //! every element is a JSON object with `"@type"` (metaclass name), `"@id"`
 //! (UUID) and its properties, where element references are `{"@id": ...}`
 //! objects. Element UUIDs are deterministic (UUIDv5 over the element's
-//! ownership path), so exporting the same model twice yields identical JSON.
+//! ownership path, where a name places an element among its siblings),
+//! so the same model exports as the same JSON however its files were
+//! ordered on the way in.
 //!
 //! Every element is serialized with the complete property set its
 //! metaclass declares, the shape the standard's API serializes: stored
@@ -14,7 +16,8 @@
 //! ownership web (`owner`/`ownedElement`, `ownedRelationship`,
 //! `owningRelationship`, `owningMembership`, `owningNamespace`), a
 //! relationship's related elements (`relatedElement`, `source`, `target`,
-//! `ownedRelatedElement`, `owningRelatedElement`), a membership's member
+//! `ownedRelatedElement`, `owningRelatedElement`, and each end under
+//! whatever name its own metaclass gives it), a membership's member
 //! (`memberElement`, `memberName` and their owned forms), and annotation
 //! bindings (`documentation`, `textualRepresentation`).
 //!
@@ -26,8 +29,13 @@
 //! An unresolved model derives empty closures -- which is what it knows.
 //!
 //! Ownership is reified the way the abstract syntax has it: a membership
-//! bridges a namespace and each ordinary element it owns, while a pure
-//! relationship owns its elements directly as `ownedRelatedElement`. The
+//! bridges a namespace and each element it owns, while a pure
+//! relationship -- a specialization, an import, a membership -- is owned
+//! directly and owns its own elements as `ownedRelatedElement`. A
+//! relationship that is also a type or a feature is a member all the
+//! same: a connector, an association and a dependency each reach the
+//! namespace that declares them through a membership, as the grammar
+//! has them. The
 //! membership's metaclass follows the member: `FeatureMembership` for a
 //! feature of a type, `EndFeatureMembership` for a connector end,
 //! `ParameterMembership`/`ReturnParameterMembership` for a directed
@@ -38,7 +46,8 @@
 //! `StateSubactionMembership` (kind `entry`/`do`/`exit`) for a state's
 //! subactions, `RequirementConstraintMembership` (kind `assumption` or
 //! `requirement`) and `FramedConcernMembership` for a requirement's
-//! constraints and concerns, and `OwningMembership` otherwise. Each carries the visibility the member
+//! constraints and concerns, `ViewRenderingMembership` for the
+//! rendering a view is drawn with, and `OwningMembership` otherwise. Each carries the visibility the member
 //! was declared with. Bridging memberships are synthesized on export with
 //! deterministic UUIDs and folded back on import -- role, visibility and
 //! all -- so either shape, this crate's or another tool's, reads back
@@ -77,8 +86,12 @@ pub enum ImportError {
     NotAnArray,
     MissingType(usize),
     UnknownType(String),
+    AbstractType(String),
     MissingId(usize),
+    DuplicateId(String),
     UnknownReference(String),
+    SharedOwnership(String),
+    OwnershipCycle(String),
 }
 
 impl std::fmt::Display for ImportError {
@@ -87,8 +100,17 @@ impl std::fmt::Display for ImportError {
             ImportError::NotAnArray => write!(f, "expected a JSON array of elements"),
             ImportError::MissingType(i) => write!(f, "element {i} has no \"@type\""),
             ImportError::UnknownType(t) => write!(f, "unknown metaclass {t:?}"),
+            ImportError::AbstractType(t) => write!(f, "metaclass {t:?} is abstract"),
             ImportError::MissingId(i) => write!(f, "element {i} has no \"@id\""),
+            ImportError::DuplicateId(id) => write!(f, "two elements share the id {id:?}"),
             ImportError::UnknownReference(id) => write!(f, "reference to unknown element {id:?}"),
+            ImportError::SharedOwnership(id) => write!(f, "two elements own {id:?}"),
+            ImportError::OwnershipCycle(id) => {
+                write!(
+                    f,
+                    "{id:?} is owned by itself, directly or through its owners"
+                )
+            }
         }
     }
 }
@@ -102,33 +124,149 @@ pub fn element_uuid(model: &Model, id: ElementId) -> Uuid {
     let mut segments = Vec::new();
     let mut current = Some(id);
     while let Some(elem) = current {
-        let index = model
-            .owner(elem)
-            .map(|o| {
-                model
-                    .owned(o)
-                    .iter()
-                    .position(|c| *c == elem)
-                    .unwrap_or_default()
-            })
-            .unwrap_or(elem.index());
-        let segment = match model.name(elem) {
-            Some(name) => format!("{index}:{name}"),
-            None => format!("{index}"),
+        let index = match model.owner(elem) {
+            Some(owner) => namesake_index(model, model.owned(owner), elem),
+            None => namesake_index(model, &roots(model), elem),
         };
-        segments.push(segment);
+        segments.push(path_segment(model, elem, index));
         current = model.owner(elem);
     }
     segments.reverse();
-    let path = format!("sysml-v2-rs:{}", segments.join("/"));
+    uuid_of_path(&format!("sysml-v2-rs:{}", segments.join("/")))
+}
+
+/// Where an element sits among the siblings that answer to the same
+/// name.
+///
+/// The plain position among all of them made every UUID in a file
+/// depend on which files were loaded before it: a workspace hangs each
+/// file's declarations off one root namespace, so `sysml export a.sysml
+/// b.sysml` and `sysml export b.sysml a.sysml` moved the package `a.sysml`
+/// declares -- and everything under it -- to another slot. Counting only
+/// namesakes leaves a name to place its own element, so what a model
+/// exports depends on the model and on nothing else: not on the order of
+/// the files, nor on what they are called or where they sit on disk,
+/// which keying by file name would have made the UUIDs depend on
+/// instead. Only elements sharing a name -- or sharing having none --
+/// are still counted off in the order the model holds them, which is all
+/// that is left to tell them apart.
+fn namesake_index(model: &Model, siblings: &[ElementId], id: ElementId) -> usize {
+    siblings
+        .iter()
+        .take_while(|&&sibling| sibling != id)
+        .filter(|&&sibling| model.name(sibling) == model.name(id))
+        .count()
+}
+
+/// The elements no other element owns.
+fn roots(model: &Model) -> Vec<ElementId> {
+    model
+        .ids()
+        .filter(|&id| model.owner(id).is_none())
+        .collect()
+}
+
+/// One step of the path a UUID is built from: where the element sits
+/// among its owner's children, and the name it was declared with.
+fn path_segment(model: &Model, id: ElementId, index: usize) -> String {
+    match model.name(id) {
+        Some(name) => format!("{index}:{name}"),
+        None => format!("{index}"),
+    }
+}
+
+fn uuid_of_path(path: &str) -> Uuid {
     Uuid::new_v5(&Uuid::NAMESPACE_URL, path.as_bytes())
+}
+
+/// What one walk down the ownership tree settles for every element: the
+/// UUID it is written under, the UUID of the membership it is owned
+/// through, and the qualified name it answers to.
+///
+/// Each of the three is a path from the root, and each was once built by
+/// walking back up to the root from every element in turn -- the UUID
+/// scanning each owner's children on the way to find where the element
+/// sits among them, and again for every reference to a synthesized
+/// membership. That made an export cost grow with the square of the
+/// model's depth. Walking down instead knows each index, and each
+/// prefix, as it goes.
+struct Identities {
+    uuids: HashMap<ElementId, Uuid>,
+    bridges: HashMap<ElementId, Uuid>,
+    qualified: HashMap<ElementId, String>,
+}
+
+fn identities(model: &Model) -> Identities {
+    let mut out = Identities {
+        uuids: HashMap::with_capacity(model.len()),
+        bridges: HashMap::new(),
+        qualified: HashMap::with_capacity(model.len()),
+    };
+    let roots = roots(model);
+    let mut stack: Vec<(ElementId, String, Option<String>)> = roots
+        .iter()
+        .copied()
+        .map(|id| {
+            (
+                id,
+                format!(
+                    "sysml-v2-rs:{}",
+                    path_segment(model, id, namesake_index(model, &roots, id))
+                ),
+                // the root namespace has no name and contributes no
+                // segment; what it owns is named from there
+                qualified_under(Some(""), model, id).or(Some(String::new())),
+            )
+        })
+        .collect();
+    while let Some((id, path, qualified)) = stack.pop() {
+        let children = model.owned(id);
+        // one pass over the children, counting each name as it goes:
+        // asking where each of them sits among its namesakes one at a
+        // time would walk the whole list again for every one of them
+        let mut namesakes: HashMap<Option<&str>, usize> = HashMap::new();
+        for &child in children {
+            let seen = namesakes.entry(model.name(child)).or_default();
+            let index = *seen;
+            *seen += 1;
+            stack.push((
+                child,
+                format!("{path}/{}", path_segment(model, child, index)),
+                qualified_under(qualified.as_deref(), model, child),
+            ));
+        }
+        let uuid = uuid_of_path(&path);
+        if bridged(model, id) {
+            out.bridges.insert(
+                id,
+                uuid_of_path(&format!("sysml-v2-rs:{uuid}#owningMembership")),
+            );
+        }
+        out.uuids.insert(id, uuid);
+        if let Some(qualified) = qualified.filter(|name| !name.is_empty()) {
+            out.qualified.insert(id, qualified);
+        }
+    }
+    out
+}
+
+/// The qualified name of an element under the name of its owner:
+/// nothing, once an element on the way has no name to write.
+fn qualified_under(prefix: Option<&str>, model: &Model, id: ElementId) -> Option<String> {
+    let prefix = prefix?;
+    let name = quoted(model.effective_name(id)?);
+    Some(if prefix.is_empty() {
+        name
+    } else {
+        format!("{prefix}::{name}")
+    })
 }
 
 /// The membership metaclasses that only carry ownership -- and, for some,
 /// a role or a visibility the owned element keeps -- so they fold into
 /// edges on import and are synthesized back on export. `FeatureValue` and
 /// friends stay real elements: they carry state of their own.
-const FOLDED: [ElementKind; 16] = [
+const FOLDED: [ElementKind; 17] = [
     ElementKind::OwningMembership,
     ElementKind::FeatureMembership,
     ElementKind::EndFeatureMembership,
@@ -145,50 +283,40 @@ const FOLDED: [ElementKind; 16] = [
     ElementKind::RequirementConstraintMembership,
     ElementKind::RequirementVerificationMembership,
     ElementKind::FramedConcernMembership,
+    ElementKind::ViewRenderingMembership,
 ];
 
-/// Property names the exporter computes rather than reads, skipped on
-/// import wherever the metaclass marks them derived. A metaclass that
-/// declares one of these as a stored fact of its own keeps it.
-const SYNTHESIZED: [&str; 38] = [
-    "relatedElement",
-    "source",
-    "target",
-    "memberElement",
-    "ownedMemberElement",
-    "ownedMemberFeature",
-    "memberElementId",
-    "ownedMemberElementId",
-    "feature",
-    "ownedFeature",
-    "inheritedFeature",
-    "inheritedMembership",
-    "endFeature",
-    "ownedEndFeature",
-    "input",
-    "output",
-    "directedFeature",
-    "parameter",
-    "membership",
-    "ownedMembership",
-    "member",
-    "ownedMember",
-    "ownedSpecialization",
-    "ownedSubclassification",
-    "ownedTyping",
-    "ownedSubsetting",
-    "ownedRedefinition",
-    "ownedReferenceSubsetting",
-    "ownedImport",
-    "type",
-    "owningType",
-    "annotatedElement",
-    "nestedUsage",
-    "ownedUsage",
-    "importedMembership",
-    "isLibraryElement",
-    "featuringType",
-    "owningFeatureMembership",
+/// The derived properties the model stores itself, and so the only ones
+/// import reads back: a multiplicity and its bounds, a transition's
+/// trigger, guard and effect, and the rest of what the builder writes
+/// into a property the metamodel calls derived.
+///
+/// Everything else derived is computed afresh on export. Reading one of
+/// those back would let the copy that came in shadow the answer: an
+/// element renamed after import would still export the `name` and
+/// `qualifiedName` it arrived with.
+///
+/// The list is what the builder and the resolver between them write; the
+/// CLI's corpus sweep round-trips every file in the corpus and reports
+/// the drift when one is missing from it.
+const STORED_DERIVED: [&str; 17] = [
+    "bound",
+    "chainingFeature",
+    "effectAction",
+    "featureWithValue",
+    "guardExpression",
+    "lowerBound",
+    "multiplicity",
+    "referencingFeature",
+    "referent",
+    "relatedFeature",
+    "representedElement",
+    "satisfiedRequirement",
+    "satisfyingFeature",
+    "triggerAction",
+    "upperBound",
+    "value",
+    "verifiedRequirement",
 ];
 
 /// The role a folded membership gives back to its member, so that what
@@ -217,6 +345,7 @@ fn folded_role(bridge: &Json) -> Option<Role> {
             _ => None,
         },
         Some("FramedConcernMembership") => Some(Role::Frame),
+        Some("ViewRenderingMembership") => Some(Role::Render),
         Some("RequirementVerificationMembership") => Some(Role::Verify),
         Some("RequirementConstraintMembership") => match bridge["kind"].as_str() {
             Some("assumption") => Some(Role::Assume),
@@ -245,14 +374,15 @@ impl<'a> Closures<'a> {
         }
     }
 
-    /// The features an element owns directly.
+    /// The features an element owns directly, connectors among them: a
+    /// connector is a feature of the type that declares it, whatever
+    /// else it relates.
     fn owned_features(&self, id: ElementId) -> Vec<ElementId> {
         self.model
             .owned(id)
             .iter()
             .copied()
             .filter(|&child| self.model.kind(child).is_a(ElementKind::Feature))
-            .filter(|&child| !self.model.kind(child).is_a(ElementKind::Relationship))
             .collect()
     }
 
@@ -332,33 +462,57 @@ impl<'a> Closures<'a> {
     }
 }
 
-/// The UUID of the `OwningMembership` synthesized between an element and
-/// its owner: the element's own path with a marker, so it is as stable as
-/// the element it brings in.
-fn membership_uuid(model: &Model, owned: ElementId) -> Uuid {
-    let of = element_uuid(model, owned);
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("sysml-v2-rs:{of}#owningMembership").as_bytes(),
-    )
-}
-
 /// Does ownership of this element pass through a synthesized membership?
 ///
-/// A relationship needs none at either end: the standard has an element
-/// own its relationships directly, and a pure relationship own its
-/// elements the same way -- a `FeatureValue` holds the expression it sets
-/// without a membership between them. A relationship that is also a
-/// namespace, though -- a connection definition, an association -- owns
-/// its members the way any namespace does, membership and all.
+/// A pure relationship -- a specialization, an import, a membership --
+/// needs none at either end: the standard has an element own those
+/// directly, and a pure relationship own its elements the same way, so a
+/// `FeatureValue` holds the expression it sets without a membership
+/// between them. A relationship that is also a type or a feature is a
+/// member all the same: the grammar reaches a connector, an association
+/// and a dependency alike through the membership of the namespace that
+/// declares them (KerML's `NonFeatureMember` and `TypeFeatureMember`),
+/// and a relationship that is also a namespace owns its own members that
+/// way in turn.
 fn bridged(model: &Model, owned: ElementId) -> bool {
-    if model.kind(owned).is_a(ElementKind::Relationship) {
+    if only_a_relationship(model.kind(owned)) {
         return false;
     }
     !model.owner(owned).is_some_and(|owner| {
         let kind = model.kind(owner);
         kind.is_a(ElementKind::Relationship) && !kind.is_a(ElementKind::Namespace)
     })
+}
+
+/// Is this metaclass a relationship and nothing else -- a membership, an
+/// import, a specialization -- rather than one that is also a type or a
+/// dependency?
+///
+/// The distinction runs through the whole reified shape: what a
+/// relationship owns that is only a relationship in turn is an
+/// `ownedRelationship` of it and no end of it, while a connector or an
+/// association owned by a membership is both.
+fn only_a_relationship(kind: ElementKind) -> bool {
+    kind.is_a(ElementKind::Relationship)
+        && !kind.is_a(ElementKind::Type)
+        && !kind.is_a(ElementKind::Dependency)
+}
+
+/// What a relationship owns and relates in one: the ends it holds
+/// itself, rather than everything under it.
+///
+/// An `import A::*[@Safety]` owns the filter that narrows it, and a
+/// `Membership` owns whatever it brings in; neither the filter nor a
+/// membership one level down is an end of the relationship above it.
+/// Counting them as ends made the ends the model states disagree with
+/// the ends read back from them.
+fn related_to(model: &Model, id: ElementId) -> Vec<ElementId> {
+    model
+        .owned(id)
+        .iter()
+        .copied()
+        .filter(|&child| !bridged(model, child) && !only_a_relationship(model.kind(child)))
+        .collect()
 }
 
 /// The membership a bridged element is owned through.
@@ -385,10 +539,7 @@ fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
             Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
             Role::Frame => ElementKind::FramedConcernMembership,
             Role::Verify => ElementKind::RequirementVerificationMembership,
-            // the membership the standard names for a rendering
-            // references it rather than owning it, which is a shape this
-            // exporter does not write yet
-            Role::Render => ElementKind::FeatureMembership,
+            Role::Render => ElementKind::ViewRenderingMembership,
         };
     }
     let owner_kind = match model.owner(owned) {
@@ -452,92 +603,50 @@ fn all_features(kind: ElementKind) -> Vec<&'static sysml_model::FeatureMeta> {
         .collect()
 }
 
-/// The name an element is known by: its declared name or, for a feature
-/// declared without one, the name it takes from what it redefines or
-/// references -- KerML's effective-name rule, so `attribute :>> mass;`
-/// is a feature named `mass`.
-fn effective_name(model: &Model, id: ElementId) -> Option<String> {
-    named_after(
-        model,
-        id,
-        "declaredName",
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-/// [`effective_name`], for the short name.
-fn effective_short_name(model: &Model, id: ElementId) -> Option<String> {
-    named_after(
-        model,
-        id,
-        "declaredShortName",
-        &mut std::collections::HashSet::new(),
-    )
-}
-
-/// The declared property, or the naming feature's, redefinitions before
-/// reference subsettings. The guard keeps a redefinition cycle -- illegal,
-/// but representable -- finite.
-fn named_after(
-    model: &Model,
-    id: ElementId,
-    declared: &str,
-    visiting: &mut std::collections::HashSet<ElementId>,
-) -> Option<String> {
-    if let Some(name) = model.get(id, declared).and_then(Value::as_str) {
-        return Some(name.to_string());
-    }
-    if !visiting.insert(id) {
-        return None;
-    }
-    let naming = model.owned(id).iter().find_map(|&child| {
-        let target = match model.kind(child) {
-            ElementKind::Redefinition => "redefinedFeature",
-            ElementKind::ReferenceSubsetting => "referencedFeature",
-            _ => return None,
-        };
-        match model.get(child, target) {
-            Some(Value::Ref(target)) => Some(*target),
-            _ => None,
-        }
-    })?;
-    named_after(model, naming, declared, visiting)
-}
-
 /// A name the way `qualifiedName` writes it: as it is when it is a basic
-/// name, quoted when it needs to be.
+/// name, quoted when it is not -- a keyword included, since `part`
+/// written plainly reads back as the keyword rather than as a name.
+/// Inside the quotes a backslash and a quote are escaped again, undoing
+/// what [`sysml_syntax::unquote`] did when the name was read.
 fn quoted(name: &str) -> String {
     let basic = !name.is_empty()
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit());
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && sysml_syntax::SyntaxKind::from_keyword(name).is_none();
     if basic {
-        name.to_string()
-    } else {
-        format!("'{name}'")
+        return name.to_string();
     }
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('\'');
+    for ch in name.chars() {
+        match ch {
+            '\\' | '\'' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
 }
 
-/// The dotted path of names from the root, or nothing as soon as one
-/// element on the way has no name to write.
-fn qualified_name(model: &Model, id: ElementId) -> Option<String> {
-    let mut segments = Vec::new();
-    let mut current = Some(id);
-    while let Some(elem) = current {
-        let owner = model.owner(elem);
-        match effective_name(model, elem) {
-            Some(name) => segments.push(quoted(&name)),
-            // the root namespace has no name and contributes no segment;
-            // anything unnamed below it interrupts the path
-            None if owner.is_none() => {}
-            None => return None,
-        }
-        current = owner;
-    }
-    if segments.is_empty() {
-        return None;
-    }
-    segments.reverse();
-    Some(segments.join("::"))
+/// What an annotating element's `about` named: the target of each
+/// `Annotation` it owns, in the order they were written. A comment that
+/// named nothing owns none and is about the element it sits on.
+fn annotated(model: &Model, id: ElementId) -> Vec<ElementId> {
+    model
+        .owned(id)
+        .iter()
+        .copied()
+        .filter(|&child| model.kind(child) == ElementKind::Annotation)
+        .filter_map(|child| model.get(child, "annotatedElement").and_then(Value::as_id))
+        .collect()
 }
 
 /// What a resolver knows and a serializer alone cannot: the standard's
@@ -568,12 +677,13 @@ pub fn to_json(model: &Model) -> Json {
 
 /// [`to_json`], with the resolver-derived facts filled in.
 pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
-    let uuids: HashMap<ElementId, Uuid> = model
-        .ids()
-        .map(|id| (id, element_uuid(model, id)))
-        .collect();
+    let Identities {
+        uuids,
+        bridges: bridge_uuids,
+        qualified,
+    } = identities(model);
     let reference = |id: &ElementId| json!({ "@id": uuids[id].to_string() });
-    let membership = |id: ElementId| json!({ "@id": membership_uuid(model, id).to_string() });
+    let membership = |id: ElementId| json!({ "@id": bridge_uuids[&id].to_string() });
     let references = |ids: &[ElementId]| Json::Array(ids.iter().map(reference).collect());
     let annotations = |id: ElementId, kind: ElementKind| {
         Json::Array(
@@ -585,6 +695,15 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 .collect(),
         )
     };
+
+    // the property set a metaclass declares is the same for every
+    // element of it, and working it out means walking the whole
+    // inheritance chain: once per metaclass, not once per element
+    let features: HashMap<ElementKind, Vec<&'static sysml_model::FeatureMeta>> =
+        sysml_model::generated::ELEMENT_KINDS
+            .iter()
+            .map(|&kind| (kind, all_features(kind)))
+            .collect();
 
     let closures = Closures::new(model);
     // a membership reference for each element a namespace reaches: its
@@ -747,6 +866,16 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 Some(extras.import_targets.get(&id).map_or(Json::Null, reference))
             }
             "isLibraryElement" => Some(extras.library.contains(&id).into()),
+            // an import says how far what it brings in travels; written
+            // without a keyword, the metamodel has it stop where it is
+            "visibility" if kind.is_a(ElementKind::Import) => Some(
+                match model.member_visibility(id).unwrap_or(Vis::Private) {
+                    Vis::Public => "public",
+                    Vis::Protected => "protected",
+                    Vis::Private => "private",
+                }
+                .into(),
+            ),
             // the specializations an element owns, by their metaclass
             "ownedSpecialization" if is_type => {
                 Some(owned_of_kind(id, ElementKind::Specialization))
@@ -795,12 +924,36 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     Json::Null
                 })
             }
-            // an annotating element is about the element it sits on
+            // a relationship owned by one of the elements it relates
+            // names that end again in its own vocabulary
+            "owningClassifier"
+            | "owningFeature"
+            | "owningFeatureOfType"
+            | "membershipOwningNamespace"
+            | "importOwningNamespace"
+            | "owningAnnotatingElement"
+                if is_relationship =>
+            {
+                Some(match model.owner(id) {
+                    Some(owner) if !bridged(model, id) => reference(&owner),
+                    _ => Json::Null,
+                })
+            }
+            // an annotating element is about what its `about` named --
+            // one owned Annotation for each -- and, where it named
+            // nothing, about the element it sits on
             "annotatedElement" if kind.is_a(ElementKind::AnnotatingElement) => {
+                let about = annotated(model, id);
                 Some(match model.get(id, "representedElement") {
                     Some(Value::Ref(target)) => Json::Array(vec![reference(target)]),
+                    _ if !about.is_empty() => references(&about),
                     _ => Json::Array(model.owner(id).iter().map(reference).collect()),
                 })
+            }
+            "annotation" | "ownedAnnotatingRelationship"
+                if kind.is_a(ElementKind::AnnotatingElement) =>
+            {
+                Some(owned_of_kind(id, ElementKind::Annotation))
             }
             "nestedUsage" if kind.is_a(ElementKind::Usage) => {
                 Some(owned_of_kind(id, ElementKind::Usage))
@@ -809,9 +962,17 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 Some(owned_of_kind(id, ElementKind::Usage))
             }
             "elementId" => Some(uuids[&id].to_string().into()),
-            "name" => Some(effective_name(model, id).map_or(Json::Null, Json::from)),
-            "shortName" => Some(effective_short_name(model, id).map_or(Json::Null, Json::from)),
-            "qualifiedName" => Some(qualified_name(model, id).map_or(Json::Null, Json::from)),
+            "name" => Some(model.effective_name(id).map_or(Json::Null, Json::from)),
+            "shortName" => Some(
+                model
+                    .effective_short_name(id)
+                    .map_or(Json::Null, Json::from),
+            ),
+            "qualifiedName" => Some(
+                qualified
+                    .get(&id)
+                    .map_or(Json::Null, |name| Json::from(name.clone())),
+            ),
             "owner" => Some(
                 model
                     .owner(id)
@@ -826,10 +987,10 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     .owned(id)
                     .iter()
                     .filter_map(|&child| {
-                        if model.kind(child).is_a(ElementKind::Relationship) {
-                            Some(reference(&child))
-                        } else if bridged(model, child) {
+                        if bridged(model, child) {
                             Some(membership(child))
+                        } else if model.kind(child).is_a(ElementKind::Relationship) {
+                            Some(reference(&child))
                         } else {
                             None
                         }
@@ -862,30 +1023,25 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             "textualRepresentation" => Some(annotations(id, ElementKind::TextualRepresentation)),
             // a relationship that is also a namespace holds its members
             // through memberships; only the rest is directly related
-            "ownedRelatedElement" if is_relationship => Some(references(
-                &model
-                    .owned(id)
-                    .iter()
-                    .copied()
-                    .filter(|&child| !bridged(model, child))
-                    .collect::<Vec<_>>(),
-            )),
-            "owningRelatedElement" if is_relationship => Some(
-                model
-                    .owner(id)
-                    .map_or(Json::Null, |owner| reference(&owner)),
-            ),
-            "relatedElement" if is_relationship => {
-                let mut related: Vec<ElementId> = model.owner(id).into_iter().collect();
-                related.extend(
-                    model
-                        .owned(id)
-                        .iter()
-                        .copied()
-                        .filter(|&child| !bridged(model, child)),
-                );
-                Some(references(&related))
+            "ownedRelatedElement" if is_relationship => Some(references(&related_to(model, id))),
+            // a bridged relationship is owned by its membership, which
+            // is no end of it
+            "owningRelatedElement" if is_relationship => Some(match model.owner(id) {
+                Some(owner) if !bridged(model, id) => reference(&owner),
+                _ => Json::Null,
+            }),
+            // an alias names what it brings in itself: `alias Q for P;`
+            // is a membership through which P is known as Q. What it
+            // stands for is the resolver's to say, and stays null here.
+            "memberName" if kind == ElementKind::Membership => {
+                Some(model.name(id).map_or(Json::Null, Json::from))
             }
+            "memberShortName" if kind == ElementKind::Membership => Some(
+                model
+                    .get(id, "declaredShortName")
+                    .and_then(Value::as_str)
+                    .map_or(Json::Null, Json::from),
+            ),
             // a membership's member: for the owning kind, what it owns
             "memberElement" | "ownedMemberElement" if kind.is_a(ElementKind::OwningMembership) => {
                 Some(model.owned(id).first().map_or(Json::Null, &reference))
@@ -918,11 +1074,15 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             let mut object = Map::new();
             object.insert("@type".into(), model.kind(id).name().into());
             object.insert("@id".into(), uuids[&id].to_string().into());
-            for meta in all_features(model.kind(id)) {
+            for meta in &features[&model.kind(id)] {
                 let value = match stored.get(meta.name) {
                     Some(value) => match value {
                         Value::Bool(b) => Json::from(*b),
                         Value::Int(i) => Json::from(*i),
+                        // JSON has no infinity: a number its syntax
+                        // cannot hold is written as the text of it, and
+                        // read back from that text
+                        Value::Real(r) if !r.is_finite() => Json::from(r.to_string()),
                         Value::Real(r) => Json::from(*r),
                         Value::String(text) => Json::from(text.clone()),
                         Value::EnumLit(lit) => Json::from(*lit),
@@ -932,6 +1092,14 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     None => derived(id, meta.name).unwrap_or_else(|| default_for(meta)),
                 };
                 object.insert(meta.name.into(), value);
+            }
+            if model.kind(id).is_a(ElementKind::Relationship) {
+                let owner = model
+                    .owner(id)
+                    .filter(|_| !bridged(model, id))
+                    .map(|owner| reference(&owner));
+                let related: Vec<Json> = related_to(model, id).iter().map(reference).collect();
+                fill_ends(&mut object, model.kind(id), owner, related);
             }
             Json::Object(object)
         })
@@ -947,11 +1115,11 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             continue;
         }
         let kind = membership_kind(model, id);
-        let uuid = membership_uuid(model, id).to_string();
+        let uuid = bridge_uuids[&id].to_string();
         let mut object = Map::new();
         object.insert("@type".into(), kind.name().into());
         object.insert("@id".into(), uuid.clone().into());
-        for meta in all_features(kind) {
+        for meta in &features[&kind] {
             let value = match meta.name {
                 "elementId" => uuid.clone().into(),
                 "owner" | "owningRelatedElement" | "membershipOwningNamespace" => reference(&owner),
@@ -970,16 +1138,34 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 | "ownedObjectiveRequirement"
                 | "ownedVariantUsage"
                 | "transitionFeature"
-                | "ownedEndFeature"
+                | "action"
+                | "ownedResultExpression"
                 | "ownedConstraint"
-                | "ownedConcern" => reference(&id),
+                | "ownedRequirement"
+                | "ownedConcern"
+                | "ownedRendering" => reference(&id),
+                // what the member refers to, rather than the member: a
+                // required constraint, a framed concern, a verified
+                // requirement and the rendering a view is drawn with
+                // each name the element their member references, where
+                // it references one
+                "referencedConstraint"
+                | "referencedConcern"
+                | "verifiedRequirement"
+                | "referencedRendering" => model
+                    .owned(id)
+                    .iter()
+                    .find(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
+                    .and_then(|&child| model.get(child, "referencedFeature"))
+                    .and_then(Value::as_id)
+                    .map_or(Json::Null, |target| reference(&target)),
                 "memberElementId" | "ownedMemberElementId" => uuids[&id].to_string().into(),
                 "memberName" | "ownedMemberName" => {
-                    effective_name(model, id).map_or(Json::Null, Json::from)
+                    model.effective_name(id).map_or(Json::Null, Json::from)
                 }
-                "memberShortName" | "ownedMemberShortName" => {
-                    effective_short_name(model, id).map_or(Json::Null, Json::from)
-                }
+                "memberShortName" | "ownedMemberShortName" => model
+                    .effective_short_name(id)
+                    .map_or(Json::Null, Json::from),
                 "owningType" => reference(&owner),
                 // the standard spells it out even where nothing was written
                 "visibility" => match model.member_visibility(id).unwrap_or(Vis::Public) {
@@ -1023,8 +1209,8 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
 }
 
 /// What a property nothing sets or derives reads as: absent, empty or
-/// plainly false -- except a visibility, which the metamodel defaults to
-/// `public`.
+/// plainly false -- except a membership's visibility, which the
+/// metamodel defaults to `public`.
 fn default_for(meta: &sysml_model::FeatureMeta) -> Json {
     if meta.name == "visibility" {
         return "public".into();
@@ -1036,6 +1222,180 @@ fn default_for(meta: &sysml_model::FeatureMeta) -> Json {
         FeatureType::Data(PrimitiveType::Boolean) => Json::from(false),
         _ => Json::Null,
     }
+}
+
+/// Where each relationship metaclass writes its ends: the chain of
+/// property names from the one it declares down to `source` or `target`
+/// itself, each redefining or subsetting the next. A `Subclassification`
+/// writes its specific end as `subclassifier`, which redefines
+/// `specific`, which subsets `source`; the metaclass that wrote one link
+/// of the chain has said the same thing about all of them. Read most
+/// specific first, and only the links the metaclass declares are
+/// written, so one entry serves a whole family.
+const ENDS: [(ElementKind, &[&str], &[&str]); 15] = [
+    (
+        ElementKind::FeatureValue,
+        &["featureWithValue", "membershipOwningNamespace", "source"],
+        &["value", "memberElement", "target"],
+    ),
+    (
+        ElementKind::Membership,
+        &["membershipOwningNamespace", "source"],
+        &[
+            "ownedMemberFeature",
+            "ownedMemberElement",
+            "memberElement",
+            "target",
+        ],
+    ),
+    (
+        ElementKind::Import,
+        &["importOwningNamespace", "source"],
+        &[
+            "importedMembership",
+            "importedNamespace",
+            "importedElement",
+            "target",
+        ],
+    ),
+    (
+        ElementKind::Specialization,
+        &[
+            "subclassifier",
+            "typedFeature",
+            "redefiningFeature",
+            "referencingFeature",
+            "subsettingFeature",
+            "specific",
+            "source",
+        ],
+        &[
+            "superclassifier",
+            "type",
+            "redefinedFeature",
+            "referencedFeature",
+            "subsettedFeature",
+            "general",
+            "target",
+        ],
+    ),
+    (
+        ElementKind::Dependency,
+        &["client", "source"],
+        &["supplier", "target"],
+    ),
+    (
+        ElementKind::Annotation,
+        &["annotatingElement", "owningAnnotatingElement", "source"],
+        &["annotatedElement", "owningAnnotatedElement", "target"],
+    ),
+    (
+        ElementKind::Conjugation,
+        &["conjugatedType", "source"],
+        &["originalType", "target"],
+    ),
+    (
+        ElementKind::Disjoining,
+        &["typeDisjoined", "source"],
+        &["disjoiningType", "target"],
+    ),
+    (
+        ElementKind::TypeFeaturing,
+        &["featureOfType", "source"],
+        &["featuringType", "target"],
+    ),
+    (
+        ElementKind::FeatureChaining,
+        &["featureChained", "source"],
+        &["chainingFeature", "target"],
+    ),
+    (
+        ElementKind::FeatureInverting,
+        &["featureInverted", "source"],
+        &["invertingFeature", "target"],
+    ),
+    (
+        ElementKind::Differencing,
+        &["typeDifferenced", "source"],
+        &["differencingType", "target"],
+    ),
+    (
+        ElementKind::Unioning,
+        &["typeUnioned", "source"],
+        &["unioningType", "target"],
+    ),
+    (
+        ElementKind::Intersecting,
+        &["typeIntersected", "source"],
+        &["intersectingType", "target"],
+    ),
+    (
+        ElementKind::Connector,
+        &["sourceFeature", "source"],
+        &["targetFeature", "target"],
+    ),
+];
+
+/// Fill in a relationship's ends, and what its metaclass calls them.
+///
+/// Where the model wrote no end at all, ownership answers: a
+/// specialization is owned by the type it specializes, a feature value
+/// by the feature it sets, and each owns the far end unless a membership
+/// stands between them.
+fn fill_ends(
+    object: &mut Map<String, Json>,
+    kind: ElementKind,
+    owner: Option<Json>,
+    owned: Vec<Json>,
+) {
+    let (sources, targets) = ENDS
+        .iter()
+        .find(|(of, _, _)| kind.is_a(*of))
+        .map_or((&[][..], &[][..]), |(_, sources, targets)| {
+            (*sources, *targets)
+        });
+    let mut related = fill_end(object, kind, sources, owner.into_iter().collect());
+    for end in fill_end(object, kind, targets, owned) {
+        if !related.contains(&end) {
+            related.push(end);
+        }
+    }
+    // a connector whose ends have not resolved still says what it
+    // relates, under the name that redefines `relatedElement`
+    if related.is_empty() {
+        if let Some(Json::Array(features)) = object.get("relatedFeature") {
+            related = features.clone();
+        }
+    }
+    object.insert("relatedElement".into(), Json::Array(related));
+}
+
+/// One end: the first link of the chain the model filled in, or the
+/// fallback where it filled in none, written back into every link.
+fn fill_end(
+    object: &mut Map<String, Json>,
+    kind: ElementKind,
+    chain: &[&str],
+    fallback: Vec<Json>,
+) -> Vec<Json> {
+    let found = chain.iter().find_map(|name| match object.get(*name) {
+        Some(Json::Array(values)) if !values.is_empty() => Some(values.clone()),
+        Some(value @ Json::Object(_)) => Some(vec![value.clone()]),
+        _ => None,
+    });
+    let end = found.unwrap_or(fallback);
+    for name in chain {
+        let Some(meta) = kind.feature(name) else {
+            continue;
+        };
+        let written = if meta.many {
+            Json::Array(end.clone())
+        } else {
+            end.first().cloned().unwrap_or(Json::Null)
+        };
+        object.insert((*name).into(), written);
+    }
+    end
 }
 
 /// Rebuild a model from interchange JSON. Returns the model and the root
@@ -1059,9 +1419,15 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
             .ok_or(ImportError::MissingType(index))?;
         let kind = ElementKind::from_name(type_name)
             .ok_or_else(|| ImportError::UnknownType(type_name.to_string()))?;
+        if kind.is_abstract() {
+            return Err(ImportError::AbstractType(type_name.to_string()));
+        }
         let uuid = object["@id"]
             .as_str()
             .ok_or(ImportError::MissingId(index))?;
+        if by_uuid.contains_key(uuid) || bridges.contains_key(uuid) {
+            return Err(ImportError::DuplicateId(uuid.to_string()));
+        }
         if FOLDED.contains(&kind) && object.get("ownedRelatedElement").is_some() {
             bridges.insert(uuid, object);
             continue;
@@ -1105,17 +1471,22 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
         Ok(members)
     };
 
-    // pass 2: properties and ownership. Ownership may be written as the
-    // derived `ownedElement`, as memberships, or as a relationship's own
-    // related elements -- often all at once, so each pair counts once, in
-    // the order it is first given.
-    let mut owned = std::collections::HashSet::new();
+    // pass 2: properties, and the ownership each element states.
+    // Ownership may be written as the derived `ownedElement`, as
+    // memberships, or as a relationship's own related elements -- often
+    // all at once, so each pair counts once, in the order it is first
+    // given. None of it is built until all of it is known to be a tree:
+    // `Model::add_owned` refuses a cycle rather than let every later
+    // walk of the ownership web run for ever, and foreign JSON is where
+    // a cycle would come from.
+    let mut stated = std::collections::HashSet::new();
+    let mut edges: Vec<(ElementId, ElementId)> = Vec::new();
     for (object, id) in created.iter().zip(&ids) {
         let kind = model.kind(*id);
         let object = object.as_object().expect("validated in pass 1");
-        let mut own = |model: &mut Model, child: ElementId| {
-            if owned.insert((*id, child)) {
-                model.add_owned(*id, child);
+        let mut own = |child: ElementId| {
+            if stated.insert((*id, child)) {
+                edges.push((*id, child));
             }
         };
         for (key, value) in object {
@@ -1130,17 +1501,23 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
                 | "owningRelationship"
                 | "owningMembership"
                 | "owningNamespace"
-                | "owningRelatedElement" => continue,
+                | "owningRelatedElement"
+                // a relationship's ends are read from the properties
+                // its own metaclass names them by; these general
+                // spellings say the same thing, and one of them may
+                // name a membership that folded into an edge
+                | "source"
+                | "target"
+                | "importedElement" => continue,
                 "ownedElement" | "ownedRelatedElement" => {
                     for child in value.as_array().into_iter().flatten() {
-                        let child = resolve(child)?;
-                        own(&mut model, child);
+                        own(resolve(child)?);
                     }
                 }
                 "ownedRelationship" => {
                     for related in value.as_array().into_iter().flatten() {
                         for child in through(&mut model, related)? {
-                            own(&mut model, child);
+                            own(child);
                         }
                     }
                 }
@@ -1148,11 +1525,10 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
                     let Some(meta) = kind.feature(key) else {
                         continue; // tolerate foreign properties
                     };
-                    // what the exporter derives is not read back -- except
-                    // where this metaclass declares the property as its
-                    // own stored fact, the way `FeatureTyping` holds the
-                    // `type` a feature's typing resolved to
-                    if meta.derived && SYNTHESIZED.contains(&key.as_str()) {
+                    // what the exporter derives is not read back, except
+                    // for the handful of derived properties the model
+                    // stores itself
+                    if meta.derived && !STORED_DERIVED.contains(&key.as_str()) {
                         continue;
                     }
                     let converted = match convert_value(meta.ty, value, &resolve) {
@@ -1176,12 +1552,76 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
         }
     }
 
+    let spelled: HashMap<ElementId, &str> = by_uuid.iter().map(|(uuid, id)| (*id, *uuid)).collect();
+    ownership_is_a_tree(&edges, &spelled)?;
+    for (owner, child) in edges {
+        model.add_owned(owner, child);
+    }
+
     let roots = ids
         .iter()
         .copied()
         .filter(|id| model.owner(*id).is_none())
         .collect();
     Ok((model, roots))
+}
+
+/// Is the ownership the JSON stated a tree? Every element owned at most
+/// once, and none among its own owners.
+fn ownership_is_a_tree(
+    edges: &[(ElementId, ElementId)],
+    spelled: &HashMap<ElementId, &str>,
+) -> Result<(), ImportError> {
+    let named = |id: ElementId| spelled[&id].to_string();
+    let mut owner: HashMap<ElementId, ElementId> = HashMap::new();
+    for &(parent, child) in edges {
+        if owner.get(&child).is_some_and(|&first| first != parent) {
+            return Err(ImportError::SharedOwnership(named(child)));
+        }
+        owner.insert(child, parent);
+    }
+    // climbing from each element to its root settles every element on
+    // the way, so the whole web is walked once
+    let mut settled: std::collections::HashSet<ElementId> = std::collections::HashSet::new();
+    for &(_, start) in edges {
+        let mut climbed = Vec::new();
+        let mut on_path = std::collections::HashSet::new();
+        let mut at = Some(start);
+        while let Some(node) = at {
+            if settled.contains(&node) {
+                break;
+            }
+            if !on_path.insert(node) {
+                return Err(ImportError::OwnershipCycle(named(node)));
+            }
+            climbed.push(node);
+            at = owner.get(&node).copied();
+        }
+        settled.extend(climbed);
+    }
+    Ok(())
+}
+
+/// The `'static` text the metamodel spells an enumeration literal with.
+///
+/// A model holds a literal as one of those and its readers match on it;
+/// a `Value::String` of the same text would print the same and never
+/// compare equal to one. A string naming no literal of the enumeration
+/// is not one, and nothing is stored for it.
+fn enum_literal(ty: sysml_model::EnumType, text: &str) -> Option<&'static str> {
+    use sysml_model::generated::*;
+    use sysml_model::EnumType;
+    Some(match ty {
+        EnumType::FeatureDirectionKind => FeatureDirectionKind::from_literal(text)?.literal(),
+        EnumType::PortionKind => PortionKind::from_literal(text)?.literal(),
+        EnumType::RequirementConstraintKind => {
+            RequirementConstraintKind::from_literal(text)?.literal()
+        }
+        EnumType::StateSubactionKind => StateSubactionKind::from_literal(text)?.literal(),
+        EnumType::TransitionFeatureKind => TransitionFeatureKind::from_literal(text)?.literal(),
+        EnumType::TriggerKind => TriggerKind::from_literal(text)?.literal(),
+        EnumType::VisibilityKind => VisibilityKind::from_literal(text)?.literal(),
+    })
 }
 
 fn convert_value(
@@ -1193,12 +1633,17 @@ fn convert_value(
         (_, Json::Null) => None,
         (FeatureType::Data(PrimitiveType::Boolean), Json::Bool(b)) => Some(Value::Bool(*b)),
         (FeatureType::Data(PrimitiveType::Real), Json::Number(n)) => n.as_f64().map(Value::Real),
+        (FeatureType::Data(PrimitiveType::Real), Json::String(text)) => {
+            text.parse::<f64>().ok().map(Value::Real)
+        }
         (FeatureType::Data(_), Json::Number(n)) => n
             .as_i64()
             .map(Value::Int)
             .or_else(|| n.as_f64().map(Value::Real)),
         (FeatureType::Data(_), Json::String(s)) => Some(Value::String(s.clone())),
-        (FeatureType::Enumeration(_), Json::String(s)) => Some(Value::String(s.clone())),
+        (FeatureType::Enumeration(ty), Json::String(text)) => {
+            enum_literal(ty, text).map(Value::EnumLit)
+        }
         (FeatureType::Class(_), Json::Object(_)) => Some(Value::Ref(resolve(value)?)),
         (FeatureType::Class(_), Json::Array(items)) => {
             let refs: Result<Vec<_>, _> = items.iter().map(resolve).collect();
@@ -1235,6 +1680,54 @@ mod tests {
     }
 
     #[test]
+    fn a_root_keeps_its_uuid_whatever_order_the_files_came_in() {
+        let exported = |first: &str, second: &str| -> std::collections::BTreeMap<String, String> {
+            let mut ws = sysml_semantics::Workspace::new();
+            ws.add_file("first.sysml", first);
+            ws.add_file("second.sysml", second);
+            ws.resolve_all();
+            to_json(ws.model())
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|object| {
+                    Some((
+                        object["qualifiedName"].as_str()?.to_string(),
+                        object["@id"].as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        };
+        let a = "package A {\n\tpart def X;\n}\n";
+        let b = "package B {\n\tpart def Y;\n}\n";
+        let one_way = exported(a, b);
+        assert!(one_way.contains_key("A::X"));
+        assert_eq!(one_way, exported(b, a), "the load order moved the UUIDs");
+    }
+
+    #[test]
+    fn two_roots_of_one_name_are_still_told_apart() {
+        let mut model = Model::new();
+        for _ in 0..2 {
+            let root = model.create(ElementKind::Package);
+            model.set(root, "declaredName", Value::String("P".to_string()));
+        }
+        let roots: Vec<ElementId> = model.ids().collect();
+        assert_ne!(
+            element_uuid(&model, roots[0]),
+            element_uuid(&model, roots[1])
+        );
+        let json = to_json(&model);
+        let ids: std::collections::HashSet<&str> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|object| object["@id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
     fn round_trip_preserves_structure() {
         let model = example_model();
         let json = to_json(&model);
@@ -1262,8 +1755,12 @@ mod tests {
             (ImportError::NotAnArray, "array"),
             (ImportError::MissingType(3), "no \"@type\""),
             (ImportError::UnknownType("X".into()), "unknown metaclass"),
+            (ImportError::AbstractType("X".into()), "abstract"),
             (ImportError::MissingId(1), "no \"@id\""),
+            (ImportError::DuplicateId("u".into()), "share the id"),
             (ImportError::UnknownReference("u".into()), "unknown element"),
+            (ImportError::SharedOwnership("u".into()), "two elements own"),
+            (ImportError::OwnershipCycle("u".into()), "owned by itself"),
         ] {
             assert!(error.to_string().contains(needle), "{error}");
             assert!(!format!("{error:?}").is_empty());
@@ -1287,7 +1784,10 @@ mod tests {
         model.set(m, "visibility", Value::EnumLit("private"));
         model.set(m, "isImportAll", Value::Bool(true));
         model.set(m, "importedMembership", Value::Ref(a));
-        model.set(root, "filterCondition", Value::RefList(vec![a, b]));
+        // a stored list of references: what a dependency relates
+        let d = model.create(ElementKind::Dependency);
+        model.add_owned(root, d);
+        model.set(d, "client", Value::RefList(vec![a, b]));
 
         let json = to_json(&model);
         let (rebuilt, roots) = from_json(&json).unwrap();
@@ -1304,8 +1804,9 @@ mod tests {
         );
         assert_eq!(rebuilt.get(rm, "isImportAll"), Some(&Value::Bool(true)));
         assert_eq!(rebuilt.get(rm, "importedMembership"), Some(&Value::Ref(ra)));
+        let rd = rebuilt.owned(roots[0])[3];
         assert_eq!(
-            rebuilt.get(roots[0], "filterCondition"),
+            rebuilt.get(rd, "client"),
             Some(&Value::RefList(vec![ra, rb]))
         );
         assert_eq!(to_json(&rebuilt), json);
@@ -1782,6 +2283,81 @@ mod tests {
     }
 
     #[test]
+    fn an_import_that_filters_keeps_the_filter_out_of_its_ends() {
+        // `import Q::*[@Safety][@Approved];`: each bracket is an
+        // `ElementFilterMembership` the import owns, and neither is a
+        // namespace the import brings in. Written as ends they came
+        // back as the imported namespace instead, and the second export
+        // disagreed with the first.
+        let mut model = Model::new();
+        let package = model.create(ElementKind::Package);
+        model.set(package, "declaredName", Value::String("P".to_string()));
+        let import = model.create(ElementKind::NamespaceImport);
+        model.add_owned(package, import);
+        for _ in 0..2 {
+            let filter = model.create(ElementKind::ElementFilterMembership);
+            model.add_owned(import, filter);
+            let condition = model.create(ElementKind::Expression);
+            model.add_owned(filter, condition);
+        }
+
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of_type = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["@type"] == name)
+                .unwrap()
+        };
+        let written = of_type("NamespaceImport");
+        assert_eq!(written["ownedRelationship"].as_array().unwrap().len(), 2);
+        assert_eq!(written["ownedRelatedElement"], json!([]));
+        assert_eq!(written["importedNamespace"], Json::Null);
+        assert_eq!(written["relatedElement"].as_array().unwrap().len(), 1);
+        // the filter still relates the expression that says what it keeps
+        let filter = of_type("ElementFilterMembership");
+        assert_eq!(filter["ownedRelatedElement"].as_array().unwrap().len(), 1);
+
+        let (rebuilt, roots) = from_json(&json).unwrap();
+        assert_eq!(rebuilt.len(), model.len());
+        let import = rebuilt.owned(roots[0])[0];
+        assert_eq!(rebuilt.owned(import).len(), 2, "both filters came back");
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    #[test]
+    fn a_render_member_is_a_view_rendering_membership() {
+        let (_, model) = resolved(
+            "rendering def R;\nrendering asTree : R;\nview def V {\n\trender asTree;\n}\n",
+        );
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let membership = objects
+            .iter()
+            .find(|object| object["@type"] == "ViewRenderingMembership")
+            .expect("`render` names the membership the standard gives it");
+        // the membership owns the rendering the view is drawn with, and
+        // names again what that rendering refers to
+        let rendering = objects
+            .iter()
+            .find(|object| object["@id"] == membership["ownedRendering"]["@id"])
+            .unwrap();
+        assert_eq!(rendering["@type"], "RenderingUsage");
+        let declared = objects
+            .iter()
+            .find(|object| {
+                object["declaredName"] == "asTree" && object["@type"] == "RenderingUsage"
+            })
+            .unwrap();
+        assert_eq!(membership["referencedRendering"]["@id"], declared["@id"]);
+        assert_eq!(membership["memberName"], "asTree");
+
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(rebuilt.len(), model.len(), "nothing was owned twice");
+        assert_eq!(to_json(&rebuilt), json, "the rendering role survived");
+    }
+
+    #[test]
     fn library_elements_say_they_are_library_elements() {
         let (_, model) = resolved("part def Local;\n");
         let root = model.ids().next().unwrap();
@@ -1809,6 +2385,8 @@ mod tests {
         model.add_owned(feature, untyped);
         let unredefined = model.create(ElementKind::Redefinition);
         model.add_owned(feature, unredefined);
+        // and one owned by nothing at all, which has no end there either
+        let orphan = model.create(ElementKind::FeatureTyping);
 
         let json = to_json(&model);
         let of = |name: &str| {
@@ -1821,6 +2399,14 @@ mod tests {
         };
         assert_eq!(of("B")["feature"].as_array().unwrap().len(), 1);
         assert_eq!(of("x")["type"], json!([]));
+        let loose = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["@id"] == element_uuid(&model, orphan).to_string())
+            .unwrap();
+        assert_eq!(loose["owningFeature"], Json::Null);
+        assert_eq!(loose["source"], json!([]));
     }
 
     #[test]
@@ -1933,6 +2519,21 @@ mod tests {
     }
 
     #[test]
+    fn an_alias_states_the_name_it_gives() {
+        let (_, model) = resolved("package P {\n\tpart def A;\n\talias Q for A;\n}\n");
+        let json = to_json(&model);
+        let alias = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["@type"] == "Membership")
+            .expect("the alias was reified");
+        assert_eq!(alias["declaredName"], "Q");
+        assert_eq!(alias["memberName"], "Q");
+        assert_eq!(alias["memberShortName"], Json::Null);
+    }
+
+    #[test]
     fn a_naming_cycle_ends_in_no_name() {
         // two unnamed features redefining each other -- illegal, but the
         // walk must end rather than recurse forever
@@ -1944,8 +2545,8 @@ mod tests {
             model.add_owned(from, redefinition);
             model.set(redefinition, "redefinedFeature", Value::Ref(to));
         }
-        assert_eq!(effective_name(&model, a), None);
-        assert_eq!(effective_short_name(&model, a), None);
+        assert_eq!(model.effective_name(a), None);
+        assert_eq!(model.effective_short_name(a), None);
     }
 
     #[test]
@@ -1999,6 +2600,382 @@ mod tests {
         assert_eq!(quoted("wheel 1"), "'wheel 1'");
         assert_eq!(quoted("1st"), "'1st'");
         assert_eq!(quoted(""), "''");
+        // a keyword written plainly would read back as the keyword
+        assert_eq!(quoted("part"), "'part'");
+        assert_eq!(quoted("it's"), "'it\\'s'");
+        // whatever the quotes must not end early is escaped again, so
+        // that unquoting the result gives the name back
+        for name in [
+            "it's", "a\\b", "a\nb", "a\rb", "a\tb", "a\u{8}b", "a\u{c}b", "wheel 1",
+        ] {
+            assert_eq!(sysml_syntax::unquote(&quoted(name)), name, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_qualified_name_of_keywords_reads_back() {
+        let (_, model) = resolved("package 'part' {\n\tpart def 'in';\n}\n");
+        let json = to_json(&model);
+        let qualified = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["@type"] == "PartDefinition")
+            .unwrap()["qualifiedName"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(qualified, "'part'::'in'");
+        // and this toolchain's own parser reads that name back
+        let parse = sysml_syntax::parse(&format!("part def Copy :> {qualified};\n"));
+        assert!(parse.ok(), "{:?}", parse.errors());
+    }
+
+    #[test]
+    fn the_uuid_an_element_is_exported_under_is_the_published_one() {
+        // the walk down the whole model and the walk up from one element
+        // build the same path, and must go on agreeing
+        let model = example_model();
+        let json = to_json(&model);
+        for (id, object) in model.ids().zip(json.as_array().unwrap()) {
+            assert_eq!(object["@id"], element_uuid(&model, id).to_string());
+        }
+    }
+
+    #[test]
+    fn a_deep_model_is_exported_in_one_walk_of_it() {
+        // every UUID used to be computed by walking up to the root, and
+        // every membership reference to compute one again: a chain this
+        // deep took a minute to export
+        let mut model = Model::new();
+        let mut owner = model.create(ElementKind::Package);
+        for step in 0..2_000 {
+            let child = model.create(ElementKind::PartDefinition);
+            model.set(child, "declaredName", Value::String(format!("P{step}")));
+            model.add_owned(owner, child);
+            owner = child;
+        }
+        let started = std::time::Instant::now();
+        let json = to_json(&model);
+        let took = started.elapsed();
+        assert_eq!(json.as_array().unwrap().len(), 2_001 + 2_000);
+        assert!(took < std::time::Duration::from_secs(5), "took {took:?}");
+    }
+
+    #[test]
+    fn a_cycle_in_imported_ownership_is_refused_rather_than_built() {
+        // building it would panic in `add_owned`, and every walk of the
+        // ownership web would run for ever if it did not
+        let round = json!([
+            { "@type": "Package", "@id": "a", "ownedElement": [{ "@id": "b" }] },
+            { "@type": "Package", "@id": "b", "ownedElement": [{ "@id": "a" }] },
+        ]);
+        assert!(matches!(
+            from_json(&round),
+            Err(ImportError::OwnershipCycle(_))
+        ));
+        let itself = json!([
+            { "@type": "Package", "@id": "a", "ownedElement": [{ "@id": "a" }] },
+        ]);
+        assert!(matches!(
+            from_json(&itself),
+            Err(ImportError::OwnershipCycle(_))
+        ));
+    }
+
+    #[test]
+    fn an_element_two_owners_claim_is_refused() {
+        let json = json!([
+            { "@type": "Package", "@id": "a", "ownedElement": [{ "@id": "c" }] },
+            { "@type": "Package", "@id": "b", "ownedElement": [{ "@id": "c" }] },
+            { "@type": "Package", "@id": "c" },
+        ]);
+        assert!(matches!(
+            from_json(&json),
+            Err(ImportError::SharedOwnership(_))
+        ));
+    }
+
+    #[test]
+    fn a_repeated_id_and_an_abstract_metaclass_are_refused() {
+        let twice = json!([
+            { "@type": "Package", "@id": "a" },
+            { "@type": "Package", "@id": "a" },
+        ]);
+        assert!(matches!(
+            from_json(&twice),
+            Err(ImportError::DuplicateId(_))
+        ));
+        // a membership folded into an edge is claimed by its id too
+        let after_a_bridge = json!([
+            { "@type": "OwningMembership", "@id": "m",
+              "ownedRelatedElement": [{ "@id": "a" }] },
+            { "@type": "Package", "@id": "m" },
+        ]);
+        assert!(matches!(
+            from_json(&after_a_bridge),
+            Err(ImportError::DuplicateId(_))
+        ));
+        // and no model holds an element of an abstract metaclass
+        let abstract_type = json!([{ "@type": "Relationship", "@id": "r" }]);
+        assert!(matches!(
+            from_json(&abstract_type),
+            Err(ImportError::AbstractType(_))
+        ));
+    }
+
+    #[test]
+    fn a_connector_is_a_feature_of_the_type_that_declares_it() {
+        let (_, model) = resolved("part def P {\n\tpart a;\n\tpart b;\n\tconnect a to b;\n}\n");
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of_type = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["@type"] == name)
+                .unwrap_or_else(|| panic!("no {name} was written"))
+        };
+        let part = of_type("PartDefinition");
+        let connector = of_type("ConnectionUsage");
+        let ids = |value: &Json| -> Vec<String> {
+            value
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|reference| reference["@id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let bridge_id = connector["owningMembership"]["@id"]
+            .as_str()
+            .expect("the connector is owned through a membership")
+            .to_string();
+        let bridge = objects
+            .iter()
+            .find(|object| object["@id"] == bridge_id.as_str())
+            .unwrap();
+        assert_eq!(bridge["@type"], "FeatureMembership");
+        assert_eq!(bridge["owningRelatedElement"]["@id"], part["@id"]);
+        assert_eq!(bridge["ownedRelatedElement"][0]["@id"], connector["@id"]);
+        // the type reaches the connector as one of its features, and
+        // owns the membership rather than the connector itself
+        let connector_id = connector["@id"].as_str().unwrap().to_string();
+        assert!(ids(&part["ownedFeature"]).contains(&connector_id));
+        assert!(ids(&part["feature"]).contains(&connector_id));
+        assert!(ids(&part["ownedRelationship"]).contains(&bridge_id));
+        assert!(!ids(&part["ownedRelationship"]).contains(&connector_id));
+        assert_eq!(connector["owningRelatedElement"], Json::Null);
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    #[test]
+    fn a_succession_relates_the_features_it_was_resolved_to() {
+        let (_, model) =
+            resolved("action def A {\n\taction a;\n\taction b;\n\tsuccession first a then b;\n}\n");
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let succession = objects
+            .iter()
+            .find(|object| object["@type"] == "SuccessionAsUsage")
+            .expect("the succession was reified");
+        // its ends never resolved to a source and a target of their own,
+        // but it still says what it relates
+        assert_eq!(succession["relatedElement"], succession["relatedFeature"]);
+        assert_eq!(succession["relatedElement"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_dependency_is_a_member_of_the_package_that_declares_it() {
+        let (_, model) =
+            resolved("package P {\n\tpart def A;\n\tpart def B;\n\tdependency from A to B;\n}\n");
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["declaredName"] == name)
+                .unwrap()
+        };
+        let dependency = objects
+            .iter()
+            .find(|object| object["@type"] == "Dependency")
+            .expect("the dependency was reified");
+        let bridge_id = dependency["owningMembership"]["@id"]
+            .as_str()
+            .expect("a dependency is a member like any other");
+        let bridge = objects
+            .iter()
+            .find(|object| object["@id"] == bridge_id)
+            .unwrap();
+        assert_eq!(bridge["@type"], "OwningMembership");
+        assert_eq!(bridge["owningRelatedElement"]["@id"], of("P")["@id"]);
+        // client and supplier are the source and the target
+        assert_eq!(dependency["client"][0]["@id"], of("A")["@id"]);
+        assert_eq!(dependency["supplier"][0]["@id"], of("B")["@id"]);
+        assert_eq!(dependency["source"], dependency["client"]);
+        assert_eq!(dependency["target"], dependency["supplier"]);
+        assert_eq!(dependency["relatedElement"][0]["@id"], of("A")["@id"]);
+        assert_eq!(dependency["relatedElement"][1]["@id"], of("B")["@id"]);
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    #[test]
+    fn a_reified_relationship_names_the_elements_it_relates() {
+        let (_, model) = resolved(
+            "attribute def R;\npart def A;\npart def B :> A {\n\tattribute mass : R;\n}\n",
+        );
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["declaredName"] == name)
+                .unwrap()
+        };
+        let of_type = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["@type"] == name)
+                .unwrap()
+        };
+        // nothing wrote the specific end of a subclassification; the
+        // type that owns it is that end
+        let subclassification = of_type("Subclassification");
+        assert_eq!(subclassification["subclassifier"]["@id"], of("B")["@id"]);
+        assert_eq!(subclassification["superclassifier"]["@id"], of("A")["@id"]);
+        assert_eq!(
+            subclassification["specific"],
+            subclassification["subclassifier"]
+        );
+        assert_eq!(
+            subclassification["general"],
+            subclassification["superclassifier"]
+        );
+        assert_eq!(subclassification["source"][0]["@id"], of("B")["@id"]);
+        assert_eq!(subclassification["target"][0]["@id"], of("A")["@id"]);
+        assert_eq!(
+            subclassification["relatedElement"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(subclassification["owningClassifier"]["@id"], of("B")["@id"]);
+        // a typing writes its ends itself, and the names it redefines
+        // say the same thing
+        let typing = of_type("FeatureTyping");
+        assert_eq!(typing["typedFeature"]["@id"], of("mass")["@id"]);
+        assert_eq!(typing["type"]["@id"], of("R")["@id"]);
+        assert_eq!(typing["specific"], typing["typedFeature"]);
+        assert_eq!(typing["general"], typing["type"]);
+        assert_eq!(typing["owningFeature"]["@id"], of("mass")["@id"]);
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    #[test]
+    fn a_plain_import_brings_what_it_imports_no_further() {
+        let (_, model) = resolved(
+            "package A;\npackage B {\n\timport A::*;\n}\n\
+             package C {\n\tpublic import A::*;\n}\n\
+             package D {\n\tprotected import A::*;\n}\n",
+        );
+        let json = to_json(&model);
+        let visibilities: Vec<&str> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|object| object["@type"] == "NamespaceImport")
+            .map(|object| object["visibility"].as_str().unwrap())
+            .collect();
+        assert_eq!(visibilities, ["private", "public", "protected"]);
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    #[test]
+    fn a_name_changed_after_an_import_is_the_name_exported() {
+        let model = example_model();
+        let (mut rebuilt, roots) = from_json(&to_json(&model)).unwrap();
+        // the derived name arrived as a property of its own before, and
+        // shadowed the declared name from then on
+        assert_eq!(rebuilt.get(roots[0], "name"), None);
+        rebuilt.set(roots[0], "declaredName", Value::String("Q".to_string()));
+        let json = to_json(&rebuilt);
+        assert_eq!(json[0]["name"], "Q");
+        assert_eq!(json[0]["qualifiedName"], "Q");
+    }
+
+    #[test]
+    fn a_comment_is_about_what_it_named() {
+        let (_, model) = resolved(
+            "package P {\n\tpart def A;\n\tpart def B;\n\tcomment about A, B /* both */\n}\n",
+        );
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["declaredName"] == name)
+                .unwrap()
+        };
+        let comment = objects
+            .iter()
+            .find(|object| object["@type"] == "Comment")
+            .expect("the comment was reified");
+        let about: Vec<&str> = comment["annotatedElement"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|reference| reference["@id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            about,
+            [
+                of("A")["@id"].as_str().unwrap(),
+                of("B")["@id"].as_str().unwrap()
+            ]
+        );
+        assert_eq!(comment["annotation"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            comment["annotation"],
+            comment["ownedAnnotatingRelationship"]
+        );
+        // each annotation relates the comment to what it named
+        let annotation = objects
+            .iter()
+            .find(|object| object["@type"] == "Annotation")
+            .unwrap();
+        assert_eq!(annotation["source"][0]["@id"], comment["@id"]);
+        assert_eq!(annotation["target"][0]["@id"], of("A")["@id"]);
+        assert_eq!(annotation["annotatingElement"]["@id"], comment["@id"]);
+    }
+
+    #[test]
+    fn a_folded_membership_names_its_member_the_way_its_metaclass_does() {
+        let (_, model) = resolved(
+            "action def Act;\nstate def S {\n\tentry action a : Act;\n}\n\
+             constraint def C {\n\ttrue\n}\n",
+        );
+        let json = to_json(&model);
+        let objects = json.as_array().unwrap();
+        let of_type = |name: &str| {
+            objects
+                .iter()
+                .find(|object| object["@type"] == name)
+                .unwrap_or_else(|| panic!("no {name} was written"))
+        };
+        let subaction = of_type("StateSubactionMembership");
+        assert_eq!(
+            subaction["action"]["@id"],
+            subaction["ownedRelatedElement"][0]["@id"]
+        );
+        let result = of_type("ResultExpressionMembership");
+        assert_eq!(
+            result["ownedResultExpression"]["@id"],
+            result["ownedRelatedElement"][0]["@id"]
+        );
     }
 
     #[test]
@@ -2011,6 +2988,66 @@ mod tests {
         ]);
         let (model, roots) = from_json(&json).unwrap();
         assert_eq!(model.props(roots[0]).count(), 0);
+    }
+
+    #[test]
+    fn an_enumeration_reads_back_as_the_literal_the_metamodel_spells() {
+        // a model holds a literal as the metamodel's own text, which is
+        // what its readers match on
+        let json = json!([
+            { "@type": "AttributeUsage", "@id": "a", "direction": "in" },
+            { "@type": "OccurrenceUsage", "@id": "b", "portionKind": "snapshot" },
+            { "@type": "NamespaceImport", "@id": "c", "visibility": "protected" },
+            { "@type": "RequirementConstraintMembership", "@id": "d", "kind": "assumption" },
+            { "@type": "StateSubactionMembership", "@id": "e", "kind": "do" },
+            { "@type": "TransitionFeatureMembership", "@id": "f", "kind": "guard" },
+            { "@type": "TriggerInvocationExpression", "@id": "g", "kind": "after" },
+            { "@type": "AttributeUsage", "@id": "h", "direction": "sideways" },
+        ]);
+        let (model, roots) = from_json(&json).unwrap();
+        let literals: Vec<Option<&Value>> = [
+            "direction",
+            "portionKind",
+            "visibility",
+            "kind",
+            "kind",
+            "kind",
+            "kind",
+            "direction",
+        ]
+        .iter()
+        .zip(&roots)
+        .map(|(property, &id)| model.get(id, property))
+        .collect();
+        assert_eq!(
+            literals,
+            [
+                Some(&Value::EnumLit("in")),
+                Some(&Value::EnumLit("snapshot")),
+                Some(&Value::EnumLit("protected")),
+                Some(&Value::EnumLit("assumption")),
+                Some(&Value::EnumLit("do")),
+                Some(&Value::EnumLit("guard")),
+                Some(&Value::EnumLit("after")),
+                // no literal of the enumeration is spelled that way
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_number_json_cannot_hold_is_written_as_text() {
+        let mut model = Model::new();
+        let literal = model.create(ElementKind::LiteralRational);
+        model.set(literal, "value", Value::Real(f64::INFINITY));
+        let json = to_json(&model);
+        assert_eq!(json[0]["value"], "inf");
+        let (rebuilt, roots) = from_json(&json).unwrap();
+        assert_eq!(
+            rebuilt.get(roots[0], "value"),
+            Some(&Value::Real(f64::INFINITY))
+        );
+        assert_eq!(to_json(&rebuilt), json);
     }
 
     #[test]
