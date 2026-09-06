@@ -47,10 +47,7 @@ fn corpus_formats_safely_and_idempotently() {
 
     for path in &files {
         let text = std::fs::read_to_string(path).unwrap();
-        let dialect = match path.extension().and_then(|e| e.to_str()) {
-            Some("kerml") => Dialect::KerML,
-            _ => Dialect::SysML,
-        };
+        let dialect = Dialect::from_path(path);
         let original = parse_dialect(&text, dialect);
         let formatted = format(&text, dialect);
         let reparsed = parse_dialect(&formatted, dialect);
@@ -65,6 +62,23 @@ fn corpus_formats_safely_and_idempotently() {
             tokens(&original),
             tokens(&reparsed),
             "formatting changed the token stream of {}",
+            path.display()
+        );
+        // Every break the formatter writes is `\n`. A `\r` survives only
+        // inside a comment body or a block note, whose interior is one
+        // token's text and is emitted as the author wrote it -- a `//`
+        // note used to carry the `\r` of a CRLF line ending too, which
+        // left twenty of these files formatted with both endings mixed.
+        let stray: Vec<String> = sysml_syntax::lex_dialect(&formatted, dialect)
+            .0
+            .into_iter()
+            .filter(|t| !matches!(t.kind, SyntaxKind::COMMENT_BODY | SyntaxKind::BLOCK_NOTE))
+            .filter(|t| formatted[t.range.clone()].contains('\r'))
+            .map(|t| format!("{:?} at {:?}", t.kind, t.range))
+            .collect();
+        assert!(
+            stray.is_empty(),
+            "formatting left a carriage return outside a comment in {}: {stray:?}",
             path.display()
         );
         let twice = format(&formatted, dialect);

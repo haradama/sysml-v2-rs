@@ -44,10 +44,7 @@ fn check_corpus(subdir: &str) {
     let mut failures = Vec::new();
     for path in &files {
         let text = std::fs::read_to_string(path).unwrap();
-        let dialect = match path.extension().and_then(|e| e.to_str()) {
-            Some("kerml") => Dialect::KerML,
-            _ => Dialect::SysML,
-        };
+        let dialect = Dialect::from_path(path);
         let parse = parse_dialect(&text, dialect);
         assert_eq!(
             parse.syntax().text().to_string(),

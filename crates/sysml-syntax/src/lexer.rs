@@ -28,7 +28,14 @@ fn lex_note(lex: &mut logos::Lexer<'_, Tok>) -> Note {
             }
         }
     } else {
-        let i = rem.find('\n').unwrap_or(rem.len());
+        let mut i = rem.find('\n').unwrap_or(rem.len());
+        // On a CRLF file the `\r` belongs to the line ending, not to the
+        // note. Keeping it inside the token carries it through the
+        // formatter, which writes `\n` for every break it makes itself and
+        // would otherwise leave the file with two kinds of line ending.
+        if rem[..i].ends_with('\r') {
+            i -= 1;
+        }
         lex.bump(i);
         Note::Line
     }
@@ -51,6 +58,10 @@ fn lex_comment_body(lex: &mut logos::Lexer<'_, Tok>) -> bool {
 #[derive(Logos, Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Tok {
     #[regex(r"[ \t\r\n]+")]
+    // A byte order mark is what an editor on Windows puts in front of a
+    // file it saved as UTF-8; it says how to read the bytes and nothing
+    // about the model, so the grammar may skip it as it skips a space.
+    #[token("\u{feff}")]
     Whitespace,
     #[token("//", lex_note)]
     Note(Note),
@@ -63,6 +74,14 @@ pub(crate) enum Tok {
     UnrestrictedName,
     #[regex(r#""([^"\\\n]|\\.)*""#)]
     Str,
+    // A quote left open is a name (or a string) all the same: it is what
+    // every keystroke of writing one looks like, and reading it as an
+    // error to the end of the line swallows the `;` or `}` that the rest
+    // of the file needs. Longest-match keeps these behind the closed forms.
+    #[regex(r"'[^'\n]*")]
+    UnterminatedName,
+    #[regex(r#""[^"\n]*"#)]
+    UnterminatedStr,
     #[regex(
         r"([0-9]+((\.[0-9]+([eE][+-]?[0-9]+)?)|([eE][+-]?[0-9]+)))|(\.[0-9]+([eE][+-]?[0-9]+)?)"
     )]
@@ -200,6 +219,14 @@ pub fn lex_dialect(text: &str, dialect: crate::Dialect) -> (Vec<Token>, Vec<Diag
                 .unwrap_or(SyntaxKind::IDENT),
             Ok(Tok::UnrestrictedName) => SyntaxKind::UNRESTRICTED_NAME,
             Ok(Tok::Str) => SyntaxKind::STRING,
+            Ok(Tok::UnterminatedName) => {
+                diagnostics.push(Diagnostic::new(&range, "unterminated name"));
+                SyntaxKind::UNRESTRICTED_NAME
+            }
+            Ok(Tok::UnterminatedStr) => {
+                diagnostics.push(Diagnostic::new(&range, "unterminated string"));
+                SyntaxKind::STRING
+            }
             Ok(Tok::Real) => SyntaxKind::REAL,
             Ok(Tok::Decimal) => SyntaxKind::DECIMAL,
             Ok(Tok::LBrace) => SyntaxKind::L_BRACE,
@@ -318,6 +345,47 @@ mod tests {
         let (tokens, diags) = lex("/* never closed  ");
         assert_eq!(tokens[0].kind, COMMENT_BODY);
         assert_eq!(diags.len(), 1);
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_trivia_wherever_it_appears() {
+        assert_eq!(
+            kinds("\u{feff}part def A;"),
+            vec![WHITESPACE, PART_KW, WHITESPACE, DEF_KW, WHITESPACE, IDENT, SEMICOLON]
+        );
+        assert!(lex("\u{feff}").1.is_empty());
+    }
+
+    #[test]
+    fn a_line_note_stops_before_the_carriage_return_of_a_crlf() {
+        let text = "// note\r\nx";
+        let (tokens, _) = lex(text);
+        assert_eq!(
+            tokens.iter().map(|t| t.kind).collect::<Vec<_>>(),
+            vec![LINE_NOTE, WHITESPACE, IDENT]
+        );
+        assert_eq!(&text[tokens[0].range.clone()], "// note");
+        // a lone `\r` is not a line ending, so it stays in the note
+        assert_eq!(&lex("// note\rx").0[0].range, &(0..9));
+    }
+
+    #[test]
+    fn a_quote_left_open_is_still_a_name_and_ends_at_the_line() {
+        let (tokens, diags) = lex("part def 'half written\npart def B;");
+        assert_eq!(tokens[4].kind, UNRESTRICTED_NAME);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "unterminated name");
+        // the `;` the rest of the file needs is still its own token
+        assert_eq!(tokens.last().unwrap().kind, SEMICOLON);
+        let (tokens, diags) = lex("attribute a = \"open;\n");
+        assert_eq!(tokens[6].kind, STRING);
+        assert_eq!(diags[0].message, "unterminated string");
+        // a closed one still wins the longest match
+        assert_eq!(
+            kinds("'a\\'b' \"c\""),
+            vec![UNRESTRICTED_NAME, WHITESPACE, STRING]
+        );
+        assert!(lex("'a' 'b'").1.is_empty());
     }
 
     #[test]

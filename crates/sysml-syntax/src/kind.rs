@@ -450,148 +450,23 @@ impl SyntaxKind {
     /// Is this keyword reserved in the SysML v2 textual notation?
     /// (Keywords of the other dialect are ordinary identifiers.)
     pub fn is_sysml_keyword(self) -> bool {
-        use SyntaxKind::*;
-        self.is_keyword()
-            && !matches!(
-                self,
-                // not in the official RESERVED_KEYWORD list of either notation
-                ASSUMPTION_KW | EFFECT_KW | GUARD_KW | TRIGGER_KW
-                // KerML-only keywords
-                | TYPED_KW
-                | ASSOC_KW
-                    | BEHAVIOR_KW
-                    | BOOL_KW
-                    | CHAINS_KW
-                    | CLASS_KW
-                    | CLASSIFIER_KW
-                    | COMPOSITE_KW
-                    | CONJUGATE_KW
-                    | CONJUGATES_KW
-                    | CONJUGATION_KW
-                    | CONNECTOR_KW
-                    | CONST_KW
-                    | DATATYPE_KW
-                    | DIFFERENCES_KW
-                    | DISJOINING_KW
-                    | DISJOINT_KW
-                    | EXPR_KW
-                    | FEATURE_KW
-                    | FEATURED_KW
-                    | FEATURING_KW
-                    | FUNCTION_KW
-                    | INTERACTION_KW
-                    | INTERSECTS_KW
-                    | INV_KW
-                    | INVERSE_KW
-                    | INVERTING_KW
-                    | MEMBER_KW
-                    | METACLASS_KW
-                    | MULTIPLICITY_KW
-                    | NAMESPACE_KW
-                    | PORTION_KW
-                    | PREDICATE_KW
-                    | REDEFINITION_KW
-                    | SPECIALIZATION_KW
-                    | STEP_KW
-                    | STRUCT_KW
-                    | SUBCLASSIFIER_KW
-                    | SUBSET_KW
-                    | SUBTYPE_KW
-                    | TYPE_KW
-                    | TYPING_KW
-                    | UNIONS_KW
-                    | VAR_KW
-            )
+        matches!(self.reserved_in(), Reserved::Both | Reserved::SysML)
     }
 
     /// Is this keyword reserved in the KerML textual notation?
     pub fn is_kerml_keyword(self) -> bool {
-        use SyntaxKind::*;
-        self.is_keyword()
-            && !matches!(
-                self,
-                // not in the official RESERVED_KEYWORD list of either notation
-                ASSUMPTION_KW | EFFECT_KW | GUARD_KW | TRIGGER_KW
-                // SysML-only keywords. `new` is not among them: KerML
-                // writes `new A(x)` too, and reading it as a name makes
-                // the constructor an unresolvable reference.
-                | UNTIL_KW
-                | ACCEPT_KW
-                    | ACTION_KW
-                    | ACTOR_KW
-                    | AFTER_KW
-                    | ALLOCATE_KW
-                    | ALLOCATION_KW
-                    | ANALYSIS_KW
-                    | ASSERT_KW
-                    | ASSIGN_KW
-                    | ASSUME_KW
-                    | AT_KW
-                    | ATTRIBUTE_KW
-                    | BIND_KW
-                    | CALC_KW
-                    | CASE_KW
-                    | CONCERN_KW
-                    | CONNECT_KW
-                    | CONNECTION_KW
-                    | CONSTANT_KW
-                    | CONSTRAINT_KW
-                    | DECIDE_KW
-                    | DEF_KW
-                    | DEFINED_KW
-                    | DO_KW
-                    | ENTRY_KW
-                    | ENUM_KW
-                    | EVENT_KW
-                    | EXHIBIT_KW
-                    | EXIT_KW
-                    | EXPOSE_KW
-                    | FORK_KW
-                    | FRAME_KW
-                    | INCLUDE_KW
-                    | INDIVIDUAL_KW
-                    | INTERFACE_KW
-                    | ITEM_KW
-                    | JOIN_KW
-                    | LOOP_KW
-                    | MERGE_KW
-                    | MESSAGE_KW
-                    | OBJECTIVE_KW
-                    | OCCURRENCE_KW
-                    | PARALLEL_KW
-                    | PART_KW
-                    | PERFORM_KW
-                    | PORT_KW
-                    | REF_KW
-                    | RENDER_KW
-                    | RENDERING_KW
-                    | REQUIRE_KW
-                    | REQUIREMENT_KW
-                    | SATISFY_KW
-                    | SEND_KW
-                    | SNAPSHOT_KW
-                    | STAKEHOLDER_KW
-                    | STATE_KW
-                    | SUBJECT_KW
-                    | TERMINATE_KW
-                    | TIMESLICE_KW
-                    | TRANSITION_KW
-                    | USE_KW
-                    | VARIANT_KW
-                    | VARIATION_KW
-                    | VERIFICATION_KW
-                    | VERIFY_KW
-                    | VIA_KW
-                    | VIEW_KW
-                    | VIEWPOINT_KW
-                    | WHEN_KW
-                    | WHILE_KW
-            )
+        matches!(self.reserved_in(), Reserved::Both | Reserved::KerML)
+    }
+
+    /// Which notations reserve this kind, `Neither` for anything that is
+    /// not a keyword at all.
+    fn reserved_in(self) -> Reserved {
+        RESERVED_IN[self as usize]
     }
 
     pub fn from_keyword(ident: &str) -> Option<SyntaxKind> {
         KEYWORDS
-            .binary_search_by_key(&ident, |(text, _)| text)
+            .binary_search_by_key(&ident, |(text, _, _)| text)
             .ok()
             .map(|found| KEYWORDS[found].1)
     }
@@ -626,191 +501,222 @@ pub type SyntaxNode = rowan::SyntaxNode<SysMLLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<SysMLLanguage>;
 pub type SyntaxElement = rowan::SyntaxElement<SysMLLanguage>;
 
-/// Every keyword of the two textual notations with its token, in
-/// alphabetical order -- the single table the lexer, the completion list
-/// and the conformance tests against the specification's BNF all read.
+/// Which of the two notations reserve a keyword.
 ///
-/// Four of these are contextual rather than reserved (`assumption`,
+/// A keyword of one notation is an ordinary identifier in the other:
+/// `frame` is a name in KerML, `step` is a name in SysML. Four words are
+/// reserved by neither, because the specification's grammar spells them
+/// inline (`{ kind = 'guard' }`) rather than reserving them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reserved {
+    Both,
+    SysML,
+    KerML,
+    Neither,
+}
+
+/// What each kind is reserved in, indexed by the kind itself.
+///
+/// Built from [`KEYWORDS`] at compile time. The two dialect predicates
+/// used to be hand-kept lists of what each notation does *not* reserve,
+/// so a keyword added to one list and forgotten in the other silently
+/// became a name in a notation that reserves it.
+const RESERVED_IN: [Reserved; SyntaxKind::EOF as usize + 1] = {
+    let mut table = [Reserved::Neither; SyntaxKind::EOF as usize + 1];
+    let mut i = 0;
+    while i < KEYWORDS.len() {
+        table[KEYWORDS[i].1 as usize] = KEYWORDS[i].2;
+        i += 1;
+    }
+    table
+};
+
+/// Every keyword of the two textual notations with its token and the
+/// notations that reserve it, in alphabetical order -- the single table
+/// the lexer, the completion list, the two dialect predicates and the
+/// conformance tests against the specification's BNF all read.
+///
+/// Four of these are reserved by neither notation (`assumption`,
 /// `effect`, `guard`, `trigger`): the parser still accepts them as plain
 /// names, and `tests/bnf_keywords.rs` holds it to that.
-pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
-    ("about", ABOUT_KW),
-    ("abstract", ABSTRACT_KW),
-    ("accept", ACCEPT_KW),
-    ("action", ACTION_KW),
-    ("actor", ACTOR_KW),
-    ("after", AFTER_KW),
-    ("alias", ALIAS_KW),
-    ("all", ALL_KW),
-    ("allocate", ALLOCATE_KW),
-    ("allocation", ALLOCATION_KW),
-    ("analysis", ANALYSIS_KW),
-    ("and", AND_KW),
-    ("as", AS_KW),
-    ("assert", ASSERT_KW),
-    ("assign", ASSIGN_KW),
-    ("assoc", ASSOC_KW),
-    ("assume", ASSUME_KW),
-    ("assumption", ASSUMPTION_KW),
-    ("at", AT_KW),
-    ("attribute", ATTRIBUTE_KW),
-    ("behavior", BEHAVIOR_KW),
-    ("bind", BIND_KW),
-    ("binding", BINDING_KW),
-    ("bool", BOOL_KW),
-    ("by", BY_KW),
-    ("calc", CALC_KW),
-    ("case", CASE_KW),
-    ("chains", CHAINS_KW),
-    ("class", CLASS_KW),
-    ("classifier", CLASSIFIER_KW),
-    ("comment", COMMENT_KW),
-    ("composite", COMPOSITE_KW),
-    ("concern", CONCERN_KW),
-    ("conjugate", CONJUGATE_KW),
-    ("conjugates", CONJUGATES_KW),
-    ("conjugation", CONJUGATION_KW),
-    ("connect", CONNECT_KW),
-    ("connection", CONNECTION_KW),
-    ("connector", CONNECTOR_KW),
-    ("const", CONST_KW),
-    ("constant", CONSTANT_KW),
-    ("constraint", CONSTRAINT_KW),
-    ("crosses", CROSSES_KW),
-    ("datatype", DATATYPE_KW),
-    ("decide", DECIDE_KW),
-    ("def", DEF_KW),
-    ("default", DEFAULT_KW),
-    ("defined", DEFINED_KW),
-    ("dependency", DEPENDENCY_KW),
-    ("derived", DERIVED_KW),
-    ("differences", DIFFERENCES_KW),
-    ("disjoining", DISJOINING_KW),
-    ("disjoint", DISJOINT_KW),
-    ("do", DO_KW),
-    ("doc", DOC_KW),
-    ("effect", EFFECT_KW),
-    ("else", ELSE_KW),
-    ("end", END_KW),
-    ("entry", ENTRY_KW),
-    ("enum", ENUM_KW),
-    ("event", EVENT_KW),
-    ("exhibit", EXHIBIT_KW),
-    ("exit", EXIT_KW),
-    ("expose", EXPOSE_KW),
-    ("expr", EXPR_KW),
-    ("false", FALSE_KW),
-    ("feature", FEATURE_KW),
-    ("featured", FEATURED_KW),
-    ("featuring", FEATURING_KW),
-    ("filter", FILTER_KW),
-    ("first", FIRST_KW),
-    ("flow", FLOW_KW),
-    ("for", FOR_KW),
-    ("fork", FORK_KW),
-    ("frame", FRAME_KW),
-    ("from", FROM_KW),
-    ("function", FUNCTION_KW),
-    ("guard", GUARD_KW),
-    ("hastype", HASTYPE_KW),
-    ("if", IF_KW),
-    ("implies", IMPLIES_KW),
-    ("import", IMPORT_KW),
-    ("in", IN_KW),
-    ("include", INCLUDE_KW),
-    ("individual", INDIVIDUAL_KW),
-    ("inout", INOUT_KW),
-    ("interaction", INTERACTION_KW),
-    ("interface", INTERFACE_KW),
-    ("intersects", INTERSECTS_KW),
-    ("inv", INV_KW),
-    ("inverse", INVERSE_KW),
-    ("inverting", INVERTING_KW),
-    ("istype", ISTYPE_KW),
-    ("item", ITEM_KW),
-    ("join", JOIN_KW),
-    ("language", LANGUAGE_KW),
-    ("library", LIBRARY_KW),
-    ("locale", LOCALE_KW),
-    ("loop", LOOP_KW),
-    ("member", MEMBER_KW),
-    ("merge", MERGE_KW),
-    ("message", MESSAGE_KW),
-    ("meta", META_KW),
-    ("metaclass", METACLASS_KW),
-    ("metadata", METADATA_KW),
-    ("multiplicity", MULTIPLICITY_KW),
-    ("namespace", NAMESPACE_KW),
-    ("new", NEW_KW),
-    ("nonunique", NONUNIQUE_KW),
-    ("not", NOT_KW),
-    ("null", NULL_KW),
-    ("objective", OBJECTIVE_KW),
-    ("occurrence", OCCURRENCE_KW),
-    ("of", OF_KW),
-    ("or", OR_KW),
-    ("ordered", ORDERED_KW),
-    ("out", OUT_KW),
-    ("package", PACKAGE_KW),
-    ("parallel", PARALLEL_KW),
-    ("part", PART_KW),
-    ("perform", PERFORM_KW),
-    ("port", PORT_KW),
-    ("portion", PORTION_KW),
-    ("predicate", PREDICATE_KW),
-    ("private", PRIVATE_KW),
-    ("protected", PROTECTED_KW),
-    ("public", PUBLIC_KW),
-    ("redefines", REDEFINES_KW),
-    ("redefinition", REDEFINITION_KW),
-    ("ref", REF_KW),
-    ("references", REFERENCES_KW),
-    ("render", RENDER_KW),
-    ("rendering", RENDERING_KW),
-    ("rep", REP_KW),
-    ("require", REQUIRE_KW),
-    ("requirement", REQUIREMENT_KW),
-    ("return", RETURN_KW),
-    ("satisfy", SATISFY_KW),
-    ("send", SEND_KW),
-    ("snapshot", SNAPSHOT_KW),
-    ("specialization", SPECIALIZATION_KW),
-    ("specializes", SPECIALIZES_KW),
-    ("stakeholder", STAKEHOLDER_KW),
-    ("standard", STANDARD_KW),
-    ("state", STATE_KW),
-    ("step", STEP_KW),
-    ("struct", STRUCT_KW),
-    ("subclassifier", SUBCLASSIFIER_KW),
-    ("subject", SUBJECT_KW),
-    ("subset", SUBSET_KW),
-    ("subsets", SUBSETS_KW),
-    ("subtype", SUBTYPE_KW),
-    ("succession", SUCCESSION_KW),
-    ("terminate", TERMINATE_KW),
-    ("then", THEN_KW),
-    ("timeslice", TIMESLICE_KW),
-    ("to", TO_KW),
-    ("transition", TRANSITION_KW),
-    ("trigger", TRIGGER_KW),
-    ("true", TRUE_KW),
-    ("type", TYPE_KW),
-    ("typed", TYPED_KW),
-    ("typing", TYPING_KW),
-    ("unions", UNIONS_KW),
-    ("until", UNTIL_KW),
-    ("use", USE_KW),
-    ("var", VAR_KW),
-    ("variant", VARIANT_KW),
-    ("variation", VARIATION_KW),
-    ("verification", VERIFICATION_KW),
-    ("verify", VERIFY_KW),
-    ("via", VIA_KW),
-    ("view", VIEW_KW),
-    ("viewpoint", VIEWPOINT_KW),
-    ("when", WHEN_KW),
-    ("while", WHILE_KW),
-    ("xor", XOR_KW),
+pub const KEYWORDS: &[(&str, SyntaxKind, Reserved)] = &[
+    ("about", ABOUT_KW, Reserved::Both),
+    ("abstract", ABSTRACT_KW, Reserved::Both),
+    ("accept", ACCEPT_KW, Reserved::SysML),
+    ("action", ACTION_KW, Reserved::SysML),
+    ("actor", ACTOR_KW, Reserved::SysML),
+    ("after", AFTER_KW, Reserved::SysML),
+    ("alias", ALIAS_KW, Reserved::Both),
+    ("all", ALL_KW, Reserved::Both),
+    ("allocate", ALLOCATE_KW, Reserved::SysML),
+    ("allocation", ALLOCATION_KW, Reserved::SysML),
+    ("analysis", ANALYSIS_KW, Reserved::SysML),
+    ("and", AND_KW, Reserved::Both),
+    ("as", AS_KW, Reserved::Both),
+    ("assert", ASSERT_KW, Reserved::SysML),
+    ("assign", ASSIGN_KW, Reserved::SysML),
+    ("assoc", ASSOC_KW, Reserved::KerML),
+    ("assume", ASSUME_KW, Reserved::SysML),
+    ("assumption", ASSUMPTION_KW, Reserved::Neither),
+    ("at", AT_KW, Reserved::SysML),
+    ("attribute", ATTRIBUTE_KW, Reserved::SysML),
+    ("behavior", BEHAVIOR_KW, Reserved::KerML),
+    ("bind", BIND_KW, Reserved::SysML),
+    ("binding", BINDING_KW, Reserved::Both),
+    ("bool", BOOL_KW, Reserved::KerML),
+    ("by", BY_KW, Reserved::Both),
+    ("calc", CALC_KW, Reserved::SysML),
+    ("case", CASE_KW, Reserved::SysML),
+    ("chains", CHAINS_KW, Reserved::KerML),
+    ("class", CLASS_KW, Reserved::KerML),
+    ("classifier", CLASSIFIER_KW, Reserved::KerML),
+    ("comment", COMMENT_KW, Reserved::Both),
+    ("composite", COMPOSITE_KW, Reserved::KerML),
+    ("concern", CONCERN_KW, Reserved::SysML),
+    ("conjugate", CONJUGATE_KW, Reserved::KerML),
+    ("conjugates", CONJUGATES_KW, Reserved::KerML),
+    ("conjugation", CONJUGATION_KW, Reserved::KerML),
+    ("connect", CONNECT_KW, Reserved::SysML),
+    ("connection", CONNECTION_KW, Reserved::SysML),
+    ("connector", CONNECTOR_KW, Reserved::KerML),
+    ("const", CONST_KW, Reserved::KerML),
+    ("constant", CONSTANT_KW, Reserved::SysML),
+    ("constraint", CONSTRAINT_KW, Reserved::SysML),
+    ("crosses", CROSSES_KW, Reserved::Both),
+    ("datatype", DATATYPE_KW, Reserved::KerML),
+    ("decide", DECIDE_KW, Reserved::SysML),
+    ("def", DEF_KW, Reserved::SysML),
+    ("default", DEFAULT_KW, Reserved::Both),
+    ("defined", DEFINED_KW, Reserved::SysML),
+    ("dependency", DEPENDENCY_KW, Reserved::Both),
+    ("derived", DERIVED_KW, Reserved::Both),
+    ("differences", DIFFERENCES_KW, Reserved::KerML),
+    ("disjoining", DISJOINING_KW, Reserved::KerML),
+    ("disjoint", DISJOINT_KW, Reserved::KerML),
+    ("do", DO_KW, Reserved::SysML),
+    ("doc", DOC_KW, Reserved::Both),
+    ("effect", EFFECT_KW, Reserved::Neither),
+    ("else", ELSE_KW, Reserved::Both),
+    ("end", END_KW, Reserved::Both),
+    ("entry", ENTRY_KW, Reserved::SysML),
+    ("enum", ENUM_KW, Reserved::SysML),
+    ("event", EVENT_KW, Reserved::SysML),
+    ("exhibit", EXHIBIT_KW, Reserved::SysML),
+    ("exit", EXIT_KW, Reserved::SysML),
+    ("expose", EXPOSE_KW, Reserved::SysML),
+    ("expr", EXPR_KW, Reserved::KerML),
+    ("false", FALSE_KW, Reserved::Both),
+    ("feature", FEATURE_KW, Reserved::KerML),
+    ("featured", FEATURED_KW, Reserved::KerML),
+    ("featuring", FEATURING_KW, Reserved::KerML),
+    ("filter", FILTER_KW, Reserved::Both),
+    ("first", FIRST_KW, Reserved::Both),
+    ("flow", FLOW_KW, Reserved::Both),
+    ("for", FOR_KW, Reserved::Both),
+    ("fork", FORK_KW, Reserved::SysML),
+    ("frame", FRAME_KW, Reserved::SysML),
+    ("from", FROM_KW, Reserved::Both),
+    ("function", FUNCTION_KW, Reserved::KerML),
+    ("guard", GUARD_KW, Reserved::Neither),
+    ("hastype", HASTYPE_KW, Reserved::Both),
+    ("if", IF_KW, Reserved::Both),
+    ("implies", IMPLIES_KW, Reserved::Both),
+    ("import", IMPORT_KW, Reserved::Both),
+    ("in", IN_KW, Reserved::Both),
+    ("include", INCLUDE_KW, Reserved::SysML),
+    ("individual", INDIVIDUAL_KW, Reserved::SysML),
+    ("inout", INOUT_KW, Reserved::Both),
+    ("interaction", INTERACTION_KW, Reserved::KerML),
+    ("interface", INTERFACE_KW, Reserved::SysML),
+    ("intersects", INTERSECTS_KW, Reserved::KerML),
+    ("inv", INV_KW, Reserved::KerML),
+    ("inverse", INVERSE_KW, Reserved::KerML),
+    ("inverting", INVERTING_KW, Reserved::KerML),
+    ("istype", ISTYPE_KW, Reserved::Both),
+    ("item", ITEM_KW, Reserved::SysML),
+    ("join", JOIN_KW, Reserved::SysML),
+    ("language", LANGUAGE_KW, Reserved::Both),
+    ("library", LIBRARY_KW, Reserved::Both),
+    ("locale", LOCALE_KW, Reserved::Both),
+    ("loop", LOOP_KW, Reserved::SysML),
+    ("member", MEMBER_KW, Reserved::KerML),
+    ("merge", MERGE_KW, Reserved::SysML),
+    ("message", MESSAGE_KW, Reserved::SysML),
+    ("meta", META_KW, Reserved::Both),
+    ("metaclass", METACLASS_KW, Reserved::KerML),
+    ("metadata", METADATA_KW, Reserved::Both),
+    ("multiplicity", MULTIPLICITY_KW, Reserved::KerML),
+    ("namespace", NAMESPACE_KW, Reserved::KerML),
+    ("new", NEW_KW, Reserved::Both),
+    ("nonunique", NONUNIQUE_KW, Reserved::Both),
+    ("not", NOT_KW, Reserved::Both),
+    ("null", NULL_KW, Reserved::Both),
+    ("objective", OBJECTIVE_KW, Reserved::SysML),
+    ("occurrence", OCCURRENCE_KW, Reserved::SysML),
+    ("of", OF_KW, Reserved::Both),
+    ("or", OR_KW, Reserved::Both),
+    ("ordered", ORDERED_KW, Reserved::Both),
+    ("out", OUT_KW, Reserved::Both),
+    ("package", PACKAGE_KW, Reserved::Both),
+    ("parallel", PARALLEL_KW, Reserved::SysML),
+    ("part", PART_KW, Reserved::SysML),
+    ("perform", PERFORM_KW, Reserved::SysML),
+    ("port", PORT_KW, Reserved::SysML),
+    ("portion", PORTION_KW, Reserved::KerML),
+    ("predicate", PREDICATE_KW, Reserved::KerML),
+    ("private", PRIVATE_KW, Reserved::Both),
+    ("protected", PROTECTED_KW, Reserved::Both),
+    ("public", PUBLIC_KW, Reserved::Both),
+    ("redefines", REDEFINES_KW, Reserved::Both),
+    ("redefinition", REDEFINITION_KW, Reserved::KerML),
+    ("ref", REF_KW, Reserved::SysML),
+    ("references", REFERENCES_KW, Reserved::Both),
+    ("render", RENDER_KW, Reserved::SysML),
+    ("rendering", RENDERING_KW, Reserved::SysML),
+    ("rep", REP_KW, Reserved::Both),
+    ("require", REQUIRE_KW, Reserved::SysML),
+    ("requirement", REQUIREMENT_KW, Reserved::SysML),
+    ("return", RETURN_KW, Reserved::Both),
+    ("satisfy", SATISFY_KW, Reserved::SysML),
+    ("send", SEND_KW, Reserved::SysML),
+    ("snapshot", SNAPSHOT_KW, Reserved::SysML),
+    ("specialization", SPECIALIZATION_KW, Reserved::KerML),
+    ("specializes", SPECIALIZES_KW, Reserved::Both),
+    ("stakeholder", STAKEHOLDER_KW, Reserved::SysML),
+    ("standard", STANDARD_KW, Reserved::Both),
+    ("state", STATE_KW, Reserved::SysML),
+    ("step", STEP_KW, Reserved::KerML),
+    ("struct", STRUCT_KW, Reserved::KerML),
+    ("subclassifier", SUBCLASSIFIER_KW, Reserved::KerML),
+    ("subject", SUBJECT_KW, Reserved::SysML),
+    ("subset", SUBSET_KW, Reserved::KerML),
+    ("subsets", SUBSETS_KW, Reserved::Both),
+    ("subtype", SUBTYPE_KW, Reserved::KerML),
+    ("succession", SUCCESSION_KW, Reserved::Both),
+    ("terminate", TERMINATE_KW, Reserved::SysML),
+    ("then", THEN_KW, Reserved::Both),
+    ("timeslice", TIMESLICE_KW, Reserved::SysML),
+    ("to", TO_KW, Reserved::Both),
+    ("transition", TRANSITION_KW, Reserved::SysML),
+    ("trigger", TRIGGER_KW, Reserved::Neither),
+    ("true", TRUE_KW, Reserved::Both),
+    ("type", TYPE_KW, Reserved::KerML),
+    ("typed", TYPED_KW, Reserved::KerML),
+    ("typing", TYPING_KW, Reserved::KerML),
+    ("unions", UNIONS_KW, Reserved::KerML),
+    ("until", UNTIL_KW, Reserved::SysML),
+    ("use", USE_KW, Reserved::SysML),
+    ("var", VAR_KW, Reserved::KerML),
+    ("variant", VARIANT_KW, Reserved::SysML),
+    ("variation", VARIATION_KW, Reserved::SysML),
+    ("verification", VERIFICATION_KW, Reserved::SysML),
+    ("verify", VERIFY_KW, Reserved::SysML),
+    ("via", VIA_KW, Reserved::SysML),
+    ("view", VIEW_KW, Reserved::SysML),
+    ("viewpoint", VIEWPOINT_KW, Reserved::SysML),
+    ("when", WHEN_KW, Reserved::SysML),
+    ("while", WHILE_KW, Reserved::SysML),
+    ("xor", XOR_KW, Reserved::Both),
 ];
 
 #[cfg(test)]

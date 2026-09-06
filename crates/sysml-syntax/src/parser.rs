@@ -50,6 +50,8 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         pos: 0,
         builder: GreenNodeBuilder::new(),
         errors: lex_errors,
+        depth: 0,
+        gave_up: false,
         plain_target: false,
         carries_payload: false,
     };
@@ -60,6 +62,16 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
     }
 }
 
+/// How much nesting the parser will build structure for.
+///
+/// Both the recursion and the tree it builds are bounded by this: a
+/// thousand open braces would otherwise take the process down with a stack
+/// overflow, which is not something a caller can catch, and even a tree
+/// built without recursion overflows when it is *dropped*. The corpus
+/// nests about a dozen deep, so the limit is only ever reached by input
+/// nobody wrote by hand.
+const MAX_DEPTH: usize = 512;
+
 struct Parser<'t> {
     text: &'t str,
     tokens: Vec<Token>,
@@ -68,6 +80,11 @@ struct Parser<'t> {
     pos: usize,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<Diagnostic>,
+    /// How much of [`MAX_DEPTH`] the tree under construction has spent.
+    depth: usize,
+    /// Set once the limit is reached; from then on the parser reports
+    /// nothing further and the rest of the file is flat.
+    gave_up: bool,
     /// While reading what a `perform`/`include`/`satisfy` adapts, a `[`
     /// opens the usage's multiplicity rather than an index into the
     /// thing being adapted: `include 'add fuel'[0..*]` includes it zero
@@ -150,8 +167,35 @@ impl Parser<'_> {
     }
 
     fn error(&mut self, message: impl Into<String>) {
+        // Once the depth limit has been reported there is nothing left to
+        // say: every enclosing construct is about to find its body missing
+        // and would report the same thing again.
+        if self.gave_up {
+            return;
+        }
         let range = self.current_range();
         self.errors.push(Diagnostic::new(&range, message));
+    }
+
+    /// Claim one more level of nesting, or give up.
+    ///
+    /// Giving up means swallowing the rest of the file as loose tokens in
+    /// whatever node is open: the text is still reproduced exactly, no
+    /// deeper node is built, and every enclosing loop sees EOF and unwinds.
+    fn deepen(&mut self) -> bool {
+        if self.gave_up {
+            return false;
+        }
+        if self.depth < MAX_DEPTH {
+            self.depth += 1;
+            return true;
+        }
+        self.error(format!("nested more than {MAX_DEPTH} deep"));
+        self.gave_up = true;
+        while self.pos < self.tokens.len() {
+            self.token_into_builder();
+        }
+        false
     }
 
     // --- node primitives ---------------------------------------------------
@@ -261,6 +305,14 @@ impl Parser<'_> {
 
     /// One member of a namespace/definition body (or of the root namespace).
     fn member(&mut self) {
+        let outer = self.depth;
+        if self.deepen() {
+            self.member_inner();
+        }
+        self.depth = outer;
+    }
+
+    fn member_inner(&mut self) {
         let cp = self.checkpoint();
         // visibility and `#name` user-defined-keyword prefixes, in any order
         loop {
@@ -293,7 +345,8 @@ impl Parser<'_> {
             IF_KW => self.if_member(cp),
             FIRST_KW | THEN_KW | ELSE_KW | WHILE_KW | UNTIL_KW | FOR_KW | LOOP_KW | MERGE_KW
             | DECIDE_KW | FORK_KW | JOIN_KW | SEND_KW | ACCEPT_KW | ASSIGN_KW | TERMINATE_KW
-            | DO_KW | ENTRY_KW | EXIT_KW | TRANSITION_KW => self.lead_stmt(cp, CONTROL_STMT),
+            | DO_KW | ENTRY_KW | EXIT_KW => self.lead_stmt(cp, CONTROL_STMT),
+            TRANSITION_KW => self.transition(cp),
             SPECIALIZATION_KW | SUBCLASSIFIER_KW | SUBTYPE_KW | SUBSET_KW | REDEFINITION_KW
             | CONJUGATION_KW | DISJOINING_KW | DISJOINT_KW | INVERTING_KW | INVERSE_KW
             | FEATURING_KW | TYPING_KW => self.lead_stmt(cp, RELATION_STMT),
@@ -329,9 +382,12 @@ impl Parser<'_> {
                 self.expect(COMMENT_BODY);
                 self.finish_node();
             }
-            // `message` declarations may be named (`message messages : M ...`)
             SUBJECT_KW | ACTOR_KW | STAKEHOLDER_KW | OBJECTIVE_KW | RETURN_KW | VARIANT_KW
-            | DEFAULT_KW | MESSAGE_KW => self.kw_usage(cp),
+            | DEFAULT_KW => self.kw_usage(cp),
+            // a message carries a payload, and only `definition_or_usage`
+            // knows that, so `message m of x = v` must go the same way
+            // `abstract message m of x = v` already does
+            MESSAGE_KW => self.definition_or_usage(cp),
             k if k.is_modifier_kw() || k.is_def_kind_kw() => self.definition_or_usage(cp),
             // `:>> quantity = isq.L;` — a kind-less usage starting with a
             // feature specialization
@@ -492,6 +548,21 @@ impl Parser<'_> {
         self.finish_node();
     }
 
+    /// `transition <shortName>? Name? first a then b;`
+    ///
+    /// `TransitionUsage = 'transition' ( UsageDeclaration 'first' )? ...`
+    /// puts the declaration before `first`, so a transition that reads its
+    /// own name as a reference is a transition nothing can name -- the same
+    /// trap `connection k connect a to b` sets.
+    fn transition(&mut self, cp: Checkpoint) {
+        self.start_node_at(cp, CONTROL_STMT);
+        self.bump();
+        self.opt_short_name();
+        self.opt_decl_name();
+        self.element_tail();
+        self.finish_node();
+    }
+
     /// `perform action a ...`, `assert not constraint ...`, `event x.y;`, ...
     fn adapter_usage(&mut self, cp: Checkpoint) {
         self.start_node_at(cp, USAGE);
@@ -552,7 +623,18 @@ impl Parser<'_> {
         }
     }
 
+    /// A declaration may lead straight into another one -- `end x feature y
+    /// : T` -- so this recurses through `element_tail` without ever passing
+    /// through `member`, and needs its own share of the depth budget.
     fn definition_or_usage(&mut self, cp: Checkpoint) {
+        let outer = self.depth;
+        if self.deepen() {
+            self.definition_or_usage_inner(cp);
+        }
+        self.depth = outer;
+    }
+
+    fn definition_or_usage_inner(&mut self, cp: Checkpoint) {
         loop {
             if self.current().is_modifier_kw() {
                 self.bump();
@@ -601,10 +683,6 @@ impl Parser<'_> {
         if self.at(L_PAREN) {
             self.param_list();
         }
-        // a nested declaration inside the body is a statement of its own,
-        // and what it means by `of` is its own business
-        let carries = std::mem::take(&mut self.carries_payload);
-        self.carries_payload = carries;
         self.element_tail();
         self.carries_payload = false;
         self.finish_node();
@@ -663,12 +741,11 @@ impl Parser<'_> {
                 OF_KW if self.nth_is_name(1) => self.payload_part(),
                 OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | ACCEPT_KW
                 | AT_KW | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
-                | PARALLEL_KW | GUARD_KW | EFFECT_KW | ASSIGN_KW | SEND_KW | TRIGGER_KW
-                | MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW | TERMINATE_KW | LOOP_KW | NEW_KW
-                | ORDERED_KW | NONUNIQUE_KW | CONNECT_KW | BIND_KW | MESSAGE_KW | ALLOCATE_KW
-                | SUBTYPE_KW | SUBSET_KW | REDEFINITION_KW | TYPING_KW | SPECIALIZATION_KW
-                | SUBCLASSIFIER_KW | COMMA | QUESTION | QUESTION_QUESTION | FAT_ARROW
-                | LANGUAGE_KW => self.bump(),
+                | PARALLEL_KW | ASSIGN_KW | SEND_KW | MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW
+                | TERMINATE_KW | LOOP_KW | NEW_KW | ORDERED_KW | NONUNIQUE_KW | CONNECT_KW
+                | BIND_KW | MESSAGE_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW | REDEFINITION_KW
+                | TYPING_KW | SPECIALIZATION_KW | SUBCLASSIFIER_KW | COMMA | QUESTION
+                | QUESTION_QUESTION | FAT_ARROW | LANGUAGE_KW => self.bump(),
                 // nested declarations inside statements: `then perform body;`,
                 // `then private action whileLoop { ... }`
                 PERFORM_KW | EXHIBIT_KW | EVENT_KW | INCLUDE_KW | SATISFY_KW | ASSERT_KW
@@ -989,6 +1066,9 @@ impl Parser<'_> {
                     | CONNECT_KW
                     | BIND_KW
                     | ALLOCATE_KW
+                    // `succession s first a then b;` and `transition t
+                    // first a then b;` declare themselves before `first`
+                    | FIRST_KW
             )
         {
             self.opt_name();
@@ -1021,9 +1101,15 @@ impl Parser<'_> {
     }
 
     /// `A::B::C`, optionally ending in `::*` / `::**` (imports).
+    ///
+    /// `QualifiedName = ('$' '::')? (NAME '::')* NAME`: a leading `$` is the
+    /// global root, and an import may start there like anything else.
     fn qualified_name(&mut self, allow_wildcards: bool) {
         self.start_node(QUALIFIED_NAME);
-        if self.at_name() || (allow_wildcards && matches!(self.current(), STAR | STAR_STAR)) {
+        if self.at_name()
+            || self.at(DOLLAR)
+            || (allow_wildcards && matches!(self.current(), STAR | STAR_STAR))
+        {
             self.bump();
         } else {
             self.error(format!("expected a name, found {:?}", self.current()));
@@ -1068,6 +1154,14 @@ impl Parser<'_> {
     }
 
     fn expr_bp(&mut self, min_bp: u8) {
+        let outer = self.depth;
+        if self.deepen() {
+            self.expr_bp_inner(min_bp);
+        }
+        self.depth = outer;
+    }
+
+    fn expr_bp_inner(&mut self, min_bp: u8) {
         let cp = self.checkpoint();
         match self.current() {
             NOT_KW | MINUS | PLUS | TILDE | ALL_KW => {
@@ -1116,12 +1210,14 @@ impl Parser<'_> {
                 }
                 self.finish_node();
             }
-            DECIMAL | REAL | STRING | TRUE_KW | FALSE_KW | NULL_KW | STAR | DOLLAR => {
+            DECIMAL | REAL | STRING | TRUE_KW | FALSE_KW | NULL_KW | STAR => {
                 self.start_node(LITERAL);
                 self.bump();
                 self.finish_node();
             }
-            IDENT | UNRESTRICTED_NAME => {
+            // `$` is the global root, so `$::A::b` is a reference like any
+            // other and reads its `::` segments the same way
+            IDENT | UNRESTRICTED_NAME | DOLLAR => {
                 self.start_node(NAME_REF);
                 self.bump();
                 while self.at(COLON_COLON) && self.nth_is_name(1) {
@@ -1155,7 +1251,11 @@ impl Parser<'_> {
                 return;
             }
         }
-        loop {
+        // Each postfix and each binary operator wraps everything read so
+        // far in a new node, so `a.a.a...` and `1 + 1 + 1 ...` grow the tree
+        // one level per operator without ever recursing. Dropping such a
+        // tree is what overflows, so the loop spends the budget too.
+        while self.deepen() {
             match self.current() {
                 DOT | DOT_QUESTION if self.nth_is_name(1) => {
                     self.start_node_at(cp, PATH_EXPR);
@@ -1363,6 +1463,42 @@ mod tests {
         check_ok("import Q::* [@Safety];");
     }
 
+    /// `QualifiedName = ('$' '::')? (NAME '::')* NAME`: the global root is
+    /// a qualified name's first segment wherever a qualified name may go.
+    #[test]
+    fn the_global_root_starts_a_name_in_every_position() {
+        check_ok("import $::Objects::*;");
+        check_ok("import all $::A::B;");
+        check_ok("alias O for $::Objects::Object;");
+        check_ok_kerml("class E :> $::Objects::Object;");
+        check_ok("attribute a = $::A::b;");
+        check_ok("attribute b = $::A::b + 1;");
+        // and it is a reference, not a literal
+        let parse = check_ok("attribute a = $::A::b;");
+        assert!(format!("{:#?}", parse.syntax()).contains("NAME_REF"));
+    }
+
+    /// A statement that reads its own name as a reference is a statement
+    /// nothing can name -- and a reference to something that is not there.
+    #[test]
+    fn a_succession_and_a_transition_declare_their_names() {
+        for text in [
+            "succession s first a then b;",
+            "transition t first a then b;",
+            "transition <t1> t first a then b;",
+        ] {
+            let parse = check_ok(text);
+            let tree = format!("{:#?}", parse.syntax());
+            assert!(
+                tree.contains("NAME@"),
+                "{text} has no declared name:\n{tree}"
+            );
+        }
+        // a nameless one still reads `a` as where it starts
+        let tree = format!("{:#?}", check_ok("succession first a then b;").syntax());
+        assert!(!tree.contains("NAME@"), "{tree}");
+    }
+
     /// Every error-recovery arm keeps the full text and reports something.
     #[test]
     fn error_paths_recover() {
@@ -1396,6 +1532,40 @@ mod tests {
         ] {
             let parse = parse(text);
             assert_eq!(parse.syntax().text().to_string(), text, "lossless: {text}");
+        }
+    }
+
+    /// Nesting past the limit used to take the process down: the recursion
+    /// overflowed the stack while parsing, and where the tree was built by
+    /// a loop instead it overflowed again when rowan dropped it.
+    #[test]
+    fn nesting_past_the_limit_is_reported_once_and_left_flat() {
+        for text in [
+            format!("part def A {{{}", "part b {".repeat(20_000)),
+            format!("attribute x = {};", "(".repeat(50_000)),
+            format!("attribute x = a{};", ".a".repeat(20_000)),
+            format!("attribute x = 1{};", " + 1".repeat(20_000)),
+            (0..20_000).fold(String::new(), |text, n| text + &format!("part a{n} ")) + ";",
+            format!("attribute x = f{};", "(1)".repeat(20_000)),
+        ] {
+            let parse = parse(&text);
+            assert_eq!(parse.syntax().text().to_string(), text, "lossless");
+            let deep: Vec<_> = parse
+                .errors()
+                .iter()
+                .filter(|e| e.message.contains("nested more than"))
+                .collect();
+            assert_eq!(deep.len(), 1, "for {}...", &text[..20]);
+            // and nothing is said after it
+            assert_eq!(parse.errors().last(), deep.first().copied());
+            // the tree is shallow enough to walk -- and to drop
+            let deepest = parse
+                .syntax()
+                .descendants()
+                .map(|node| node.ancestors().count())
+                .max()
+                .unwrap();
+            assert!(deepest <= MAX_DEPTH + 8, "{deepest} levels");
         }
     }
 
@@ -1440,6 +1610,26 @@ mod tests {
         check_ok("state def S { entry; then idle; state idle; transition first idle accept sig then busy; state busy; }");
         check_ok("action def A (in x : X, out y : Y) { first start; then s1; action s1; send x to y via p; }");
         check_ok("part p { perform action a { assign x := x + 1; } exhibit state s parallel { } }");
+    }
+
+    /// What a message carries is the same thing whether or not a modifier
+    /// came first; only the route through the parser differed.
+    #[test]
+    fn a_message_carries_a_payload_however_it_is_written() {
+        let from_the_keyword = |text: &str| {
+            let tree = format!("{:#?}", check_ok(text).syntax());
+            let kinds: Vec<String> = tree
+                .lines()
+                .map(|line| line.trim().split('@').next().unwrap().to_string())
+                .collect();
+            let at = kinds.iter().position(|kind| kind == "MESSAGE_KW").unwrap();
+            kinds[at..].to_vec()
+        };
+        assert_eq!(
+            from_the_keyword("message m of x = v from a to b;"),
+            from_the_keyword("abstract message m of x = v from a to b;")
+        );
+        check_ok("message messages : M;");
     }
 
     #[test]

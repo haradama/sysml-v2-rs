@@ -38,6 +38,12 @@ fn reserved(path: &Path) -> BTreeSet<String> {
 /// reserving them.
 const CONTEXTUAL: [&str; 4] = ["assumption", "effect", "guard", "trigger"];
 
+/// Words the lexer reserves in KerML that the KerML BNF does not.
+///
+/// `new` is the one: KerML writes `new A(x)` as SysML does, and reading
+/// it as a name turns the constructor into a reference to nothing.
+const DEVIATIONS: [&str; 1] = ["new"];
+
 #[test]
 fn the_lexer_reserves_exactly_what_the_specification_does() {
     let bnf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release/bnf");
@@ -61,12 +67,30 @@ fn the_lexer_reserves_exactly_what_the_specification_does() {
     // and the lexer reserves nothing else, the contextual words aside
     let extra: Vec<&str> = sysml_syntax::KEYWORDS
         .iter()
-        .map(|(word, _)| *word)
+        .map(|(word, _, _)| *word)
         .filter(|word| !union.contains(word) && !CONTEXTUAL.contains(word))
         .collect();
     assert!(
         extra.is_empty(),
         "keywords the BNF does not reserve: {extra:?}"
+    );
+
+    // Each notation on its own: reserving a KerML keyword in SysML rejects
+    // a model that spells `step` or `type` as a name, and failing to
+    // reserve one reads a declaration as a reference. The union alone
+    // cannot tell those apart, so every word is checked against its own
+    // list.
+    let mismatched: Vec<String> = sysml_syntax::KEYWORDS
+        .iter()
+        .filter(|(word, kind, _)| {
+            kind.is_sysml_keyword() != sysml.contains(*word)
+                || kind.is_kerml_keyword() != (kerml.contains(*word) || DEVIATIONS.contains(word))
+        })
+        .map(|(word, kind, _)| format!("{word} ({kind:?})"))
+        .collect();
+    assert!(
+        mismatched.is_empty(),
+        "reserved by the lexer in a different notation than by the BNF: {mismatched:?}"
     );
 
     // the contextual list stays honest: not reserved, but real keywords

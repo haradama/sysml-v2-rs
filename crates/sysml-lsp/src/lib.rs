@@ -677,7 +677,7 @@ impl Server {
                 ..Default::default()
             })
             .collect();
-        for (keyword, _) in sysml_syntax::KEYWORDS {
+        for (keyword, _, _) in sysml_syntax::KEYWORDS {
             items.push(CompletionItem {
                 label: (*keyword).to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),

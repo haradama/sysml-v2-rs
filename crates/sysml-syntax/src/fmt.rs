@@ -4,7 +4,9 @@
 //! depth, one member per line, single blank lines are preserved, comments
 //! keep their own-line/trailing position, and spacing is decided from token
 //! kinds plus the parent node (so `a < b` gets spaces while `<shortName>`
-//! does not). Comment and note interiors are emitted verbatim.
+//! does not). Comment and note interiors are emitted verbatim, line
+//! endings included: they are one token's text and are what the author
+//! wrote, so a CRLF comment body keeps its `\r\n`.
 //!
 //! Guarantees (regression-tested against the whole official corpus):
 //! formatting never changes the non-trivia token stream (reparse
@@ -16,30 +18,44 @@ const INDENT: &str = "    ";
 
 /// Format a whole source file.
 pub fn format(text: &str, dialect: Dialect) -> String {
-    let parse = parse_dialect(text, dialect);
+    format_parsed(&parse_dialect(text, dialect))
+}
+
+/// Format a file that has already been parsed.
+///
+/// The tree is all the formatter reads, so a caller that has one -- the
+/// command line, which parses to find out whether the file is worth
+/// rewriting at all -- need not have it parsed a second time.
+pub fn format_parsed(parse: &crate::Parse) -> String {
     let all_tokens: Vec<SyntaxToken> = parse
         .syntax()
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .collect();
-    Formatter {
+    // A leading byte order mark is trivia to the grammar but tells the next
+    // reader how the file is encoded, so formatting keeps it where it is
+    // rather than quietly changing what the file claims to be.
+    let marked = all_tokens
+        .first()
+        .is_some_and(|token| token.text().starts_with('\u{feff}'));
+    let formatted = Formatter {
         out: String::new(),
         depth: 0,
         line_empty: true,
         pending_newlines: 0,
         prev: None,
     }
-    .run(&all_tokens)
+    .run(&all_tokens);
+    if marked {
+        format!("\u{feff}{formatted}")
+    } else {
+        formatted
+    }
 }
 
 /// Format using the dialect implied by a file name.
 pub fn format_file(name: &str, text: &str) -> String {
-    let dialect = if name.ends_with(".kerml") {
-        Dialect::KerML
-    } else {
-        Dialect::SysML
-    };
-    format(text, dialect)
+    format(text, Dialect::from_path(name))
 }
 
 struct Formatter {
@@ -67,11 +83,6 @@ impl Formatter {
             }
             let kind = token.kind();
             let gap = self.original_gap_lines(token);
-            let next_kind = visible
-                .iter()
-                .skip(index + 1)
-                .find(|t| !is_note(t.kind()))
-                .map(|t| t.kind());
 
             if is_note(kind) {
                 if gap == 0 && !self.line_empty && self.prev.is_some() {
@@ -126,6 +137,15 @@ impl Formatter {
                     self.pending_newlines = 1;
                 }
                 R_BRACE => {
+                    // `} ;` closes a body that a `;` still has to end, and
+                    // only that keeps the brace from ending its line. The
+                    // search skips notes, so it is done here rather than for
+                    // every token: a run of n notes would otherwise cost n^2.
+                    let next_kind = visible
+                        .iter()
+                        .skip(index + 1)
+                        .find(|t| !is_note(t.kind()))
+                        .map(|t| t.kind());
                     if next_kind != Some(SEMICOLON) {
                         self.pending_newlines = 1;
                     }
@@ -306,6 +326,36 @@ mod tests {
         // trimmed from the output
         let out = fmt("doc /* open  ");
         assert!(out.ends_with("open\n"), "{out:?}");
+    }
+
+    #[test]
+    fn a_crlf_file_comes_out_with_one_kind_of_line_ending() {
+        let input = "package P {\r\n    part def A; // note\r\n    part def B;\r\n}\r\n";
+        let out = fmt(input);
+        assert!(!out.contains('\r'), "{out:?}");
+        assert_eq!(
+            out,
+            "package P {\n    part def A; // note\n    part def B;\n}\n"
+        );
+        assert_eq!(fmt(&out), out);
+    }
+
+    #[test]
+    fn a_byte_order_mark_survives_formatting() {
+        assert_eq!(fmt("\u{feff}part   def A;"), "\u{feff}part def A;\n");
+        // and only the one at the front: elsewhere it is spacing
+        assert_eq!(fmt("part\u{feff}def A;"), "part def A;\n");
+    }
+
+    /// A run of notes used to cost the formatter a scan each, so a file
+    /// that is mostly notes took time in the square of its length.
+    #[test]
+    fn a_file_of_notes_formats_in_one_pass() {
+        let input = "part def A {\n".to_string() + &"    // note\n".repeat(20_000) + "}\n";
+        let started = std::time::Instant::now();
+        let out = fmt(&input);
+        assert_eq!(out, input);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

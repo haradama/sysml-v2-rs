@@ -236,7 +236,7 @@ impl Name {
     pub fn text(&self) -> String {
         self.syntax()
             .first_token()
-            .map(|t| unquote(t.text()))
+            .map(|t| crate::unquote(t.text()))
             .unwrap_or_default()
     }
 }
@@ -248,16 +248,9 @@ impl QualifiedName {
             .children_with_tokens()
             .filter_map(|e| e.into_token())
             .filter(|t| matches!(t.kind(), IDENT | UNRESTRICTED_NAME | STAR | STAR_STAR))
-            .map(|t| unquote(t.text()))
+            .map(|t| crate::unquote(t.text()))
             .collect()
     }
-}
-
-fn unquote(text: &str) -> String {
-    text.strip_prefix('\'')
-        .and_then(|t| t.strip_suffix('\''))
-        .unwrap_or(text)
-        .to_string()
 }
 
 fn first_token_matching(node: &SyntaxNode, pred: fn(SyntaxKind) -> bool) -> Option<SyntaxToken> {
