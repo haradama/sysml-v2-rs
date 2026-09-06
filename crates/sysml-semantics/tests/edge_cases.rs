@@ -154,8 +154,10 @@ fn cycles_do_not_hang() {
         "package A { public import B::*; alias L for M; alias M for L; }\npackage B { public import A::*; }\npackage C { part x : A::Nothing; part y : A::L; }",
     )]);
     // both lookups terminate (unresolved, but no hang / stack overflow),
-    // and enumeration through the cyclic imports terminates too
-    assert_eq!(ws.unresolved().len(), 2);
+    // and enumeration through the cyclic imports terminates too. Four,
+    // because an alias that names an alias that names it back names
+    // nothing, and each of the two says so.
+    assert_eq!(ws.unresolved().len(), 4, "{:?}", ws.unresolved());
     let names = ws.visible_names(0, TextSize::from(10));
     assert!(names.iter().any(|(n, _)| n == "L"), "{names:?}");
 }
@@ -1272,4 +1274,446 @@ fn a_kerml_relation_after_a_name_still_leaves_a_declaration() {
             ws.unresolved()
         );
     }
+}
+
+/// The shape a language server works in: a project is resolved without
+/// the buffers that are open, and the open buffers are added to it
+/// afterwards. A name that was not there for the first resolution must
+/// not stay missing for the rest of the session.
+#[test]
+fn a_name_missing_when_it_was_first_looked_up_is_found_once_its_file_arrives() {
+    let mut ws = Workspace::default();
+    let a = ws.add_file(
+        "a.sysml",
+        "package A { part def Car :> B::Vehicle; part car : Car { attribute :>> mass; } }",
+    );
+    ws.resolve_files(&[a]);
+    let b = ws.add_file(
+        "b.sysml",
+        "package B { part def Vehicle { attribute mass; } }",
+    );
+    let c = ws.add_file(
+        "c.sysml",
+        "package C { part c : A::Car { attribute :>> mass; } }",
+    );
+    ws.resolve_files(&[b, c]);
+    assert!(
+        ws.unresolved().iter().all(|u| u.file != c),
+        "{:?}",
+        ws.unresolved()
+    );
+
+    // the same for an import: its failure was cached too
+    let mut ws = Workspace::default();
+    let a = ws.add_file("a.sysml", "package A { public import B::*; }");
+    ws.resolve_files(&[a]);
+    let b = ws.add_file("b.sysml", "package B { part def Vehicle; }");
+    let c = ws.add_file("c.sysml", "package C { part v : A::Vehicle; }");
+    ws.resolve_files(&[b, c]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}
+
+/// A root package of one's own named after one of the standard
+/// library's is read on the side of the boundary it was written on,
+/// whichever order the files arrived in, and the collision is said out
+/// loud.
+#[test]
+fn a_root_package_named_after_a_library_one_is_reported_and_read_from_its_own_side() {
+    let library = "standard library package Requirements {\n    part def RequirementCheck;\n}\nstandard library package Constraints {\n    part def Check :> Requirements::RequirementCheck;\n}\n";
+    let mine = "package Requirements {\n    part def Safe;\n}\npackage M {\n    import Requirements::*;\n    part s : Safe;\n}\n";
+    for order in [
+        [("lib.sysml", library), ("m.sysml", mine)],
+        [("m.sysml", mine), ("lib.sysml", library)],
+    ] {
+        let ws = ws(&order);
+        assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+        let collisions = ws.findings(&[]).collisions;
+        assert_eq!(collisions.len(), 1, "{collisions:?}");
+        assert_eq!(ws.file_name(collisions[0].file), "m.sysml");
+        assert_eq!(
+            collisions[0].what,
+            "`Requirements` is also a root package of the standard library"
+        );
+        // and the collision is reported in the file it is written in
+        assert!(ws.findings(&[0]).collisions.len() + ws.findings(&[1]).collisions.len() == 1);
+    }
+}
+
+/// A `private package` is not a way through: what is nested in it stays
+/// nested, however public each of those members is.
+#[test]
+fn a_recursive_import_stops_at_a_private_namespace() {
+    let text = "package P {\n    private package Hidden { part def X; }\n    part def Open;\n}\npackage M {\n    import P::**;\n    part o : Open;\n    part x : X;\n}\n";
+    let mut pruned = ws(&[("m.sysml", text)]);
+    let names: Vec<&str> = pruned
+        .unresolved()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(names, ["X"]);
+    let m = pruned
+        .model()
+        .ids()
+        .find(|&id| pruned.model().name(id) == Some("M"))
+        .expect("M");
+    let members = pruned.imported_members(m);
+    let imported: Vec<String> = members
+        .iter()
+        .filter_map(|&id| pruned.model().name(id).map(String::from))
+        .collect();
+    assert!(imported.contains(&"Open".to_string()), "{imported:?}");
+    assert!(!imported.contains(&"X".to_string()), "{imported:?}");
+    let offered: Vec<String> = pruned
+        .visible_names(0, offset_of(text, "part x"))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert!(!offered.contains(&"X".to_string()), "{offered:?}");
+
+    // `import all` is what asks for the private ones anyway
+    let all = text.replace("import P::**", "import all P::**");
+    let asking_for_all = ws(&[("m.sysml", &all)]);
+    assert!(
+        asking_for_all.unresolved().is_empty(),
+        "{:?}",
+        asking_for_all.unresolved()
+    );
+}
+
+/// `that` is not looked up, so nothing was walked to reach it. What the
+/// last qualified name walked belongs to that name: recorded again here
+/// it would offer a rename of `Lib` an edit over the word `that`.
+#[test]
+fn a_name_the_resolver_does_not_look_up_records_no_earlier_segments() {
+    let text = "package Lib { part def Q; }\npackage M {\n    part q : Lib::Q { satisfy nowhere.deep by that; }\n}\n";
+    let ws = ws(&[("m.sysml", text)]);
+    let lib = ws
+        .model()
+        .ids()
+        .find(|&id| ws.model().name(id) == Some("Lib"))
+        .expect("Lib");
+    let written: Vec<&str> = ws
+        .references_to(lib)
+        .map(|r| &text[usize::from(r.range.start())..usize::from(r.range.end())])
+        .collect();
+    assert_eq!(written, ["Lib"]);
+}
+
+/// The language server resolves a project once and then answers from
+/// copies of it, one per set of open buffers.
+#[test]
+fn a_copy_of_a_workspace_answers_what_the_original_answers() {
+    let original = ws(&[("m.sysml", "package P { part def A; part a : A; }")]);
+    let mut copy = original.clone();
+    let usage = copy
+        .model()
+        .ids()
+        .find(|&id| copy.model().name(id) == Some("a"))
+        .expect("a");
+    let found = copy.resolve_from(usage, &["A".to_string()]);
+    assert_eq!(copy.model().name(found.expect("A")), Some("A"));
+    assert_eq!(copy.references().len(), original.references().len());
+    assert!(copy.findings(&[]).names.is_empty());
+}
+
+/// Every other query answers `None` for a cursor the file does not
+/// have. An editor that trails a stale position behind an edit asks
+/// this one as readily as the rest.
+#[test]
+fn a_cursor_past_the_end_of_the_file_is_not_inside_a_call() {
+    let mut ws = ws(&[(
+        "m.sysml",
+        "package P { calc def Sum { in a; } attribute s = Sum(1); }",
+    )]);
+    let past = TextSize::from(10_000);
+    assert!(ws.callable_at(0, past).is_none());
+    assert!(ws.reference_at(0, past).is_none());
+    assert!(ws.definition_at(0, past).is_none());
+}
+
+/// Looking a name up used to scan every member of the namespace, so a
+/// package of n parts cost n scans of n members to resolve. Ten
+/// thousand of them is a real model, and it took minutes.
+#[test]
+fn a_package_of_thousands_of_members_resolves_without_scanning_them_all() {
+    let n = 8000;
+    let mut text = String::from("package P { part def A0;\n");
+    for i in 1..=n {
+        text.push_str(&format!("part def A{i} :> A{};\n", i - 1));
+    }
+    text.push_str("}\n");
+    let started = std::time::Instant::now();
+    let mut ws = Workspace::default();
+    ws.add_file("m.sysml", &text);
+    let stats = ws.resolve_all();
+    assert_eq!((stats.resolved, stats.unresolved), (n, 0));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "resolving {n} siblings took {:?}",
+        started.elapsed()
+    );
+}
+
+/// What is offered as you type has to be what a lookup will find. A
+/// private import does not re-export, and a chain of re-exports is
+/// followed to the end however long it is.
+#[test]
+fn completion_offers_the_names_a_lookup_would_find() {
+    let text = "package Lib { part def Widget; }\npackage B { import Lib::*; }\npackage M { import B::*; part w : Widget; }\n";
+    let mut behind_a_private_import = ws(&[("m.sysml", text)]);
+    // lookup refuses it, so completion must not offer it
+    assert_eq!(behind_a_private_import.unresolved().len(), 1);
+    let offered: Vec<String> = behind_a_private_import
+        .visible_names(0, offset_of(text, "part w"))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert!(!offered.contains(&"Widget".to_string()), "{offered:?}");
+
+    // twenty packages re-exporting one another, which lookup follows
+    let mut text = String::from("package L0 { part def Deep; }\n");
+    for i in 1..=20 {
+        text.push_str(&format!(
+            "package L{i} {{ public import L{}::*; }}\n",
+            i - 1
+        ));
+    }
+    text.push_str("package M { import L20::*; part d : Deep; }\n");
+    let mut long_chain = ws(&[("m.sysml", &text)]);
+    assert!(long_chain.unresolved().is_empty());
+    let offered: Vec<String> = long_chain
+        .visible_names(0, offset_of(&text, "part d :"))
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert!(offered.contains(&"Deep".to_string()), "{offered:?}");
+}
+
+/// A package's members are the ones written in it; a type's are its own
+/// and every public one it inherits, so importing a type imports what
+/// its supertypes give it.
+#[test]
+fn importing_a_type_imports_what_it_inherits() {
+    let text = "package P {\n    part def Base { attribute a; }\n    part def Sub :> Base { attribute b; }\n}\npackage M {\n    import P::Sub::*;\n    part x { attribute ra = a; attribute rb = b; }\n}\n";
+    let ws = ws(&[("m.sysml", text)]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}
+
+/// A quoted name means what it spells once its escapes are resolved,
+/// and the model stores it that way. A reference that only stripped the
+/// quotes was comparing two different strings.
+#[test]
+fn a_quoted_name_with_an_escape_in_it_resolves() {
+    let text = "package P {\n    part def 'a\\'b';\n    part x : 'a\\'b';\n}\n";
+    let ws = ws(&[("m.sysml", text)]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    assert_eq!(ws.references().len(), 1);
+    assert_eq!(
+        ws.model().name(ws.references()[0].target),
+        Some("a'b"),
+        "the model stores the name unescaped"
+    );
+}
+
+#[test]
+fn an_alias_says_on_the_model_what_it_names() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n    part def Engine;\n    alias Motor for Engine;\n    alias Broken for ;\n}\n",
+    )]);
+    let model = ws.model();
+    let aliases: Vec<_> = model.ids().filter(|&id| ws.is_alias(id)).collect();
+    assert_eq!(aliases.len(), 2);
+    let named: Vec<Option<&str>> = aliases
+        .iter()
+        .map(|&id| ws.alias_target(id).and_then(|to| model.name(to)))
+        .collect();
+    // the one that names something says so; the one that names nothing
+    // is left saying nothing rather than pointing at the wrong thing
+    assert_eq!(named, vec![Some("Engine"), None]);
+}
+
+#[test]
+fn what_a_view_exposes_ignores_visibility() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package ViewTest {\n    package P {\n        private part p2;\n    }\n    view def V;\n    view v : V {\n        expose P::*;\n        alias vp2 for p2;\n    }\n}\n",
+    )]);
+    // `expose` is an import with isImportAll set, so what the package
+    // keeps to itself is still what the view is pointed at
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+}
+
+/// An import whose own path walks back into a type asks that type what
+/// it specializes, and the answer it gets is refused by the guard that
+/// keeps the import from resolving itself. Settling for that answer
+/// leaves the model saying two different things: `A :> Other` reified,
+/// and `Other`'s members unreachable through `A`.
+#[test]
+fn what_a_blocked_import_hid_is_not_the_supertype_list_kept() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+    public import Q::Sub::*;
+    part def A :> Base, Other;
+    part a : A {
+        attribute :>> fromOther;
+    }
+}
+package Q {
+    public import P::A::Nothing::*;
+    public import R::*;
+}
+package R {
+    package Sub {
+        part def Base;
+        part def Other { attribute fromOther; }
+    }
+}
+",
+    )]);
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+}
+
+/// Everything a pass reifies, in one model: typings, a specialization,
+/// a redefinition, the reference behind `perform`, an annotation, the
+/// ends of a connector (twice over the same feature), a trigger's
+/// payload type and what an alias names.
+const REIFIES: &str = "package P {
+    part def Base;
+    part def A :> Base {
+        attribute mass;
+    }
+    alias Alias for A;
+    part a : A {
+        attribute :>> mass;
+    }
+    part b : A;
+    comment about a /* the one at the end of the connection */
+    connect a to b;
+    connect a to a;
+    action def Sense;
+    action sense : Sense;
+    part c {
+        perform sense;
+        state s {
+            entry; then done;
+            state done;
+            accept e : Base then done;
+        }
+    }
+}
+";
+
+#[test]
+fn asking_twice_leaves_the_model_saying_it_once() {
+    let mut ws = Workspace::default();
+    ws.add_file("m.sysml", REIFIES);
+    let first = ws.resolve_all();
+    assert_eq!(first.unresolved, 0, "{:?}", ws.unresolved());
+    let (elements, references) = (ws.model().len(), ws.references().len());
+    let again = ws.resolve_all();
+    assert_eq!(
+        ws.model().len(),
+        elements,
+        "a second pass reified what the first already had"
+    );
+    assert_eq!(
+        (again.resolved, again.unresolved),
+        (first.resolved, first.unresolved)
+    );
+    // and what was found about the file is replaced, not added to
+    assert_eq!(ws.references().len(), references);
+}
+
+/// `part p4 :> p4;` is a feature saying it is the one its type already
+/// declares, and the language reads it that way even where there is no
+/// such feature. Nothing else can mean that: a type is not its own
+/// type, and a definition does not specialize itself.
+#[test]
+fn only_a_subsetting_may_name_the_declaration_that_writes_it() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n    part v : v;\n    part def C :> C;\n    part p4 :> p4;\n    part r ::> r;\n}\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["v", "C"]);
+    let model = ws.model();
+    let loops = model
+        .ids()
+        .filter(|&id| model.kind(id).is_a(sysml_model::ElementKind::FeatureTyping))
+        .count();
+    assert_eq!(loops, 0, "a feature was left standing as its own type");
+}
+
+/// A model can specialize deeper than a stack goes. Walking what it
+/// inherits took the process down with it; now the walk stops and the
+/// name is reported as one that resolves to nothing.
+#[test]
+fn a_specialization_chain_deeper_than_the_stack_is_a_finding() {
+    let deep = 8_000;
+    let mut text = String::from("package P {\n");
+    for step in 0..deep {
+        text.push_str(&format!("    part def A{step} :> A{};\n", step + 1));
+    }
+    text.push_str("    part a : A0 { attribute :>> nowhere; }\n}\n");
+    let ws = ws(&[("m.sysml", &text)]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    // the end of the chain names nothing, and neither does a member
+    // looked for past the depth the walk stops at
+    assert_eq!(names, [format!("A{deep}").as_str(), "nowhere"]);
+}
+
+#[test]
+fn one_file_read_twice_is_still_one_file() {
+    let mut ws = Workspace::default();
+    let text = "package P {\n    part def Thing;\n}\n";
+    let first = ws.add_file("m.sysml", text);
+    assert_eq!(ws.add_file("m.sysml", text), first);
+    assert_eq!(ws.file_count(), 1);
+    // the same name over different text is a different file, because
+    // ids already handed out for the first one still name it
+    let other = ws.add_file("m.sysml", "package Q {\n    part def Thing;\n}\n");
+    assert_ne!(other, first);
+    assert_eq!(ws.file_count(), 2);
+    ws.resolve_all();
+    let things: Vec<_> = ws
+        .named_elements()
+        .filter(|(_, name)| *name == "Thing")
+        .collect();
+    assert_eq!(things.len(), 2, "one per file, not one per reading");
+}
+
+/// The same artifact one step further in: a user-defined keyword says
+/// what it stands for through a `SemanticMetadata` base, and that name
+/// is looked up in the same refused window. A keyword that came back
+/// with nothing leaves everything it marks without the members it
+/// brings.
+#[test]
+fn what_a_blocked_import_hid_is_not_the_keyword_base_kept() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+    public import Q::Sub::*;
+    metadata def Marker :> SemanticMetadata {
+        :>> baseType = Other meta SysML::Usage;
+    }
+    #Marker part def A;
+    part a : A {
+        attribute :>> fromOther;
+    }
+}
+package Q {
+    public import P::A::Nothing::*;
+    public import R::*;
+}
+package R {
+    package Sub {
+        metadata def SemanticMetadata { attribute baseType; }
+        part def Other { attribute fromOther; }
+    }
+}
+",
+    )]);
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
 }

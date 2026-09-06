@@ -202,3 +202,28 @@ fn a_verification_of_nothing_is_reported() {
     );
     assert_eq!(unresolved, ["NoSuchRequirement"]);
 }
+
+/// `$` is the global namespace, and a name that starts there means the
+/// same thing wherever it is written -- in an expression as much as in
+/// a typing. Without it the name below reads as the `P` next door.
+#[test]
+fn a_name_written_from_the_root_starts_at_the_root() {
+    let text = "package P {\n\
+                \tattribute x;\n\
+                }\n\
+                package Q {\n\
+                \tpackage P { attribute x; }\n\
+                \tattribute a = $::P::x;\n\
+                }\n";
+    let mut ws = Workspace::new();
+    let file = ws.add_file("e.sysml", text);
+    ws.resolve_files(&[file]);
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    let at = ws
+        .reference_at(
+            0,
+            sysml_syntax::TextSize::from(text.find("::x").unwrap() as u32 + 2),
+        )
+        .expect("the name in the value is a reference");
+    assert_eq!(ws.qualified_name_of(at.target), "P::x");
+}

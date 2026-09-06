@@ -38,6 +38,13 @@ use sysml_syntax::{
     is_name_chain, parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange,
 };
 
+/// How many namespaces deep a lookup will walk through inherited
+/// members before it gives up. The corpus, standard library included,
+/// never goes past a few dozen; a model that goes thousands deep would
+/// take the stack down with it, so it is told its name resolves to
+/// nothing instead. The parser bounds its own nesting the same way.
+const MAX_INHERITANCE: usize = 512;
+
 /// Whether a resolution pass replaces what was found about the files it
 /// touches, or adds to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,15 +73,20 @@ pub struct Reference {
     pub target: ElementId,
 }
 
-/// What is wrong with a model. The two are kept apart because a file
-/// that does not parse has no names worth resolving: anything said about
-/// them is about the tree the parser guessed at, not the one written.
+/// What is wrong with a model, in the kinds a reader wants apart. A
+/// file that does not parse has no names worth resolving -- anything
+/// said about them is about the tree the parser guessed at, not the one
+/// written -- and a collision is not a name that failed to resolve but
+/// one that resolves to something other than it looks like.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Findings {
     /// What the parser could not read.
     pub syntax: Vec<Finding>,
     /// References that resolve to nothing.
     pub names: Vec<Finding>,
+    /// Root packages of the model declared under a name the standard
+    /// library has already taken.
+    pub collisions: Vec<Finding>,
 }
 
 /// One thing wrong, and where.
@@ -104,6 +116,11 @@ struct File {
     name: String,
     parse: Parse,
     roots: Vec<ElementId>,
+    /// Every element built from the file, in the order the model holds
+    /// them. A question about a position is a question about one file,
+    /// and answering it by walking the whole model walks the standard
+    /// library -- forty thousand elements -- per keystroke.
+    elements: Vec<ElementId>,
 }
 
 /// How a namespace's members are being accessed during lookup.
@@ -137,7 +154,6 @@ enum ImportScope {
     Recursive,
 }
 
-#[derive(Clone)]
 pub struct Workspace {
     model: Model,
     root: ElementId,
@@ -161,11 +177,17 @@ pub struct Workspace {
     /// than the truth. The other guards settle for an incomplete answer
     /// and cache it, so what they return is at least the same every time.
     blocked: u64,
-    /// Imports and aliases whose cached failure was reached through such
-    /// a guard. The failure is remembered while the outermost lookup
-    /// runs -- ten unresolved wildcard imports in one package consult
-    /// each other, and without memory that search is exponential -- and
-    /// forgotten once it ends, so a later lookup may still find them.
+    /// How deep the walk through inherited members is. Nothing else
+    /// bounds it: what a namespace specializes is written in the
+    /// model, and the model can say it thousands of times over.
+    walking: usize,
+    /// What was worked out while that count moved: an import or an
+    /// alias that failed, a supertype list that came out short. The
+    /// answer is remembered while the outermost lookup runs -- ten
+    /// unresolved wildcard imports in one package consult each other,
+    /// and without memory that search is exponential -- and forgotten
+    /// once it ends, so the next one works it out from what the model
+    /// really holds.
     provisional: HashSet<ElementId>,
     /// Counts what `ResolveStats::lookups` reports.
     lookups: u64,
@@ -177,12 +199,74 @@ pub struct Workspace {
     /// one outermost call, and the provisional failures live exactly
     /// that long.
     depth: usize,
+    /// How many lookups have come back empty-handed. A conclusion
+    /// drawn while this moved rests on a name that was not there, and
+    /// a file added afterwards may be the file that name lives in.
+    misses: u64,
+    /// The elements whose cached supertypes or semantic bases were
+    /// worked out while a name was missing, and so are only as
+    /// complete as the workspace was at the time.
+    incomplete: HashSet<ElementId>,
+    /// The element a reference is written in, for the whole of the
+    /// walk that resolves it. Two root packages may answer to one name
+    /// -- a model's own and the standard library's -- and which one is
+    /// meant depends on where the name was written.
+    origin: ElementId,
     imports: HashMap<ElementId, Option<ImportTarget>>,
     aliases: HashMap<ElementId, Option<ElementId>>,
     visibilities: HashMap<ElementId, Vis>,
     semantic_bases: HashMap<ElementId, Vec<ElementId>>,
+    /// Members of a namespace by the names they answer to, in the
+    /// order a lookup would have walked them. Searching the list itself
+    /// costs a scan of every member of the namespace per lookup, which
+    /// on a package of ten thousand parts is what makes a project take
+    /// minutes to open rather than seconds.
+    members: HashMap<ElementId, HashMap<String, Vec<ElementId>>>,
+    /// What the pass under way has already reified, so that a second
+    /// pass over the same declaration takes what the first one made
+    /// instead of making it again, while a declaration that really
+    /// does write the same relationship twice still gets two.
+    claimed: HashSet<ElementId>,
     unresolved: Vec<Unresolved>,
     references: Vec<Reference>,
+}
+
+impl Clone for Workspace {
+    /// A copy is a workspace to ask questions of, not a resolution
+    /// caught halfway. The guards, the walk in progress and the
+    /// failures held back until the current reference is answered all
+    /// belong to that reference; carried into a copy they are a cycle
+    /// guard against elements nothing is looking at and a trail of
+    /// segments no name walked.
+    fn clone(&self) -> Workspace {
+        Workspace {
+            model: self.model.clone(),
+            root: self.root,
+            files: self.files.clone(),
+            source: self.source.clone(),
+            elem_file: self.elem_file.clone(),
+            supertypes: self.supertypes.clone(),
+            in_progress: HashSet::new(),
+            resolving: Vec::new(),
+            blocked: 0,
+            walking: 0,
+            provisional: HashSet::new(),
+            lookups: self.lookups,
+            chain: Vec::new(),
+            depth: 0,
+            misses: self.misses,
+            incomplete: self.incomplete.clone(),
+            origin: self.root,
+            imports: self.imports.clone(),
+            aliases: self.aliases.clone(),
+            visibilities: self.visibilities.clone(),
+            semantic_bases: self.semantic_bases.clone(),
+            members: self.members.clone(),
+            claimed: HashSet::new(),
+            unresolved: self.unresolved.clone(),
+            references: self.references.clone(),
+        }
+    }
 }
 
 impl Default for Workspace {
@@ -205,14 +289,20 @@ impl Workspace {
             in_progress: HashSet::new(),
             resolving: Vec::new(),
             blocked: 0,
+            walking: 0,
             provisional: HashSet::new(),
             lookups: 0,
             chain: Vec::new(),
             depth: 0,
+            misses: 0,
+            incomplete: HashSet::new(),
+            origin: root,
             imports: HashMap::new(),
             aliases: HashMap::new(),
             visibilities: HashMap::new(),
             semantic_bases: HashMap::new(),
+            members: HashMap::new(),
+            claimed: HashSet::new(),
             unresolved: Vec::new(),
             references: Vec::new(),
         }
@@ -220,29 +310,73 @@ impl Workspace {
 
     /// Parse `text` (dialect chosen from the file name's extension) and add
     /// it to the workspace. Returns the file index.
+    ///
+    /// The same file read twice is one file. A caller reaching one file
+    /// two ways -- through a link, or a URL spelled two ways -- would
+    /// otherwise declare everything in it twice, and the second copy
+    /// would lose every lookup to the first, silently, in a model that
+    /// still resolves.
+    ///
+    /// A name added again over *different* text is a different
+    /// question, and still adds a second file rather than replacing the
+    /// first: a workspace hands element ids out to its callers, and
+    /// taking a file back would leave every id from it pointing at
+    /// nothing. A front end that reopens a file -- the language server,
+    /// when a buffer replaces what is on disk -- builds the workspace
+    /// again instead.
     pub fn add_file(&mut self, name: impl Into<String>, text: &str) -> usize {
         let name = name.into();
-        let dialect = if name.ends_with(".kerml") {
-            Dialect::KerML
-        } else {
-            Dialect::SysML
-        };
-        let parse = parse_dialect(text, dialect);
+        if let Some(same) = self
+            .files
+            .iter()
+            .position(|file| file.name == name && file.parse.syntax().text() == text)
+        {
+            return same;
+        }
+        let parse = parse_dialect(text, Dialect::from_path(&name));
         let built = build_into(&mut self.model, &parse);
         let file_idx = self.files.len();
         for root in &built.roots {
             self.model.add_owned(self.root, *root);
         }
+        let mut elements = Vec::with_capacity(built.source.len());
         for (id, node) in built.source {
+            elements.push(id);
             self.source.insert(id, node);
             self.elem_file.insert(id, file_idx);
         }
+        // the builder hands them back in no order at all
+        elements.sort_unstable();
         self.files.push(File {
             name,
             parse,
             roots: built.roots,
+            elements,
         });
+        self.forget_failures();
         file_idx
+    }
+
+    /// Forget what was worked out from names that were not there.
+    ///
+    /// A workspace grows a file at a time: an editor opens a buffer
+    /// over a project already loaded, a project loads its library
+    /// after the file being edited. A lookup that failed before the
+    /// file arrived is no evidence about the workspace it is asked
+    /// about now, and remembering it is how a language server comes to
+    /// underline a name the model does resolve. What was found stands
+    /// -- a file only adds names, and the ones already found are still
+    /// where they were.
+    fn forget_failures(&mut self) {
+        self.imports.retain(|_, target| target.is_some());
+        self.aliases.retain(|_, target| target.is_some());
+        for id in std::mem::take(&mut self.incomplete) {
+            self.supertypes.remove(&id);
+            self.semantic_bases.remove(&id);
+        }
+        // the new file's members are members of the root namespace, and
+        // its own namespaces have none indexed yet
+        self.members.clear();
     }
 
     /// Recursively load every `.sysml`/`.kerml` file under `dir`.
@@ -250,7 +384,12 @@ impl Workspace {
         let paths = model_files(dir);
         let count = paths.len();
         for path in paths {
-            let text = std::fs::read_to_string(&path)?;
+            // the error names the file, not just the directory the
+            // caller asked about: one unreadable file in a corpus of
+            // hundreds is otherwise a refusal with nothing to act on
+            let text = std::fs::read_to_string(&path).map_err(|err| {
+                std::io::Error::new(err.kind(), format!("{}: {err}", path.display()))
+            })?;
             self.add_file(path.to_string_lossy(), &text);
         }
         Ok(count)
@@ -324,7 +463,55 @@ impl Workspace {
                 what: u.name.clone(),
             })
             .collect();
-        Findings { syntax, names }
+        let collisions = self
+            .library_collisions()
+            .into_iter()
+            .filter(|c| wanted(c.file))
+            .collect();
+        Findings {
+            syntax,
+            names,
+            collisions,
+        }
+    }
+
+    /// Root packages declared under a name the standard library has
+    /// already taken.
+    ///
+    /// Every file's outermost packages are members of one shared root
+    /// namespace, so a `package Requirements` of one's own and the
+    /// library's `Requirements` are two members of it under one name.
+    /// Resolution keeps both halves working by reading each name on the
+    /// side of the library boundary it was written on -- but the name
+    /// then means one thing in the model and another in the library,
+    /// and nothing in the file says so. Two packages of one's own
+    /// sharing a name are not reported: the official examples do it
+    /// deliberately, writing the same model twice over.
+    fn library_collisions(&self) -> Vec<Finding> {
+        let named: Vec<(ElementId, &str)> = self
+            .model
+            .owned(self.root)
+            .iter()
+            .filter_map(|&member| Some((member, self.model.name(member)?)))
+            .collect();
+        let of_library =
+            |member: ElementId| self.model.kind(member).is_a(ElementKind::LibraryPackage);
+        let taken: HashSet<&str> = named
+            .iter()
+            .filter(|&&(member, _)| of_library(member))
+            .map(|&(_, name)| name)
+            .collect();
+        named
+            .iter()
+            .filter(|&&(member, name)| !of_library(member) && taken.contains(name))
+            .filter_map(|&(member, name)| {
+                Some(Finding {
+                    file: *self.elem_file.get(&member)?,
+                    range: self.element_ranges(member)?.1,
+                    what: format!("`{name}` is also a root package of the standard library"),
+                })
+            })
+            .collect()
     }
 
     /// All references resolving to `target`.
@@ -335,6 +522,17 @@ impl Workspace {
         self.source
             .get(&elem)
             .is_some_and(|node| node.kind() == SyntaxKind::ALIAS)
+    }
+
+    /// What an `alias X for Y;` stands for, once it has been resolved.
+    ///
+    /// Read back off the model rather than out of the resolver's
+    /// memory, so it costs nothing and answers for a workspace that is
+    /// only being read. A model written out carries the alias as an
+    /// element of its own, and an alias that says nothing about what it
+    /// names is a name given to nothing.
+    pub fn alias_target(&self, alias: ElementId) -> Option<ElementId> {
+        self.model.member_element(alias)
     }
 
     /// Everything that answers to the same name as `elem` because it
@@ -378,9 +576,9 @@ impl Workspace {
     /// The element whose declared-name range covers `offset` in `file`
     /// (for rename/find-references started on a declaration).
     pub fn definition_at(&self, file: usize, offset: sysml_syntax::TextSize) -> Option<ElementId> {
-        self.model
-            .ids()
-            .filter(|id| self.elem_file.get(id) == Some(&file))
+        self.elements_of(file)
+            .iter()
+            .copied()
             .filter_map(|id| {
                 let node = self.source.get(&id)?;
                 let name = node.children().find(|c| c.kind() == SyntaxKind::NAME)?;
@@ -397,9 +595,9 @@ impl Workspace {
     /// The innermost model element whose syntax covers `offset` in `file`
     /// (the workspace root when none does).
     pub fn innermost_element(&self, file: usize, offset: sysml_syntax::TextSize) -> ElementId {
-        self.model
-            .ids()
-            .filter(|id| self.elem_file.get(id) == Some(&file))
+        self.elements_of(file)
+            .iter()
+            .copied()
             .filter_map(|id| {
                 let range = self.source.get(&id)?.text_range();
                 range
@@ -419,6 +617,13 @@ impl Workspace {
         offset: sysml_syntax::TextSize,
     ) -> Option<(ElementId, u32)> {
         let syntax = self.files.get(file)?.parse.syntax();
+        // Every other query answers `None` for a cursor the file does
+        // not have; asking the tree for a token there is a panic. An
+        // editor that trails a stale position behind an edit asks this
+        // one as readily as the rest.
+        if !syntax.text_range().contains_inclusive(offset) {
+            return None;
+        }
         let token = match syntax.token_at_offset(offset) {
             sysml_syntax::TokenAtOffset::Single(t) => t,
             sysml_syntax::TokenAtOffset::Between(l, _) => l,
@@ -539,7 +744,7 @@ impl Workspace {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         loop {
-            self.collect_visible(scope, Access::Internal, &mut out, &mut seen, 0);
+            self.collect_visible(scope, Access::Internal, &mut out, &mut seen);
             match self.model.owner(scope) {
                 Some(owner) => scope = owner,
                 None => break,
@@ -557,9 +762,13 @@ impl Workspace {
         access: Access,
         out: &mut Vec<(String, ElementKind)>,
         seen: &mut HashSet<ElementId>,
-        depth: usize,
     ) {
-        if depth > 16 || !seen.insert(ns) {
+        // Every namespace is walked once, which both ends the walk and
+        // keeps it as long as it needs to be: a chain of twenty
+        // re-exporting packages is a chain lookup follows to the end,
+        // and a completion list that stopped short of it offered fewer
+        // names than the model resolves.
+        if !seen.insert(ns) {
             return;
         }
         for child in self.model.owned(ns).to_vec() {
@@ -587,10 +796,18 @@ impl Workspace {
             access
         };
         for sup in self.supertypes_of(ns) {
-            self.collect_visible(sup, sub_access, out, seen, depth + 1);
+            self.collect_visible(sup, sub_access, out, seen);
         }
         if access != Access::Inherited {
             for import in self.imports_of(ns) {
+                // only a `public import` re-exports, so only one of
+                // those is reached from outside the namespace. What is
+                // offered as you type has to be what a lookup would
+                // find, or the completion list is a list of names the
+                // model will not resolve.
+                if access == Access::External && self.visibility(import) != Vis::Public {
+                    continue;
+                }
                 let Some(imp) = self.import_target(import) else {
                     continue;
                 };
@@ -610,20 +827,16 @@ impl Workspace {
                         } else {
                             Access::External
                         };
-                        self.collect_visible(imp.target, target_access, out, seen, depth + 1);
+                        self.collect_visible(imp.target, target_access, out, seen);
                         // `import Q::**` reaches what is nested in Q as
                         // well, which is how `class Z :> F;` finds
                         // `Q::Q2::F`. Offering only Q's own members left
                         // the modeller typing blind a name the model
                         // resolves -- lookup has always followed it there.
                         if imp.scope == ImportScope::Recursive {
-                            for desc in self.model.descendants(imp.target) {
-                                if self.visible(desc, target_access)
-                                    && !self.model.kind(desc).is_a(ElementKind::Relationship)
-                                {
-                                    if let Some(name) = self.model.name(desc) {
-                                        out.push((name.to_string(), self.model.kind(desc)));
-                                    }
+                            for desc in self.nested_visible(imp.target, target_access) {
+                                if let Some(name) = self.model.name(desc) {
+                                    out.push((name.to_string(), self.model.kind(desc)));
                                 }
                             }
                         }
@@ -631,6 +844,12 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Every element built from `file`, which is where a query about a
+    /// position in it has to look.
+    fn elements_of(&self, file: usize) -> &[ElementId] {
+        self.files.get(file).map_or(&[], |f| &f.elements)
     }
 
     /// File a model element was built from.
@@ -779,6 +998,7 @@ impl Workspace {
 
         let mut stats = ResolveStats::default();
         let began = self.lookups;
+        self.claimed.clear();
         for &id in ids {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
@@ -832,6 +1052,15 @@ impl Workspace {
                 self.record_import(id, &node);
                 continue;
             }
+            // `alias Q for P;` is a membership whose member is the
+            // element it renames. Nothing else asks for it -- a name
+            // reached through the alias resolves to what it stands for
+            // and forgets the way in -- so a reader of the model alone
+            // would find an alias that names nothing.
+            if node.kind() == SyntaxKind::ALIAS {
+                self.record_alias(id, &node, &mut stats);
+                continue;
+            }
             // `mass * speed` ending a calculation body, or the body of
             // `require constraint { ... }`: an expression standing on
             // its own, whose names are as much references as a typing's
@@ -867,7 +1096,11 @@ impl Workspace {
             let is_definition = node.kind() == SyntaxKind::DEFINITION;
             for (part_kind, targets) in relationship_parts(&node) {
                 for t in targets {
-                    match self.resolve_from(id, &t.segments) {
+                    match self.resolve_written(
+                        id,
+                        &t.segments,
+                        may_name_itself(part_kind, is_definition),
+                    ) {
                         Some(target) => {
                             stats.resolved += 1;
                             let file = self.elem_file.get(&id).copied().unwrap_or(0);
@@ -875,12 +1108,8 @@ impl Workspace {
                             self.reify(id, is_definition, part_kind, target);
                         }
                         None => {
-                            stats.unresolved += 1;
-                            self.unresolved.push(Unresolved {
-                                file: self.elem_file.get(&id).copied().unwrap_or(0),
-                                range: t.range,
-                                name: Self::spell(&t.segments),
-                            });
+                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                            self.record_miss(file, t.range, &t.segments, &mut stats);
                         }
                     }
                 }
@@ -958,12 +1187,12 @@ impl Workspace {
                 self.reify(usage, false, SyntaxKind::TYPING, def);
             }
             None => {
-                stats.unresolved += 1;
-                self.unresolved.push(Unresolved {
-                    file: self.elem_file.get(&usage).copied().unwrap_or(0),
-                    range: target.range,
-                    name: Self::spell(&target.segments),
-                });
+                self.record_miss(
+                    self.elem_file.get(&usage).copied().unwrap_or(0),
+                    target.range,
+                    &target.segments,
+                    stats,
+                );
             }
         }
     }
@@ -972,16 +1201,35 @@ impl Workspace {
     /// `elem`. `elem` itself is excluded from name matches: a feature's own
     /// (effective) name must not shadow the inherited feature it redefines.
     pub fn resolve_from(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
+        self.resolve_written(elem, segments, true)
+    }
+
+    /// As `resolve_from`, saying whether the declaration the name is
+    /// written on may answer with itself.
+    fn resolve_written(
+        &mut self,
+        elem: ElementId,
+        segments: &[String],
+        may_name_itself: bool,
+    ) -> Option<ElementId> {
         if segments.is_empty() {
             return None;
         }
         self.depth += 1;
+        // Kept for the whole walk and put back afterwards: an import
+        // resolving its own path is a reference of its own, written
+        // where the import is rather than where the name that woke it
+        // was.
+        let outer = std::mem::replace(&mut self.origin, elem);
         let exclude = Some(elem);
         let found = self.resolve_segments(elem, segments, exclude).or_else(|| {
             // A self-reference (`part p4 :> p4;`) is a legal name even
             // though a declaration cannot shadow the feature it
             // redefines, so the name is looked up once more with the
             // declaration itself allowed to answer.
+            if !may_name_itself {
+                return None;
+            }
             let hit = self.resolve_segments(elem, segments, None)?;
             // But a feature with no name of its own answers to the name
             // of what it redefines, and that is the very thing being
@@ -993,6 +1241,16 @@ impl Workspace {
             (hit != elem || names_itself).then_some(hit)
         });
         self.depth -= 1;
+        self.origin = outer;
+        if found.is_none() {
+            self.misses += 1;
+            // A walk that found nothing named nothing. The segments a
+            // walk started from inside this one recorded are not this
+            // one's, and left behind they are handed to whatever
+            // reference is recorded next -- which is how a rename comes
+            // to rewrite a token the name never touched.
+            self.chain.clear();
+        }
         self.forget_provisional();
         found
     }
@@ -1021,6 +1279,46 @@ impl Workspace {
             let file = self.elem_file.get(&import).copied().unwrap_or(0);
             self.record(file, last, last, &at, target);
         }
+    }
+
+    /// Resolve what an alias names, put it on the membership, and say
+    /// where it was written -- renaming the element has to reach the
+    /// alias too.
+    fn record_alias(&mut self, alias: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
+        let file = self.elem_file.get(&alias).copied().unwrap_or(0);
+        // An alias writes exactly one name -- the parser puts one there
+        // even where the text does not, empty rather than missing.
+        for qname in node
+            .children()
+            .filter(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)
+        {
+            let at = segment_ranges(&qname);
+            let range = qname.text_range();
+            match self.resolve_alias(alias) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.try_set(alias, "memberElement", Value::Ref(target));
+                    self.record(file, range, last_name_range(&qname), &at, target);
+                }
+                None => self.record_miss(file, range, &name_segments(&qname), stats),
+            }
+        }
+    }
+
+    /// Say that a name resolved to nothing, and count it.
+    fn record_miss(
+        &mut self,
+        file: usize,
+        range: TextRange,
+        segments: &[String],
+        stats: &mut ResolveStats,
+    ) {
+        stats.unresolved += 1;
+        self.unresolved.push(Unresolved {
+            file,
+            range,
+            name: Self::spell(segments),
+        });
     }
 
     fn record(
@@ -1163,33 +1461,63 @@ impl Workspace {
         if !guard.insert(ns) {
             return None;
         }
-        // Direct members, aliases, and everything nested under an `end`
-        // member. An end's body can nest further -- an association whose
-        // end holds a feature which itself holds the one being named --
-        // and the whole of it belongs to the connector's scope, so a
-        // subtype naming it inherits the lot.
-        let mut candidates = self.model.owned(ns).to_vec();
-        for child in self.model.owned(ns).to_vec() {
-            if self.is_end_member(child) {
-                candidates.extend(self.model.descendants(child));
-            }
+        // A namespace inherits from a namespace that inherits from a
+        // namespace: the walk goes as deep as the model specializes,
+        // and a model can specialize deeper than a stack goes. Past
+        // this the walk stops and the name is reported unresolved,
+        // which is a finding a reader can act on rather than a crash.
+        if self.walking >= MAX_INHERITANCE {
+            return None;
+        }
+        self.walking += 1;
+        let found = self.lookup_walk(
+            ns,
+            name,
+            access,
+            allow_inherited,
+            allow_imports,
+            exclude,
+            guard,
+        );
+        self.walking -= 1;
+        found
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn lookup_walk(
+        &mut self,
+        ns: ElementId,
+        name: &str,
+        access: Access,
+        allow_inherited: bool,
+        allow_imports: bool,
+        exclude: Option<ElementId>,
+        guard: &mut HashSet<ElementId>,
+    ) -> Option<ElementId> {
+        // Direct members and aliases, in the order they are written.
+        let mut candidates = self.members_named(ns, name);
+        if ns == self.root && candidates.len() > 1 {
+            // Two files may declare a root package of the same name --
+            // a model's own `Requirements` and the standard library's.
+            // Which one is meant is settled by where the name was
+            // written rather than by the order the files were loaded:
+            // the library resolves within the library, a model within
+            // its own files. `findings` reports the collision.
+            let side = self.in_library(self.origin);
+            candidates.sort_by_key(|&member| self.in_library(member) != side);
         }
         for child in candidates {
             if Some(child) == exclude || !self.visible(child, access) {
                 continue;
             }
-            let kind = self.model.kind(child);
-            if kind.is_a(ElementKind::Import) {
-                continue;
-            }
-            if self.member_name_matches(child, name) {
-                if kind == ElementKind::Membership {
-                    if let Some(target) = self.alias_target(child) {
-                        return Some(target);
-                    }
-                } else {
-                    return Some(child);
+            // an import is a member of the namespace but answers to no
+            // name of its own, so the index never files one
+            if self.model.kind(child) == ElementKind::Membership {
+                if let Some(target) = self.resolve_alias(child) {
+                    return Some(target);
                 }
+            } else {
+                return Some(child);
             }
         }
         // inherited members through specializations/typings. Private members
@@ -1246,20 +1574,29 @@ impl Workspace {
                 };
                 match imp.scope {
                     ImportScope::Member => {
-                        // `import A::Alias;` makes the member visible under
-                        // the imported (possibly alias) name
-                        if imp.leaf.as_deref() == Some(name)
-                            || self.member_name_matches(imp.target, name)
+                        // `import A::B;` makes the member visible under
+                        // the name the import wrote, and where that is
+                        // the member's own its short name answers too.
+                        // Where it is an alias's -- `import A::Alias;`
+                        // -- the member's own name was not imported,
+                        // and offering it as well would let a name the
+                        // importing file never wrote resolve.
+                        let wrote = imp.leaf.as_deref();
+                        let by_its_own_name =
+                            wrote.is_some_and(|leaf| self.member_name_matches(imp.target, leaf));
+                        if wrote == Some(name)
+                            || (by_its_own_name && self.member_name_matches(imp.target, name))
                         {
                             return Some(imp.target);
                         }
                     }
                     ImportScope::Members => {
+                        let inherited = self.inherits_into_imports(imp.target);
                         if let Some(hit) = self.lookup_guarded(
                             imp.target,
                             name,
                             target_access,
-                            false,
+                            inherited,
                             true,
                             exclude,
                             guard,
@@ -1268,23 +1605,20 @@ impl Workspace {
                         }
                     }
                     ImportScope::Recursive => {
+                        let inherited = self.inherits_into_imports(imp.target);
                         if let Some(hit) = self.lookup_guarded(
                             imp.target,
                             name,
                             target_access,
-                            false,
+                            inherited,
                             true,
                             exclude,
                             guard,
                         ) {
                             return Some(hit);
                         }
-                        for desc in self.model.descendants(imp.target) {
-                            if Some(desc) != exclude
-                                && self.visible(desc, target_access)
-                                && self.member_name_matches(desc, name)
-                                && !self.model.kind(desc).is_a(ElementKind::Relationship)
-                            {
+                        for desc in self.nested_visible(imp.target, target_access) {
+                            if Some(desc) != exclude && self.member_name_matches(desc, name) {
                                 return Some(desc);
                             }
                         }
@@ -1293,6 +1627,84 @@ impl Workspace {
             }
         }
         None
+    }
+
+    /// The members of `ns` that answer to `name`, in the order a walk
+    /// of the namespace would have met them.
+    fn members_named(&mut self, ns: ElementId, name: &str) -> Vec<ElementId> {
+        if !self.members.contains_key(&ns) {
+            let index = self.member_index(ns);
+            self.members.insert(ns, index);
+        }
+        self.members[&ns].get(name).cloned().unwrap_or_default()
+    }
+
+    /// Every member of `ns`, filed under each name it answers to.
+    ///
+    /// Kept until a file arrives, because what resolution itself adds to
+    /// a namespace is relationships and connector ends, and neither has
+    /// a name to be found under.
+    fn member_index(&self, ns: ElementId) -> HashMap<String, Vec<ElementId>> {
+        // An `end` member's body can nest further -- an association
+        // whose end holds a feature which itself holds the one being
+        // named -- and the whole of it belongs to the connector's
+        // scope, so a subtype naming it inherits the lot.
+        let mut members = self.model.owned(ns).to_vec();
+        for &child in self.model.owned(ns) {
+            if self.is_end_member(child) {
+                members.extend(self.model.descendants(child));
+            }
+        }
+        let mut index: HashMap<String, Vec<ElementId>> = HashMap::new();
+        for member in members {
+            for name in self.member_names(member) {
+                index.entry(name).or_default().push(member);
+            }
+        }
+        index
+    }
+
+    /// Does `import T::*` of this namespace bring in what it inherits?
+    ///
+    /// A package's members are the ones written in it, but a type's
+    /// are its own and every public one it inherits -- KerML puts them
+    /// both in `Type::visibleMemberships` -- so importing a type
+    /// imports what its supertypes give it.
+    fn inherits_into_imports(&self, ns: ElementId) -> bool {
+        self.model.kind(ns).is_a(ElementKind::Type)
+    }
+
+    /// Which side of the library boundary an element is written on:
+    /// whether the root package holding it is a `library package`.
+    fn in_library(&self, elem: ElementId) -> bool {
+        let mut at = elem;
+        while let Some(owner) = self.model.owner(at) {
+            if owner == self.root {
+                return self.model.kind(at).is_a(ElementKind::LibraryPackage);
+            }
+            at = owner;
+        }
+        false
+    }
+
+    /// Everything an `import N::**` reaches below `ns`: the members
+    /// `access` can see, then the members of those, and so on down.
+    ///
+    /// The walk stops at a member it cannot see rather than stepping
+    /// over it. KerML's `visibleMemberships` recurses only into member
+    /// namespaces that are themselves visible, so a `private package`
+    /// hides what is nested in it however public each of those is.
+    fn nested_visible(&mut self, ns: ElementId, access: Access) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        let mut stack: Vec<ElementId> = self.model.owned(ns).iter().rev().copied().collect();
+        while let Some(at) = stack.pop() {
+            if self.model.kind(at).is_a(ElementKind::Relationship) || !self.visible(at, access) {
+                continue;
+            }
+            out.push(at);
+            stack.extend(self.model.owned(at).iter().rev().copied());
+        }
+        out
     }
 
     /// Declared visibility of a member (imports default to private, other
@@ -1336,18 +1748,26 @@ impl Workspace {
     }
 
     fn member_name_matches(&self, elem: ElementId, name: &str) -> bool {
-        if self.model.name(elem) == Some(name)
-            || self
-                .model
+        self.member_names(elem).iter().any(|known| known == name)
+    }
+
+    /// Every name a member answers to: the one it was declared with or,
+    /// where it declared none, the one it borrows from what it
+    /// redefines (`attribute :>> mass = 10.0;` is found as `mass`), and
+    /// its short name.
+    fn member_names(&self, elem: ElementId) -> Vec<String> {
+        let mut names = Vec::new();
+        match self.model.name(elem) {
+            Some(name) => names.push(name.to_string()),
+            None => names.extend(self.effective_name(elem)),
+        }
+        names.extend(
+            self.model
                 .get(elem, "declaredShortName")
                 .and_then(Value::as_str)
-                == Some(name)
-        {
-            return true;
-        }
-        // An unnamed redefining feature takes the name of the feature it
-        // redefines: `attribute :>> mass = 10.0;` is found as `mass`.
-        self.model.name(elem).is_none() && self.effective_name(elem).as_deref() == Some(name)
+                .map(String::from),
+        );
+        names
     }
 
     /// Effective name of an unnamed feature from its first redefinition (or
@@ -1394,6 +1814,8 @@ impl Workspace {
             // break the specialization cycle
             return Vec::new();
         }
+        let cut = self.misses;
+        let refused = self.blocked;
         let mut supers = Vec::new();
         if let Some(node) = self.source.get(&elem).cloned() {
             // an `@name` metadata usage inherits the definition's members
@@ -1424,6 +1846,28 @@ impl Workspace {
                         push_supertype(&mut supers, elem, base);
                     }
                 }
+            }
+        }
+        // An element the builder reified has no syntax of its own. An
+        // accept node's payload is one: `accept cl : Cmd` declares it on
+        // the statement, and the typing written there is attached to the
+        // payload once it resolves. Read back from the model it is a
+        // supertype like any other, and without it `cl.itms` names
+        // nothing.
+        if supers.is_empty() {
+            let typed: Vec<ElementId> = self
+                .model
+                .owned(elem)
+                .iter()
+                .copied()
+                .filter(|&owned| self.model.kind(owned) == ElementKind::FeatureTyping)
+                .filter_map(|owned| match self.model.get(owned, "type") {
+                    Some(Value::Ref(target)) => Some(*target),
+                    _ => None,
+                })
+                .collect();
+            for target in typed {
+                push_supertype(&mut supers, elem, target);
             }
         }
         // A feature can redeclare an inherited one by naming it the
@@ -1480,13 +1924,7 @@ impl Workspace {
                 }
             }
         }
-        let kind = self.model.kind(elem);
-        let mut implicit: Vec<&str> = implicit_supertype(kind).to_vec();
-        // every feature also (implicitly) subsets the top-level `things`
-        if kind.is_a(ElementKind::Feature) && !implicit.contains(&"Base::things") {
-            implicit.push("Base::things");
-        }
-        for path in implicit {
+        for path in implied_bases(self.model.kind(elem)) {
             let segments: Vec<String> = path.split("::").map(String::from).collect();
             if let Some(target) = self.resolve_from(elem, &segments) {
                 if target != elem && !supers.contains(&target) {
@@ -1495,6 +1933,17 @@ impl Workspace {
             }
         }
         self.in_progress.remove(&elem);
+        if self.misses != cut {
+            self.incomplete.insert(elem);
+        }
+        // A name this walk asked for was refused by the guard that
+        // stops an import from resolving itself, so a supertype may be
+        // missing from the list for no reason but the order things
+        // were asked in. Kept for the reference under way and worked
+        // out again for the next one.
+        if self.blocked != refused {
+            self.provisional.insert(elem);
+        }
         self.supertypes.insert(elem, supers.clone());
         supers
     }
@@ -1508,6 +1957,8 @@ impl Workspace {
         if !self.in_progress.insert(meta_def) {
             return Vec::new();
         }
+        let cut = self.misses;
+        let refused = self.blocked;
         let mut found = Vec::new();
         for child in self.model.owned(meta_def).to_vec() {
             if !self.member_name_matches(child, "baseType") {
@@ -1537,6 +1988,12 @@ impl Workspace {
             break;
         }
         self.in_progress.remove(&meta_def);
+        if self.misses != cut {
+            self.incomplete.insert(meta_def);
+        }
+        if self.blocked != refused {
+            self.provisional.insert(meta_def);
+        }
         self.semantic_bases.insert(meta_def, found.clone());
         found
     }
@@ -1579,11 +2036,8 @@ impl Workspace {
                 }
                 ImportScope::Recursive => {
                     self.visible_members_into(imp.target, access, &mut out, &mut seen);
-                    for below in self.model.descendants(imp.target) {
-                        if self.model.kind(below).is_a(ElementKind::Namespace)
-                            && !self.model.kind(below).is_a(ElementKind::Relationship)
-                            && self.visible(below, access)
-                        {
+                    for below in self.nested_visible(imp.target, access) {
+                        if self.model.kind(below).is_a(ElementKind::Namespace) {
                             self.visible_members_into(below, access, &mut out, &mut seen);
                         }
                     }
@@ -1638,12 +2092,8 @@ impl Workspace {
             if kind.is_a(ElementKind::Relationship) || !kind.is_a(ElementKind::Type) {
                 continue;
             }
-            let mut implied: Vec<&str> = implicit_supertype(kind).to_vec();
-            if kind.is_a(ElementKind::Feature) && !implied.contains(&"Base::things") {
-                implied.push("Base::things");
-            }
             let mut bases = Vec::new();
-            for path in implied {
+            for path in implied_bases(kind) {
                 let segments: Vec<String> = path.split("::").map(String::from).collect();
                 if let Some(target) = self.resolve_from(elem, &segments) {
                     if target != elem && !bases.contains(&target) {
@@ -1742,10 +2192,16 @@ impl Workspace {
                 }
                 _ => ImportScope::Member,
             };
-            let all = node
-                .children_with_tokens()
-                .filter_map(|e| e.into_token())
-                .any(|t| t.kind() == SyntaxKind::ALL_KW);
+            // `expose P::*;` writes no `all` and means it: "An Expose
+            // always imports all Elements, regardless of visibility
+            // (isImportAll = true)". A view shows what it is pointed
+            // at, and what a package keeps to itself is still part of
+            // what it is.
+            let all = node.kind() == SyntaxKind::EXPOSE
+                || node
+                    .children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .any(|t| t.kind() == SyntaxKind::ALL_KW);
             let target = self.resolve_from(import, &segments)?;
             let leaf = if scope == ImportScope::Member {
                 segments.last().cloned()
@@ -1776,18 +2232,21 @@ impl Workspace {
         result
     }
 
-    /// Drop the provisional failures once the reference that prompted
-    /// them has been answered.
+    /// Drop what the guard's refusals shaped, once the reference that
+    /// prompted them has been answered. An element is an import, an
+    /// alias or a type, so at most one of these has anything under it.
     fn forget_provisional(&mut self) {
         if self.depth == 0 && self.resolving.is_empty() {
             for id in std::mem::take(&mut self.provisional) {
                 self.imports.remove(&id);
                 self.aliases.remove(&id);
+                self.supertypes.remove(&id);
+                self.semantic_bases.remove(&id);
             }
         }
     }
 
-    fn alias_target(&mut self, alias: ElementId) -> Option<ElementId> {
+    fn resolve_alias(&mut self, alias: ElementId) -> Option<ElementId> {
         if let Some(cached) = self.aliases.get(&alias) {
             return *cached;
         }
@@ -1817,6 +2276,39 @@ impl Workspace {
         result
     }
 
+    /// Put an element of `kind` with `props` under `owner`, taking the
+    /// one an earlier pass made rather than making a second.
+    ///
+    /// Resolving the same file again is a thing callers do -- asking
+    /// what is wrong with a model resolves it -- and it does the same
+    /// work over again: the same declarations, the same targets, the
+    /// same relationships. Made afresh each time, a feature would come
+    /// to hold its type twice and everything reading the model would
+    /// see it twice. What this pass has already taken is passed over,
+    /// so `connect a to a`, which really does write one end twice,
+    /// still gets two.
+    fn reified(&mut self, owner: ElementId, kind: ElementKind, props: &[(&str, Value)]) {
+        let already = self.model.owned(owner).iter().copied().find(|&child| {
+            self.model.kind(child) == kind
+                && !self.claimed.contains(&child)
+                && props
+                    .iter()
+                    .all(|(prop, value)| self.model.get(child, prop) == Some(value))
+        });
+        let made = match already {
+            Some(child) => child,
+            None => {
+                let child = self.model.create(kind);
+                self.model.add_owned(owner, child);
+                for (prop, value) in props {
+                    self.try_set(child, prop, value.clone());
+                }
+                child
+            }
+        };
+        self.claimed.insert(made);
+    }
+
     /// Create the relationship element for one resolved target.
     fn reify(&mut self, elem: ElementId, is_definition: bool, part: SyntaxKind, target: ElementId) {
         let (kind, source_prop, target_prop) = match part {
@@ -1843,10 +2335,14 @@ impl Workspace {
             // relationship_parts only yields the four kinds above plus TYPING
             _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
         };
-        let rel = self.model.create(kind);
-        self.model.add_owned(elem, rel);
-        self.try_set(rel, source_prop, Value::Ref(elem));
-        self.try_set(rel, target_prop, Value::Ref(target));
+        self.reified(
+            elem,
+            kind,
+            &[
+                (source_prop, Value::Ref(elem)),
+                (target_prop, Value::Ref(target)),
+            ],
+        );
     }
 
     /// Resolve the operands of a `connect`/`bind`/`allocate` statement and
@@ -1865,13 +2361,7 @@ impl Workspace {
             // `None` arm below reports like any other unresolved end
             let segments = operand_segments(&operand);
             let range = operand.text_range();
-            let name_range = operand
-                .descendants_with_tokens()
-                .filter_map(|e| e.into_token())
-                .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
-                .last()
-                .map(|t| t.text_range())
-                .unwrap_or(range);
+            let name_range = last_name_range(&operand);
             match self.resolve_from(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
@@ -1880,12 +2370,7 @@ impl Workspace {
                     self.reify_end(id, &segments);
                 }
                 None => {
-                    stats.unresolved += 1;
-                    self.unresolved.push(Unresolved {
-                        file,
-                        range,
-                        name: Self::spell(&segments),
-                    });
+                    self.record_miss(file, range, &segments, stats);
                 }
             }
         }
@@ -1896,9 +2381,11 @@ impl Workspace {
         // relates nothing is a step the model cannot say follows.
         if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
             if let Some(target) = self.wrapped_declaration(id, node) {
-                let end = self.model.create(ElementKind::Feature);
-                self.model.add_owned(id, end);
-                self.try_set(end, "chainingFeature", Value::RefList(vec![target]));
+                self.reified(
+                    id,
+                    ElementKind::Feature,
+                    &[("chainingFeature", Value::RefList(vec![target]))],
+                );
                 related.push(target);
             }
         }
@@ -1937,17 +2424,14 @@ impl Workspace {
                         // and a rename has to reach every one of them
                         let at = segment_ranges(&qname);
                         self.record(file, range, last_name_range(&operand), &at, target);
-                        let annotation = self.model.create(ElementKind::Annotation);
-                        self.model.add_owned(id, annotation);
-                        self.try_set(annotation, "annotatedElement", Value::Ref(target));
+                        self.reified(
+                            id,
+                            ElementKind::Annotation,
+                            &[("annotatedElement", Value::Ref(target))],
+                        );
                     }
                     None => {
-                        stats.unresolved += 1;
-                        self.unresolved.push(Unresolved {
-                            file,
-                            range,
-                            name: Self::spell(&segments),
-                        });
+                        self.record_miss(file, range, &segments, stats);
                     }
                 }
             }
@@ -2022,12 +2506,7 @@ impl Workspace {
                     .push(target);
                 }
                 None => {
-                    stats.unresolved += 1;
-                    self.unresolved.push(Unresolved {
-                        file,
-                        range,
-                        name: Self::spell(&segments),
-                    });
+                    self.record_miss(file, range, &segments, stats);
                 }
             }
         }
@@ -2072,9 +2551,11 @@ impl Workspace {
                 chain.push(step);
             }
         }
-        let end = self.model.create(ElementKind::Feature);
-        self.model.add_owned(connector, end);
-        self.try_set(end, "chainingFeature", Value::RefList(chain));
+        self.reified(
+            connector,
+            ElementKind::Feature,
+            &[("chainingFeature", Value::RefList(chain))],
+        );
     }
 
     /// A transition's `accept x : T` writes a typing that belongs to the
@@ -2087,6 +2568,22 @@ impl Workspace {
     ) {
         let declared = match self.model.get(transition, "triggerAction") {
             Some(Value::RefList(triggers)) => triggers.first().copied(),
+            // `accept cl : CallGiveItems do action { ... }` is an accept
+            // node rather than a transition, so what it waits for is its
+            // own payload parameter instead of a trigger. The type is
+            // written after the payload's name and belongs to it either
+            // way: without it `cl.itms` names nothing.
+            _ if self
+                .model
+                .kind(transition)
+                .is_a(ElementKind::AcceptActionUsage) =>
+            {
+                self.model
+                    .owned(transition)
+                    .iter()
+                    .copied()
+                    .find(|&child| self.model.kind(child) == ElementKind::AcceptActionUsage)
+            }
             _ => None,
         };
         let Some(trigger) = declared else {
@@ -2098,22 +2595,21 @@ impl Workspace {
             .filter(|(part, _)| *part == SyntaxKind::TYPING);
         for (_, targets) in typings {
             for t in targets {
-                match self.resolve_from(transition, &t.segments) {
+                match self.resolve_written(transition, &t.segments, false) {
                     Some(target) => {
                         stats.resolved += 1;
                         self.record(file, t.range, t.name_range, &t.at, target);
-                        let typing = self.model.create(ElementKind::FeatureTyping);
-                        self.model.add_owned(trigger, typing);
-                        self.try_set(typing, "typedFeature", Value::Ref(trigger));
-                        self.try_set(typing, "type", Value::Ref(target));
+                        self.reified(
+                            trigger,
+                            ElementKind::FeatureTyping,
+                            &[
+                                ("typedFeature", Value::Ref(trigger)),
+                                ("type", Value::Ref(target)),
+                            ],
+                        );
                     }
                     None => {
-                        stats.unresolved += 1;
-                        self.unresolved.push(Unresolved {
-                            file,
-                            range: t.range,
-                            name: Self::spell(&t.segments),
-                        });
+                        self.record_miss(file, t.range, &t.segments, stats);
                     }
                 }
             }
@@ -2155,12 +2651,7 @@ impl Workspace {
                     self.try_set(id, property, Value::Ref(target));
                 }
                 None => {
-                    stats.unresolved += 1;
-                    self.unresolved.push(Unresolved {
-                        file,
-                        range,
-                        name: Self::spell(&segments),
-                    });
+                    self.record_miss(file, range, &segments, stats);
                 }
             }
         }
@@ -2184,12 +2675,7 @@ impl Workspace {
         let segments = operand_segments(&operand);
         let range = operand.text_range();
         let Some(target) = self.resolve_operand(id, &segments) else {
-            stats.unresolved += 1;
-            self.unresolved.push(Unresolved {
-                file,
-                range,
-                name: Self::spell(&segments),
-            });
+            self.record_miss(file, range, &segments, stats);
             return;
         };
         stats.resolved += 1;
@@ -2251,12 +2737,7 @@ impl Workspace {
                     }
                 }
                 None => {
-                    stats.unresolved += 1;
-                    self.unresolved.push(Unresolved {
-                        file,
-                        range,
-                        name: Self::spell(&segments),
-                    });
+                    self.record_miss(file, range, &segments, stats);
                 }
             }
         }
@@ -2281,6 +2762,9 @@ impl Workspace {
         if !matches!(segments, [only] if only == "self" || only == "that") {
             return self.resolve_from(elem, segments);
         }
+        // `self` and `that` are not looked up, so no qualified name was
+        // walked to reach what they name.
+        self.chain.clear();
         let mut scope = self.model.owner(elem);
         while let Some(current) = scope {
             if self.model.kind(current).is_a(ElementKind::Type) {
@@ -2330,6 +2814,18 @@ fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
         }
     }
     false
+}
+
+/// Everything an element of this metaclass implicitly specializes: the
+/// semantic-library types the standard maps the metaclass to, and --
+/// for a feature -- the top-level `Base::things` every one of them
+/// subsets.
+fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
+    let mut implied: Vec<&str> = implicit_supertype(kind).to_vec();
+    if kind.is_a(ElementKind::Feature) && !implied.contains(&"Base::things") {
+        implied.push("Base::things");
+    }
+    implied
 }
 
 fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
@@ -2443,17 +2939,10 @@ fn metadata_target(node: &SyntaxNode) -> Option<Target> {
     let qname = node
         .children()
         .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-    let name_range = qname
-        .children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
-        .last()
-        .map(|t| t.text_range())
-        .unwrap_or_else(|| qname.text_range());
     Some(Target {
         segments: name_segments(&qname),
         range: qname.text_range(),
-        name_range,
+        name_range: last_name_range(&qname),
         at: segment_ranges(&qname),
     })
 }
@@ -2477,19 +2966,10 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                     let qname = type_ref
                         .children()
                         .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-                    let name_range = qname
-                        .children_with_tokens()
-                        .filter_map(|e| e.into_token())
-                        .filter(|t| {
-                            matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME)
-                        })
-                        .last()
-                        .map(|t| t.text_range())
-                        .unwrap_or_else(|| qname.text_range());
                     Some(Target {
                         segments: name_segments(&qname),
                         range: qname.text_range(),
-                        name_range,
+                        name_range: last_name_range(&qname),
                         at: segment_ranges(&qname),
                     })
                 })
@@ -2594,13 +3074,18 @@ fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
     operand
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
-        .map(|t| {
-            t.text()
-                .strip_prefix('\'')
-                .and_then(|s| s.strip_suffix('\''))
-                .unwrap_or(t.text())
-                .to_string()
+        .filter(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR
+            )
+        })
+        // a name written from the root means the same thing in an
+        // expression as anywhere else, and the root is spelled as the
+        // segment a declared name cannot be
+        .map(|t| match t.kind() {
+            SyntaxKind::DOLLAR => String::new(),
+            _ => sysml_syntax::unquote(t.text()),
         })
         .collect()
 }
@@ -2610,6 +3095,23 @@ fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
 fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementId) {
     if target != elem && !supers.contains(&target) {
         supers.push(target);
+    }
+}
+
+/// Whether a declaration writing its own name may be answered with
+/// itself.
+///
+/// `part p4 :> p4;` says the feature is the one its type already
+/// declares, and the language reads it that way even where the type
+/// declares no such thing. Nothing else can mean that: `part v : v;`
+/// would make a feature its own type and `part def C :> C;` a
+/// definition its own supertype -- loops that say nothing, and that
+/// every reader of the model would have to know to stop at.
+fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
+    match part {
+        SyntaxKind::SUBSETTING => !is_definition,
+        SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES => true,
+        _ => false,
     }
 }
 
@@ -2696,7 +3198,7 @@ fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
     let mut front = node
         .children_with_tokens()
         .take_while(|element| {
-            element.as_token().map_or(true, |token| {
+            element.as_token().is_none_or(|token| {
                 token.kind().is_trivia()
                     || token.kind().is_modifier_kw()
                     || token.kind().is_visibility_kw()
@@ -2787,7 +3289,14 @@ fn operand_ranges(operand: &SyntaxNode) -> Vec<TextRange> {
     operand
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+        // one range per segment, the root marker included: what each
+        // step of the name landed on is paired off against these
+        .filter(|t| {
+            matches!(
+                t.kind(),
+                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR
+            )
+        })
         .map(|t| t.text_range())
         .collect()
 }
@@ -2814,11 +3323,7 @@ fn name_segments(qname: &SyntaxNode) -> Vec<String> {
             if t.kind() == SyntaxKind::DOLLAR {
                 return String::new();
             }
-            t.text()
-                .strip_prefix('\'')
-                .and_then(|s| s.strip_suffix('\''))
-                .unwrap_or(t.text())
-                .to_string()
+            sysml_syntax::unquote(t.text())
         })
         .collect()
 }
@@ -2841,7 +3346,11 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // Only a directory that is one is entered: a link to a directory
+        // is where a walk goes round in circles, loading every file once
+        // per level the kernel allows, or never coming back at all.
+        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if is_dir {
             collect_files(&path, out);
         } else if matches!(
             path.extension().and_then(|e| e.to_str()),
@@ -2906,7 +3415,17 @@ mod tests {
             "package P {\n  part def Engine;\n  alias Motor for Engine;\n}\npackage Q {\n  part e : P::Motor;\n  part f : $::P::Engine;\n}",
         )]);
         assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
-        assert_eq!(stats.resolved, 2);
+        // two typings, and the alias's own `for Engine`
+        assert_eq!(stats.resolved, 3);
+        let alias = ws
+            .model()
+            .ids()
+            .find(|&id| ws.is_alias(id))
+            .expect("the alias is an element of the model");
+        let engine = ws
+            .alias_target(alias)
+            .expect("the alias says what it names");
+        assert_eq!(ws.qualified_name_of(engine), "P::Engine");
     }
 
     #[test]
@@ -2986,6 +3505,20 @@ mod tests {
         assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
     }
 
+    /// A keyword whose base type names something that is not there
+    /// leaves the elements it marks without one, and says so once --
+    /// the answer is only as good as the workspace it was worked out
+    /// in, so it must not outlive the file that was missing.
+    #[test]
+    fn a_base_type_that_names_nothing_is_reported_once() {
+        let (ws, _) = resolved_workspace(&[(
+            "m.sysml",
+            "package Lib {\n  metadata def SemanticMetadata { attribute baseType; }\n  metadata def cause :> SemanticMetadata {\n    :>> baseType = nowhere;\n  }\n}\npackage M {\n  import Lib::*;\n  #cause 'battery old';\n}",
+        )]);
+        let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+        assert_eq!(names, ["nowhere"]);
+    }
+
     #[test]
     fn import_all_overrides_visibility() {
         let (ws, stats) = resolved_workspace(&[(
@@ -3008,6 +3541,13 @@ mod tests {
     fn self_reference_resolves_to_self() {
         let (ws, stats) = resolved_workspace(&[("m.sysml", "package P { part p4 :> p4; }")]);
         assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    }
+
+    /// The root namespace holds both halves and is on neither side.
+    #[test]
+    fn the_root_namespace_is_in_no_library() {
+        let ws = Workspace::new();
+        assert!(!ws.in_library(ws.root()));
     }
 
     #[test]
