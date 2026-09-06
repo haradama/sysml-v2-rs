@@ -87,6 +87,16 @@ impl Default for Style {
 }
 
 impl Style {
+    /// How tall the tab in a package's top left corner is.
+    ///
+    /// One line of the name with room above and below it, which is what
+    /// makes the tab sit close around what it says rather than reading
+    /// as a box in its own right. The drawing and both layouts have to
+    /// agree on it, or what the package holds is placed under its name.
+    pub(crate) fn package_tab(&self) -> f64 {
+        self.padding + self.line_height
+    }
+
     /// Rough advance width of `text`. Boxes are sized without a font engine,
     /// so this assumes the average glyph of a sans-serif face is 0.6 em --
     /// wide enough for the ASCII identifiers SysML models are written with.

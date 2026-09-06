@@ -234,7 +234,10 @@ wrote 4 lifeline(s) and 3 message(s) to seq.svg
 
 A package is the folder the standard draws round what it holds
 (`package-node`): its name in the tab, the definitions it owns inside,
-and a package it encloses drawn inside its frame. The frames are worked
+and a package it encloses drawn inside its frame. The tab is closed
+along the bottom and widens as it descends, the way PlantUML and the UML
+tools before it draw one, so it reads as a tab rather than as a step in
+the outline. The frames are worked
 out as the boxes are placed rather than fitted round them afterwards, so
 two packages can never overlap. Lines still run between definitions in
 different packages, across the frames.

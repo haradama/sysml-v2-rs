@@ -85,28 +85,39 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     let mut out = markers();
     // the package frames first, so every box and line sits on top of them
     for frame in &layout.packages {
-        let tab = 2.0 * style.padding + style.line_height;
-        let notch = style.text_width(&frame.name) + 2.0 * style.padding;
-        // the folder the standard draws: a tab on the top left, and the
-        // body below it holding what the package contains
+        let tab = style.package_tab();
+        // The tab widens as it descends, and is closed along the bottom,
+        // so it reads as a tab of its own rather than as a step in the
+        // outline -- the folder as PlantUML and the UML tools before it
+        // have always drawn it.
+        let slant = 0.3 * tab;
+        let notch = (style.text_width(&frame.name) + 2.0 * style.padding)
+            .min(frame.width - slant)
+            .max(0.0);
         writeln!(
             out,
-            "<path class=\"box\" d=\"M {:.1} {:.1} H {:.1} V {:.1} H {:.1} V {:.1} \
-             H {:.1} z\"/>",
+            "<path class=\"box\" d=\"M {:.1} {:.1} H {:.1} L {:.1} {:.1} H {:.1} V {:.1} \
+             H {:.1} z\"/>\n\
+             <line class=\"rule\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\"/>",
             frame.x,
             frame.y,
-            frame.x + notch.min(frame.width),
+            frame.x + notch,
+            frame.x + notch + slant,
             frame.y + tab,
             frame.x + frame.width,
             frame.y + frame.height,
             frame.x,
+            frame.x,
+            frame.y + tab,
+            frame.x + notch + slant,
+            frame.y + tab,
         )
         .unwrap();
         writeln!(
             out,
             "<text class=\"name\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
             frame.x + style.padding,
-            frame.y + style.padding + 0.75 * style.line_height,
+            frame.y + 0.5 * style.padding + 0.75 * style.line_height,
             escape(&frame.name)
         )
         .unwrap();
@@ -2872,7 +2883,7 @@ mod tests {
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let placed = layout(&diagram, &style);
-        let tab = 2.0 * style.padding + style.line_height;
+        let tab = style.package_tab();
         for (group, frame) in diagram.groups.iter().zip(&placed.packages) {
             for &at in &group.nodes {
                 let clear = frame.y + tab + style.padding;

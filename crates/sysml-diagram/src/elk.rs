@@ -217,7 +217,7 @@ fn package(
     // the tab and then the same clearance the other three sides get:
     // padding of exactly the tab would leave the first box's top border
     // drawn along the tab's bottom, which reads as one line, not two
-    let top = 2.0 * style.padding + style.line_height + pad;
+    let top = style.package_tab() + pad;
     write!(
         out,
         "{{\"id\":\"g{at}\",\"layoutOptions\":{{\"elk.algorithm\":\"layered\",\
@@ -657,7 +657,7 @@ mod tests {
         // the drawing puts the package's name in a tab inside the frame,
         // so what the frame holds has to start below it and then clear of
         // it by as much as the other three sides are cleared by
-        let tab = 2.0 * style.padding + style.line_height;
+        let tab = style.package_tab();
         let padding = graph["children"][0]["layoutOptions"]["elk.padding"]
             .as_str()
             .expect("a package says how much room it keeps");

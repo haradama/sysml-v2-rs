@@ -190,7 +190,7 @@ fn frame(
     frames: &mut [Frame],
 ) -> (f64, f64) {
     let group = &diagram.groups[at];
-    let tab = 2.0 * style.padding + style.line_height;
+    let tab = style.package_tab();
     let inside = left + style.padding;
     let mut down = top + tab + style.padding;
     let mut widest: f64 = style.text_width(&group.name) + 2.0 * style.padding;
