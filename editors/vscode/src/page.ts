@@ -7,10 +7,20 @@
 /// The page a preview panel is opened with, once, for the life of the
 /// panel: the drawings are posted in rather than written into it.
 export function page(): string {
+  // One per panel, and the only thing the policy below lets run. The
+  // drawing is written into the page with `innerHTML`, so what keeps a
+  // model file from carrying a script into this window is the policy
+  // rather than the care taken where the SVG was drawn.
+  const nonce = Array.from({ length: 32 }, () =>
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".charAt(
+      Math.floor(Math.random() * 62)
+    )
+  ).join("");
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <style>
   html, body { height: 100%; }
   body {
@@ -61,7 +71,7 @@ export function page(): string {
   <button id="save" title="Save the diagram as an image">Save&hellip;</button>
 </div>
 <div id="diagram"><div id="sizer"><div id="canvas"></div></div></div>
-<script>
+<script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const view = document.getElementById("view");
   const element = document.getElementById("element");

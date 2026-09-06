@@ -348,3 +348,22 @@ fn client_disconnect_without_shutdown_terminates_the_server() {
     // the receive loop ends when the channel closes
     handle.join().unwrap().unwrap();
 }
+
+#[test]
+fn exit_before_shutdown_leaves_with_a_failure() {
+    // the spec asks for it, and a client reads the code to tell a stop
+    // it asked for from a server that fell over
+    let (server_side, client_side) = Connection::memory();
+    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side));
+    let mut client = Client {
+        connection: client_side,
+        next_id: 1,
+    };
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({ "capabilities": {} }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
+    assert!(handle.join().unwrap().is_err());
+}

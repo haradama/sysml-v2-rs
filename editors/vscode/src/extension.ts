@@ -58,9 +58,22 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
   const exclude = vscode.workspace
     .getConfiguration("sysml")
     .get<string[]>("workspace.exclude", []);
+  // A file and an unsaved buffer are documents the server can speak
+  // for. The other schemes a window shows are not: a `git:` document is
+  // some earlier revision of a file, and handing it over declares that
+  // revision's names alongside the working copy's, in the same project,
+  // as though the model held both.
+  const schemes = ["file", "untitled"];
+  const languages = ["sysml", "kerml"];
+  // a model file written, renamed or deleted outside the editor belongs
+  // to the project too, and only the client can see it happen
+  const watcher = vscode.workspace.createFileSystemWatcher("**/*.{sysml,kerml}");
+  context.subscriptions.push(watcher);
   return {
-    // no scheme filter: untitled buffers get language support too
-    documentSelector: [{ language: "sysml" }, { language: "kerml" }],
+    documentSelector: schemes.flatMap((scheme) =>
+      languages.map((language) => ({ scheme, language }))
+    ),
+    synchronize: { fileEvents: watcher },
     initializationOptions: {
       ...(library ? { libraryPath: library } : {}),
       ...(exclude.length > 0 ? { excludePaths: exclude } : {}),

@@ -295,3 +295,23 @@ test("anything but a drawing is ignored", () => {
   assert.equal(it.zoom(), 100);
   assert.equal(it.sizer.style.width, "800px");
 });
+
+test("the drawing is written into a page that lets nothing of its own run", () => {
+  // The SVG arrives as markup and goes in with `innerHTML`. What keeps
+  // a script in a model file out of this window is the policy, not the
+  // care taken wherever the drawing was made.
+  const html = page();
+  const policy = html.match(
+    /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/
+  );
+  assert.ok(policy, html.slice(0, 200));
+  assert.match(policy[1], /default-src 'none'/);
+  assert.match(policy[1], /img-src data:/);
+  assert.match(policy[1], /style-src 'unsafe-inline'/);
+
+  // only the page's own script is let through, by a nonce of its own
+  const nonce = policy[1].match(/script-src 'nonce-([A-Za-z0-9]+)'/);
+  assert.ok(nonce, policy[1]);
+  assert.ok(html.includes(`<script nonce="${nonce[1]}">`), "the script is not the one named");
+  assert.notEqual(nonce[1], page().match(/script-src 'nonce-([A-Za-z0-9]+)'/)[1]);
+});

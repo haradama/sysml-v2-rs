@@ -196,10 +196,14 @@ fn every_position_in_the_corpus() {
                     json!({"textDocument":{"uri":&uri},"position":{"line":row,"character":col},
                            "newName":"Renamed"}),
                 ) {
-                    // a rename it declines -- off a name, or of an alias
-                    // whose uses it could not follow -- is the answer,
-                    // not a fault
-                    if !e.contains("nothing to rename here") && !e.contains("alias") {
+                    // a rename it declines -- off a name, of an alias
+                    // whose uses it could not follow, or of a feature
+                    // that declares no name and borrows none either --
+                    // is the answer, not a fault
+                    if !e.contains("nothing to rename here")
+                        && !e.contains("alias")
+                        && !e.contains("declares no name")
+                    {
                         found.push(format!("rename\t{}:{row}:{col}\t{e}", path.display()));
                     }
                 }

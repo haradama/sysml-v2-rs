@@ -41,11 +41,20 @@ impl LineIndex {
 
     pub fn offset(&self, text: &str, position: Position) -> Option<TextSize> {
         let line_start = *self.starts.get(position.line as usize)?;
+        // the line's own text, without the break that ends it: a
+        // character column past the end of a line belongs to the end of
+        // that line, not to the start of the next one
         let line_end = self
             .starts
             .get(position.line as usize + 1)
-            .copied()
-            .unwrap_or(text.len());
+            .map_or(text.len(), |&next| {
+                let end = next - 1;
+                if text[..end].ends_with('\r') {
+                    end - 1
+                } else {
+                    end
+                }
+            });
         let mut utf16 = 0u32;
         for (i, c) in text[line_start..line_end].char_indices() {
             if utf16 >= position.character {
@@ -74,6 +83,29 @@ mod tests {
         assert_eq!(
             index.offset(text, Position::new(2, 99)).map(usize::from),
             Some(text.len())
+        );
+    }
+
+    #[test]
+    fn a_column_past_a_line_is_the_end_of_that_line_not_the_next() {
+        // hovering past the end of `part x :` used to answer about
+        // whatever the line below began with
+        let text = "part x :\nA;\n";
+        let index = LineIndex::new(text);
+        assert_eq!(
+            index.offset(text, Position::new(0, 99)).map(usize::from),
+            Some(8)
+        );
+        // the break itself is not part of the line either way it is written
+        let text = "part x :\r\nA;\r\n";
+        let index = LineIndex::new(text);
+        assert_eq!(
+            index.offset(text, Position::new(0, 99)).map(usize::from),
+            Some(8)
+        );
+        assert_eq!(
+            index.offset(text, Position::new(1, 99)).map(usize::from),
+            Some(12)
         );
     }
 }
