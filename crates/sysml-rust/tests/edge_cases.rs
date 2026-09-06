@@ -47,6 +47,43 @@ fn generate(system: &str) -> Result<String, sysml_rust::RustgenError> {
     sysml_rust::generate(ws.model(), &roots)
 }
 
+/// Generated Rust, put to the only test that counts: `rustc` on it.
+///
+/// The assertions elsewhere in this file say what the output should
+/// contain; this says the whole of it is a Rust file, which is what
+/// catches the shape nobody thought to assert about.
+#[track_caller]
+fn compiles(rust: &str) {
+    let at = std::env::temp_dir().join(format!(
+        "sysml-rust-edge-{}-{}.rs",
+        std::process::id(),
+        COMPILED.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::write(&at, rust).unwrap();
+    let out = std::process::Command::new(std::env::var("RUSTC").unwrap_or("rustc".into()))
+        .args([
+            "--crate-type",
+            "lib",
+            "--edition",
+            "2021",
+            "--emit=metadata",
+        ])
+        .arg("-o")
+        .arg(at.with_extension("rmeta"))
+        .arg(&at)
+        .output()
+        .expect("rustc runs");
+    assert!(
+        out.status.success(),
+        "generated Rust does not compile:\n{}\n---\n{rust}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(&at);
+    let _ = std::fs::remove_file(at.with_extension("rmeta"));
+}
+
+static COMPILED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[test]
 fn what_has_no_shape_becomes_a_comment_not_silence() {
     let rust = generate(
@@ -241,6 +278,7 @@ fn names_arrive_in_rusts_case_and_clear_of_the_words_it_reserves() {
          \t\tattribute 'loop' : Integer = 2;\n\
          \t\tattribute 'self' : Real;\n\
          \t\tcalc scaled : Real = inputScaling * 2.0;\n\
+         \t\tcalc widened : Integer = Widen('loop', 'loop');\n\
          \t}\n\
          \tcalc def Widen {\n\
          \t\tin reservoirSize : Integer;\n\
@@ -261,6 +299,8 @@ fn names_arrive_in_rusts_case_and_clear_of_the_words_it_reserves() {
     // what is declared and what reads it have to move together, or the
     // renaming would generate expressions over names that do not exist
     assert!(rust.contains("pub fn widen(reservoir_size: i64, input_dimension: i64) -> i64 {"));
+    // a calculation a method calls is called by the name Rust gave it
+    assert!(rust.contains("widen(self.r#loop, self.r#loop)"), "{rust}");
     assert!(rust.contains("(1 + input_dimension) + reservoir_size"));
     assert!(rust.contains("self.input_scaling * 2.0"));
 }
@@ -549,7 +589,11 @@ fn the_long_tail_of_shapes_and_signatures() {
          \tprivate import Api::*;\n\
          \tprivate import ScalarValues::*;\n\
          \tdoc /* the whole package */\n\
-         \tenum def Mood {\n\t\tdoc /* how it feels */\n\t\tenum calm;\n\t}\n\
+         \tenum def Mood {\n\
+         \t\tdoc /* how it feels */\n\
+         \t\tenum calm;\n\
+         \t\tattribute loudness : Real;\n\
+         \t}\n\
          \tvariation part def Pick {\n\
          \t\tdoc /* one of these */\n\
          \t\tvariant part first_choice;\n\
@@ -594,6 +638,9 @@ fn the_long_tail_of_shapes_and_signatures() {
     // untyped members and stray actions become notes
     assert!(rust.contains("// not generated: `loose` -- no Rust type for its SysML type"));
     assert!(rust.contains("`helper` -- ActionUsage not generated"));
+    // an enumeration says what it left out: a member that is not one of
+    // its values has nowhere to go in a Rust enum
+    assert!(rust.contains("// not generated: `loudness` -- only `enum` values become variants"));
     // a named or ranged bound degrades to a Vec
     assert!(rust.contains("pub counted: Vec<i64>,"));
     assert!(rust.contains("pub window: Vec<i64>,"));
@@ -803,8 +850,23 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     model.add_owned(perform, typing);
 
     // a metadata usage whose settings are broken in every way
+    let rust_def = model.create(ElementKind::MetadataDefinition);
+    model.set(rust_def, "declaredName", Value::String("rust".to_string()));
     let meta = model.create(ElementKind::MetadataUsage);
+    let says_rust = model.create(ElementKind::FeatureTyping);
+    model.set(says_rust, "type", Value::Ref(rust_def));
+    model.add_owned(meta, says_rust);
     model.add_owned(part, meta);
+    // a second usage of somebody else's metadata definition, whose
+    // settings look exactly like a binding's and are none of this
+    // generator's business
+    let safety = model.create(ElementKind::MetadataDefinition);
+    model.set(safety, "declaredName", Value::String("Safety".to_string()));
+    let tagged = model.create(ElementKind::MetadataUsage);
+    let says_safety = model.create(ElementKind::FeatureTyping);
+    model.set(says_safety, "type", Value::Ref(safety));
+    model.add_owned(tagged, says_safety);
+    model.add_owned(part, tagged);
     let hollow = model.create(ElementKind::ReferenceUsage);
     model.add_owned(meta, hollow);
     let untargeted = model.create(ElementKind::Redefinition);
@@ -830,6 +892,34 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     model.set(literal, "value", Value::Int(3));
     model.add_owned(value, literal);
     model.set(value, "value", Value::Ref(literal));
+
+    // a setting that redefines something with no name at all, and one
+    // whose value is an element that holds no literal: neither says
+    // anything a binding could be read out of
+    let nameless = model.create(ElementKind::ReferenceUsage);
+    model.add_owned(meta, nameless);
+    let to_nothing = model.create(ElementKind::Redefinition);
+    model.add_owned(nameless, to_nothing);
+    let anonymous = model.create(ElementKind::AttributeUsage);
+    model.add_owned(part, anonymous);
+    model.set(to_nothing, "redefinedFeature", Value::Ref(anonymous));
+    let holds_a_literal = model.create(ElementKind::FeatureValue);
+    model.add_owned(nameless, holds_a_literal);
+    let three = model.create(ElementKind::LiteralInteger);
+    model.set(three, "value", Value::Int(3));
+    model.add_owned(holds_a_literal, three);
+    model.set(holds_a_literal, "value", Value::Ref(three));
+
+    let valueless = model.create(ElementKind::ReferenceUsage);
+    model.add_owned(meta, valueless);
+    let to_retries = model.create(ElementKind::Redefinition);
+    model.add_owned(valueless, to_retries);
+    model.set(to_retries, "redefinedFeature", Value::Ref(attribute));
+    let holds_nothing = model.create(ElementKind::FeatureValue);
+    model.add_owned(valueless, holds_nothing);
+    let empty = model.create(ElementKind::Expression);
+    model.add_owned(holds_nothing, empty);
+    model.set(holds_nothing, "value", Value::Ref(empty));
 
     let rust = sysml_rust::generate(&model, &[part]).unwrap();
     // the part has a binding now (retries = 3), so it is treated as an
@@ -1004,7 +1094,7 @@ fn calculations_translate_where_the_simple_subset_allows() {
     assert!(rust.contains("pub fn blank(a: f64) -> f64 {\n    todo!()\n}"));
     // `**` is Rust's `powf`, and a whole-number exponent is spelled as
     // the real number it stands for
-    assert!(rust.contains("pub fn squared(x: f64) -> f64 {\n    x.powf(2.0)\n}"));
+    assert!(rust.contains("pub fn squared(x: f64) -> f64 {\n    f64::powf(x, 2.0)\n}"));
     // a literal return value, an anonymous `in` skipped from the arguments
     assert!(rust.contains("pub fn anon() -> f64 {\n    1.0\n}"));
     // a calc usage reads the struct through `self`, its own params plainly
@@ -1389,6 +1479,9 @@ fn names_rust_cannot_spell_are_joined_up_and_never_collide() {
          \tpart def '2nd Stage';\n\
          \tpart def '+/-';\n\
          \tpart def IdealGasParcel;\n\
+         \tpart def 'match';\n\
+         \tpart def Vec;\n\
+         \tpart def 'x²';\n\
          \tpackage Inner {\n\t\tpart def 'Ideal-Gas-Parcel';\n\t}\n\
          }\n",
     )
@@ -1398,7 +1491,9 @@ fn names_rust_cannot_spell_are_joined_up_and_never_collide() {
     // Rust can use still has to be called something
     assert!(rust.contains("pub struct IdealGasParcel"), "{rust}");
     assert!(rust.contains("pub struct _2ndStage"), "{rust}");
-    assert!(rust.contains("pub struct _ "), "{rust}");
+    // `_` is a pattern rather than a name, so a name Rust can spell no
+    // part of gets one that at least says so
+    assert!(rust.contains("pub struct Unnamed "), "{rust}");
     // three names arrive at `IdealGasParcel`; the first keeps it and the
     // others are named by where they came from, not written twice over
     assert_eq!(
@@ -1416,6 +1511,13 @@ fn names_rust_cannot_spell_are_joined_up_and_never_collide() {
         rust.contains("// not generated: `Ideal-Gas-Parcel` -- `IdealGasParcel` is already the Rust name of `S::Ideal Gas Parcel`"),
         "{rust}"
     );
+    // a keyword, and a prelude name the file writes itself, both get out
+    // of the way rather than shadowing what the generator needs
+    assert!(rust.contains("pub struct match_"), "{rust}");
+    assert!(rust.contains("pub struct Vec_"), "{rust}");
+    // a superscript is alphanumeric and is not part of any Rust name
+    assert!(rust.contains("pub struct x "), "{rust}");
+    compiles(&rust);
 }
 
 /// A behaviour that performs itself would have to be its own supertrait,
@@ -1566,4 +1668,324 @@ fn a_bound_type_is_the_type_the_model_names() {
         !rust.contains("#[derive(Debug, Clone, PartialEq)]\npub struct Counter"),
         "{rust}"
     );
+}
+
+/// Two paths to one general are not a circle. Reaching `Base` through
+/// both `Left` and `Right` once meant "its specializations form a
+/// circle" and no struct at all, which is what dropped 30 definitions
+/// of the official corpus.
+#[test]
+fn a_diamond_flattens_and_only_a_real_circle_is_refused() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Base { attribute id : Integer; }\n\
+         \tpart def Left :> Base { attribute l : Real; }\n\
+         \tpart def Right :> Base { attribute r : Real; }\n\
+         \tpart def Both :> Left, Right { attribute b : Boolean; }\n\
+         \tpart def Ouro :> Round;\n\
+         \tpart def Round :> Ouro;\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub struct Both"), "{rust}");
+    // the inherited field arrives once, however many ways there are to it
+    assert_eq!(rust.matches("pub id: i64,").count(), 4, "{rust}");
+    assert!(
+        rust.contains("// not generated: `Ouro` -- its specializations form a circle"),
+        "{rust}"
+    );
+    compiles(&rust);
+}
+
+/// Metadata is how a model says anything about anything, and only one
+/// definition of it -- this crate's own `@rust` -- says which Rust item
+/// something stands for. A `@Safety { :>> level = "high"; }` once read
+/// as a binding, and its part vanished without so much as a note.
+#[test]
+fn somebody_elses_metadata_is_not_a_rust_binding() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tmetadata def Safety { attribute level : String; }\n\
+         \tpart def Engine {\n\
+         \t\t@Safety { :>> level = \"high\"; }\n\
+         \t\tattribute power : Real;\n\
+         \t}\n\
+         \tpart def Car { part e : Engine; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub struct Engine"), "{rust}");
+    assert!(rust.contains("pub power: f64,"), "{rust}");
+    assert!(rust.contains("pub e: Engine,"), "{rust}");
+    compiles(&rust);
+}
+
+/// A struct has a size only if everything it holds inline does. The
+/// cycle detector used to look at declared members of structs alone, so
+/// a circle closing through an inherited field, or through the payload
+/// of a variation's variant, reached `rustc` with no `Box` in it.
+#[test]
+fn a_cycle_through_an_inherited_field_or_a_variant_payload_is_boxed() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Base { part b : B; }\n\
+         \tpart def A :> Base;\n\
+         \tpart def B { part a : A; }\n\
+         \tpart def Tree { part root : Node; }\n\
+         \tvariation part def Node { variant leaf; variant branch : Tree; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub b: Box<B>,"), "{rust}");
+    assert!(rust.contains("Branch(Box<Tree>),"), "{rust}");
+    compiles(&rust);
+}
+
+/// A variation is an enum, and whatever holds one asks it for a
+/// `Default` -- which it can only have through a variant that carries
+/// no payload, since that is the only kind `#[default]` accepts.
+#[test]
+fn a_variation_starts_at_its_first_payload_less_variant() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tvariation part def Mode { variant off; variant on; }\n\
+         \tpart def Payload { attribute p : Real; }\n\
+         \tvariation part def Loaded { variant full : Payload; }\n\
+         \tpart def Holder { part m : Mode; }\n\
+         \tpart def Carrier { part l : Loaded; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("#[derive(Default)]\npub enum Mode"), "{rust}");
+    assert!(rust.contains("    #[default]\n    Off,"), "{rust}");
+    assert!(rust.contains("impl Default for Holder"), "{rust}");
+    // every variant carries something, so nothing can start it and
+    // nothing holding it can start either
+    assert!(
+        !rust.contains("#[derive(Default)]\npub enum Loaded"),
+        "{rust}"
+    );
+    assert!(!rust.contains("impl Default for Carrier"), "{rust}");
+    compiles(&rust);
+}
+
+/// SysML has one numeric tower and Rust has several. `1670` written
+/// against a `Real` is a real, and Rust reads it as an integer and
+/// refuses to put it in an `f64` -- or to multiply one by it.
+#[test]
+fn a_whole_number_against_a_real_gets_the_point_rust_needs() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Wheel {\n\
+         \t\tattribute shift : Real = 1670;\n\
+         \t\tattribute mass : Real = -5;\n\
+         \t\tattribute area : Real = 2 * 3;\n\
+         \t\tattribute count : Integer = 7;\n\
+         \t}\n\
+         \tcalc def Twice { in x : Real; return : Real = x * 2; }\n\
+         \tcalc def Whole { in n : Integer; return : Integer = n * 2; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("shift: 1670.0,"), "{rust}");
+    assert!(rust.contains("mass: -5.0,"), "{rust}");
+    assert!(rust.contains("area: 2.0 * 3.0,"), "{rust}");
+    assert!(rust.contains("x * 2.0"), "{rust}");
+    // an integer target keeps the spelling the model chose
+    assert!(rust.contains("count: 7,"), "{rust}");
+    assert!(rust.contains("n * 2\n"), "{rust}");
+    compiles(&rust);
+}
+
+/// Two ways a real reached `rustc` as something it will not read: a
+/// literal base with no type to look `powf` up on, and a value the
+/// model wrote that no `f64` holds.
+#[test]
+fn a_real_is_spelled_so_that_rust_reads_it_back() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Sq { attribute area : Real = 3.0 ** 2; attribute big : Real = 1e999; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("area: f64::powf(3.0, 2.0),"), "{rust}");
+    assert!(rust.contains("big: f64::INFINITY,"), "{rust}");
+    compiles(&rust);
+}
+
+/// SysML tells `fuelTank`, `fuel_tank` and `'fuel tank'` apart and Rust
+/// does not. Every namespace Rust has -- a struct's fields, an enum's
+/// variants, the module's own types and functions -- is settled here so
+/// that what a model keeps apart stays apart.
+#[test]
+fn names_that_arrive_at_one_rust_spelling_are_told_apart() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Car {\n\
+         \t\tattribute fuelTank : Real;\n\
+         \t\tattribute fuel_tank : Real;\n\
+         \t\tattribute 'fuel tank' : Real;\n\
+         \t\tattribute '' : Real;\n\
+         \t\tattribute '+' : Real;\n\
+         \t}\n\
+         \tenum def E { enum a_b; enum aB; }\n\
+         \tcalc def fooBar { in x : Real; return : Real = x; }\n\
+         \tcalc def FooBar { in x : Real; return : Real = x; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub fuel_tank: f64,"), "{rust}");
+    assert!(rust.contains("pub fuel_tank_2: f64,"), "{rust}");
+    assert!(rust.contains("pub fuel_tank_3: f64,"), "{rust}");
+    assert!(rust.contains("pub unnamed: f64,"), "{rust}");
+    assert!(rust.contains("pub unnamed_2: f64,"), "{rust}");
+    assert!(rust.contains("    AB,"), "{rust}");
+    assert!(rust.contains("    AB_2,"), "{rust}");
+    // two calculations arrive at one function, and Rust keeps functions
+    // in a namespace of their own, so only the name they share matters
+    assert_eq!(rust.matches("pub fn foo_bar(").count(), 1, "{rust}");
+    assert!(
+        rust.contains(
+            "// not generated: `FooBar` -- `foo_bar` is already the Rust name of `S::fooBar`"
+        ),
+        "{rust}"
+    );
+    compiles(&rust);
+}
+
+/// A state machine writes three types the state definition never named
+/// -- `FooState`, `FooEvent`, `FooHooks` -- and its states and events
+/// become enum variants, which are types and must be spelled as such.
+#[test]
+fn a_state_machine_spells_its_states_and_reserves_the_names_it_derives() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tstate def 'Traffic Light' {\n\
+         \t\tstate 'red light';\n\
+         \t\tstate green;\n\
+         \t\tstate waiting { accept go then green; }\n\
+         \t\ttransition 'go-green' first 'red light' then green;\n\
+         \t}\n\
+         \tpart def Junction { state s : 'Traffic Light'; }\n\
+         \tstate def Foo { state a; state b; transition t first a then b; }\n\
+         \tpart def FooState { attribute x : Real; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub enum TrafficLightState"), "{rust}");
+    assert!(
+        rust.contains(
+            "// not generated: a transition inside state `waiting` -- only a transition naming \
+             both its ends joins the table"
+        ),
+        "{rust}"
+    );
+    assert!(rust.contains("    RedLight,"), "{rust}");
+    assert!(rust.contains("    GoGreen,"), "{rust}");
+    assert!(rust.contains("pub s: TrafficLightState,"), "{rust}");
+    // the machine wrote `FooState` first, so the part cannot have it
+    assert!(
+        rust.contains(
+            "// not generated: `FooState` -- `FooState` is already the Rust name of `S::Foo`"
+        ),
+        "{rust}"
+    );
+    compiles(&rust);
+}
+
+/// Three types a signature reached for that the file never wrote: an
+/// abstract definition, which flattens into its subtypes; an action,
+/// which becomes a trait; and a state definition, whose three types are
+/// none of them called what it is called.
+#[test]
+fn a_signature_names_only_what_the_file_writes_as_a_type() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tabstract item def Cmd { attribute code : Integer; }\n\
+         \tstate def M { state a; state b; transition t first a accept c : Cmd then b; }\n\
+         \tcalc def F { in c : Cmd; return : Real = 1.0; }\n\
+         \taction def Act { in q : Other; }\n\
+         \taction def Other;\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(!rust.contains("(Cmd)"), "{rust}");
+    assert!(!rust.contains(": Cmd"), "{rust}");
+    assert!(!rust.contains(": Other"), "{rust}");
+    compiles(&rust);
+}
+
+/// A `state def` with no states becomes an enum with no values, so it
+/// has no `initial()` and nothing holding one can start.
+#[test]
+fn a_part_holding_a_stateless_machine_has_no_default() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tstate def Idle;\n\
+         \tpart def P { attribute x : Real; state s : Idle; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub s: IdleState,"), "{rust}");
+    assert!(!rust.contains("impl Default for P"), "{rust}");
+    compiles(&rust);
+}
+
+/// A port's name becomes a generic parameter, which is a type name and
+/// has to be spelled as one -- `port 'my port'` was writing
+/// `pub struct Node<My port: ...>`.
+#[test]
+fn a_generic_parameter_is_named_the_way_a_type_is() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Node { port 'my port' : Store; part inner : Child; }\n\
+         \tpart def Child { port store : Store; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("pub struct Node<MyPort: fake::Store, InnerStore: fake::Store>"),
+        "{rust}"
+    );
+}
+
+/// Every multiplicity a model can write, as the container it means.
+/// `[1..1]` is the default said out loud and `[0]` is nothing at all;
+/// both used to come out as a `Vec`, which claims neither.
+#[test]
+fn a_multiplicity_becomes_the_container_it_states() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def Thing { attribute v : Real; }\n\
+         \tpart def Crate {\n\
+         \t\tpart exactlyOne : Thing[1..1];\n\
+         \t\tpart none : Thing[0];\n\
+         \t\tpart twoToFive : Thing[2..5];\n\
+         \t\tpart opt : Thing[0..1];\n\
+         \t\tpart many : Thing[*];\n\
+         \t\tpart three : Thing[3];\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub exactly_one: Thing,"), "{rust}");
+    assert!(rust.contains("pub none: [Thing; 0],"), "{rust}");
+    assert!(rust.contains("pub two_to_five: Vec<Thing>,"), "{rust}");
+    assert!(rust.contains("pub opt: Option<Thing>,"), "{rust}");
+    assert!(rust.contains("pub many: Vec<Thing>,"), "{rust}");
+    assert!(rust.contains("pub three: [Thing; 3],"), "{rust}");
+    compiles(&rust);
 }

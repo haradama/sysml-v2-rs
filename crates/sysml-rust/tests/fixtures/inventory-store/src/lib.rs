@@ -76,7 +76,7 @@ pub trait Session {
     fn close(self);
     /// A map has no monomorphic SysML shape: skipped.
     fn tally(&self, counts: std::collections::HashMap<String, u64>) -> bool;
-    /// A borrowed parameter reads as its owned value.
+    /// A borrowed string is a type of its own: it reads as `&str`.
     fn label(&self, name: &str) -> bool;
     /// An unmappable return type: skipped.
     fn dump(&self) -> std::collections::HashMap<String, u64>;

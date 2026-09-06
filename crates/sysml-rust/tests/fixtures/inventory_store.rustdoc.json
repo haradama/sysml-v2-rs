@@ -2343,7 +2343,7 @@
       "name": "label",
       "span": { "filename": "src/lib.rs", "begin": [80, 5], "end": [80, 41] },
       "visibility": "default",
-      "docs": "A borrowed parameter reads as its owned value.",
+      "docs": "A borrowed string is a type of its own: it reads as `&str`.",
       "links": {},
       "attrs": [],
       "deprecation": null,

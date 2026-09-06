@@ -54,7 +54,7 @@ use crate::binding;
 /// What every generated struct and enum derives, where its fields let
 /// it. `Default` joins them when the model gave every field a value.
 const DERIVED: [&str; 3] = ["Debug", "Clone", "PartialEq"];
-use crate::expr::{self, translate, Translated};
+use crate::expr::{self, translate, translate_as, Numbers, Translated};
 
 /// What stops code generation outright (a model this generator cannot
 /// write faithfully); everything smaller is a comment in the output.
@@ -155,6 +155,9 @@ struct Generator<'a> {
     /// Per struct: its generic parameters and what each composed field
     /// passes along, so parts with API ports compose.
     plans: HashMap<ElementId, Plan>,
+    /// Every generated type's fields, worked out once they stop
+    /// changing. Empty until then.
+    fields: HashMap<ElementId, Option<Vec<Field>>>,
 }
 
 /// The generic signature of one struct and how its fields use it.
@@ -237,10 +240,12 @@ impl<'a> Generator<'a> {
             derivable: HashSet::new(),
             boxed: HashSet::new(),
             plans: HashMap::new(),
+            fields: HashMap::new(),
         };
         generator.break_cycles();
         generator.settle_unbuildable();
         generator.settle_collisions();
+        generator.settle_fields();
         generator.settle_plans();
         generator.settle_defaults();
         generator.settle_derives();
@@ -249,65 +254,79 @@ impl<'a> Generator<'a> {
 
     /// Depth-first over the composition graph; the edge that would close
     /// a cycle is remembered and later held behind a `Box`.
+    ///
+    /// The graph runs over the flattened fields rather than the declared
+    /// members, since a field a general hands down is held inline just
+    /// as tightly as one declared here, and over the payloads of a
+    /// variation's variants, which an enum holds inline the same way.
+    /// A cycle closing through either of those went unboxed, and the
+    /// struct it closed on had no size Rust could work out.
     fn break_cycles(&mut self) {
         let mut done: HashSet<ElementId> = HashSet::new();
+        let mut boxed = HashSet::new();
         for &def in &self.order {
-            let mut path = Vec::new();
-            walk(
-                self.model,
-                &self.shapes,
-                def,
-                &mut path,
-                &mut done,
-                &mut self.boxed,
-            );
+            self.walk_composition(def, &mut Vec::new(), &mut done, &mut boxed);
         }
+        self.boxed = boxed;
+    }
 
-        fn walk(
-            model: &Model,
-            shapes: &HashMap<ElementId, Shape>,
-            def: ElementId,
-            path: &mut Vec<ElementId>,
-            done: &mut HashSet<ElementId>,
-            boxed: &mut HashSet<(ElementId, ElementId)>,
-        ) {
-            if done.contains(&def) {
-                return;
-            }
-            path.push(def);
-            for &child in model.owned(def) {
-                // the same members `fields` makes fields of, or a
-                // composition that closes a circle through one of the
-                // others goes unseen and the struct has no finite size
-                if !matches!(
-                    model.kind(child),
-                    ElementKind::PartUsage
-                        | ElementKind::ItemUsage
-                        | ElementKind::AttributeUsage
-                        | ElementKind::ReferenceUsage
-                        | ElementKind::PortUsage
-                ) {
-                    continue;
-                }
-                // a Vec already breaks the recursion
-                if multiplicity(model, child) == Container::Many {
-                    continue;
-                }
-                let Some(target) = model.type_of(child) else {
-                    continue;
-                };
-                if shapes.get(&target) != Some(&Shape::Struct) {
-                    continue;
-                }
-                if path.contains(&target) {
-                    boxed.insert((def, target));
-                } else {
-                    walk(model, shapes, target, path, done, boxed);
-                }
-            }
-            path.pop();
-            done.insert(def);
+    fn walk_composition(
+        &self,
+        def: ElementId,
+        path: &mut Vec<ElementId>,
+        done: &mut HashSet<ElementId>,
+        boxed: &mut HashSet<(ElementId, ElementId)>,
+    ) {
+        if done.contains(&def) {
+            return;
         }
+        path.push(def);
+        for (holder, target) in self.composed(def) {
+            if path.contains(&target) {
+                boxed.insert((holder, target));
+            } else {
+                self.walk_composition(target, path, done, boxed);
+            }
+        }
+        path.pop();
+        done.insert(def);
+    }
+
+    /// Every generated type `def` holds inside itself, each paired with
+    /// the element a `Box` would go on -- for an inherited field, the
+    /// general that declared it, since that is where the field is
+    /// written. A `Vec` is left out: it already breaks the recursion.
+    fn composed(&self, def: ElementId) -> Vec<(ElementId, ElementId)> {
+        let mut edges = Vec::new();
+        if self.shapes.get(&def) == Some(&Shape::Variation) {
+            // only a variant carrying a payload holds anything inline
+            edges.extend(
+                self.variants(def)
+                    .into_iter()
+                    .filter_map(|(_, payload)| Some((def, payload?))),
+            );
+            return edges;
+        }
+        let held = self
+            .fields(def)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|field| (self.model.owner(field.usage).unwrap_or(def), field))
+            .chain(self.plain_ports(def).into_iter().map(|port| (def, port)));
+        for (holder, field) in held {
+            if field.container == Container::Many {
+                continue;
+            }
+            if let FieldType::Generated(target) = field.ty {
+                if matches!(
+                    self.shapes.get(&target),
+                    Some(Shape::Struct | Shape::Variation)
+                ) {
+                    edges.push((holder, target));
+                }
+            }
+        }
+        edges
     }
 
     /// The generic plan of every struct: its own API ports first, then
@@ -382,8 +401,8 @@ impl<'a> Generator<'a> {
             let Some(port) = self.port_of(child) else {
                 continue;
             };
-            let mut parameter = camel(&port.name);
-            if parameter.is_empty() || parameter == def_name || !taken.insert(parameter.clone()) {
+            let mut parameter = type_ident(&camel(&port.name));
+            if parameter == def_name || !taken.insert(parameter.clone()) {
                 parameter = format!("P{at}");
                 taken.insert(parameter.clone());
             }
@@ -424,11 +443,12 @@ impl<'a> Generator<'a> {
             }
             let mut arguments = Vec::new();
             for (theirs, bound) in target_params {
-                let mut local = format!("{}{theirs}", camel(&field.name));
+                let after = type_ident(&camel(&field.name));
+                let mut local = format!("{after}{theirs}");
                 let mut bump = 0;
                 while !taken.insert(local.clone()) {
                     bump += 1;
-                    local = format!("{}{theirs}{bump}", camel(&field.name));
+                    local = format!("{after}{theirs}{bump}");
                 }
                 arguments.push(local.clone());
                 plan.params.push((local, bound));
@@ -451,11 +471,12 @@ impl<'a> Generator<'a> {
             // to start at a value its type does not have.
             let has_values = match shape {
                 Shape::Enum => !self.enum_values(def).is_empty(),
+                // a variation starts at the first variant that carries
+                // nothing, since `#[default]` is only for such a variant
                 Shape::Variation => self
-                    .model
-                    .owned(def)
+                    .variants(def)
                     .iter()
-                    .any(|&child| self.model.member_role(child) == Some(Role::Variant)),
+                    .any(|(_, payload)| payload.is_none()),
                 _ => false,
             };
             if has_values {
@@ -479,7 +500,17 @@ impl<'a> Generator<'a> {
                     .plain_ports(def)
                     .iter()
                     .all(|field| self.field_defaultable(field));
+                // a `state def` with no states generates an enum with no
+                // values and no `initial()` to call, so a part holding
+                // one has nothing to start it at
+                let states_fine = self
+                    .model
+                    .owned(def)
+                    .iter()
+                    .filter(|&&child| self.model.kind(child) == ElementKind::StateUsage)
+                    .all(|&child| self.state_field(child).is_none() || self.state_starts(child));
                 if ports_fine
+                    && states_fine
                     && self
                         .fields(def)
                         .is_some_and(|fields| fields.iter().all(|f| self.field_defaultable(f)))
@@ -499,22 +530,42 @@ impl<'a> Generator<'a> {
     /// spelling joins up the same way. Only the first can have it; the
     /// rest are named rather than written twice over.
     fn settle_collisions(&mut self) {
-        let mut taken: HashMap<String, ElementId> = HashMap::new();
+        // Rust keeps types and values in namespaces of their own, so a
+        // struct and a function may share a name and two functions may
+        // not. The key says which namespace the name is claimed in.
+        let mut taken: HashMap<(bool, String), ElementId> = HashMap::new();
         let mut clashing = Vec::new();
         for &def in &self.order {
-            let name = type_ident(self.model.name(def).expect("the unnamed never got a shape"));
-            match taken.get(&name) {
-                Some(&first) => clashing.push((
+            let spelled = self.model.name(def).expect("the unnamed never got a shape");
+            let name = type_ident(spelled);
+            // a definition may write more than one name: a state machine
+            // writes three, and none of them is the name of the state
+            // definition itself
+            let claims = match self.shapes[&def] {
+                Shape::StateMachine => vec![
+                    (true, format!("{name}State")),
+                    (true, format!("{name}Event")),
+                    (true, format!("{name}Hooks")),
+                ],
+                // a calculation with a formula is a function; one without
+                // is a trait, and traits are types
+                Shape::Calculation if !self.model.is_abstract(def) => {
+                    vec![(false, ident(spelled))]
+                }
+                _ => vec![(true, name)],
+            };
+            match claims
+                .iter()
+                .find_map(|claim| Some((claim, *taken.get(claim)?)))
+            {
+                Some(((_, claimed), first)) => clashing.push((
                     def,
                     format!(
-                        "`{}` is already the Rust name of `{}`",
-                        name,
+                        "`{claimed}` is already the Rust name of `{}`",
                         qualified_of(self.model, first)
                     ),
                 )),
-                None => {
-                    taken.insert(name, def);
-                }
+                None => taken.extend(claims.into_iter().map(|claim| (claim, def))),
             }
         }
         for (def, why) in clashing {
@@ -544,9 +595,6 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// Which structs can carry `#[derive(Debug, Clone, PartialEq)]`:
-    /// those whose fields are scalars or other such structs and enums --
-    /// nothing is claimed of external API types.
     /// Whether the type of `field` says it already has `trait_name`.
     /// Only a bound type is asked: what this generator wrote, it knows.
     fn field_type_claims(&self, field: &Field, trait_name: &str) -> bool {
@@ -557,6 +605,9 @@ impl<'a> Generator<'a> {
             .is_some_and(|bound| binding::claims(&bound, trait_name))
     }
 
+    /// Which structs can carry `#[derive(Debug, Clone, PartialEq)]`:
+    /// those whose fields are scalars or other such structs and enums --
+    /// nothing is claimed of external API types.
     fn settle_derives(&mut self) {
         for (&def, &shape) in &self.shapes {
             if matches!(shape, Shape::Enum) {
@@ -663,19 +714,48 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// The flattened data fields of a struct definition: its own
-    /// attributes and compositions, then what its specializations hand
-    /// down, redefinitions and same names shadowing outward.
+    /// Work every definition's fields out once. Six callers ask for a
+    /// definition's fields, two of them inside a loop that runs until
+    /// nothing changes, so one answer was being walked out over and
+    /// over. Nothing after `settle_collisions` changes what the answer
+    /// is, which is why this is where it is settled.
+    fn settle_fields(&mut self) {
+        let settled = self
+            .order
+            .iter()
+            .map(|&def| (def, self.walk_fields(def)))
+            .collect();
+        self.fields = settled;
+    }
+
+    /// The flattened data fields of a struct definition, settled where
+    /// they have been and worked out where they have not -- the phases
+    /// that run before [`Generator::settle_fields`] ask too.
+    fn fields(&self, def: ElementId) -> Option<Vec<Field>> {
+        match self.fields.get(&def) {
+            Some(settled) => settled.clone(),
+            None => self.walk_fields(def),
+        }
+    }
+
+    /// A definition's own attributes and compositions, then what its
+    /// specializations hand down, redefinitions and same names
+    /// shadowing outward.
     ///
     /// `None` marks a specialization cycle, which cannot flatten.
-    fn fields(&self, def: ElementId) -> Option<Vec<Field>> {
+    fn walk_fields(&self, def: ElementId) -> Option<Vec<Field>> {
+        if self.specializes_itself(def, &mut Vec::new(), &mut HashSet::new()) {
+            return None;
+        }
         let mut fields = Vec::new();
         let mut taken: HashSet<String> = HashSet::new();
         let mut chain = vec![def];
         let mut visited = HashSet::new();
         while let Some(level) = chain.pop() {
+            // diamond inheritance reaches one general along two paths;
+            // it hands its fields down once, not twice
             if !visited.insert(level) {
-                return None;
+                continue;
             }
             for &child in self.model.owned(level) {
                 if !matches!(
@@ -697,25 +777,69 @@ impl<'a> Generator<'a> {
                     fields.push(field);
                 }
             }
-            for &child in self.model.owned(level) {
-                if self.model.kind(child) == ElementKind::Subclassification {
-                    if let Some(Value::Ref(general)) = self.model.get(child, "superclassifier") {
-                        chain.push(*general);
-                    }
-                }
-            }
+            chain.extend(self.generals(level));
         }
         Some(fields)
     }
 
+    /// What `def` names as its immediate generals, off the reified
+    /// subclassifications.
+    fn generals(&self, def: ElementId) -> Vec<ElementId> {
+        self.model
+            .owned(def)
+            .iter()
+            .filter(|&&child| self.model.kind(child) == ElementKind::Subclassification)
+            .filter_map(|&child| {
+                self.model
+                    .get(child, "superclassifier")
+                    .and_then(Value::as_id)
+            })
+            .collect()
+    }
+
+    /// Whether specializing leads back to something already on the way
+    /// here. Only a circle stops a definition flattening: a diamond
+    /// arrives at one general twice but never at itself, and `fields`
+    /// takes what it hands down the first time it gets there.
+    fn specializes_itself(
+        &self,
+        def: ElementId,
+        path: &mut Vec<ElementId>,
+        settled: &mut HashSet<ElementId>,
+    ) -> bool {
+        if path.contains(&def) {
+            return true;
+        }
+        if !settled.insert(def) {
+            return false;
+        }
+        path.push(def);
+        let circular = self
+            .generals(def)
+            .into_iter()
+            .any(|general| self.specializes_itself(general, path, settled));
+        path.pop();
+        circular
+    }
+
+    /// Whether a definition is written as something a signature can
+    /// name. An abstract definition flattens into its subtypes and is
+    /// never written; an action or an abstract calculation becomes a
+    /// trait, which is not a type; a state definition becomes three
+    /// things, none of them called what the definition is called.
+    fn written_as_a_type(&self, def: ElementId) -> bool {
+        matches!(
+            self.shapes.get(&def),
+            Some(Shape::Struct | Shape::Enum | Shape::Variation)
+        )
+    }
+
     /// One attribute or composed part as a field, if it has a Rust type.
     fn field(&self, def: ElementId, level: ElementId, usage: ElementId) -> Option<Field> {
-        // an unnamed redefinition answers to the name it redefines
-        let name = self.model.name(usage).map(str::to_string).or_else(|| {
-            self.model
-                .name(redefined(self.model, usage)?)
-                .map(str::to_string)
-        })?;
+        // an unnamed redefinition answers to the name it redefines, and
+        // KerML's rule for that -- which follows references as well as
+        // redefinitions, and a chain of either -- is the model's own
+        let name = self.model.effective_name(usage)?.to_string();
         let target = self
             .model
             .type_of(usage)
@@ -729,16 +853,7 @@ impl<'a> Generator<'a> {
             // a state machine or an abstract definition is not a value type
             FieldType::Generated(target)
         } else {
-            FieldType::Scalar(match self.model.name(target)? {
-                "Real" => "f64",
-                "Integer" => "i64",
-                // `Positive` is a `Natural` the model has ruled zero out
-                // of; Rust has no such integer that is also `Default`
-                "Natural" | "Positive" => "u64",
-                "Boolean" => "bool",
-                "String" => "String",
-                _ => return None,
-            })
+            FieldType::Scalar(scalar_of(self.model.name(target)?)?)
         };
         let container = multiplicity(self.model, usage);
         // anything but a Vec keeps the value inline, so a cycle needs a Box
@@ -746,6 +861,7 @@ impl<'a> Generator<'a> {
             && (self.boxed.contains(&(level, target))
                 || matches!(ty, FieldType::Generated(t) if t == def));
         Some(Field {
+            spelled: ident(&name),
             name,
             usage,
             ty,
@@ -768,7 +884,7 @@ impl<'a> Generator<'a> {
         let mut states: Vec<(String, String)> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
 
-        let fields = self.fields(def).expect("settled as buildable");
+        let mut fields = self.fields(def).expect("settled as buildable");
         for &child in model.owned(def) {
             if model.kind(child).is_a(ElementKind::Relationship)
                 || model.kind(child) == ElementKind::MetadataUsage
@@ -817,6 +933,22 @@ impl<'a> Generator<'a> {
                 other => notes.push(format!("`{child_name}` -- {} not generated", other.name())),
             }
         }
+        // Every member of the struct is spelled once here, in the order
+        // they are written, so that three model names arriving at one
+        // Rust name become three fields rather than one declared thrice.
+        let mut spelling = Namespace::default();
+        let port_names: Vec<String> = ports
+            .iter()
+            .map(|port| spelling.take(ident(&port.name)))
+            .collect();
+        for field in plain_ports.iter_mut().chain(fields.iter_mut()) {
+            field.spelled = spelling.take(std::mem::take(&mut field.spelled));
+        }
+        let state_names: Vec<String> = states
+            .iter()
+            .map(|(state, _)| spelling.take(ident(state)))
+            .collect();
+
         // the plan already named the parameters, own ports first
         let plan = self.plans.get(&def).expect("planned in collect");
         for (port, (parameter, _)) in ports.iter_mut().zip(&plan.params) {
@@ -869,14 +1001,14 @@ impl<'a> Generator<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         writeln!(out, "pub struct {def_name}{} {{", angle(&generics)).unwrap();
-        for port in &ports {
+        for (port, spelled) in ports.iter().zip(&port_names) {
             writeln!(
                 out,
                 "    /// SysML: `port {} : {}`",
                 port.name, port.type_name
             )
             .unwrap();
-            writeln!(out, "    pub {}: {},", ident(&port.name), port.parameter).unwrap();
+            writeln!(out, "    pub {spelled}: {},", port.parameter).unwrap();
         }
         for field in plain_ports.iter().chain(&fields) {
             if let Some(dropped) = plan.dropped.get(&field.usage) {
@@ -889,14 +1021,14 @@ impl<'a> Generator<'a> {
             writeln!(
                 out,
                 "    pub {}: {},",
-                ident(&field.name),
+                field.spelled,
                 self.rust_type(plan, field)
             )
             .unwrap();
         }
-        for (state, machine) in &states {
+        for ((state, machine), spelled) in states.iter().zip(&state_names) {
             writeln!(out, "    /// SysML: `state {state}`").unwrap();
-            writeln!(out, "    pub {}: {machine},", ident(state)).unwrap();
+            writeln!(out, "    pub {spelled}: {machine},").unwrap();
         }
         writeln!(out, "}}").unwrap();
 
@@ -932,25 +1064,20 @@ impl<'a> Generator<'a> {
             .unwrap();
             writeln!(out, "    fn default() -> Self {{").unwrap();
             writeln!(out, "        Self {{").unwrap();
-            for port in &ports {
-                writeln!(
-                    out,
-                    "            {}: Default::default(),",
-                    ident(&port.name)
-                )
-                .unwrap();
+            for spelled in &port_names {
+                writeln!(out, "            {spelled}: Default::default(),").unwrap();
             }
             for field in plain_ports.iter().chain(&fields) {
                 writeln!(
                     out,
                     "            {}: {},",
-                    ident(&field.name),
+                    field.spelled,
                     self.default_value(field)
                 )
                 .unwrap();
             }
-            for (state, machine) in &states {
-                writeln!(out, "            {}: {machine}::initial(),", ident(state)).unwrap();
+            for ((_, machine), spelled) in states.iter().zip(&state_names) {
+                writeln!(out, "            {spelled}: {machine}::initial(),").unwrap();
             }
             writeln!(out, "        }}").unwrap();
             writeln!(out, "    }}").unwrap();
@@ -1046,6 +1173,25 @@ impl<'a> Generator<'a> {
             .collect()
     }
 
+    /// The variants of a variation, in declaration order, each with the
+    /// struct it carries as a payload where it has one. What counts as a
+    /// variant is asked here by everything that needs to know, so that
+    /// what is written and what is claimed about it cannot disagree.
+    fn variants(&self, def: ElementId) -> Vec<(&str, Option<ElementId>)> {
+        self.model
+            .owned(def)
+            .iter()
+            .filter(|&&child| self.model.member_role(child) == Some(Role::Variant))
+            .filter_map(|&child| {
+                let payload = self
+                    .model
+                    .type_of(child)
+                    .filter(|target| self.shapes.get(target) == Some(&Shape::Struct));
+                Some((self.model.name(child)?, payload))
+            })
+            .collect()
+    }
+
     fn enumeration(&self, def: ElementId, out: &mut String) {
         let name = type_ident(self.model.name(def).expect("collected named"));
         let values = self.enum_values(def);
@@ -1075,12 +1221,14 @@ impl<'a> Generator<'a> {
         let default = if values.is_empty() { "" } else { ", Default" };
         writeln!(out, "#[derive(Clone, Copy, Debug, PartialEq, Eq{default})]").unwrap();
         writeln!(out, "pub enum {name} {{").unwrap();
+        let mut spelling = Namespace::default();
         for (at, value) in values.iter().enumerate() {
             writeln!(out, "    /// SysML: `enum {value}`").unwrap();
             if at == 0 {
                 writeln!(out, "    #[default]").unwrap();
             }
-            writeln!(out, "    {},", type_ident(&camel(value))).unwrap();
+            let variant = spelling.take(type_ident(&camel(value)));
+            writeln!(out, "    {variant},").unwrap();
         }
         writeln!(out, "}}").unwrap();
     }
@@ -1094,22 +1242,33 @@ impl<'a> Generator<'a> {
             doc_comment(&doc, "", out);
         }
         writeln!(out, "/// SysML: variation `{name}`").unwrap();
+        let variants = self.variants(def);
+        // whatever holds a variation asks it for a `Default`, and only a
+        // variant carrying no payload can be one
+        let starts_at = variants
+            .iter()
+            .position(|(_, payload)| payload.is_none())
+            .filter(|_| self.defaultable.contains(&def));
+        if starts_at.is_some() {
+            writeln!(out, "#[derive(Default)]").unwrap();
+        }
         writeln!(out, "pub enum {name} {{").unwrap();
-        for &child in self.model.owned(def) {
-            if self.model.member_role(child) != Some(Role::Variant) {
-                continue;
-            }
-            let Some(variant) = self.model.name(child) else {
-                continue;
-            };
+        let mut spelling = Namespace::default();
+        for (at, (variant, payload)) in variants.iter().enumerate() {
             writeln!(out, "    /// SysML: `variant {variant}`").unwrap();
-            let payload = self
-                .model
-                .type_of(child)
-                .filter(|target| self.shapes.get(target) == Some(&Shape::Struct))
-                .and_then(|target| self.model.name(target))
-                .map(type_ident);
-            let variant = type_ident(&camel(variant));
+            if starts_at == Some(at) {
+                writeln!(out, "    #[default]").unwrap();
+            }
+            let payload = payload.and_then(|target| {
+                let held = type_ident(self.model.name(target)?);
+                // a variant carries its payload inline, so a cycle
+                // closing through one needs the same `Box` a field does
+                Some(match self.boxed.contains(&(def, target)) {
+                    true => format!("Box<{held}>"),
+                    false => held,
+                })
+            });
+            let variant = spelling.take(type_ident(&camel(variant)));
             match payload {
                 Some(payload) => writeln!(out, "    {variant}({payload}),").unwrap(),
                 None => writeln!(out, "    {variant},").unwrap(),
@@ -1143,10 +1302,37 @@ impl<'a> Generator<'a> {
             doc_comment(&doc, "", out);
         }
         writeln!(out, "/// SysML: `state def {name}` -- the states").unwrap();
+        // a transition written inside a state -- `state a { accept go
+        // then b; }` -- names only where it goes, and the table is over
+        // transitions that say both ends, so it is said out loud rather
+        // than left out
+        for (state, state_name) in &states {
+            let nested = model.owned(*state).iter().any(|&child| {
+                let kind = model.kind(child);
+                kind == ElementKind::TransitionUsage || kind == ElementKind::SuccessionAsUsage
+            });
+            if nested {
+                writeln!(
+                    out,
+                    "// not generated: a transition inside state `{state_name}` -- \
+                     only a transition naming both its ends joins the table"
+                )
+                .unwrap();
+            }
+        }
         writeln!(out, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
+        // a state's name is written into an enum, so it goes through
+        // the same mangling a type name does: `'red light'` is a state
+        // in SysML and `Red light` is not a variant in Rust
+        let mut spelling = Namespace::default();
+        let variants: HashMap<&str, String> = states
+            .iter()
+            .map(|(_, state)| (*state, spelling.take(type_ident(&camel(state)))))
+            .collect();
+        let variant = |state: &str| variants.get(state).cloned().unwrap_or_default();
         writeln!(out, "pub enum {name}State {{").unwrap();
         for (_, state) in &states {
-            writeln!(out, "    {},", camel(state)).unwrap();
+            writeln!(out, "    {},", variant(state)).unwrap();
         }
         writeln!(out, "}}").unwrap();
         if let Some((_, first)) = states.first() {
@@ -1157,7 +1343,7 @@ impl<'a> Generator<'a> {
             )
             .unwrap();
             writeln!(out, "    pub fn initial() -> Self {{").unwrap();
-            writeln!(out, "        {name}State::{}", camel(first)).unwrap();
+            writeln!(out, "        {name}State::{}", variant(first)).unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
@@ -1165,11 +1351,16 @@ impl<'a> Generator<'a> {
         // one event per transition: the payload it accepts, or a bare
         // signal named after the transition
         writeln!(out, "\n/// What `{name}State::step` reacts to.").unwrap();
+        let mut spelling = Namespace::default();
+        let events: Vec<String> = transitions
+            .iter()
+            .map(|transition| spelling.take(transition.event.clone()))
+            .collect();
         writeln!(out, "pub enum {name}Event {{").unwrap();
-        for transition in &transitions {
+        for (transition, event) in transitions.iter().zip(&events) {
             match &transition.payload {
-                Some((_, ty)) => writeln!(out, "    {}({ty}),", transition.event).unwrap(),
-                None => writeln!(out, "    {},", transition.event).unwrap(),
+                Some((_, ty)) => writeln!(out, "    {event}({ty}),").unwrap(),
+                None => writeln!(out, "    {event},").unwrap(),
             }
         }
         writeln!(out, "}}").unwrap();
@@ -1241,14 +1432,13 @@ impl<'a> Generator<'a> {
         )
         .unwrap();
         writeln!(out, "        match (self, event) {{").unwrap();
-        for transition in &transitions {
+        for (transition, event) in transitions.iter().zip(&events) {
             let pattern = match &transition.payload {
                 // only a guard or an effect reads the payload; binding it
                 // for an arm that does neither is an unused variable
                 Some((param, _)) => format!(
-                    "({name}State::{}, {name}Event::{}({}))",
-                    camel(&transition.source),
-                    transition.event,
+                    "({name}State::{}, {name}Event::{event}({}))",
+                    variant(&transition.source),
                     if transition.guard.is_some() || transition.effect {
                         ident(param)
                     } else {
@@ -1256,9 +1446,8 @@ impl<'a> Generator<'a> {
                     }
                 ),
                 None => format!(
-                    "({name}State::{}, {name}Event::{})",
-                    camel(&transition.source),
-                    transition.event
+                    "({name}State::{}, {name}Event::{event})",
+                    variant(&transition.source)
                 ),
             };
             let guard = match (&transition.guard, &transition.payload) {
@@ -1301,7 +1490,7 @@ impl<'a> Generator<'a> {
             writeln!(
                 out,
                 "                {name}State::{}",
-                camel(&transition.target)
+                variant(&transition.target)
             )
             .unwrap();
             writeln!(out, "            }}").unwrap();
@@ -1353,7 +1542,7 @@ impl<'a> Generator<'a> {
                 let ty = model.type_of(accept)?;
                 let rust = if let Some(bound) = binding(model, ty) {
                     bound.get(binding::PATH)?.clone()
-                } else if self.shapes.contains_key(&ty) {
+                } else if self.written_as_a_type(ty) {
                     type_ident(model.name(ty)?)
                 } else {
                     return None;
@@ -1362,10 +1551,7 @@ impl<'a> Generator<'a> {
             }),
             _ => None,
         };
-        let event = match &payload {
-            Some(_) => camel(name),
-            None => camel(name),
-        };
+        let event = type_ident(&camel(name));
         let guard = match model.get(usage, "guardExpression") {
             Some(Value::RefList(guards)) => guards
                 .first()
@@ -1445,7 +1631,11 @@ impl<'a> Generator<'a> {
                 .map(|(param, _)| ident(param))
         };
         let translated = match &clause {
-            Some(ValueClause::Text(text)) => translate(text, &resolve, &|name| self.callable(name)),
+            Some(ValueClause::Text(text)) => {
+                translate_as(text, numbers_of(declared.as_deref()), &resolve, &|name| {
+                    self.callable(name)
+                })
+            }
             _ => None,
         };
         // an undeclared return type can still be read off the expression:
@@ -1593,11 +1783,15 @@ impl<'a> Generator<'a> {
             fields
                 .iter()
                 .find(|field| field.name == leading)
-                .map(|field| format!("self.{}", ident(&field.name)))
+                .map(|field| format!("self.{}", field.spelled))
         };
         let clause = result_clause(model, usage).or_else(|| value_clause(model, usage));
         let translated = match &clause {
-            Some(ValueClause::Text(text)) => translate(text, &resolve, &|name| self.callable(name)),
+            Some(ValueClause::Text(text)) => {
+                translate_as(text, numbers_of(Some(&returns)), &resolve, &|name| {
+                    self.callable(name)
+                })
+            }
             _ => None,
         };
         let (body, unfit) = match (&clause, translated) {
@@ -1637,6 +1831,17 @@ impl<'a> Generator<'a> {
         Ok(method)
     }
 
+    /// Whether the machine a `state` usage names declares a state to
+    /// start in.
+    fn state_starts(&self, usage: ElementId) -> bool {
+        self.model.type_of(usage).is_some_and(|def| {
+            self.model.owned(def).iter().any(|&child| {
+                self.model.kind(child) == ElementKind::StateUsage
+                    && self.model.name(child).is_some()
+            })
+        })
+    }
+
     /// A `state` usage of a part: the state its machine is in, as the
     /// generated enum, under the name the model gave the usage.
     fn state_field(&self, usage: ElementId) -> Option<(String, String)> {
@@ -1645,7 +1850,7 @@ impl<'a> Generator<'a> {
             return None;
         }
         let name = self.model.name(usage)?.to_string();
-        Some((name, format!("{}State", self.model.name(def)?)))
+        Some((name, format!("{}State", type_ident(self.model.name(def)?))))
     }
 
     /// An `assert constraint` usage as the check it stands for. The model
@@ -1921,7 +2126,7 @@ impl<'a> Generator<'a> {
         *left = left.saturating_sub(1);
         let copyable = self
             .parameter_shape(parameter)
-            .is_some_and(|(base, _)| matches!(base.as_str(), "f64" | "i64" | "u64" | "bool"));
+            .is_some_and(|(base, _)| copyable(&base));
         Some(if *left > 0 && !copyable {
             format!("{read}.clone()")
         } else {
@@ -1984,7 +2189,7 @@ impl<'a> Generator<'a> {
         // every call anyway
         let copyable = self
             .parameter_shape(parameter)
-            .is_some_and(|(base, _)| matches!(base.as_str(), "f64" | "i64" | "u64" | "bool"));
+            .is_some_and(|(base, _)| copyable(&base));
         let left = fanout.entry((source, parameter)).or_insert(0);
         *left = left.saturating_sub(1);
         Some(if !copyable && *left > 0 {
@@ -2197,7 +2402,7 @@ impl<'a> Generator<'a> {
             fields
                 .iter()
                 .find(|field| field.name == leading)
-                .map(|field| format!("self.{}", ident(&field.name)))
+                .map(|field| format!("self.{}", field.spelled))
         };
 
         let mut params: Vec<(String, String)> = Vec::new();
@@ -2294,7 +2499,7 @@ impl<'a> Generator<'a> {
     /// A bound argument as something the call can take by value: reading
     /// a field has to clone it, since the method only borrows the part.
     fn owned_argument(&self, read: String, ty: &str, param: ElementId) -> Option<String> {
-        let copyable = matches!(ty, "f64" | "i64" | "u64" | "bool");
+        let copyable = copyable(ty);
         let field_read = read.strip_prefix("self.").is_some_and(|rest| {
             rest.chars()
                 .all(|ch| ch.is_alphanumeric() || ch == '_' || ch == '#')
@@ -2317,8 +2522,10 @@ impl<'a> Generator<'a> {
             return None;
         }
         let container = multiplicity(self.model, usage);
+        let name = self.model.name(usage)?.to_string();
         Some(Field {
-            name: self.model.name(usage)?.to_string(),
+            spelled: ident(&name),
+            name,
             usage,
             ty: FieldType::Generated(target),
             // a port of the definition's own type composes it as surely
@@ -2360,7 +2567,7 @@ impl<'a> Generator<'a> {
     /// yet kept.
     fn requirements(&self, roots: &[ElementId], out: &mut String) {
         let model = self.model;
-        let mut stubs = Vec::new();
+        let mut found = Vec::new();
         let mut named = HashSet::new();
         for &root in roots {
             for id in model.descendants(root) {
@@ -2381,39 +2588,31 @@ impl<'a> Generator<'a> {
                 if !named.insert(name.to_string()) {
                     continue;
                 }
-                // what the model claims satisfies this requirement
-                let satisfiers: Vec<String> = model
-                    .ids()
-                    .filter(|&satisfy| {
-                        model
-                            .kind(satisfy)
-                            .is_a(ElementKind::SatisfyRequirementUsage)
-                            && model.get(satisfy, "satisfiedRequirement") == Some(&Value::Ref(id))
-                            // `not satisfy r by p;` says p does not, so
-                            // naming it as what answers for `r` would
-                            // put the opposite of the model in the doc
-                            && model.get(satisfy, "isNegated") != Some(&Value::Bool(true))
-                    })
-                    .filter_map(|satisfy| {
-                        let feature = model.get(satisfy, "satisfyingFeature")?.as_id()?;
-                        model.name(feature).map(str::to_string)
-                    })
-                    .collect();
-                // and what the model says verifies it: a verification
-                // case naming the Rust that runs it is a test that runs
-                stubs.push((
-                    keyword,
-                    name.to_string(),
-                    documentation(model, id),
-                    satisfiers,
-                    self.verifications(id),
-                    declared_values(model, id),
-                ));
+                found.push((keyword, id, name.to_string()));
             }
         }
-        if stubs.is_empty() {
+        if found.is_empty() {
             return;
         }
+        // What satisfies and what verifies is stated anywhere in the
+        // model, so it takes a walk of the whole of it -- the loaded
+        // standard library included -- to find. One walk answers for
+        // every requirement at once; asking per requirement, as this
+        // did, walked a hundred thousand elements twice over for each.
+        let claims = self.claims();
+        let stubs: Vec<_> = found
+            .into_iter()
+            .map(|(keyword, id, name)| {
+                (
+                    keyword,
+                    name,
+                    documentation(model, id),
+                    claims.satisfiers.get(&id).cloned().unwrap_or_default(),
+                    claims.verifications.get(&id).cloned().unwrap_or_default(),
+                    declared_values(model, id),
+                )
+            })
+            .collect();
         writeln!(
             out,
             "\n/// The model's requirements: one test per requirement, running\n\
@@ -2455,22 +2654,46 @@ impl<'a> Generator<'a> {
         writeln!(out, "}}").unwrap();
     }
 
-    /// The verification cases the model says answer for a requirement,
-    /// each with the Rust its `@rust` binding names, where it names one.
-    fn verifications(&self, requirement: ElementId) -> Vec<(String, Option<String>)> {
+    /// What the model claims about its requirements, in one walk of it:
+    /// what satisfies each, and which verification cases answer for it
+    /// with the Rust their `@rust` bindings name.
+    fn claims(&self) -> Claims {
         let model = self.model;
-        model
-            .ids()
-            .filter(|&case| match model.get(case, "verifiedRequirement") {
-                Some(Value::RefList(verified)) => verified.contains(&requirement),
-                _ => false,
-            })
-            .filter_map(|case| {
-                let name = model.name(case)?.to_string();
-                let path = binding(model, case).and_then(|bound| bound.get(binding::PATH).cloned());
-                Some((name, path))
-            })
-            .collect()
+        let mut claims = Claims::default();
+        for id in model.ids() {
+            if model.kind(id).is_a(ElementKind::SatisfyRequirementUsage)
+                // `not satisfy r by p;` says p does not, so naming it as
+                // what answers for `r` would put the opposite of the
+                // model in the doc
+                && model.get(id, "isNegated") != Some(&Value::Bool(true))
+            {
+                let satisfied = model.get(id, "satisfiedRequirement").and_then(Value::as_id);
+                let by = model
+                    .get(id, "satisfyingFeature")
+                    .and_then(Value::as_id)
+                    .and_then(|feature| model.name(feature));
+                if let Some((requirement, name)) = satisfied.zip(by) {
+                    claims
+                        .satisfiers
+                        .entry(requirement)
+                        .or_default()
+                        .push(name.to_string());
+                }
+            }
+            if let (Some(Value::RefList(verified)), Some(name)) =
+                (model.get(id, "verifiedRequirement"), model.name(id))
+            {
+                let path = binding(model, id).and_then(|bound| bound.get(binding::PATH).cloned());
+                for &requirement in verified {
+                    claims
+                        .verifications
+                        .entry(requirement)
+                        .or_default()
+                        .push((name.to_string(), path.clone()));
+                }
+            }
+        }
+        claims
     }
 
     fn port_of(&self, usage: ElementId) -> Option<Port> {
@@ -2683,22 +2906,23 @@ impl<'a> Generator<'a> {
                 .cloned()
                 .map(|path| (path, container));
         }
-        if self.shapes.contains_key(&ty) {
+        if self.written_as_a_type(ty) {
             return self
                 .model
                 .name(ty)
                 .map(|name| (type_ident(name), container));
         }
-        let scalar = match self.model.name(ty)? {
-            "Real" => "f64",
-            "Integer" => "i64",
-            "Natural" | "Positive" => "u64",
-            "Boolean" => "bool",
-            "String" => "String",
-            _ => return None,
-        };
-        Some((scalar.to_string(), container))
+        Some((scalar_of(self.model.name(ty)?)?.to_string(), container))
     }
+}
+
+/// What the model claims about its requirements: which features
+/// satisfy each, and which verification cases answer for it, each with
+/// the Rust path its binding names where it names one.
+#[derive(Default)]
+struct Claims {
+    satisfiers: HashMap<ElementId, Vec<String>>,
+    verifications: HashMap<ElementId, Vec<(String, Option<String>)>>,
 }
 
 /// A port of a part, once its type turned out to be a bound API trait.
@@ -2710,8 +2934,12 @@ struct Port {
 }
 
 /// One data field of a generated struct.
+#[derive(Clone)]
 struct Field {
     name: String,
+    /// The name Rust knows it by, which is `ident(name)` unless another
+    /// field of the same struct got there first.
+    spelled: String,
     usage: ElementId,
     ty: FieldType,
     container: Container,
@@ -2721,6 +2949,26 @@ struct Field {
     default: Option<String>,
 }
 
+/// The names taken in one Rust namespace. What SysML keeps apart Rust
+/// may not -- `fuelTank`, `fuel_tank` and `'fuel tank'` are three names
+/// in a model and one in Rust -- so the second one to want a spelling
+/// is numbered rather than written twice over.
+#[derive(Default)]
+struct Namespace(HashSet<String>);
+
+impl Namespace {
+    fn take(&mut self, wanted: String) -> String {
+        let mut spelled = wanted.clone();
+        let mut at = 1;
+        while !self.0.insert(spelled.clone()) {
+            at += 1;
+            spelled = format!("{wanted}_{at}");
+        }
+        spelled
+    }
+}
+
+#[derive(Clone)]
 enum FieldType {
     Scalar(&'static str),
     Generated(ElementId),
@@ -2756,7 +3004,6 @@ struct Transition {
     effect: bool,
 }
 
-/// The declared multiplicity of a usage, as the container it implies.
 /// A compiled action body: the traits its parts demand of whoever
 /// implements it, and the statements that perform them in order.
 struct Body {
@@ -2820,6 +3067,13 @@ fn returns_clause(returns: &str) -> String {
     }
 }
 
+/// Whether a Rust type is `Copy`, so that reading a value of it twice
+/// costs nothing. What is not gets a `.clone()` wherever it is read
+/// more than once. Three places asked this and had to agree.
+fn copyable(ty: &str) -> bool {
+    matches!(ty, "f64" | "i64" | "u64" | "bool")
+}
+
 /// A type under the container its multiplicity asks for.
 fn contained(base: String, container: Container) -> String {
     match container {
@@ -2830,6 +3084,7 @@ fn contained(base: String, container: Container) -> String {
     }
 }
 
+/// The declared multiplicity of a usage, as the container it implies.
 fn multiplicity(model: &Model, usage: ElementId) -> Container {
     let Some(Value::Ref(range)) = model.get(usage, "multiplicity") else {
         return Container::One;
@@ -2852,8 +3107,13 @@ fn multiplicity(model: &Model, usage: ElementId) -> Container {
         bound_value("upperBound"),
     ) {
         (Some(BoundKind::Many), _, _) => Container::Many,
-        (Some(BoundKind::Exactly(n)), _, _) if n > 0 => Container::Array(n),
+        // `[0]` is a multiplicity of nothing, which Rust spells as an
+        // array of nothing; a `Vec` would claim it can hold more
+        (Some(BoundKind::Exactly(n)), _, _) if n >= 0 => Container::Array(n),
         (None, Some(BoundKind::Exactly(0)), Some(BoundKind::Exactly(1))) => Container::Optional,
+        // `[1..1]` is the multiplicity everything has by default, said
+        // out loud -- one of the thing, not a collection of them
+        (None, Some(BoundKind::Exactly(1)), Some(BoundKind::Exactly(1))) => Container::One,
         (None, Some(_), Some(_)) => Container::Many,
         _ => Container::Many,
     }
@@ -2873,7 +3133,15 @@ enum BoundKind {
 fn default_of(model: &Model, usage: ElementId) -> Option<String> {
     match value_clause(model, usage)? {
         ValueClause::Literal(rust) => Some(rust),
-        ValueClause::Text(text) => match translate(&text, &|_| None, &|_| None) {
+        ValueClause::Text(text) => match translate_as(
+            &text,
+            match wants_float(model, usage) {
+                true => Numbers::AsReals,
+                false => Numbers::AsWritten,
+            },
+            &|_| None,
+            &|_| None,
+        ) {
             Some(translated) => Some(translated.rust),
             // A value that is only a name refers to a feature, and name
             // resolution wrote down which one, so the value to start
@@ -2933,6 +3201,59 @@ fn result_clause(model: &Model, element: ElementId) -> Option<ValueClause> {
     clause
 }
 
+/// The Rust scalar a SysML type stands for, where it stands for one.
+/// Fields and parameters both ask this, so that one model type cannot
+/// be a `f64` in a struct and something else in a signature.
+fn scalar_of(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Real" => "f64",
+        "Integer" => "i64",
+        // `Positive` is a `Natural` the model has ruled zero out of;
+        // Rust has no such integer that is also `Default`
+        "Natural" | "Positive" => "u64",
+        "Boolean" => "bool",
+        "String" => "String",
+        _ => return None,
+    })
+}
+
+/// Whether a usage is typed by something Rust spells as a float. SysML
+/// writes `attribute shift : Real = 1670;` and means 1670.0; Rust reads
+/// that literal as an integer and refuses it, so the point has to be
+/// put back.
+fn wants_float(model: &Model, usage: ElementId) -> bool {
+    let Some(target) = model
+        .type_of(usage)
+        .or_else(|| redefined(model, usage).and_then(|it| model.type_of(it)))
+    else {
+        return false;
+    };
+    match binding(model, target).and_then(|bound| bound.get(binding::PATH).cloned()) {
+        Some(path) => path == "f32" || path == "f64",
+        None => model.name(target).and_then(scalar_of) == Some("f64"),
+    }
+}
+
+/// A real as Rust spells it. `{:?}` writes `inf` and `NaN`, which are
+/// what a model overflowing a `f64` -- `1e999` -- arrives as and which
+/// Rust does not read back as anything.
+fn real_literal(real: f64) -> String {
+    match real {
+        _ if real.is_nan() => "f64::NAN".to_string(),
+        f64::INFINITY => "f64::INFINITY".to_string(),
+        f64::NEG_INFINITY => "f64::NEG_INFINITY".to_string(),
+        _ => format!("{real:?}"),
+    }
+}
+
+/// How a Rust type of `spelled` wants its whole numbers written.
+fn numbers_of(spelled: Option<&str>) -> Numbers {
+    match spelled {
+        Some("f32" | "f64") => Numbers::AsReals,
+        _ => Numbers::AsWritten,
+    }
+}
+
 /// The `= value` clause of a usage, ready for translation.
 fn value_clause(model: &Model, usage: ElementId) -> Option<ValueClause> {
     let membership = model
@@ -2944,7 +3265,8 @@ fn value_clause(model: &Model, usage: ElementId) -> Option<ValueClause> {
         return None;
     };
     let rust = match model.get(*expression, "value") {
-        Some(Value::Real(real)) => format!("{real:?}"),
+        Some(Value::Real(real)) => real_literal(*real),
+        Some(Value::Int(int)) if wants_float(model, usage) => format!("{int}.0"),
         Some(Value::Int(int)) => format!("{int}"),
         Some(Value::Bool(flag)) => format!("{flag}"),
         Some(Value::String(text)) => format!("{text:?}.to_string()"),
@@ -2974,13 +3296,18 @@ fn redefined(model: &Model, usage: ElementId) -> Option<ElementId> {
     })
 }
 
-/// The resolved type of a usage, off its reified typing.
 /// The `@rust { :>> name = value; ... }` pairs of one element, if it
 /// carries a binding.
 fn binding(model: &Model, element: ElementId) -> Option<HashMap<String, String>> {
     let mut out = HashMap::new();
     for &child in model.owned(element) {
         if model.kind(child) != ElementKind::MetadataUsage {
+            continue;
+        }
+        // `@Safety { :>> level = "high"; }` has the shape of a binding
+        // and means nothing of the sort; only the metadata definition
+        // this crate owns says which Rust item an element stands for
+        if model.type_of(child).and_then(|def| model.name(def)) != Some(binding::DEF) {
             continue;
         }
         for &setting in model.owned(child) {
@@ -3117,6 +3444,16 @@ fn qualified_of(model: &Model, def: ElementId) -> String {
     parts.join("::")
 }
 
+/// Whether Rust will accept a character inside an identifier.
+///
+/// Rust's rule is Unicode's XID, which `char::is_alphanumeric` is not:
+/// it says yes to `²` and to the Arabic-Indic digits, and `x²` is not a
+/// name Rust can spell. Letters and ASCII digits are the part of XID
+/// this generator needs, and anything else is dropped.
+fn spellable(ch: char) -> bool {
+    ch.is_alphabetic() || ch.is_ascii_digit()
+}
+
 /// A SysML name as the name of a Rust *type*. An escaped name holds
 /// whatever the modeller wrote -- `'Ideal Gas Parcel'` is one name in
 /// SysML -- and Rust spells type names out of a much smaller alphabet,
@@ -3126,7 +3463,7 @@ fn type_ident(name: &str) -> String {
     let mut out = String::new();
     let mut upper = false;
     for ch in name.chars() {
-        if ch.is_alphanumeric() {
+        if spellable(ch) {
             if upper {
                 out.extend(ch.to_uppercase());
                 upper = false;
@@ -3138,11 +3475,33 @@ fn type_ident(name: &str) -> String {
             upper = !out.is_empty();
         }
     }
-    if out.is_empty() || out.starts_with(|ch: char| ch.is_ascii_digit()) {
+    if out.is_empty() {
+        // a name Rust cannot spell one character of -- `'+'`, `''` --
+        // still has to be called something, and `_` is not a name
+        out.push_str("Unnamed");
+    } else if out.starts_with(|ch: char| ch.is_ascii_digit()) {
         out.insert(0, '_');
+    }
+    if TAKEN_TYPES.contains(&out.as_str()) {
+        out.push('_');
     }
     out
 }
+
+/// Type names a generated file cannot have, because it uses them for
+/// something else. Rust's own keywords are here for the obvious reason;
+/// so are the prelude names and primitives this generator writes -- a
+/// `part def Vec` taking `Vec` would leave every `Vec<T>` in the file
+/// naming a struct that has no parameter, and a `part def Default` the
+/// same for every derive.
+const TAKEN_TYPES: [&str; 61] = [
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
+    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "true", "try", "type",
+    "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield", "Box", "Vec",
+    "Option", "String", "Default", "Result", "bool", "f64", "i64", "u64",
+];
 
 /// A SysML name as the Rust name of a field, parameter or method:
 /// `spectralRadius` -> `spectral_radius`, since the model's own
@@ -3168,16 +3527,14 @@ pub(crate) fn ident(name: &str) -> String {
     // smaller alphabet
     let name: String = snake(name)
         .chars()
-        .map(|ch| {
-            if ch.is_alphanumeric() || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
+        .map(|ch| if spellable(ch) || ch == '_' { ch } else { '_' })
         .collect();
     let name = if name.starts_with(|ch: char| ch.is_ascii_digit()) {
         format!("_{name}")
+    } else if name.is_empty() || name == "_" {
+        // `_` is a pattern, not a name, and a name Rust can spell no
+        // part of still has to be called something
+        "unnamed".to_string()
     } else {
         name
     };

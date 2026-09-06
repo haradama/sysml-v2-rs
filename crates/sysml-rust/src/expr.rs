@@ -5,13 +5,14 @@
 //! comparison and logical operators, `**` as `powf`, escaped names,
 //! parentheses, the conditional
 //! `if c ? a else b`, and a call of a calculation the generator wrote a
-//! function for. Numeric literals keep their written form, so a
-//! model mixing `2` into Real arithmetic surfaces as a Rust type error
-//! rather than a silent coercion. Anything beyond the subset -- a call
-//! of something abstract or of nothing at all, a call that names only
-//! some of its arguments, an unresolvable reference -- makes
-//! the whole expression untranslatable, and the caller says so instead
-//! of approximating.
+//! function for. A whole number keeps its written form unless the caller
+//! says the expression is over reals, in which case it gets the point
+//! Rust needs and SysML does not write; a model mixing types Rust will
+//! not mix still surfaces as a Rust type error rather than a silent
+//! coercion. Anything beyond the subset -- a call of something abstract
+//! or of nothing at all, a call that names only some of its arguments,
+//! an unresolvable reference -- makes the whole expression
+//! untranslatable, and the caller says so instead of approximating.
 
 /// What a call resolves to: the function Rust spells it as, and the
 /// parameters it takes, in order, so that a call written with named
@@ -43,6 +44,18 @@ impl Translated {
     }
 }
 
+/// How a whole number written in the model is spelled in Rust.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Numbers {
+    /// As the model wrote it, so that a model mixing `2` into `Integer`
+    /// arithmetic keeps the spelling it chose.
+    AsWritten,
+    /// With a point on it. SysML has one numeric tower and Rust has
+    /// several: `x * 2` against a `Real` means 2.0, and Rust will not
+    /// multiply an `f64` by an integer to find that out.
+    AsReals,
+}
+
 /// `text` as a Rust expression, or `None` where any part of it falls
 /// outside the simple subset. `resolve` says how Rust spells the leading
 /// name of a reference chain (`self.price`, a parameter).
@@ -51,10 +64,21 @@ pub(crate) fn translate(
     resolve: &dyn Fn(&str) -> Option<String>,
     resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
+    translate_as(text, Numbers::AsWritten, resolve, resolve_call)
+}
+
+/// [`translate`], saying how whole numbers should be spelled.
+pub(crate) fn translate_as(
+    text: &str,
+    numbers: Numbers,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    resolve_call: &dyn Fn(&str) -> Option<Callee>,
+) -> Option<Translated> {
     let tokens = lex(text)?;
     let mut parser = Parser {
         tokens: &tokens,
         at: 0,
+        numbers,
         references: Vec::new(),
         resolve,
         resolve_call,
@@ -239,6 +263,7 @@ fn wrap(node: &Node) -> String {
 struct Parser<'a> {
     tokens: &'a [Token],
     at: usize,
+    numbers: Numbers,
     references: Vec<String>,
     resolve: &'a dyn Fn(&str) -> Option<String>,
     resolve_call: &'a dyn Fn(&str) -> Option<Callee>,
@@ -371,6 +396,10 @@ impl Parser<'_> {
     /// `Real`; an exponent written as a whole number is spelled as one
     /// anyway, since `x ** 2` means the same real number as `x ** 2.0`
     /// and only one of the two compiles.
+    ///
+    /// It is written `f64::powf(a, b)` rather than `a.powf(b)` because a
+    /// literal base -- `3.0 ** 2` -- has no settled type yet, and Rust
+    /// will not pick one of its float types to look a method up on.
     fn power(&mut self) -> Option<Node> {
         let lhs = self.unary()?;
         if !self.eat(&Token::StarStar) {
@@ -380,10 +409,10 @@ impl Parser<'_> {
         let rhs = self.power()?;
         let exponent = match rhs.rust.parse::<i64>() {
             Ok(whole) => format!("{whole}.0"),
-            Err(_) => wrap(&rhs),
+            Err(_) => rhs.rust,
         };
         Some(Node {
-            rust: format!("{}.powf({exponent})", wrap(&lhs)),
+            rust: format!("f64::powf({}, {exponent})", lhs.rust),
             atomic: true,
             boolean: false,
         })
@@ -437,7 +466,10 @@ impl Parser<'_> {
         self.at += 1;
         match token {
             Token::Num(text) => Some(Node {
-                rust: text,
+                rust: match self.numbers == Numbers::AsReals && !text.contains(['.', 'e', 'E']) {
+                    true => format!("{text}.0"),
+                    false => text,
+                },
                 atomic: true,
                 boolean: false,
             }),
@@ -641,9 +673,14 @@ mod tests {
         assert!(plain("Widen(1, 2) > 0").is_some());
         // `**` is a method in Rust, and a whole-number exponent is
         // spelled as the real number it stands for
-        assert_eq!(plain("s ** 2").as_deref(), Some("s.powf(2.0)"));
-        assert_eq!(plain("s ** 2.5").as_deref(), Some("s.powf(2.5)"));
-        assert_eq!(plain("a ** b ** c").as_deref(), Some("a.powf(b.powf(c))"));
+        assert_eq!(plain("s ** 2").as_deref(), Some("f64::powf(s, 2.0)"));
+        assert_eq!(plain("s ** 2.5").as_deref(), Some("f64::powf(s, 2.5)"));
+        assert_eq!(
+            plain("a ** b ** c").as_deref(),
+            Some("f64::powf(a, f64::powf(b, c))")
+        );
+        // a literal base has no type to look a method up on
+        assert_eq!(plain("3.0 ** 2").as_deref(), Some("f64::powf(3.0, 2.0)"));
         // an escaped name is a name
         assert_eq!(plain("'a name' + 1").as_deref(), Some("a name + 1"));
         assert!(plain("'unterminated").is_none());
