@@ -44,6 +44,16 @@ struct Enum {
     literals: Vec<String>,
 }
 
+/// One operation of the abstract syntax, as the specification defines it.
+#[derive(Debug)]
+struct Operation {
+    name: String,
+    metaclass: String,
+    /// The names its arguments are written under, in order.
+    parameters: Vec<String>,
+    ocl: String,
+}
+
 /// One well-formedness constraint, as the specification states it.
 #[derive(Debug)]
 struct Rule {
@@ -74,10 +84,12 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         collect_classifiers(&doc, &ids, &mut classes, &mut enums);
     }
     let (mut rules, mut derivations) = (Vec::new(), Vec::new());
+    let mut operations = Vec::new();
     for xml in [kerml_xmi, sysml_xmi] {
         let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
         collect_rules(&doc, "validate", &mut rules);
         collect_rules(&doc, "derive", &mut derivations);
+        collect_operations(&doc, &mut operations);
     }
 
     // transitive ancestors (excluding self), name-sorted for determinism
@@ -90,7 +102,54 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         ancestors.insert(name.clone(), acc);
     }
 
-    generate(&classes, &enums, &ancestors, &rules, &derivations)
+    generate(
+        &classes,
+        &enums,
+        &ancestors,
+        &rules,
+        &derivations,
+        &operations,
+    )
+}
+
+/// The operations the abstract syntax defines, with what each answers.
+///
+/// A constraint calls `inputParameters()` or `referencedFeatureTarget()`
+/// as readily as it navigates a property, and the metamodel says what
+/// they come to in the same OCL. Four of the hundred and three carry no
+/// body, and those are the ones nothing here can call.
+fn collect_operations(doc: &roxmltree::Document, out: &mut Vec<Operation>) {
+    for node in doc.descendants() {
+        if !node.has_tag_name("ownedOperation") {
+            continue;
+        }
+        let Some((name, ocl)) = node.attribute("name").zip(
+            node.descendants()
+                .find(|it| it.has_tag_name("specification"))
+                .and_then(|spec| spec.attribute("body")),
+        ) else {
+            continue;
+        };
+        let metaclass = node
+            .ancestors()
+            .find(|up| xmi_type(up) == Some("uml:Class"))
+            .and_then(|up| up.attribute("name"))
+            .expect("an operation is written inside the class it belongs to");
+        // the one with no name of its own is what the operation returns
+        let parameters = node
+            .children()
+            .filter(|it| it.has_tag_name("ownedParameter"))
+            .filter_map(|it| it.attribute("name"))
+            .filter(|it| !it.is_empty())
+            .map(str::to_string)
+            .collect();
+        out.push(Operation {
+            name: name.to_string(),
+            metaclass: metaclass.to_string(),
+            parameters,
+            ocl: ocl.to_string(),
+        });
+    }
 }
 
 /// The rules of one kind the metamodel states, in the order it states
@@ -339,6 +398,7 @@ fn generate(
     ancestors: &BTreeMap<String, Vec<String>>,
     rules: &[Rule],
     derivations: &[Rule],
+    operations: &[Operation],
 ) -> String {
     let mut o = String::new();
     let w = &mut o;
@@ -611,8 +671,50 @@ fn generate(
     accessors(classes, enums, w);
     constraints(rules, w);
     derivations_of(derivations, w);
+    operations_of(operations, w);
 
     o
+}
+
+/// What the abstract syntax's own operations answer, as OCL.
+fn operations_of(operations: &[Operation], w: &mut String) {
+    writeln!(
+        w,
+        "\n/// One operation of the abstract syntax, as the specification\n\
+         /// defines it.\n\
+         #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n\
+         pub struct Operation {{\n\
+         \x20   pub name: &'static str,\n\
+         \x20   /// The metaclass it is an operation of.\n\
+         \x20   pub metaclass: ElementKind,\n\
+         \x20   /// The names its arguments are written under, in order.\n\
+         \x20   pub parameters: &'static [&'static str],\n\
+         \x20   /// What it answers, as the metamodel writes it.\n\
+         \x20   pub ocl: &'static str,\n\
+         }}\n"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "/// Every operation the KerML and SysML abstract syntax defines in\n\
+         /// OCL, in the order the metamodel states them."
+    )
+    .unwrap();
+    writeln!(w, "pub const OPERATIONS: &[Operation] = &[").unwrap();
+    for operation in operations {
+        writeln!(w, "    Operation {{").unwrap();
+        writeln!(w, "        name: {:?},", operation.name).unwrap();
+        writeln!(
+            w,
+            "        metaclass: ElementKind::{},",
+            operation.metaclass
+        )
+        .unwrap();
+        writeln!(w, "        parameters: &{:?},", operation.parameters).unwrap();
+        writeln!(w, "        ocl: {:?},", operation.ocl).unwrap();
+        writeln!(w, "    }},").unwrap();
+    }
+    writeln!(w, "];").unwrap();
 }
 
 /// How the specification says each derived property is worked out.

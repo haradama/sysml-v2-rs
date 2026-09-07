@@ -62,6 +62,37 @@ fn assignment(ocl: &str) -> Option<(&str, &str)> {
     named.then_some((name, body))
 }
 
+/// What each operation of the abstract syntax answers, by the metaclass
+/// it belongs to and the name it is called by.
+///
+/// A constraint calls `inputParameters()` as readily as it navigates a
+/// property, and the metamodel defines the operation in the same OCL.
+/// Parsed once, beside the derivations and for the same reason.
+fn operations() -> &'static [Defined] {
+    static PARSED: OnceLock<Vec<Defined>> = OnceLock::new();
+    PARSED.get_or_init(|| {
+        sysml_model::OPERATIONS
+            .iter()
+            .filter_map(|operation| {
+                Some(Defined {
+                    of: operation.metaclass,
+                    called: operation.name,
+                    parameters: operation.parameters,
+                    body: ocl::parse(operation.ocl).ok()?,
+                })
+            })
+            .collect()
+    })
+}
+
+/// One operation of the abstract syntax, read.
+struct Defined {
+    of: ElementKind,
+    called: &'static str,
+    parameters: &'static [&'static str],
+    body: Expr,
+}
+
 /// The property a derivation is about, read off its name where the body
 /// does not say: `derive` then the metaclass then the property.
 fn named_after(rule: &sysml_model::Rule) -> String {
@@ -78,6 +109,16 @@ fn named_after(rule: &sysml_model::Rule) -> String {
         .collect();
     first + chars.as_str()
 }
+
+/// How many derivations and operations deep one evaluation may go.
+///
+/// The specification writes them in terms of one another -- an
+/// annotating element's annotated element is its annotation's -- so
+/// something has to stop a chain that comes back round to where it
+/// started. A bound stops it by construction; watching for the return
+/// needs a guard no model can be shown to reach, which is a guard
+/// nothing checks.
+const DEPTH: usize = 4;
 
 /// One constraint that does not hold, and of what.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,7 +231,7 @@ impl Workspace {
             ws: self,
             bound: HashMap::new(),
             self_: elem,
-            deriving: false,
+            depth: 0,
             present,
         };
         match scope.eval(expr) {
@@ -242,11 +283,11 @@ struct Scope<'a> {
     /// `let` and lambda variables.
     bound: HashMap<String, Val>,
     self_: ElementId,
-    /// Whether a derivation is already being worked out. One is worked
-    /// out from what the model stores, not from further derivations:
-    /// that terminates by construction rather than by watching for a
-    /// derivation that comes back round to itself.
-    deriving: bool,
+    /// How many derivations and operations deep this already is. They
+    /// are written in terms of one another, so a bound is what stops a
+    /// chain that comes back round to where it started -- which
+    /// terminates by construction rather than by watching for it.
+    depth: usize,
     /// The metaclasses this model builds anywhere.
     present: &'a HashSet<ElementKind>,
 }
@@ -466,23 +507,19 @@ impl Scope<'_> {
     /// lambda the navigation happened to be inside.
     fn derive(&mut self, elem: ElementId, name: &str) -> Option<Val> {
         let kind = self.ws.model().kind(elem);
-        // A derivation is written in terms of other properties, and
-        // some of those are derived in turn -- an annotating element's
-        // annotated element is its annotation's. Working those out too
-        // would need a guard against a chain that comes back round to
-        // where it started, and no model reaches one; not working them
-        // out needs nothing, and says so.
-        if self.deriving {
-            return None;
-        }
+        // A derivation that reads another goes one level deeper. Past
+        // four the answer has stopped improving, and the bound is what
+        // keeps two properties derived from each other from going round
+        // for ever.
         let (_, _, body) = derivations()
             .iter()
-            .find(|(about, property, _)| property == name && kind.is_a(*about))?;
+            .find(|(about, property, _)| property == name && kind.is_a(*about))
+            .filter(|_| self.depth < DEPTH)?;
         let mut scope = Scope {
             ws: self.ws,
             bound: HashMap::new(),
             self_: elem,
-            deriving: true,
+            depth: self.depth + 1,
             present: self.present,
         };
         Some(scope.eval(body))
@@ -727,8 +764,42 @@ impl Scope<'_> {
                     None => Val::Unknown(format!("`{qualified}` is not in this workspace")),
                 }
             }
-            _ => Val::Unknown(format!("`{name}()` is not implemented")),
+            // The abstract syntax defines its own operations in OCL
+            // beside its constraints, so what one answers is what the
+            // specification says it answers.
+            _ => self
+                .invoke(target, name, args)
+                .unwrap_or_else(|| Val::Unknown(format!("`{name}()` is not implemented"))),
         }
+    }
+
+    /// One of the abstract syntax's own operations, worked out the way
+    /// the specification defines it.
+    fn invoke(&mut self, target: &Val, name: &str, args: &[Expr]) -> Option<Val> {
+        let Val::Elem(elem) = target else {
+            // every operation the specification defines is of a
+            // metaclass, so one of a number or a string is none of them
+            return None;
+        };
+        let kind = self.ws.model().kind(*elem);
+        let defined = operations()
+            .iter()
+            .find(|it| it.called == name && it.parameters.len() == args.len() && kind.is_a(it.of))
+            .filter(|_| self.depth < DEPTH)?;
+        let bound: HashMap<String, Val> = defined
+            .parameters
+            .iter()
+            .map(|it| it.to_string())
+            .zip(args.iter().map(|arg| self.eval(arg)))
+            .collect();
+        let mut scope = Scope {
+            ws: self.ws,
+            bound,
+            self_: *elem,
+            depth: self.depth + 1,
+            present: self.present,
+        };
+        Some(scope.eval(&defined.body))
     }
 
     /// Whether `elem` specializes `up`, directly or through anything in
@@ -1152,6 +1223,22 @@ mod tests {
 
         // and a property the builder does not read is still unknown
         assert_eq!(ws.judge("operator = \'.\'", w), None);
+    }
+
+    /// A constraint calls an operation of the abstract syntax as readily
+    /// as it navigates a property, and the metamodel defines what each
+    /// one answers in the same OCL.
+    #[test]
+    fn an_operation_answers_what_the_specification_says_it_answers() {
+        let (mut ws, car) = about("part def Car;\n", "Car");
+        // `Type::isCompatibleWith(other) = specializes(other)`, and
+        // everything specializes itself
+        assert_eq!(ws.judge("self.isCompatibleWith(self)", car), Some(true));
+        // one nothing defines is still unknown
+        assert_eq!(ws.judge("self.noSuchOperation() = 1", car), None);
+        // and so is one asked of something that is not an element:
+        // every operation the specification defines is of a metaclass
+        assert_eq!(ws.judge("self.isAbstract.noSuchOperation()", car), None);
     }
 
     /// A control node written at the top of a file is a feature of
