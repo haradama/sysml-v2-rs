@@ -37,6 +37,8 @@ const CSS: &str = "\
 .name { fill: var(--text); font-weight: bold; }\n\
 .abstract { font-style: italic; }\n\
 .keyword, .feature { fill: var(--muted); }\n\
+.aside { fill: var(--muted); paint-order: stroke; stroke: var(--box); stroke-width: 3; \
+stroke-linejoin: round; }\n\
 .compartment { fill: var(--muted); font-style: italic; }\n";
 
 /// The arrowheads and diamonds every view draws with, defined once so a
@@ -161,6 +163,15 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
     let mut anchors: Vec<Anchor> = Vec::new();
     // how far down a detour reached, so the canvas can grow to hold it
     let mut floor = 0.0_f64;
+    // Every run of every line, and the names written along them. A name
+    // is held back until all the lines are down, because where it reads
+    // best depends on what else was drawn.
+    let mut drawn: Vec<Leg> = Vec::new();
+    let mut asides: Vec<Aside> = Vec::new();
+    // the names already written over the drawing -- the ones beside the
+    // ports and the ones along the lines alike -- so that no two of them
+    // are put on one another
+    let mut written: Vec<Placed> = Vec::new();
     let lanes = lanes(diagram);
     let arrivals = arrivals(diagram);
     let departures = departures(diagram);
@@ -181,6 +192,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
             // runs from the subtype's top edge to the supertype's bottom
             Relation::Specialization if routed.is_some() => {
                 let walked = routed.expect("the arm this route matched");
+                note(&mut drawn, walked);
                 writeln!(
                     out,
                     "<path class=\"edge\" fill=\"none\" d=\"{}\" \
@@ -207,30 +219,52 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                     .then(|| channel_for(layout, ((x1, y1), (x2, y2)), &[bands.1, bands.0]))
                     .flatten();
                 match channel {
-                    Some(channel) => writeln!(
-                        out,
-                        "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                         V {channel:.1} H {x2:.1} V {y2:.1}\" \
-                         marker-end=\"url(#specialization)\"/>"
-                    ),
+                    Some(channel) => {
+                        note(
+                            &mut drawn,
+                            &[(x1, y1), (x1, channel), (x2, channel), (x2, y2)],
+                        );
+                        writeln!(
+                            out,
+                            "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
+                             V {channel:.1} H {x2:.1} V {y2:.1}\" \
+                             marker-end=\"url(#specialization)\"/>"
+                        )
+                    }
                     // no single gap reaches: go round the rows in between
                     None => match blocked
                         .then(|| sidestep(layout, ((x1, y1), (x2, y2)), bands, style))
                         .flatten()
                     {
-                        Some(column) => writeln!(
-                            out,
-                            "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                             V {:.1} H {column:.1} V {:.1} H {x2:.1} V {y2:.1}\" \
-                             marker-end=\"url(#specialization)\"/>",
-                            bands.0, bands.1
-                        ),
-                        None => writeln!(
-                            out,
-                            "<line class=\"edge\" x1=\"{x1:.1}\" y1=\"{y1:.1}\" \
-                             x2=\"{x2:.1}\" y2=\"{y2:.1}\" \
-                             marker-end=\"url(#specialization)\"/>"
-                        ),
+                        Some(column) => {
+                            note(
+                                &mut drawn,
+                                &[
+                                    (x1, y1),
+                                    (x1, bands.0),
+                                    (column, bands.0),
+                                    (column, bands.1),
+                                    (x2, bands.1),
+                                    (x2, y2),
+                                ],
+                            );
+                            writeln!(
+                                out,
+                                "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
+                                 V {:.1} H {column:.1} V {:.1} H {x2:.1} V {y2:.1}\" \
+                                 marker-end=\"url(#specialization)\"/>",
+                                bands.0, bands.1
+                            )
+                        }
+                        None => {
+                            note(&mut drawn, &[(x1, y1), (x2, y2)]);
+                            writeln!(
+                                out,
+                                "<line class=\"edge\" x1=\"{x1:.1}\" y1=\"{y1:.1}\" \
+                                 x2=\"{x2:.1}\" y2=\"{y2:.1}\" \
+                                 marker-end=\"url(#specialization)\"/>"
+                            )
+                        }
                     },
                 }
             }
@@ -288,6 +322,7 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                     legs[nth] = off_port(point, toward, true, style);
                 }
                 let ((sx, sy), (ex, ey)) = (legs[0], legs[1]);
+                note(&mut drawn, &[(sx, sy), (sx, band), (ex, band), (ex, ey)]);
                 writeln!(
                     out,
                     "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {band:.1} \
@@ -403,7 +438,12 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // already drawn; anything else leaves by a side of its
                 // own choosing, and the square has to be told where
                 let bent = route.is_some();
-                let (first_toward, second_toward, label_at) = match route {
+                // The run a name written on the line is set beside. It
+                // has to be the run the name sits on rather than the
+                // line as a whole: a detour bends, and a name offset to
+                // one side of the line's far end lands back across the
+                // run it is written over.
+                let (first_toward, second_toward, run) = match route {
                     None => {
                         writeln!(
                             out,
@@ -411,7 +451,8 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                              y2=\"{y2:.1}\"{marker}/>"
                         )
                         .unwrap();
-                        ((x2, y2), (x1, y1), ((x1 + x2) / 2.0, (y1 + y2) / 2.0))
+                        note(&mut drawn, &[(x1, y1), (x2, y2)]);
+                        ((x2, y2), (x1, y1), ((x1, y1), (x2, y2)))
                     }
                     Some(Detour::Channel(channel)) => {
                         ((x1, y1), (x2, y2)) = detour;
@@ -424,11 +465,11 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         )
                         .unwrap();
                         floor = floor.max(channel);
-                        (
-                            (x1, channel),
-                            (x2, channel),
-                            ((x1 + x2) / 2.0, channel - 0.5 * style.line_height),
-                        )
+                        note(
+                            &mut drawn,
+                            &[(sx, sy), (sx, channel), (ex, channel), (ex, ey)],
+                        );
+                        ((x1, channel), (x2, channel), ((x1, channel), (x2, channel)))
                     }
                     Some(Detour::Given(route)) => {
                         let mut walked = route.to_vec();
@@ -449,11 +490,12 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         (x1, y1) = start;
                         (x2, y2) = finish;
                         floor = floor.max(walked.iter().map(|&(_, y)| y).fold(0.0, f64::max));
-                        let middle = walked[walked.len() / 2];
+                        let middle = walked.len() / 2;
+                        note(&mut drawn, &walked);
                         (
                             route[1],
                             route[last - 1],
-                            (middle.0, middle.1 - 0.5 * style.line_height),
+                            (walked[middle - 1], walked[middle]),
                         )
                     }
                     Some(Detour::Sidestep(column)) => {
@@ -468,13 +510,21 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                         )
                         .unwrap();
                         floor = floor.max(first.max(second));
+                        note(
+                            &mut drawn,
+                            &[
+                                (sx, sy),
+                                (sx, first),
+                                (column, first),
+                                (column, second),
+                                (ex, second),
+                                (ex, ey),
+                            ],
+                        );
                         // the column can be hard against the margin, so the
-                        // name goes over the gap it sets out along instead
-                        (
-                            (x1, first),
-                            (x2, second),
-                            ((x1 + x2) / 2.0, first - 0.5 * style.line_height),
-                        )
+                        // name is written along the gap the line sets out
+                        // in instead
+                        ((x1, first), (x2, second), ((x1, first), (column, first)))
                     }
                 };
                 // A detour leaves both boxes downward and a route leaves
@@ -534,18 +584,55 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
                 // Where the box declares that port, it is already
                 // drawn there and the line simply arrives at it.
                 if let Some(first) = edge.ends.0.as_ref().filter(|_| !first_is_port) {
-                    port(&mut ports, (x1, y1), first_toward, first, None, style);
+                    port(
+                        &mut ports,
+                        &mut written,
+                        (x1, y1),
+                        first_toward,
+                        first,
+                        None,
+                        style,
+                    );
                 }
                 if let Some(second) = edge.ends.1.as_ref().filter(|_| !second_is_port) {
-                    port(&mut ports, (x2, y2), second_toward, second, None, style);
+                    port(
+                        &mut ports,
+                        &mut written,
+                        (x2, y2),
+                        second_toward,
+                        second,
+                        None,
+                        style,
+                    );
                 }
                 if let Some(label) = &edge.label {
-                    beside(&mut out, label_at, (x2, y2), label, style);
+                    asides.push(Aside {
+                        run,
+                        text: label.clone(),
+                    });
                 }
                 Ok(())
             }
         }
         .unwrap();
+    }
+
+    // Every line is down, so each name can be put where the least of it
+    // is covered: a drawing gets dense enough that the spot opposite the
+    // middle of a name's own run is taken -- by the leg of another
+    // detour, or by a channel running the length of the page.
+    let mut taken: Vec<Placed> = layout.placed.clone();
+    taken.extend(written.iter().copied());
+    for aside in &asides {
+        let put = clear_spot(aside, &drawn, &taken, style);
+        // a name written under the lowest channel is the lowest thing on
+        // the canvas
+        floor = floor.max(put.1);
+        label_at(&mut out, put, "middle", &aside.text);
+        // and it is something every name after it has to keep clear of
+        let rect = text_box(put, "middle", &aside.text, style);
+        taken.push(rect);
+        written.push(rect);
     }
 
     for (at, placed) in layout.placed.iter().enumerate() {
@@ -579,7 +666,14 @@ pub fn to_svg(diagram: &Diagram, layout: &Layout, style: &Style) -> String {
         // interconnection-view compartment-stack port-l* port-r*
         // port-t* port-b*`. They go in with the other ports, after
         // every box, so a neighbour drawn later cannot cover one.
-        border_ports(&mut ports, &placements[at], at, &landings, style);
+        border_ports(
+            &mut ports,
+            &mut written,
+            &placements[at],
+            at,
+            &landings,
+            style,
+        );
     }
 
     out.push_str(&ports);
@@ -951,7 +1045,14 @@ fn obstructed(layout: &Layout, spare: Option<(usize, usize)>, route: &[(f64, f64
 /// Does the segment cross the inside of the rectangle? Used to tell a line
 /// that merely passes near a box from one that disappears under it, so the
 /// borders themselves do not count as a crossing.
-fn crosses(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> bool {
+fn crosses(rect: &Placed, one: (f64, f64), other: (f64, f64)) -> bool {
+    through(rect, one, other) > 0.0
+}
+
+/// How much of the segment lies inside the rectangle. A line drawn along
+/// a name strikes it out where one merely crossing it costs a letter, so
+/// what the two are told apart by is how much of the line falls inside.
+fn through(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> f64 {
     const GRAZE: f64 = 1.0;
     let (dx, dy) = (x2 - x1, y2 - y1);
     let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
@@ -965,7 +1066,7 @@ fn crosses(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> bool {
         if towards == 0.0 {
             // parallel to this side: outside it means outside the box
             if room < 0.0 {
-                return false;
+                return 0.0;
             }
         } else if towards < 0.0 {
             enter = enter.max(room / towards);
@@ -973,7 +1074,7 @@ fn crosses(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> bool {
             leave = leave.min(room / towards);
         }
     }
-    enter < leave
+    (leave - enter).max(0.0) * dx.hypot(dy)
 }
 
 /// The marker and the class a centre-to-centre relation is drawn with.
@@ -1192,6 +1293,9 @@ fn interconnections(out: &mut String, node: &Node, inners: &[(f64, f64, f64, f64
             height,
         }
     };
+    // the names inside one box are written among themselves, and the
+    // ones outside it are already down
+    let mut written: Vec<Placed> = Vec::new();
     for link in &node.links {
         let (from, to) = (placed(link.from), placed(link.to));
         let first = border_point(&from, centre_of(&to));
@@ -1204,10 +1308,10 @@ fn interconnections(out: &mut String, node: &Node, inners: &[(f64, f64, f64, f64
         )
         .unwrap();
         if let Some(name) = &link.ends.0 {
-            port(out, first, second, name, None, style);
+            port(out, &mut written, first, second, name, None, style);
         }
         if let Some(name) = &link.ends.1 {
-            port(out, second, first, name, None, style);
+            port(out, &mut written, second, first, name, None, style);
         }
         if let Some(label) = &link.label {
             beside(
@@ -1324,6 +1428,7 @@ fn lane_spacing(from: &Placed, to: &Placed, siblings: usize, style: &Style) -> f
 /// leaves room for a name.
 fn border_ports(
     out: &mut String,
+    written: &mut Vec<Placed>,
     places: &[Placement<'_>],
     at: usize,
     landings: &[Leaving],
@@ -1341,6 +1446,7 @@ fn border_ports(
         // away. Saying it twice only gives a line more to run through.
         marked(
             out,
+            written,
             Marked {
                 at: bent.map_or(place.at, |landing| landing.point),
                 toward: bent.map_or(place.toward, |landing| landing.toward),
@@ -1627,6 +1733,7 @@ fn facing(placed: &Placed, peer: (f64, f64)) -> ((f64, f64), (f64, f64)) {
 
 fn port(
     out: &mut String,
+    written: &mut Vec<Placed>,
     at: (f64, f64),
     toward: (f64, f64),
     name: &str,
@@ -1635,6 +1742,7 @@ fn port(
 ) {
     marked(
         out,
+        written,
         Marked {
             at,
             toward,
@@ -1665,10 +1773,14 @@ struct Marked<'a> {
     rounded: bool,
 }
 
+/// How many rows out from its port a name may be set to clear one
+/// already written before it stays where it belongs.
+const ROWS: usize = 4;
+
 /// The glyph straddling a border and the name beside it: `port-l` draws a
 /// square, `param-l` the same rounded, and the direction arrow goes inside
 /// either.
-fn marked(out: &mut String, mark: Marked<'_>, style: &Style) {
+fn marked(out: &mut String, written: &mut Vec<Placed>, mark: Marked<'_>, style: &Style) {
     let Marked {
         at,
         toward,
@@ -1724,8 +1836,27 @@ fn marked(out: &mut String, mark: Marked<'_>, style: &Style) {
         };
     // and it grows the way it was offset, so a long name never runs back
     // over the square it belongs to
-    let put = beside_point(at, (ux, uy), along, across);
-    let anchor = if put.0 >= at.0 { "start" } else { "end" };
+    let anchored = |put: (f64, f64)| if put.0 >= at.0 { "start" } else { "end" };
+    // Two ports on one border can sit closer together than their names
+    // are long, and one name written over another leaves neither
+    // readable. A name that would land on one already written is set a
+    // row further out, along the way its own port faces, where it still
+    // reads as that port's.
+    let row = |(nth, off): (usize, f64)| {
+        beside_point(at, (ux, uy), along + nth as f64 * style.line_height, off)
+    };
+    let put = (0..ROWS)
+        // the side the line is not on comes first, and the other one is
+        // still better than a name nobody can read
+        .flat_map(|nth| [(nth, across), (nth, -across)])
+        .map(row)
+        .find(|&put| {
+            let rect = text_box(put, anchored(put), name, style);
+            !written.iter().any(|other| overlaps(&rect, other))
+        })
+        .unwrap_or(row((0, across)));
+    let anchor = anchored(put);
+    written.push(text_box(put, anchor, name, style));
     if let Some(direction) = direction {
         direction_arrow(out, at, (ux, uy), direction, side);
     }
@@ -1822,11 +1953,117 @@ fn beside_point(at: (f64, f64), (ux, uy): (f64, f64), along: f64, across: f64) -
     )
 }
 
-/// One line of text, anchored so that it grows the way it was put.
+/// One straight run of a line, as it was drawn.
+type Leg = ((f64, f64), (f64, f64));
+
+/// A name written along a line, and the run of it the name belongs to.
+struct Aside {
+    run: Leg,
+    text: String,
+}
+
+/// Remember where a line went, leg by leg.
+fn note(drawn: &mut Vec<Leg>, walked: &[(f64, f64)]) {
+    drawn.extend(walked.windows(2).map(|leg| (leg[0], leg[1])));
+}
+
+/// Where along its run a name is tried, the middle first and the rest
+/// outwards from it, so a name only moves where moving buys it
+/// something.
+const STOPS: [f64; 9] = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8, 0.1, 0.9];
+
+/// Where a name written along a run goes: off to one side of it, and
+/// along it to wherever the least of the name is covered.
+fn clear_spot(aside: &Aside, drawn: &[Leg], taken: &[Placed], style: &Style) -> (f64, f64) {
+    let (start, finish) = aside.run;
+    let (dx, dy) = (finish.0 - start.0, finish.1 - start.1);
+    // `max` keeps the direction finite when a run has no length at all
+    let length = dx.hypot(dy).max(f64::EPSILON);
+    let along = (dx / length, dy / length);
+    let cost = |put: &(f64, f64)| covered(*put, &aside.text, drawn, taken, style);
+    STOPS
+        .iter()
+        .flat_map(|stop| {
+            let on = (start.0 + dx * stop, start.1 + dy * stop);
+            // the side the name would fall on anyway comes first
+            [across_of(style), -across_of(style)].map(|across| beside_point(on, along, 0.0, across))
+        })
+        // ties go to the first, which is the stop nearest the middle
+        .min_by(|one, other| {
+            let (mine, theirs) = (cost(one), cost(other));
+            mine.0
+                .cmp(&theirs.0)
+                .then_with(|| mine.1.total_cmp(&theirs.1))
+        })
+        .expect("a stop to write the name at")
+}
+
+/// How much of a name set at `put` is lost, worst first: how many boxes
+/// and other names are drawn over it, and then the length of line drawn
+/// through the words.
+///
+/// The two do not trade against each other. A box is drawn after the
+/// names and a name under one is not dimmed but gone, and two names on
+/// one spot leave neither readable; a line through a name costs it the
+/// letters it runs through and no more, and a name stands on a ground of
+/// its own that keeps even those.
+fn covered(
+    put: (f64, f64),
+    text: &str,
+    drawn: &[Leg],
+    taken: &[Placed],
+    style: &Style,
+) -> (usize, f64) {
+    let rect = text_box(put, "middle", text, style);
+    (
+        taken.iter().filter(|other| overlaps(&rect, other)).count(),
+        drawn
+            .iter()
+            .map(|&(one, other)| through(&rect, one, other))
+            .sum(),
+    )
+}
+
+/// The ground a name takes up, set at `at` and growing the way `anchor`
+/// says. `node` names nothing here: only the four sides are ever read.
+fn text_box(at: (f64, f64), anchor: &str, text: &str, style: &Style) -> Placed {
+    let width = style.text_width(text);
+    let x = match anchor {
+        "start" => at.0,
+        "end" => at.0 - width,
+        // "middle", the anchor everything written along a line carries
+        _ => at.0 - width / 2.0,
+    };
+    Placed {
+        node: 0,
+        x,
+        y: at.1 - style.font_size / 2.0,
+        width,
+        height: style.font_size,
+    }
+}
+
+/// Do two rectangles share any ground at all?
+fn overlaps(one: &Placed, other: &Placed) -> bool {
+    one.x < other.x + other.width
+        && other.x < one.x + one.width
+        && one.y < other.y + other.height
+        && other.y < one.y + one.height
+}
+
+/// One line of text written over the drawing rather than inside a box,
+/// anchored so that it grows the way it was put.
+///
+/// It is drawn on a ground of its own. [`clear_spot`] puts a name where
+/// the least of it is covered, but a drawing can be dense enough that
+/// every spot on a run has a line through it, and a name is what a
+/// reader came to the line for. The lines are all down by the time any
+/// name is written and the boxes are not, so the ground reaches back
+/// over the lines and never over a box.
 fn label_at(out: &mut String, (x, y): (f64, f64), anchor: &str, text: &str) {
     writeln!(
         out,
-        "<text class=\"feature\" x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"{anchor}\" \
+        "<text class=\"aside\" x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"{anchor}\" \
          dominant-baseline=\"middle\">{}</text>",
         escape(text)
     )
@@ -2014,7 +2251,7 @@ mod tests {
         let at = svg
             .split("aVeryLongPortNameIndeed</text>")
             .next()
-            .and_then(|before| before.rsplit_once("<text class=\"feature\" x=\""))
+            .and_then(|before| before.rsplit_once("<text class=\"aside\" x=\""))
             .map(|(_, tag)| tag)
             .expect("the port's name is drawn");
         let x: f64 = at.split('"').next().unwrap().parse().unwrap();
@@ -2487,6 +2724,7 @@ mod tests {
             let mut out = String::new();
             marked(
                 &mut out,
+                &mut Vec::new(),
                 Marked {
                     at: (50.0, 20.0),
                     // the border faces left, whatever the line then does
@@ -2515,7 +2753,15 @@ mod tests {
         // centred, it would be drawn over its own square
         let style = Style::default();
         let mut out = String::new();
-        port(&mut out, (50.0, 20.0), (50.0, 90.0), "p", None, &style);
+        port(
+            &mut out,
+            &mut Vec::new(),
+            (50.0, 20.0),
+            (50.0, 90.0),
+            "p",
+            None,
+            &style,
+        );
 
         assert!(out.contains("text-anchor=\"start\""), "{out}");
         let x: f64 = out
@@ -2539,6 +2785,7 @@ mod tests {
         // the way it faces is -x and `in` runs back into the box
         port(
             &mut out,
+            &mut Vec::new(),
             (50.0, 20.0),
             (42.0, 20.0),
             "p",
@@ -2601,6 +2848,7 @@ mod tests {
         let mut out = String::new();
         port(
             &mut out,
+            &mut Vec::new(),
             (50.0, 20.0),
             (42.0, 20.0),
             "hub.pin",
@@ -2611,6 +2859,7 @@ mod tests {
         let mut declared = String::new();
         port(
             &mut declared,
+            &mut Vec::new(),
             (50.0, 20.0),
             (42.0, 20.0),
             "pin",
@@ -3326,6 +3575,196 @@ mod tests {
         assert!(
             svg.contains(&format!("d=\"M {:.1} {:.1} V", leaves.0, leaves.1 + clear)),
             "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_name_slides_along_its_run_to_where_no_line_covers_it() {
+        // which side of its run a name falls on says nothing about what
+        // is drawn there: another line can run the length of the page
+        // through the very spot, and the name is the thing a reader
+        // came to the line for
+        let style = Style::default();
+        let aside = Aside {
+            run: ((0.0, 100.0), (600.0, 100.0)),
+            text: "connected".to_string(),
+        };
+        let across = across_of(&style);
+        let struck = ((0.0, 100.0 + across), (600.0, 100.0 + across));
+
+        let put = clear_spot(&aside, &[struck], &[], &style);
+        assert_eq!(covered(put, &aside.text, &[struck], &[], &style), (0, 0.0));
+        // it is still beside its own run, on the other side of it
+        assert!((put.1 - (100.0 - across)).abs() < 0.05, "{put:?}");
+
+        // and with nothing in the way it stays opposite the middle
+        assert_eq!(
+            clear_spot(&aside, &[], &[], &style),
+            (300.0, 100.0 + across)
+        );
+    }
+
+    #[test]
+    fn a_name_gives_way_to_a_box_that_would_be_drawn_over_it() {
+        // the boxes are drawn after the names, so a name under one is
+        // not dimmed but gone, which is why a box costs a name its
+        // whole width where a line costs it the letters it runs through
+        let style = Style::default();
+        let aside = Aside {
+            run: ((0.0, 100.0), (600.0, 100.0)),
+            text: "hidden".to_string(),
+        };
+        let over = Placed {
+            node: 0,
+            x: 200.0,
+            y: 60.0,
+            width: 200.0,
+            height: 60.0,
+        };
+        let put = clear_spot(&aside, &[], &[over], &style);
+        assert_eq!(covered(put, &aside.text, &[], &[over], &style), (0, 0.0));
+        assert!(!overlaps(
+            &text_box(put, "middle", &aside.text, &style),
+            &over
+        ));
+    }
+
+    #[test]
+    fn a_name_would_rather_be_run_through_than_hidden_under_a_box() {
+        // the two do not trade against each other: a box is drawn after
+        // the names and a name under one is gone, where a line through
+        // one costs it the letters it runs through and the ground it
+        // stands on keeps even those
+        let style = Style::default();
+        let aside = Aside {
+            run: ((0.0, 100.0), (600.0, 100.0)),
+            text: "counted".to_string(),
+        };
+        let across = across_of(&style);
+        // the side the name falls on anyway is clear of every line and
+        // under a box for the whole length of the run; the other side
+        // has a line down all of it
+        let over = Placed {
+            node: 0,
+            x: 0.0,
+            y: 100.0 + across - 10.0,
+            width: 600.0,
+            height: 20.0,
+        };
+        let struck = ((0.0, 100.0 - across), (600.0, 100.0 - across));
+
+        let put = clear_spot(&aside, &[struck], &[over], &style);
+        assert!((put.1 - (100.0 - across)).abs() < 0.05, "{put:?}");
+        assert_eq!(covered(put, &aside.text, &[struck], &[over], &style).0, 0);
+    }
+
+    #[test]
+    fn a_port_name_that_would_land_on_one_already_written_is_set_out_a_row() {
+        // two ports on one border can sit closer together than their
+        // names are long, and one name over another leaves neither
+        // readable
+        let style = Style::default();
+        let mut written = Vec::new();
+        let mut out = String::new();
+        // both leave the same border downward, closer together than
+        // `shaftPort_x` is wide
+        for at in [(100.0, 50.0), (140.0, 50.0)] {
+            port(
+                &mut out,
+                &mut written,
+                at,
+                (at.0, 90.0),
+                "shaftPort_x",
+                None,
+                &style,
+            );
+        }
+
+        let rows: Vec<f64> = out
+            .lines()
+            .filter(|line| line.starts_with("<text"))
+            .map(|line| anchor_tests::number(line, " y=\""))
+            .collect();
+        assert_eq!(rows.len(), 2, "{out}");
+        assert!((rows[1] - rows[0]).abs() >= style.line_height, "{out}");
+        assert!(!overlaps(&written[0], &written[1]), "{written:?}");
+    }
+
+    #[test]
+    fn a_name_written_over_the_drawing_stands_on_a_ground_of_its_own() {
+        // a drawing gets dense enough that every spot along a run has a
+        // line through it, and where the name cannot be moved clear it
+        // is read against whatever the lines there are doing
+        let svg = svg_of(
+            "part def A;\n\
+             connection def D {\n\
+             \tend one : A;\n\
+             }\n",
+        );
+        assert!(svg.contains("<text class=\"aside\""), "{svg}");
+        assert!(
+            svg.contains(
+                ".aside { fill: var(--muted); paint-order: stroke; \
+                          stroke: var(--box); stroke-width: 3; stroke-linejoin: round; }"
+            ),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_name_on_a_bent_line_is_written_clear_of_the_run_it_carries() {
+        // the name was set off to one side of the line's far end, which
+        // for a bent line is not the run the name is written along:
+        // where the line doubled back on itself, the offset put the
+        // name back over the channel and it was drawn through the words
+        let ws = resolved(
+            "part def A;\n\
+             part def Wall;\n\
+             connection def D {\n\
+             \tend one : A;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let mut layout = layout(&diagram, &style);
+        // one row, with the wall standing between the two boxes the
+        // line joins: a straight line would run under it, so the line
+        // drops into the channel beneath the row and runs back along it
+        let row: Vec<usize> = ["A", "Wall", "D"]
+            .iter()
+            .map(|name| {
+                (0..layout.placed.len())
+                    .find(|&at| diagram.nodes[layout.placed[at].node].name == *name)
+                    .expect("the box is drawn")
+            })
+            .collect();
+        for (nth, &at) in row.iter().enumerate() {
+            layout.placed[at].x = 300.0 * nth as f64;
+            layout.placed[at].y = 0.0;
+            layout.placed[at].width = 200.0;
+            layout.placed[at].height = 100.0;
+        }
+        let svg = to_svg(&diagram, &layout, &style);
+
+        let route = svg
+            .lines()
+            .find(|line| line.starts_with("<path class=\"edge\""))
+            .expect("the line went round the wall");
+        let channel: f64 = route
+            .split(" V ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|it| it.parse().ok())
+            .expect("the channel it runs along");
+        let name = svg
+            .lines()
+            .find(|line| line.contains(">one<"))
+            .expect("the end is named beside the line");
+        let put = anchor_tests::number(name, " y=\"");
+        // half the font is what a line has to clear to miss the letters
+        assert!(
+            (put - channel).abs() >= 0.5 * style.font_size,
+            "`one` is written at {put}, on the run at {channel}\n{svg}"
         );
     }
 
