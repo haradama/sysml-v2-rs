@@ -1127,6 +1127,21 @@ impl Workspace {
                             stats.resolved += 1;
                             let file = self.elem_file.get(&id).copied().unwrap_or(0);
                             self.record(file, t.range, t.name_range, &t.at, target);
+                            // `chains source.target` names the steps of
+                            // one chain, and each step is a chaining of
+                            // its own: read as a single relationship the
+                            // feature comes to have one chaining
+                            // feature, which the standard does not
+                            // allow it.
+                            if part_kind == SyntaxKind::CHAINS_KW {
+                                for depth in 1..=t.segments.len() {
+                                    if let Some(step) = self.resolve_from(id, &t.segments[..depth])
+                                    {
+                                        self.reify(id, is_definition, part_kind, step);
+                                    }
+                                }
+                                continue;
+                            }
                             self.reify(id, is_definition, part_kind, target);
                         }
                         None => {
@@ -2369,6 +2384,26 @@ impl Workspace {
                 "referencingFeature",
                 "referencedFeature",
             ),
+            // `datatype N :> V, A intersects V, A;` -- a type written as
+            // the union, intersection or difference of others, and
+            // `feature chain chains source.target` a feature written as
+            // the chain through them
+            SyntaxKind::UNIONS_KW => (ElementKind::Unioning, "typeUnioned", "unioningType"),
+            SyntaxKind::INTERSECTS_KW => (
+                ElementKind::Intersecting,
+                "typeIntersected",
+                "intersectingType",
+            ),
+            SyntaxKind::DIFFERENCES_KW => (
+                ElementKind::Differencing,
+                "typeDifferenced",
+                "differencingType",
+            ),
+            SyntaxKind::CHAINS_KW => (
+                ElementKind::FeatureChaining,
+                "featureChained",
+                "chainingFeature",
+            ),
             // relationship_parts only yields the four kinds above plus TYPING
             _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
         };
@@ -3256,16 +3291,34 @@ fn metadata_target(node: &SyntaxNode) -> Option<Target> {
 
 fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
     node.children()
-        .filter(|c| {
-            matches!(
-                c.kind(),
-                SyntaxKind::TYPING
-                    | SyntaxKind::SUBSETTING
-                    | SyntaxKind::REDEFINITION
-                    | SyntaxKind::REFERENCES
-            )
+        .filter_map(|part| match part.kind() {
+            SyntaxKind::TYPING
+            | SyntaxKind::SUBSETTING
+            | SyntaxKind::REDEFINITION
+            | SyntaxKind::REFERENCES => Some((part.kind(), part)),
+            // KerML writes `unions T`, `chains a.b`, `disjoint from T`
+            // and their kin as the one shape, told apart by the keyword
+            // leading it. Four of them relate a type or a feature to
+            // what it is made of; the rest say something else and are
+            // read, where they are read at all, elsewhere.
+            SyntaxKind::RELATION => {
+                let lead = part
+                    .children_with_tokens()
+                    .filter_map(|it| it.into_token())
+                    .map(|it| it.kind())
+                    .find(|it| !it.is_trivia())?;
+                matches!(
+                    lead,
+                    SyntaxKind::UNIONS_KW
+                        | SyntaxKind::INTERSECTS_KW
+                        | SyntaxKind::DIFFERENCES_KW
+                        | SyntaxKind::CHAINS_KW
+                )
+                .then_some((lead, part))
+            }
+            _ => None,
         })
-        .map(|part| {
+        .map(|(kind, part)| {
             let targets = part
                 .children()
                 .filter(|c| c.kind() == SyntaxKind::TYPE_REF)
@@ -3281,7 +3334,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                     })
                 })
                 .collect();
-            (part.kind(), targets)
+            (kind, targets)
         })
         .collect()
 }
