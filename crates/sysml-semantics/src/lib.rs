@@ -2609,7 +2609,10 @@ impl Workspace {
                         self.reified(
                             id,
                             ElementKind::Annotation,
-                            &[("annotatedElement", Value::Ref(target))],
+                            &[
+                                ("annotatingElement", Value::Ref(id)),
+                                ("annotatedElement", Value::Ref(target)),
+                            ],
                         );
                     }
                     None => {

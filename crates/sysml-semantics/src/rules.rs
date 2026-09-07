@@ -636,6 +636,12 @@ impl Scope<'_> {
                 false => Val::Null,
             };
         }
+        // The other side of that: an annotation this model builds is
+        // owned by the annotating element -- the comment, the metadata
+        // usage -- and never by what it annotates.
+        if name == "owningAnnotatedElement" && model.kind(elem).is_a(ElementKind::Annotation) {
+            return Val::Null;
+        }
         if name == "owner" {
             return match model.owner(elem) {
                 Some(owner) => Val::Elem(owner),
@@ -1203,6 +1209,9 @@ fn owned_kind(name: &str) -> Option<ElementKind> {
         "redefinition" => ElementKind::Redefinition,
         "ownedFeatureMembership" => ElementKind::FeatureMembership,
         "ownedImport" => ElementKind::Import,
+        // an annotation owns no annotating element in this model: what
+        // annotates owns the annotation, never the other way about
+        "ownedAnnotatingElement" => ElementKind::AnnotatingElement,
         _ => return None,
     };
     Some(kind)
@@ -1219,6 +1228,9 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
         // `import P::*;` is owned by the namespace it brings the names
         // into, which is the containment like any other
         "importOwningNamespace" => ElementKind::Namespace,
+        // `comment about A` reifies the annotation under the comment,
+        // so the annotating element is the one that owns it
+        "owningAnnotatingElement" => ElementKind::AnnotatingElement,
         _ => return None,
     };
     Some(kind)
