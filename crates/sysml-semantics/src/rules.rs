@@ -256,6 +256,15 @@ enum Val {
     Int(i64),
     Str(String),
     Elem(ElementId),
+    /// A membership the model keeps as containment rather than as an
+    /// element: the standard owns every member through one, and this
+    /// model owns it directly and keeps what the membership said on the
+    /// member itself. Put back together here, of the pair it relates,
+    /// the way an interchange writer puts it back together.
+    Membership {
+        owner: ElementId,
+        member: ElementId,
+    },
     Set(Vec<Val>),
 }
 
@@ -411,7 +420,57 @@ impl Scope<'_> {
                 Val::Set(out)
             }
             Val::Elem(elem) => self.property(*elem, name),
+            Val::Membership { owner, member } => self.membership_property(*owner, *member, name),
             other => unknown_from(other, &format!("`{name}` of it")),
+        }
+    }
+
+    /// The metaclass a value stands for, where it stands for one.
+    fn kind_of(&self, value: &Val) -> Option<ElementKind> {
+        match value {
+            Val::Elem(elem) => Some(self.ws.model().kind(*elem)),
+            Val::Membership { member, .. } => {
+                Some(sysml_model::membership_kind(self.ws.model(), *member))
+            }
+            _ => None,
+        }
+    }
+
+    /// One property of a membership the model keeps as containment.
+    ///
+    /// Only what the specification's own constraints navigate on one is
+    /// answered; anything else is said to be unknown rather than guessed
+    /// at, the way any property this model does not carry is.
+    fn membership_property(&mut self, owner: ElementId, member: ElementId, name: &str) -> Val {
+        match name {
+            // what it relates, from either side
+            "memberElement"
+            | "ownedMemberElement"
+            | "ownedMemberFeature"
+            | "ownedRelatedElement"
+            | "relatedElement" => Val::Elem(member),
+            "membershipOwningNamespace"
+            | "owningRelatedElement"
+            | "owningNamespace"
+            | "owner"
+            | "owningType" => Val::Elem(owner),
+            "memberName" => match self.ws.model().name(member) {
+                Some(named) => Val::Str(named.to_string()),
+                None => Val::Null,
+            },
+            // `public` unless the source wrote otherwise, which is what
+            // the model records on the member
+            "visibility" => Val::Str(
+                match self.ws.model().member_visibility(member) {
+                    Some(sysml_model::Vis::Private) => "private",
+                    Some(sysml_model::Vis::Protected) => "protected",
+                    _ => "public",
+                }
+                .to_string(),
+            ),
+            _ => Val::Unknown(format!(
+                "`{name}` of a membership, which this model keeps as the containment it stands for"
+            )),
         }
     }
 
@@ -423,11 +482,28 @@ impl Scope<'_> {
         // is an X, and an owning Y the owner where the owner is a Y.
         // Both are the containment the model does keep.
         if let Some(kind) = owned_kind(name) {
+            // A relationship that is not itself a feature -- a typing,
+            // a subsetting, an import -- is an owned relationship
+            // outright. Everything else is a *member*, owned through a
+            // membership the model keeps as the containment itself, so
+            // the membership is put back together here rather than
+            // being absent from an answer the standard says it belongs
+            // in. A connector is both a relationship and a feature, and
+            // it is the feature half that says how it is owned.
             let owned: Vec<Val> = model
                 .owned(elem)
                 .iter()
-                .filter(|&&child| model.kind(child).is_a(kind))
-                .map(|&child| Val::Elem(child))
+                .filter_map(|&child| {
+                    if is_bare_relationship(model.kind(child)) {
+                        return model.kind(child).is_a(kind).then_some(Val::Elem(child));
+                    }
+                    sysml_model::membership_kind(model, child)
+                        .is_a(kind)
+                        .then_some(Val::Membership {
+                            owner: elem,
+                            member: child,
+                        })
+                })
                 .collect();
             // Finding none of them is the ambiguous answer: the builder
             // reifies some of the relationships the abstract syntax has
@@ -442,18 +518,36 @@ impl Scope<'_> {
             }
             return Val::Set(owned);
         }
-        // `owningType` and its kin are not the containment this model
-        // keeps. A `snapshot` written inside a `first ... then` is
-        // nested under the succession here and owned by the enclosing
-        // type in the abstract syntax, and answering with the one where
-        // the rule means the other reports a violation of a model that
-        // is sound. Whoever makes the builder say which is which can
-        // take these off the list.
-        if owning_kind(name).is_some() || name == "owner" {
-            return Val::Unknown(format!(
-                "`{name}` is ownership in the abstract syntax, which is not the containment \
-                 this model builds"
-            ));
+        // An owning Y is the owner where the owner is a Y, and the
+        // membership an element is owned through is the one standing for
+        // that containment. A relationship is owned without one.
+        if let Some(kind) = owning_kind(name) {
+            let Some(owner) = model.owner(elem) else {
+                return Val::Null;
+            };
+            if kind.is_a(ElementKind::Relationship) {
+                if is_bare_relationship(model.kind(elem)) {
+                    return Val::Null;
+                }
+                let membership = Val::Membership {
+                    owner,
+                    member: elem,
+                };
+                return match self.kind_of(&membership) {
+                    Some(actual) if actual.is_a(kind) => membership,
+                    _ => Val::Null,
+                };
+            }
+            return match model.kind(owner).is_a(kind) {
+                true => Val::Elem(owner),
+                false => Val::Null,
+            };
+        }
+        if name == "owner" {
+            return match model.owner(elem) {
+                Some(owner) => Val::Elem(owner),
+                None => Val::Null,
+            };
         }
         match model.get(elem, name) {
             Some(Value::Bool(it)) => Val::Bool(*it),
@@ -658,9 +752,7 @@ impl Scope<'_> {
                 };
                 let kept: Vec<Val> = items
                     .into_iter()
-                    .filter(|item| {
-                        matches!(item, Val::Elem(id) if self.ws.model().kind(*id).is_a(kind))
-                    })
+                    .filter(|item| self.kind_of(item).is_some_and(|it| it.is_a(kind)))
                     .collect();
                 // Keeping none of them is the ambiguous answer where the
                 // model has no element of that kind anywhere: an
@@ -739,12 +831,11 @@ impl Scope<'_> {
     fn operation(&mut self, target: &Val, name: &str, args: &[Expr]) -> Val {
         match name {
             "oclIsKindOf" | "oclIsTypeOf" => {
-                let (Some(kind), Val::Elem(elem)) =
-                    (args.first().and_then(metaclass_named), target)
+                let (Some(kind), Some(actual)) =
+                    (args.first().and_then(metaclass_named), self.kind_of(target))
                 else {
                     return Val::Unknown(format!("`{name}` of a kind this does not know"));
                 };
-                let actual = self.ws.model().kind(*elem);
                 Val::Bool(if name == "oclIsKindOf" {
                     actual.is_a(kind)
                 } else {
@@ -870,6 +961,17 @@ fn equal(left: &Val, right: &Val) -> Val {
         (Val::Null, Val::Set(items)) | (Val::Set(items), Val::Null) => Val::Bool(items.is_empty()),
         _ => Val::Bool(left == right),
     }
+}
+
+/// Whether an element is owned as a relationship rather than as a
+/// member.
+///
+/// A typing, a subsetting or an import is a relationship and nothing
+/// else, and its owner owns it directly. A connector is a relationship
+/// too, but it is also a feature, and a feature of a type is owned
+/// through a membership like any other member.
+fn is_bare_relationship(kind: ElementKind) -> bool {
+    kind.is_a(ElementKind::Relationship) && !kind.is_a(ElementKind::Feature)
 }
 
 /// `ownedX` where every owned element that is an `X` is one.
@@ -1089,6 +1191,13 @@ mod tests {
             ws.judge("Sequence{1, 2}->exists(oclIsKindOf(Feature))", car),
             None
         );
+        // a metaclass is a question about something that stands for one,
+        // and a number stands for none -- so selecting by kind keeps it
+        // out rather than reading it as one
+        assert_eq!(
+            ws.judge("Set{1}->selectByKind(Package)->isEmpty()", car),
+            Some(true)
+        );
         // and `self` is not taken over by one, however deep: it still
         // means the element the constraint is being asked of
         assert_eq!(
@@ -1178,9 +1287,11 @@ mod tests {
 
         // a property of the abstract syntax this model does not build
         assert_eq!(ws.judge("operator = '.'", car), None);
-        // ownership, which is not the containment this model keeps
-        assert_eq!(ws.judge("owningType <> null", car), None);
-        assert_eq!(ws.judge("owner <> null", car), None);
+        // ownership is the containment this model keeps, so it answers:
+        // a definition written at the top of a file is owned by the root
+        // namespace, which is no type
+        assert_eq!(ws.judge("owner <> null", car), Some(true));
+        assert_eq!(ws.judge("owningType <> null", car), Some(false));
         // an operation nothing here implements
         assert_eq!(ws.judge("referencedFeatureTarget() <> null", car), None);
         assert_eq!(ws.judge("self->sortedBy(f | f)->size() = 0", car), None);
@@ -1303,10 +1414,110 @@ mod tests {
         );
     }
 
-    /// A control node written at the top of a file is a feature of
-    /// nothing, and the specification says a control node is composite.
-    /// It is the one constraint of the nine this model can answer that
-    /// a model written by hand can break.
+    /// The standard owns every member through a `Membership`; this
+    /// model owns it directly and keeps what the membership said on the
+    /// member itself. Put back together the two are the same thing --
+    /// which is what lets a constraint navigate `ownedMembership` at
+    /// all, and half of them do.
+    #[test]
+    fn a_membership_the_model_keeps_as_containment_answers_like_one() {
+        let (mut ws, car) = about(
+            "part def W;\npart def Car {\n\tprivate part wheel : W;\n}\n",
+            "Car",
+        );
+        let one = |what: &str| format!("ownedMembership->at(1).{what}");
+
+        // the member it relates and the namespace it is owned by
+        assert_eq!(ws.judge("ownedMembership->size() = 1", car), Some(true));
+        assert_eq!(
+            ws.judge(&one("memberElement.declaredName = 'wheel'"), car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge(&one("ownedMemberFeature.declaredName = 'wheel'"), car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge(&one("membershipOwningNamespace = self"), car),
+            Some(true)
+        );
+        // and what the source wrote of the membership itself, which the
+        // model keeps on the member
+        assert_eq!(ws.judge(&one("memberName = 'wheel'"), car), Some(true));
+        assert_eq!(
+            ws.judge(&one("visibility = VisibilityKind::private"), car),
+            Some(true)
+        );
+        // a feature of a type sits behind a `FeatureMembership`, so it
+        // is one of those the type owns and not merely a membership
+        assert_eq!(
+            ws.judge("ownedFeatureMembership->size() = 1", car),
+            Some(true)
+        );
+        // anything else about it is unknown rather than guessed at
+        assert_eq!(ws.judge(&one("isImplied"), car), None);
+
+        // Read from the member, the same membership stands for the same
+        // containment. A typing is a relationship and nothing else, so
+        // its owner owns it without one.
+        let (mut ws, wheel) = about(
+            "part def W;\npart def Car {\n\tprivate part wheel : W;\n}\n",
+            "wheel",
+        );
+        assert_eq!(
+            ws.judge("owningMembership.memberElement = self", wheel),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("owningFeatureMembership <> null", wheel),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("owningType.declaredName = 'Car'", wheel),
+            Some(true)
+        );
+        let typing = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().kind(id) == ElementKind::FeatureTyping)
+            .expect("the typing is reified");
+        assert_eq!(ws.judge("owningMembership = null", typing), Some(true));
+        // a package member is owned plainly, so it is behind no feature
+        // membership at all
+        let (mut ws, package) = about("package P {\n\tpart def Q;\n}\n", "Q");
+        assert_eq!(
+            ws.judge("owningFeatureMembership = null", package),
+            Some(true)
+        );
+        // and the root namespace is owned by nothing
+        let root = ws.root();
+        assert_eq!(ws.judge("owningMembership = null", root), Some(true));
+        assert_eq!(ws.judge("owner = null", root), Some(true));
+
+        // The visibility is the member's own and `public` where the
+        // source wrote none, and a member with no name gives the
+        // membership none either.
+        let (mut ws, hub) = about(
+            "part def W;\npart def Hub {\n\tprotected part guard : W;\n\
+             \tpart plain : W;\n\tpart : W;\n}\n",
+            "Hub",
+        );
+        let at = |n: usize, what: &str| format!("ownedMembership->at({n}).{what}");
+        assert_eq!(
+            ws.judge(&at(1, "visibility = VisibilityKind::protected"), hub),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge(&at(2, "visibility = VisibilityKind::public"), hub),
+            Some(true)
+        );
+        assert_eq!(ws.judge(&at(3, "memberName = null"), hub), Some(true));
+    }
+
+    /// A control node written at the top of a file is wrong in two ways
+    /// the specification names: a control node is composite, and what
+    /// owns one is an action. Both are asked of every element, and both
+    /// are reported against the node itself.
     #[test]
     fn a_constraint_the_model_breaks_is_reported_against_the_element() {
         let mut ws = Workspace::new();
@@ -1314,15 +1525,30 @@ mod tests {
         ws.resolve_all();
         let checked = ws.check_rules(&[file]);
 
-        assert_eq!(checked.violations.len(), 1, "{checked:?}");
-        let violation = &checked.violations[0];
-        assert_eq!(violation.rule, "validateControlNodeIsComposite");
-        assert!(violation.says.contains("composite"), "{violation:?}");
-        assert_eq!(ws.qualified_name_of(violation.element), "j");
-        // and the constraint is counted as one that was asked, since a
-        // rule that answers of one element and not another still ran
+        let broken: Vec<&str> = checked.violations.iter().map(|it| it.rule).collect();
+        assert_eq!(
+            broken,
+            [
+                "validateControlNodeOwningType",
+                "validateControlNodeIsComposite"
+            ],
+            "{checked:?}"
+        );
         assert!(
-            checked.held.contains(&"validateControlNodeIsComposite"),
+            checked
+                .violations
+                .iter()
+                .all(|violation| { ws.qualified_name_of(violation.element) == "j" }),
+            "{checked:?}"
+        );
+        assert!(
+            checked.violations[1].says.contains("composite"),
+            "{checked:?}"
+        );
+        // and each is counted as one that was asked, since a rule that
+        // answers of one element and not another still ran
+        assert!(
+            broken.iter().all(|rule| checked.held.contains(rule)),
             "{checked:?}"
         );
     }
