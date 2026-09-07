@@ -594,14 +594,15 @@ impl Scope<'_> {
                         })
                 })
                 .collect();
-            // Finding none of them is the ambiguous answer where the
-            // answer is relationships: the builder reifies some of the
-            // ones the abstract syntax has and not others, so an empty
-            // answer is as likely to be one it does not build as one the
-            // element does not have. A membership is not like that --
-            // one stands for each member the element owns, so owning no
-            // member of that kind is what an empty answer means.
-            if owned.is_empty() && !kind.is_a(ElementKind::Membership) {
+            // Finding none of them is the ambiguous answer only where
+            // the answer is relationships at large: the builder reifies
+            // some of the ones the abstract syntax has and not others,
+            // so an empty answer there is as likely to be one it does
+            // not build as one the element does not have. Asked for a
+            // kind of relationship it does build -- a membership, an
+            // import, a specialization -- owning none of them is what
+            // an empty answer means.
+            if owned.is_empty() && kind == ElementKind::Relationship {
                 return Val::Unknown(format!(
                     "`{name}` is empty here, and this model does not build every {} \
                      the abstract syntax has",
@@ -1591,12 +1592,14 @@ mod tests {
         // answered outright. `ownedMember` is read off the memberships,
         // and a membership stands for each member the containment
         // holds -- so a definition that owns nothing owns no member,
-        // and there is nothing an empty answer could be hiding. An
-        // owned specialization is not like that: the builder reifies
-        // some of them and not others.
+        // and there is nothing an empty answer could be hiding. The
+        // same goes for each kind of relationship the builder does
+        // write. Relationships at large are what it writes only some
+        // of, so there an empty answer says nothing either way.
         let (mut ws, car) = about("part def Car;\n", "Car");
         assert_eq!(ws.judge("ownedMember->isEmpty()", car), Some(true));
-        assert_eq!(ws.judge("ownedSpecialization->isEmpty()", car), None);
+        assert_eq!(ws.judge("ownedSpecialization->isEmpty()", car), Some(true));
+        assert_eq!(ws.judge("ownedRelationship->isEmpty()", car), None);
     }
 
     /// A `selectByKind` that keeps nothing says one thing where the
