@@ -515,83 +515,6 @@ fn related_to(model: &Model, id: ElementId) -> Vec<ElementId> {
         .collect()
 }
 
-/// The membership a bridged element is owned through.
-///
-/// The standard's abstract syntax picks a metaclass by what the member is
-/// to its owner: a declared role names it outright, a connector end gets an
-/// `EndFeatureMembership`, a directed feature of a behavior is a parameter,
-/// a trigger/guard/effect of a transition is a transition feature, any
-/// other feature of a type sits behind a `FeatureMembership`, and anything
-/// else behind a plain `OwningMembership`.
-fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
-    if let Some(role) = model.member_role(owned) {
-        // no catch-all: a role added to the model is a compile error
-        // here until it says which membership the standard names for it
-        return match role {
-            Role::Subject => ElementKind::SubjectMembership,
-            Role::Actor => ElementKind::ActorMembership,
-            Role::Stakeholder => ElementKind::StakeholderMembership,
-            Role::Objective => ElementKind::ObjectiveMembership,
-            Role::Variant => ElementKind::VariantMembership,
-            Role::Return => ElementKind::ReturnParameterMembership,
-            Role::Result => ElementKind::ResultExpressionMembership,
-            Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
-            Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
-            Role::Frame => ElementKind::FramedConcernMembership,
-            Role::Verify => ElementKind::RequirementVerificationMembership,
-            Role::Render => ElementKind::ViewRenderingMembership,
-        };
-    }
-    let owner_kind = match model.owner(owned) {
-        Some(owner) => model.kind(owner),
-        None => return ElementKind::OwningMembership,
-    };
-    if !model.kind(owned).is_a(ElementKind::Feature) || !owner_kind.is_a(ElementKind::Type) {
-        return ElementKind::OwningMembership;
-    }
-    if model.get(owned, "isEnd") == Some(&Value::Bool(true)) {
-        return ElementKind::EndFeatureMembership;
-    }
-    if transition_role(model, owned).is_some() {
-        return ElementKind::TransitionFeatureMembership;
-    }
-    let behavioral = [
-        ElementKind::Behavior,
-        ElementKind::Step,
-        ElementKind::Function,
-        ElementKind::Expression,
-    ];
-    if model.get(owned, "direction").is_some()
-        && behavioral.iter().any(|&kind| owner_kind.is_a(kind))
-    {
-        return ElementKind::ParameterMembership;
-    }
-    ElementKind::FeatureMembership
-}
-
-/// What a transition feature is to its transition -- the `kind` its
-/// membership must state -- read off the references the transition stores.
-fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> {
-    let transition = model.owner(owned)?;
-    if model.kind(transition) != ElementKind::TransitionUsage {
-        return None;
-    }
-    let holds = |name: &str| match model.get(transition, name) {
-        Some(Value::Ref(target)) => *target == owned,
-        Some(Value::RefList(targets)) => targets.contains(&owned),
-        _ => false,
-    };
-    if holds("triggerAction") {
-        Some("trigger")
-    } else if holds("guardExpression") {
-        Some("guard")
-    } else if holds("effectAction") {
-        Some("effect")
-    } else {
-        None
-    }
-}
-
 /// Every structural feature a metaclass carries, its own and the ones it
 /// inherits, first declaration of a name winning.
 fn all_features(kind: ElementKind) -> Vec<&'static sysml_model::FeatureMeta> {
@@ -917,7 +840,7 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             "owningFeatureMembership" if kind.is_a(ElementKind::Feature) => {
                 let of_a_type = bridged(model, id)
                     && model.owner(id).is_some()
-                    && membership_kind(model, id).is_a(ElementKind::FeatureMembership);
+                    && sysml_model::membership_kind(model, id).is_a(ElementKind::FeatureMembership);
                 Some(if of_a_type {
                     membership(id)
                 } else {
@@ -1114,7 +1037,7 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
         if !bridged(model, id) {
             continue;
         }
-        let kind = membership_kind(model, id);
+        let kind = sysml_model::membership_kind(model, id);
         let uuid = bridge_uuids[&id].to_string();
         let mut object = Map::new();
         object.insert("@type".into(), kind.name().into());
@@ -1178,7 +1101,7 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                 // and so do a state's subactions and a requirement's
                 // constraints, in their own vocabularies
                 "kind" if kind == ElementKind::TransitionFeatureMembership => {
-                    transition_role(model, id).map_or(Json::Null, Json::from)
+                    sysml_model::transition_role(model, id).map_or(Json::Null, Json::from)
                 }
                 // the standard spells a state subaction's kind with the
                 // keyword that declared it
@@ -2067,22 +1990,10 @@ mod tests {
     }
 
     #[test]
-    fn a_singly_referenced_transition_feature_is_recognized_too() {
-        // an imported model may hold `guardExpression` as a single
-        // reference rather than a list; both spellings name the guard
-        let mut model = Model::new();
-        let transition = model.create(ElementKind::TransitionUsage);
-        let guard = model.create(ElementKind::Expression);
-        model.add_owned(transition, guard);
-        model.set(transition, "guardExpression", Value::Ref(guard));
-        assert_eq!(transition_role(&model, guard), Some("guard"));
-    }
-
-    #[test]
     fn a_feature_outside_a_transition_has_no_transition_role() {
         let (_, model) = resolved("part def P {\n\tattribute a;\n}\n");
         let attribute = model.ids().find(|&id| model.name(id) == Some("a")).unwrap();
-        assert_eq!(transition_role(&model, attribute), None);
+        assert_eq!(sysml_model::transition_role(&model, attribute), None);
     }
 
     #[test]
@@ -2443,26 +2354,6 @@ mod tests {
         assert!(membership["ownedConcern"].is_object());
         let (rebuilt, _) = from_json(&json).unwrap();
         assert_eq!(to_json(&rebuilt), json);
-    }
-
-    /// There is no longer a role this crate does not know: `Role` is an
-    /// enum and the match over it has no catch-all, so one added to the
-    /// model does not fall through to plain ownership -- it stops the
-    /// build until this says which membership the standard names for it.
-    /// What is left to check is the element that has no role at all.
-    #[test]
-    fn a_member_with_no_role_is_owned_plainly() {
-        let mut model = Model::new();
-        let package = model.create(ElementKind::Package);
-        let part = model.create(ElementKind::PartUsage);
-        model.add_owned(package, part);
-        assert_eq!(membership_kind(&model, part), ElementKind::OwningMembership);
-        // and an element with no owner at all needs no membership either
-        let loose = model.create(ElementKind::PartUsage);
-        assert_eq!(
-            membership_kind(&model, loose),
-            ElementKind::OwningMembership
-        );
     }
 
     #[test]

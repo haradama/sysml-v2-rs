@@ -90,6 +90,100 @@ pub enum Role {
     Render,
 }
 
+/// The membership an owned element is owned through.
+///
+/// The standard's abstract syntax picks a metaclass by what the member is
+/// to its owner: a declared role names it outright, a connector end gets an
+/// `EndFeatureMembership`, a directed feature of a behavior is a parameter,
+/// a trigger/guard/effect of a transition is a transition feature, any
+/// other feature of a type sits behind a `FeatureMembership`, and anything
+/// else behind a plain `OwningMembership`.
+///
+/// The model holds ownership directly and keeps the membership's own
+/// facts on the member ([`MemberSide`]), so whatever needs the standard's
+/// view of it -- an interchange writer, the constraint checker -- puts
+/// the membership back together from here rather than each its own way.
+pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
+    if let Some(role) = model.member_role(owned) {
+        // no catch-all: a role added to the model is a compile error
+        // here until it says which membership the standard names for it
+        return match role {
+            Role::Subject => ElementKind::SubjectMembership,
+            Role::Actor => ElementKind::ActorMembership,
+            Role::Stakeholder => ElementKind::StakeholderMembership,
+            Role::Objective => ElementKind::ObjectiveMembership,
+            Role::Variant => ElementKind::VariantMembership,
+            Role::Return => ElementKind::ReturnParameterMembership,
+            Role::Result => ElementKind::ResultExpressionMembership,
+            Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
+            Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
+            Role::Frame => ElementKind::FramedConcernMembership,
+            Role::Verify => ElementKind::RequirementVerificationMembership,
+            Role::Render => ElementKind::ViewRenderingMembership,
+        };
+    }
+    let owner_kind = match model.owner(owned) {
+        Some(owner) => model.kind(owner),
+        None => return ElementKind::OwningMembership,
+    };
+    // Not everything a type owns is a feature of it. KerML writes the
+    // `[0..*]` of a type as `OwnedMultiplicity : OwningMembership` and a
+    // `#Name` prefix as `PrefixMetadataMember : OwningMembership`, and a
+    // metadata usage annotates what it is written on rather than being
+    // part of it either way. That is what
+    // `validateDefinitionVariationOwnedFeatureMembership` -- "a
+    // variation owns no feature membership" -- says of `#Security enum
+    // def C` and of `variation part x[1]`.
+    if !model.kind(owned).is_a(ElementKind::Feature)
+        || model.kind(owned).is_a(ElementKind::Multiplicity)
+        || model.kind(owned).is_a(ElementKind::MetadataUsage)
+        || !owner_kind.is_a(ElementKind::Type)
+    {
+        return ElementKind::OwningMembership;
+    }
+    if model.get(owned, "isEnd") == Some(&Value::Bool(true)) {
+        return ElementKind::EndFeatureMembership;
+    }
+    if transition_role(model, owned).is_some() {
+        return ElementKind::TransitionFeatureMembership;
+    }
+    let behavioral = [
+        ElementKind::Behavior,
+        ElementKind::Step,
+        ElementKind::Function,
+        ElementKind::Expression,
+    ];
+    if model.get(owned, "direction").is_some()
+        && behavioral.iter().any(|&kind| owner_kind.is_a(kind))
+    {
+        return ElementKind::ParameterMembership;
+    }
+    ElementKind::FeatureMembership
+}
+
+/// What a transition feature is to its transition -- the `kind` its
+/// membership must state -- read off the references the transition stores.
+pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> {
+    let transition = model.owner(owned)?;
+    if model.kind(transition) != ElementKind::TransitionUsage {
+        return None;
+    }
+    let holds = |name: &str| match model.get(transition, name) {
+        Some(Value::Ref(target)) => *target == owned,
+        Some(Value::RefList(targets)) => targets.contains(&owned),
+        _ => false,
+    };
+    if holds("triggerAction") {
+        Some("trigger")
+    } else if holds("guardExpression") {
+        Some("guard")
+    } else if holds("effectAction") {
+        Some("effect")
+    } else {
+        None
+    }
+}
+
 pub use build::BUILT_FLAGS;
 pub use build::{build_into, build_model, Built};
 pub use generated::{
@@ -653,5 +747,37 @@ mod tests {
         let mut model = Model::new();
         let part = model.create(ElementKind::PartDefinition);
         model.set(part, "isAbstract", Value::String("yes".to_string()));
+    }
+
+    /// There is no longer a role this does not know: `Role` is an
+    /// enum and the match over it has no catch-all, so one added to the
+    /// model does not fall through to plain ownership -- it stops the
+    /// build until this says which membership the standard names for it.
+    /// What is left to check is the element that has no role at all.
+    #[test]
+    fn a_member_with_no_role_is_owned_plainly() {
+        let mut model = Model::new();
+        let package = model.create(ElementKind::Package);
+        let part = model.create(ElementKind::PartUsage);
+        model.add_owned(package, part);
+        assert_eq!(membership_kind(&model, part), ElementKind::OwningMembership);
+        // and an element with no owner at all needs no membership either
+        let loose = model.create(ElementKind::PartUsage);
+        assert_eq!(
+            membership_kind(&model, loose),
+            ElementKind::OwningMembership
+        );
+    }
+
+    #[test]
+    fn a_singly_referenced_transition_feature_is_recognized_too() {
+        // an imported model may hold `guardExpression` as a single
+        // reference rather than a list; both spellings name the guard
+        let mut model = Model::new();
+        let transition = model.create(ElementKind::TransitionUsage);
+        let guard = model.create(ElementKind::Expression);
+        model.add_owned(transition, guard);
+        model.set(transition, "guardExpression", Value::Ref(guard));
+        assert_eq!(transition_role(&model, guard), Some("guard"));
     }
 }
