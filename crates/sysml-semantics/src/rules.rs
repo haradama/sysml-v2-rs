@@ -944,12 +944,20 @@ impl Scope<'_> {
                 Val::Set(kept)
             }
             "closure" => {
-                // OCL's transitive closure: the body read of each
+                // The transitive closure: the body read of each
                 // element, then of everything that comes back, until
-                // nothing new turns up. What it started from is in the
-                // answer only where the walk reaches it again, and the
-                // ones already found are what stops it going round.
-                let mut found: Vec<Val> = Vec::new();
+                // nothing new turns up, with the ones already found
+                // what stops it going round.
+                //
+                // What it started from is in the answer too.
+                // `allRedefinedFeatures()` is written
+                // `ownedRedefinition.redefinedFeature->
+                // closure(ownedRedefinition.redefinedFeature)`, and read
+                // without them it says nothing a feature redefines
+                // directly -- which is all that nearly every feature
+                // redefines, and the operation is then a no-op that
+                // takes `removeRedefinedFeatures` down with it.
+                let mut found: Vec<Val> = items.clone();
                 let mut queue = items;
                 while let Some(item) = queue.pop() {
                     let value = self.over(&item, args, lambda);
@@ -1486,14 +1494,15 @@ mod tests {
             None
         );
         // the transitive closure of a body, which stops when nothing
-        // new turns up rather than going round for ever
+        // new turns up rather than going round for ever, and answers
+        // with what it started from as well
         assert_eq!(
-            ws.judge("Set{1}->closure(n | Set{})->isEmpty()", car),
+            ws.judge("Set{1}->closure(n | Set{})->size() = 1", car),
             Some(true)
         );
         assert_eq!(
             ws.judge(
-                "Set{1}->closure(n | if n = 1 then Set{2} else Set{} endif)->size() = 1",
+                "Set{1}->closure(n | if n = 1 then Set{2} else Set{} endif)->size() = 2",
                 car
             ),
             Some(true)
@@ -1766,6 +1775,29 @@ mod tests {
             ws.judge("Set{1, 1, 2}->asSequence()->size() = 3", car),
             Some(true)
         );
+    }
+
+    /// A transitive closure answers with what it started from as well.
+    ///
+    /// `Feature::allRedefinedFeatures()` is written
+    /// `ownedRedefinition.redefinedFeature->
+    /// closure(ownedRedefinition.redefinedFeature)->asOrderedSet()->
+    /// prepend(self)`. Read without the source it says only `self`,
+    /// since nearly every feature redefines directly and nothing
+    /// further -- and `removeRedefinedFeatures`, which is how a type
+    /// stops inheriting what it has redefined, goes down with it.
+    #[test]
+    fn a_closure_answers_with_what_it_started_from() {
+        const CHAIN: &str = "part def Car {\n\tpart u;\n\tpart v :>> u;\n\tpart w :>> v;\n}\n";
+        const WALK: &str =
+            "ownedRedefinition.redefinedFeature->closure(ownedRedefinition.redefinedFeature)";
+        // `w` redefines `v`, which redefines `u`: the walk answers with
+        // both, the one it started from included
+        let (mut ws, w) = about(CHAIN, "w");
+        assert_eq!(ws.judge(&format!("{WALK}->size() = 2"), w), Some(true));
+        // `u` redefines nothing, so the walk answers with nothing
+        let (mut ws, u) = about(CHAIN, "u");
+        assert_eq!(ws.judge(&format!("{WALK}->isEmpty()"), u), Some(true));
     }
 
     /// A flag the builder reads off the source for every metaclass that
