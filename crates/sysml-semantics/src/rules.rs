@@ -93,6 +93,31 @@ struct Defined {
     body: Expr,
 }
 
+/// Constraints whose OCL parses and says something other than what the
+/// constraint says in words.
+///
+/// `Specialization::specific` is the more specific of the two types a
+/// specialization relates -- the one doing the specializing, which is
+/// the element the constraint is being asked of. So
+/// `ownedSpecialization.specific->exists(isVariation)` asks whether a
+/// variation is a variation, which it is, and the rule reports every
+/// well-formed variation in the corpus. What it says in words -- "a
+/// variation may not specialize any variation" -- is about `general`.
+///
+/// Running one of these would report a violation of a model that is
+/// sound, so what they are is said instead. The two the OCL subset
+/// cannot even parse are pinned in `ocl.rs` alongside.
+const MISWRITTEN: [(&str, &str); 2] = [
+    (
+        "validateDefinitionVariationSpecialization",
+        "the specification's own OCL reads `specific` where the constraint says `general`",
+    ),
+    (
+        "validateUsageVariationSpecialization",
+        "the specification's own OCL reads `specific` where the constraint says `general`",
+    ),
+];
+
 /// The property a derivation is about, read off its name where the body
 /// does not say: `derive` then the metaclass then the property.
 fn named_after(rule: &sysml_model::Rule) -> String {
@@ -153,6 +178,10 @@ impl Workspace {
     pub fn check_rules(&mut self, files: &[usize]) -> Checked {
         let mut parsed: Vec<(&sysml_model::Rule, Option<Expr>, Option<String>)> = Vec::new();
         for rule in sysml_model::RULES {
+            if let Some(defect) = MISWRITTEN.iter().find(|(name, _)| *name == rule.name) {
+                parsed.push((rule, None, Some(defect.1.to_string())));
+                continue;
+            }
             match ocl::parse(rule.ocl) {
                 Ok(expr) => parsed.push((rule, Some(expr), None)),
                 Err(why) => parsed.push((rule, None, Some(why))),
@@ -573,7 +602,15 @@ impl Scope<'_> {
             let visibility = model.member_visibility(elem).unwrap_or(unwritten);
             return Val::Str(visibility.keyword().to_string());
         }
-        match model.get(elem, name) {
+        // A property that redefines another is the one a model holds:
+        // `Subsetting::subsettedFeature` redefines
+        // `Specialization::general`, and a constraint written of the
+        // general one is asking about the same thing under the name the
+        // metaclass it is being asked of gives it.
+        let held = model.get(elem, name).or_else(|| {
+            redefining(model.kind(elem), name).and_then(|under| model.get(elem, under))
+        });
+        match held {
             Some(Value::Bool(it)) => Val::Bool(*it),
             Some(Value::String(it)) => Val::Str(it.clone()),
             Some(Value::EnumLit(it)) => Val::Str(it.to_string()),
@@ -1007,6 +1044,30 @@ fn equal(left: &Val, right: &Val) -> Val {
         (Val::Null, Val::Set(items)) | (Val::Set(items), Val::Null) => Val::Bool(items.is_empty()),
         _ => Val::Bool(left == right),
     }
+}
+
+/// The property of `kind` that redefines `name`, where one does.
+///
+/// A model holds the redefining name -- a `Subclassification` says
+/// `superclassifier`, not `general` -- so a constraint written of the
+/// property it redefines has to be told where to look. Redefinition
+/// chains, so the walk keeps going until it runs out.
+fn redefining(kind: ElementKind, name: &str) -> Option<&'static str> {
+    let of_kind = || {
+        std::iter::once(kind)
+            .chain(kind.ancestors().iter().copied())
+            .flat_map(|it| it.own_features())
+    };
+    let mut found = None;
+    let mut wanted = name;
+    // Redefinition chains -- `referencedFeature` redefines
+    // `subsettedFeature`, which redefines `general` -- so the walk keeps
+    // going, and the deepest name is the one the model holds.
+    while let Some(next) = of_kind().find(|meta| meta.redefines == Some(wanted)) {
+        wanted = next.name;
+        found = Some(next.name);
+    }
+    found
 }
 
 /// Whether an element is owned as a relationship rather than as a
@@ -1603,6 +1664,37 @@ mod tests {
             ws.judge("visibility = VisibilityKind::private", import),
             Some(true)
         );
+    }
+
+    /// A model holds the redefining name -- a `Subclassification` says
+    /// `superclassifier`, not `general` -- and a constraint may be
+    /// written of the property it redefines. They are the same thing
+    /// under two names, and half the constraints about specialization
+    /// ask under the older one.
+    #[test]
+    fn a_property_that_redefines_another_answers_under_both_names() {
+        let (mut ws, _) = about("part def A;\npart def B :> A;\n", "B");
+        let model = ws.model();
+        let subclassification = model
+            .ids()
+            .find(|&id| model.kind(id) == ElementKind::Subclassification)
+            .expect("the specialization is reified");
+        // the name the model holds, and the one it redefines
+        assert_eq!(
+            ws.judge("superclassifier.declaredName = 'A'", subclassification),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("general.declaredName = 'A'", subclassification),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("specific.declaredName = 'B'", subclassification),
+            Some(true)
+        );
+        // and one the metaclass does not have under either name is
+        // still unknown rather than guessed at
+        assert_eq!(ws.judge("isImplied", subclassification), None);
     }
 
     /// A control node written at the top of a file is wrong in two ways

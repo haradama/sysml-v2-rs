@@ -61,6 +61,7 @@ fn generates_a_minimal_metamodel() {
                <upperValue xmi:id="Sub-items-upper" xmi:type="uml:LiteralUnlimitedNatural" value="-1"/>
              </ownedAttribute>
              <ownedAttribute xmi:id="Sub-kind" xmi:type="uml:Property" name="kind">
+               <redefinedProperty xmi:idref="Thing-flag"/>
                <type xmi:idref="Color"/>
              </ownedAttribute>
              <ownedAttribute xmi:id="Sub-count" xmi:type="uml:Property" name="count">
@@ -87,7 +88,13 @@ fn generates_a_minimal_metamodel() {
     assert!(code.contains("ElementKind::Sub => &[ElementKind::Thing]"));
     assert!(code.contains("FeatureType::Enumeration(EnumType::Color)"));
     assert!(code.contains(
-        r#"FeatureMeta { name: "items", ty: FeatureType::Class(ElementKind::Thing), many: true, derived: true, default: None }"#
+        r#"FeatureMeta { name: "items", ty: FeatureType::Class(ElementKind::Thing), many: true, derived: true, default: None, redefines: None }"#
+    ));
+    // `<redefinedProperty xmi:idref="Thing-flag"/>` -- a model holds the
+    // redefining name, so what it redefines is carried alongside for a
+    // reader asking under the older one
+    assert!(code.contains(
+        r#"FeatureMeta { name: "kind", ty: FeatureType::Enumeration(EnumType::Color), many: false, derived: false, default: None, redefines: Some("flag") }"#
     ));
     assert!(code.contains(r#"Color::Red => "red""#));
     // the metamodel's features as typed accessors, one per shape

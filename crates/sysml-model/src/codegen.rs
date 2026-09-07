@@ -25,6 +25,12 @@ struct Feature {
     ty: FeatureTy,
     many: bool,
     derived: bool,
+    /// The property this one redefines, where it redefines one.
+    ///
+    /// `Subsetting::subsettedFeature` redefines `Specialization::general`
+    /// and a model holds only the redefining name, so a constraint
+    /// written of the general one has to be told where to look.
+    redefines: Option<String>,
     /// What the metamodel says the property is where a model says
     /// nothing, for the boolean flags that carry one. `<defaultValue
     /// xmi:type="uml:LiteralBoolean"/>` with no value is `false`, which
@@ -352,12 +358,24 @@ fn parse_feature(attr: &roxmltree::Node, ids: &BTreeMap<String, String>) -> Feat
             .and_then(|d| d.attribute("value"))
             == Some("true")
     });
+    // `<redefinedProperty xmi:idref="Core-Types-Type-directedFeature"/>`
+    // -- the property is named by the last segment of the id it points
+    // at, which is the one spelling of it that does not need every class
+    // read first.
+    let redefines = attr
+        .children()
+        .find(|c| c.has_tag_name("redefinedProperty"))
+        .and_then(|c| c.attribute((XMI, "idref")))
+        .and_then(|id| id.rsplit('-').next())
+        .map(str::to_string)
+        .filter(|redefined| redefined != name);
     Feature {
         default,
         name: name.to_string(),
         ty,
         many,
         derived: attr.attribute("isDerived") == Some("true"),
+        redefines,
     }
 }
 
@@ -561,8 +579,8 @@ fn generate(
             writeln!(
                 w,
                 "                FeatureMeta {{ name: \"{}\", ty: {ty}, many: {}, \
-                 derived: {}, default: {:?} }},",
-                f.name, f.many, f.derived, f.default
+                 derived: {}, default: {:?}, redefines: {:?} }},",
+                f.name, f.many, f.derived, f.default, f.redefines
             )
             .unwrap();
         }
@@ -615,6 +633,14 @@ fn generate(
     writeln!(w, "    pub ty: FeatureType,").unwrap();
     writeln!(w, "    pub many: bool,").unwrap();
     writeln!(w, "    pub derived: bool,").unwrap();
+    writeln!(
+        w,
+        "    /// The property this one redefines, where it redefines one:\n\
+         \x20   /// a model holds the redefining name, and a constraint may be\n\
+         \x20   /// written of the one it redefines.\n\
+         \x20   pub redefines: Option<&'static str>,"
+    )
+    .unwrap();
     writeln!(w, "}}").unwrap();
     writeln!(w).unwrap();
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
