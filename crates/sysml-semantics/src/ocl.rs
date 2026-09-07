@@ -506,27 +506,18 @@ impl Parser {
 mod tests {
     use super::*;
 
-    /// Two constraints of the specification cannot be read, and both
-    /// are defects in the specification's own text rather than gaps in
-    /// this subset:
+    /// One constraint of the specification cannot be read, and it is a
+    /// defect in the specification's own text rather than a gap in this
+    /// subset: `validateFeatureEndNoDirection` is written `isEnd
+    /// implied direction = null`, and `implied` is not an OCL operator.
+    /// What was meant is plain, but reading it as `implies` would be
+    /// this parser deciding what the specification says.
     ///
-    /// - `validateFeatureEndNoDirection` is written `isEnd implied
-    ///   direction = null`, and `implied` is not an OCL operator. What
-    ///   was meant is plain, but reading it as `implies` would be this
-    ///   parser deciding what the specification says.
-    /// - `validateRedefinitionFeaturingTypes` carries two `--` comments,
-    ///   and the metamodel's XMI dropped the line ends that closed them,
-    ///   so what is left says nothing that can be parsed.
-    ///
-    /// They are named here so that a third one cannot appear unnoticed:
+    /// It is named here so that a second one cannot appear unnoticed:
     /// what this test holds is that the subset reads everything else.
     #[test]
-    fn every_constraint_the_specification_states_parses_but_its_own_two_defects() {
-        // in the order the metamodel states them
-        const DEFECTIVE: [&str; 2] = [
-            "validateRedefinitionFeaturingTypes",
-            "validateFeatureEndNoDirection",
-        ];
+    fn every_constraint_the_specification_states_parses_but_its_own_one_defect() {
+        const DEFECTIVE: [&str; 1] = ["validateFeatureEndNoDirection"];
         let mut refused = Vec::new();
         for rule in sysml_model::RULES {
             if let Err(why) = parse(rule.ocl) {

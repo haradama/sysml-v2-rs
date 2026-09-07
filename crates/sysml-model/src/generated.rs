@@ -5812,7 +5812,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateParameterMembershipOwningType",
         metaclass: ElementKind::ParameterMembership,
-        ocl: "owningType.oclIsKindOf(Behavior) or owningType.oclIsKindOf(Step) or owningType.owningMembership.oclIsKindOf(ReturnParameterMembership) and     owningType.owningNamespace.oclIsKindOf(ConstructorExpression)",
+        ocl: "owningType.oclIsKindOf(Behavior) or owningType.oclIsKindOf(Step) or\nowningType.owningMembership.oclIsKindOf(ReturnParameterMembership) and\n    owningType.owningNamespace.oclIsKindOf(ConstructorExpression)",
         says: "A ParameterMembership must be owned by a Behavior,Step, or the result parameter of a ConstructorExpression.",
     },
     Rule {
@@ -5848,13 +5848,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateInvocationExpressionParameterRedefinition",
         metaclass: ElementKind::InvocationExpression,
-        ocl: "let parameters : OrderedSet(Feature) = instantiatedType.input in input->forAll(inp |      inp.ownedRedefinition.redefinedFeature->         intersection(parameters)->size() = 1)",
+        ocl: "let parameters : OrderedSet(Feature) = instantiatedType.input in\ninput->forAll(inp | \n    inp.ownedRedefinition.redefinedFeature->\n        intersection(parameters)->size() = 1)",
         says: "Each input parameter of an InvocationExpression must redefine exactly one input parameter of the instantiatedType of the InvocationExpression.",
     },
     Rule {
         name: "validateInvocationExpressionNoDuplicateParameterRedefinition",
         metaclass: ElementKind::InvocationExpression,
-        ocl: "let features : OrderedSet(Feature) = instantiatedType.feature in input->forAll(inp1 | input->forAll(inp2 |     inp1 <> inp2 implies         inp1.ownedRedefinition.redefinedFeature->             intersection(inp2.ownedRedefinition.redefinedFeature)->             intersection(features)->isEmpty()))",
+        ocl: "let features : OrderedSet(Feature) = instantiatedType.feature in\ninput->forAll(inp1 | input->forAll(inp2 |\n    inp1 <> inp2 implies\n        inp1.ownedRedefinition.redefinedFeature->\n            intersection(inp2.ownedRedefinition.redefinedFeature)->\n            intersection(features)->isEmpty()))",
         says: "Two different ownedFeatures of an InvocationExpression must not redefine the same feature of the instantiatedType of the InvocationExpression.",
     },
     Rule {
@@ -5866,13 +5866,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateInvocationExpressionInstantiatedType",
         metaclass: ElementKind::InvocationExpression,
-        ocl: "instantiatedType.oclIsKindOf(Behavior) or instantiatedType.oclIsKindOf(Feature) and     instantiatedType.type->exists(oclIsKindOf(Behavior)) and     instantiatedType.type->size(1)",
+        ocl: "instantiatedType.oclIsKindOf(Behavior) or\ninstantiatedType.oclIsKindOf(Feature) and\n    instantiatedType.type->exists(oclIsKindOf(Behavior)) and\n    instantiatedType.type->size(1)",
         says: "The instantiatedType of an InvocationExpression must be either a Behavior or a Feature with a single type, which is a Behavior.",
     },
     Rule {
         name: "validateConstructorExpressionNoDuplicateFeatureRedefinition",
         metaclass: ElementKind::ConstructorExpression,
-        ocl: "let features : OrderedSet(Feature) = instantiatedType.feature->     select(visibility = VisibilityKind::public) in result.ownedFeature->forAll(f1 | result.ownedFeature->forAll(f2 |     f1 <> f2 implies         f1.ownedRedefinition.redefinedFeature->             intersection(f2.ownedRedefinition.redefinedFeature)->             intersection(features)->isEmpty()))",
+        ocl: "let features : OrderedSet(Feature) = instantiatedType.feature->\n    select(visibility = VisibilityKind::public) in\nresult.ownedFeature->forAll(f1 | result.ownedFeature->forAll(f2 |\n    f1 <> f2 implies\n        f1.ownedRedefinition.redefinedFeature->\n            intersection(f2.ownedRedefinition.redefinedFeature)->\n            intersection(features)->isEmpty()))",
         says: "Two different ownedFeatures of the result of a ConstructorExpression must not redefine the same feature of the instantiatedType of the ConstructorExpression.",
     },
     Rule {
@@ -5890,7 +5890,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateFeatureReferenceExpressionReferentIsFeature",
         metaclass: ElementKind::FeatureReferenceExpression,
-        ocl: "let membership : Membership =      ownedMembership->reject(m | m.oclIsKindOf(ParameterMembership)) in membership->notEmpty() and membership->at(1).memberElement.oclIsKindOf(Feature)",
+        ocl: "let membership : Membership = \n    ownedMembership->reject(m | m.oclIsKindOf(ParameterMembership)) in\nmembership->notEmpty() and\nmembership->at(1).memberElement.oclIsKindOf(Feature)",
         says: "The first ownedMembership of a FeatureReferenceExpression that is not a ParameterMembership must have a Feature as its memberElement.",
     },
     Rule {
@@ -5998,13 +5998,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateMultiplicityRangeBoundResultTypes",
         metaclass: ElementKind::MultiplicityRange,
-        ocl: "bound->forAll(b |     b.result.specializesFromLibrary('ScalarValues::Integer') and     let value : UnlimitedNatural = valueOf(b) in     value <> null implies value >= 0 )",
+        ocl: "bound->forAll(b |\n    b.result.specializesFromLibrary('ScalarValues::Integer') and\n    let value : UnlimitedNatural = valueOf(b) in\n    value <> null implies value >= 0\n)",
         says: "The results of the bound Expression(s) of a MultiplicityRange must be typed by ScalarValues::Intger from the Kernel Data Types Library. If a bound is model-level evaluable, then it must evaluate to a non-negative value.",
     },
     Rule {
         name: "validateMultiplicityRangeBounds",
         metaclass: ElementKind::MultiplicityRange,
-        ocl: "if lowerBound = null then     ownedMember->notEmpty() and     ownedMember->at(1) = upperBound else     ownedMember->size() > 1 and     ownedMember->at(1) = lowerBound and     ownedMember->at(2) = upperBound endif",
+        ocl: "if lowerBound = null then\n    ownedMember->notEmpty() and\n    ownedMember->at(1) = upperBound\nelse\n    ownedMember->size() > 1 and\n    ownedMember->at(1) = lowerBound and\n    ownedMember->at(2) = upperBound\nendif",
         says: "The lowerBound (if any) and upperBound Expressions must be the first ownedMembers of a MultiplicityRange.",
     },
     Rule {
@@ -6028,7 +6028,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateClassSpecialization",
         metaclass: ElementKind::Class,
-        ocl: "ownedSpecialization.general->     forAll(not oclIsKindOf(DataType)) and not oclIsKindOf(Association) implies     ownedSpecialization.general->         forAll(not oclIsKindOf(Association))",
+        ocl: "ownedSpecialization.general->\n    forAll(not oclIsKindOf(DataType)) and\nnot oclIsKindOf(Association) implies\n    ownedSpecialization.general->\n        forAll(not oclIsKindOf(Association))",
         says: "A Class must not specialize a DataType and it can only specialize an Association if it is also itself a kind of Association (such as an AssociationStructure or Interaction).",
     },
     Rule {
@@ -6046,13 +6046,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateMetadataFeatureBody",
         metaclass: ElementKind::MetadataFeature,
-        ocl: "ownedFeature->closure(ownedFeature)->forAll(f |     f.declaredName = null and f.declaredShortName = null and     f.valuation <> null implies f.valuation.value.isModelLevelEvaluable and     f.redefinition.redefinedFeature->size() = 1)",
+        ocl: "ownedFeature->closure(ownedFeature)->forAll(f |\n    f.declaredName = null and f.declaredShortName = null and\n    f.valuation <> null implies f.valuation.value.isModelLevelEvaluable and\n    f.redefinition.redefinedFeature->size() = 1)",
         says: "Each ownedFeature of a MetadataFeature must have no declared name, redefine a single Feature, either have no featureValue or a featureValue with a value Expression that is model-level evaluable, and only have ownedFeatures that also meet these restrictions.",
     },
     Rule {
         name: "validateMetadataFeatureAnnotatedElement",
         metaclass: ElementKind::MetadataFeature,
-        ocl: "let baseAnnotatedElementFeature : Feature =     resolveGlobal('Metaobjects::Metaobject::annotatedElement').memberElement.     oclAsType(Feature) in let annotatedElementFeatures : OrderedSet(Feature) = feature->     select(specializes(baseAnnotatedElementFeature))->     excluding(baseAnnotatedElementFeature) in annotatedElementFeatures->notEmpty() implies     let annotatedElementTypes : Set(Feature) =         annotatedElementFeatures.typing.type->asSet() in     let metaclasses : Set(Metaclass) =         annotatedElement.oclType().qualifiedName->collect(qn |              resolveGlobal(qn).memberElement.oclAsType(Metaclass)) in    metaclasses->forAll(m | annotatedElementTypes->exists(t | m.specializes(t)))",
+        ocl: "let baseAnnotatedElementFeature : Feature =\n    resolveGlobal('Metaobjects::Metaobject::annotatedElement').memberElement.\n    oclAsType(Feature) in\nlet annotatedElementFeatures : OrderedSet(Feature) = feature->\n    select(specializes(baseAnnotatedElementFeature))->\n    excluding(baseAnnotatedElementFeature) in\nannotatedElementFeatures->notEmpty() implies\n    let annotatedElementTypes : Set(Feature) =\n        annotatedElementFeatures.typing.type->asSet() in\n    let metaclasses : Set(Metaclass) =\n        annotatedElement.oclType().qualifiedName->collect(qn | \n            resolveGlobal(qn).memberElement.oclAsType(Metaclass)) in\n   metaclasses->forAll(m | annotatedElementTypes->exists(t | m.specializes(t)))",
         says: "The annotatedElements of a MetadataFeature must have an abstract syntax metaclass consistent with the annotatedElement declarations for the MetadataFeature.",
     },
     Rule {
@@ -6160,13 +6160,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateRedefinitionFeaturingTypes",
         metaclass: ElementKind::Redefinition,
-        ocl: "let anythingType: Type =     redefiningFeature.resolveGlobal('Base::Anything').modelElement.oclAsType(Type) in  -- Including \"Anything\" accounts for implicit featuringType of Features -- with no explicit featuringType. let redefiningFeaturingTypes: Set(Type) =     if redefiningFeature.isVariable then Set{redefiningFeature.owningType}     else redefiningFeature.featuringTypes->asSet()->including(anythingType)      endif in let redefinedFeaturingTypes: Set(Type) =     if redefinedFeature.isVariable then Set{redefinedFeature.owningType}     else redefinedFeature.featuringTypes->asSet()->including(anythingType)     endif in redefiningFeaturingTypes <> redefinedFeaturingType",
+        ocl: "let anythingType: Type =\n    redefiningFeature.resolveGlobal('Base::Anything').modelElement.oclAsType(Type) in \n-- Including \"Anything\" accounts for implicit featuringType of Features\n-- with no explicit featuringType.\nlet redefiningFeaturingTypes: Set(Type) =\n    if redefiningFeature.isVariable then Set{redefiningFeature.owningType}\n    else redefiningFeature.featuringTypes->asSet()->including(anythingType) \n    endif in\nlet redefinedFeaturingTypes: Set(Type) =\n    if redefinedFeature.isVariable then Set{redefinedFeature.owningType}\n    else redefinedFeature.featuringTypes->asSet()->including(anythingType)\n    endif in\nredefiningFeaturingTypes <> redefinedFeaturingType",
         says: "The redefiningFeature of a Redefinition must have at least one featuringType that is not also a featuringType of the redefinedFeature.",
     },
     Rule {
         name: "validateRedefinitionDirectionConformance",
         metaclass: ElementKind::Redefinition,
-        ocl: "let featuringTypes : Sequence(Type) =     if redefiningFeature.isVariable then Sequence{redefiningFeature.owningType}     else redefiningFeature.featuringType     endif in featuringTypes->forAll(t |     let direction : FeatureDirectionKind = t.directionOf(redefinedFeature) in     ((direction = FeatureDirectionKind::_'in' or        direction = FeatureDirectionKind::out) implies          redefiningFeature.direction = direction)     and      (direction = FeatureDirectionKind::inout implies         redefiningFeature.direction <> null))",
+        ocl: "let featuringTypes : Sequence(Type) =\n    if redefiningFeature.isVariable then Sequence{redefiningFeature.owningType}\n    else redefiningFeature.featuringType\n    endif in\nfeaturingTypes->forAll(t |\n    let direction : FeatureDirectionKind = t.directionOf(redefinedFeature) in\n    ((direction = FeatureDirectionKind::_'in' or \n      direction = FeatureDirectionKind::out) implies\n         redefiningFeature.direction = direction)\n    and \n    (direction = FeatureDirectionKind::inout implies\n        redefiningFeature.direction <> null))",
         says: "If the redefinedFeature of a Redefinition has a direction of in or out (relative to any featuringType of the redefiningFeature or the owningType, if the redefiningFeature has isVariable = true), then the redefiningFeature must have the same direction. If the redefinedFeature has a direction of inout, then the redefiningFeature must have a non-null direction. (Note: the direction of the redefinedFeature relative to a featuringType of the redefiningFeature is the direction it would have if it had been inherited and not redefined.)",
     },
     Rule {
@@ -6238,7 +6238,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateFeatureCrossFeatureSpecialization",
         metaclass: ElementKind::Feature,
-        ocl: "crossFeature <> null implies     ownedRedefinition.redefinedFeature.crossFeature->             forAll(f | f <> null implies crossFeature.specializes(f))",
+        ocl: "crossFeature <> null implies\n    ownedRedefinition.redefinedFeature.crossFeature->\n            forAll(f | f <> null implies crossFeature.specializes(f))",
         says: "If this Feature has a crossFeature, then, for any Feature that is redefined by this Feature, the crossFeature must specialize the crossFeature of the redefined end Feature, if this exists.",
     },
     Rule {
@@ -6286,13 +6286,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateCrossSubsettingCrossedFeature",
         metaclass: ElementKind::CrossSubsetting,
-        ocl: "crossingFeature.isEnd and crossingFeature.owningType <> null implies     let endFeatures: Sequence(Feature) = crossingFeature.owningType.endFeature in     let chainingFeatures: Sequence(Feature) = crossedFeature.chainingFeature in     chainingFeatures->size() = 2 and     endFeatures->size() = 2 implies          chainingFeatures->at(1) = endFeatures->excluding(crossingFeature)->at(1)",
+        ocl: "crossingFeature.isEnd and crossingFeature.owningType <> null implies\n    let endFeatures: Sequence(Feature) = crossingFeature.owningType.endFeature in\n    let chainingFeatures: Sequence(Feature) = crossedFeature.chainingFeature in\n    chainingFeatures->size() = 2 and\n    endFeatures->size() = 2 implies \n        chainingFeatures->at(1) = endFeatures->excluding(crossingFeature)->at(1)",
         says: "The crossedFeature of a CrossSubsetting must have exactly two chainingFeatures. If the crossingFeature of the CrossSubsetting is one of two end Features, then the first chainingFeature must be the other end Feature.",
     },
     Rule {
         name: "validateCrossSubsettingCrossingFeature",
         metaclass: ElementKind::CrossSubsetting,
-        ocl: "crossingFeature.isEnd and crossingFeature.owningType<>null and crossingFeature.owningType.endFeature ->size() > 1",
+        ocl: "crossingFeature.isEnd and\ncrossingFeature.owningType<>null and\ncrossingFeature.owningType.endFeature ->size() > 1",
         says: "The crossingFeature of a CrossSubsetting must be an end Feature that is owned by a Type with at least two end Features.",
     },
     Rule {
@@ -6358,7 +6358,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateActorMembershipOwningType",
         metaclass: ElementKind::ActorMembership,
-        ocl: "owningType.oclIsKindOf(RequirementUsage) or owningType.oclIsKindOf(RequirementDefinition) or owningType.oclIsKindOf(CaseDefinition) or owningType.oclIsKindOf(CaseUsage) ",
+        ocl: "owningType.oclIsKindOf(RequirementUsage) or\nowningType.oclIsKindOf(RequirementDefinition) or\nowningType.oclIsKindOf(CaseDefinition) or\nowningType.oclIsKindOf(CaseUsage)\n",
         says: "The owningType of an ActorMembership must be a RequirementDefinition, RequirementUsage, CaseDefinition, or CaseUsage.",
     },
     Rule {
@@ -6370,7 +6370,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateSubjectMembershipOwningType",
         metaclass: ElementKind::SubjectMembership,
-        ocl: "owningType.oclIsType(RequirementDefinition) or owningType.oclIsType(RequiremenCaseRequirementDefinition) or owningType.oclIsType(CaseDefinition) or owningType.oclIsType(CaseUsage) ",
+        ocl: "owningType.oclIsType(RequirementDefinition) or\nowningType.oclIsType(RequiremenCaseRequirementDefinition) or\nowningType.oclIsType(CaseDefinition) or\nowningType.oclIsType(CaseUsage)\n",
         says: "The owningType of a SubjectMembership must be a RequirementDefinition, RequirementUsage, CaseDefinition, or CaseUsage.",
     },
     Rule {
@@ -6460,7 +6460,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateTransitionFeatureMembershipGuardExpression",
         metaclass: ElementKind::TransitionFeatureMembership,
-        ocl: "kind = TransitionFeatureKind::guard implies     transitionFeature.oclIsKindOf(Expression) and     let guard : Expression = transitionFeature.oclIsKindOf(Expression) in     guard.result.specializesFromLibrary('ScalarValues::Boolean') and     guard.result.multiplicity <> null and     guard.result.multiplicity.hasBounds(1,1)",
+        ocl: "kind = TransitionFeatureKind::guard implies\n    transitionFeature.oclIsKindOf(Expression) and\n    let guard : Expression = transitionFeature.oclIsKindOf(Expression) in\n    guard.result.specializesFromLibrary('ScalarValues::Boolean') and\n    guard.result.multiplicity <> null and\n    guard.result.multiplicity.hasBounds(1,1)",
         says: "If the kind of a TransitionUsage is guard, then its transitionFeature must be a kind of Expression whose result is a Boolean value.",
     },
     Rule {
@@ -6520,7 +6520,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateTransitionUsageSuccession",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "let successions : Sequence(Successions) =      ownedMember->selectByKind(Succession) in successions->notEmpty() and successions->at(1).targetFeature.featureTarget->     forAll(oclIsKindOf(ActionUsage))",
+        ocl: "let successions : Sequence(Successions) = \n    ownedMember->selectByKind(Succession) in\nsuccessions->notEmpty() and\nsuccessions->at(1).targetFeature.featureTarget->\n    forAll(oclIsKindOf(ActionUsage))",
         says: "A TransitionUsage must have an ownedMember that is a Succession with an ActionUsage as the featureTarget of its targetFeature.",
     },
     Rule {
@@ -6574,19 +6574,19 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateTriggerInvocationExpressionAfterArgument",
         metaclass: ElementKind::TriggerInvocationExpression,
-        ocl: "kind = TriggerKind::after implies     argument->notEmpty() and     argument->at(1).result.specializesFromLibrary('Quantities::ScalarQuantityValue') and     let mRef : Element =          resolveGlobal('Quantities::TensorQuantityValue::mRef').ownedMemberElement in     argument->at(1).result.feature->         select(ownedRedefinition.redefinedFeature->            closure(ownedRedefinition.redefinedFeature)->            includes(mRef))->         exists(specializesFromLibrary('ISQBase::DurationUnit'))",
+        ocl: "kind = TriggerKind::after implies\n    argument->notEmpty() and\n    argument->at(1).result.specializesFromLibrary('Quantities::ScalarQuantityValue') and\n    let mRef : Element = \n        resolveGlobal('Quantities::TensorQuantityValue::mRef').ownedMemberElement in\n    argument->at(1).result.feature->\n        select(ownedRedefinition.redefinedFeature->\n           closure(ownedRedefinition.redefinedFeature)->\n           includes(mRef))->\n        exists(specializesFromLibrary('ISQBase::DurationUnit'))",
         says: "If a TriggerInvocationExpression has kind = after, then it must have an argument Expression with a result that conforms to the type Quantities::ScalarQuantityValue and a feature that directly or indirectly redefines Quantities::TensorQuantityValue::mRef and directly or indirectly specializes ISQBase::DurationUnit.",
     },
     Rule {
         name: "validateTriggerInvocationExpressionAtArgument",
         metaclass: ElementKind::TriggerInvocationExpression,
-        ocl: "kind = TriggerKind::at implies     argument->notEmpty() and     argument->at(1).result.specializesFromLibrary('Time::TimeInstantValue')",
+        ocl: "kind = TriggerKind::at implies\n    argument->notEmpty() and\n    argument->at(1).result.specializesFromLibrary('Time::TimeInstantValue')",
         says: "If a TriggerInvocationExpression has kind = at, then it must have an argument Expression with a result that conforms to the type Time::TimeInstantValue.",
     },
     Rule {
         name: "validateTriggerInvocationExpressionWhenArgument",
         metaclass: ElementKind::TriggerInvocationExpression,
-        ocl: "kind = TriggerKind::when implies     argument->notEmpty() and     argument->at(1).oclIsKindOf(FeatureReferenceExpression) and     let referent : Feature =          argument->at(1).oclAsType(FeatureReferenceExpression).referent in     referent.oclIsKindOf(Expression) and     referent.oclAsType(Expression).result.specializesFromLibrary('ScalarValues::Boolean')",
+        ocl: "kind = TriggerKind::when implies\n    argument->notEmpty() and\n    argument->at(1).oclIsKindOf(FeatureReferenceExpression) and\n    let referent : Feature = \n        argument->at(1).oclAsType(FeatureReferenceExpression).referent in\n    referent.oclIsKindOf(Expression) and\n    referent.oclAsType(Expression).result.specializesFromLibrary('ScalarValues::Boolean')",
         says: "If a TriggerInvocationExpression has kind = when, then it must have an argument that is a FeatureReferenceExpression whose referent is an Expression with a result that conforms to the type ScalarValues::Boolean.",
     },
     Rule {
@@ -6598,7 +6598,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateDecisionNodeOutgoingSuccessions",
         metaclass: ElementKind::DecisionNode,
-        ocl: "sourceConnector->selectAsKind(Succession)->     collect(connectorEnd->at(2))->     forAll(targetMult |         multiplicityHasBounds(targetMult, 0, 1))",
+        ocl: "sourceConnector->selectAsKind(Succession)->\n    collect(connectorEnd->at(2))->\n    forAll(targetMult |\n        multiplicityHasBounds(targetMult, 0, 1))",
         says: "All outgoing Successions from a DecisionNode must have a target multiplicity of 0..1.",
     },
     Rule {
@@ -6622,13 +6622,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateControlNodeIncomingSuccessions",
         metaclass: ElementKind::ControlNode,
-        ocl: "targetConnector->selectByKind(Succession)->     collect(connectorEnd->at(2).multiplicity)->     forAll(targetMult |          multiplicityHasBounds(targetMult, 1, 1))",
+        ocl: "targetConnector->selectByKind(Succession)->\n    collect(connectorEnd->at(2).multiplicity)->\n    forAll(targetMult | \n        multiplicityHasBounds(targetMult, 1, 1))",
         says: "All incoming Successions to a ControlNode must have a target multiplicity of 1..1.",
     },
     Rule {
         name: "validateControlNodeOutgoingSuccessions",
         metaclass: ElementKind::ControlNode,
-        ocl: "sourceConnector->selectByKind(Succession)->     collect(connectorEnd->at(1).multiplicity)->     forAll(sourceMult |          multiplicityHasBounds(sourceMult, 1, 1))",
+        ocl: "sourceConnector->selectByKind(Succession)->\n    collect(connectorEnd->at(1).multiplicity)->\n    forAll(sourceMult | \n        multiplicityHasBounds(sourceMult, 1, 1))",
         says: "All outgoing Successions from a ControlNode must have a source multiplicity of 1..1.",
     },
     Rule {
@@ -6646,7 +6646,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateMergeNodeIncomingSuccessions",
         metaclass: ElementKind::MergeNode,
-        ocl: "targetConnector->selectByKind(Succession)->     collect(connectorEnd->at(1))->     forAll(sourceMult |         multiplicityHasBounds(sourceMult, 0, 1))",
+        ocl: "targetConnector->selectByKind(Succession)->\n    collect(connectorEnd->at(1))->\n    forAll(sourceMult |\n        multiplicityHasBounds(sourceMult, 0, 1))",
         says: "All incoming Successions to a MergeNode must have a source multiplicity of 0..1.",
     },
     Rule {
@@ -6706,7 +6706,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateOccurrenceUsagePortionKind",
         metaclass: ElementKind::OccurrenceUsage,
-        ocl: "portionKind <> null implies     owningType <> null and     (owningType.oclIsKindOf(OccurrenceDefinition) or      owningType.oclIsKindOf(OccurrenceUsage))",
+        ocl: "portionKind <> null implies\n    owningType <> null and\n    (owningType.oclIsKindOf(OccurrenceDefinition) or\n     owningType.oclIsKindOf(OccurrenceUsage))",
         says: "If an OccurrenceUsage has a non-null portionKind, then its owningType must be an OccurrenceDefinition or an OccurrenceUsage.",
     },
     Rule {
@@ -6724,7 +6724,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateUsageVariationSpecialization",
         metaclass: ElementKind::Usage,
-        ocl: "isVariation implies     not ownedSpecialization.specific->exists(         oclIsKindOf(Definition) and         oclAsType(Definition).isVariation or         oclIsKindOf(Usage) and         oclAsType(Usage).isVariation)",
+        ocl: "isVariation implies\n    not ownedSpecialization.specific->exists(\n        oclIsKindOf(Definition) and\n        oclAsType(Definition).isVariation or\n        oclIsKindOf(Usage) and\n        oclAsType(Usage).isVariation)",
         says: "A variation Usage may not specialize any variation Definition or Usage.",
     },
     Rule {
@@ -6742,13 +6742,13 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateVariantMembershipOwningNamespace",
         metaclass: ElementKind::VariantMembership,
-        ocl: "membershipOwningNamespace.oclIsKindOf(Definition) and     membershipOwningNamespace.oclAsType(Definition).isVariation or membershipOwningNamespace.oclIsKindOf(Usage) and     membershipOwningNamespace.oclAsType(Usage).isVariation ",
+        ocl: "membershipOwningNamespace.oclIsKindOf(Definition) and\n    membershipOwningNamespace.oclAsType(Definition).isVariation or\nmembershipOwningNamespace.oclIsKindOf(Usage) and\n    membershipOwningNamespace.oclAsType(Usage).isVariation\n",
         says: "The membershipOwningNamespace of a VariantMembership must be a variation-point Definition or Usage.",
     },
     Rule {
         name: "validateDefinitionVariationSpecialization",
         metaclass: ElementKind::Definition,
-        ocl: "isVariation implies     not ownedSpecialization.specific->exists(         oclIsKindOf(Definition) and         oclAsType(Definition).isVariation)",
+        ocl: "isVariation implies\n    not ownedSpecialization.specific->exists(\n        oclIsKindOf(Definition) and\n        oclAsType(Definition).isVariation)",
         says: "A variation Definition may not specialize any other variation Definition.",
     },
     Rule {
@@ -6808,7 +6808,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validatePortDefinitionConjugatedPortDefinition",
         metaclass: ElementKind::PortDefinition,
-        ocl: "not oclIsKindOf(ConjugatedPortDefinition) implies     ownedMember->         selectByKind(ConjugatedPortDefinition)->         size() = 1",
+        ocl: "not oclIsKindOf(ConjugatedPortDefinition) implies\n    ownedMember->\n        selectByKind(ConjugatedPortDefinition)->\n        size() = 1",
         says: "Unless it is a ConjugatedPortDefinition, a PortDefinition must have exactly one ownedMember that is a ConjugatedPortDefinition.",
     },
     Rule {
@@ -6868,7 +6868,7 @@ pub const RULES: &[Rule] = &[
     Rule {
         name: "validateRequirementVerificationMembershipOwningType",
         metaclass: ElementKind::RequirementVerificationMembership,
-        ocl: "owningType.oclIsKindOf(RequirementUsage) and owningType.owningFeatureMembership <> null and owningType.owningFeatureMembership.oclIsKindOf(ObjectiveMembership)",
+        ocl: "owningType.oclIsKindOf(RequirementUsage) and\nowningType.owningFeatureMembership <> null and\nowningType.owningFeatureMembership.oclIsKindOf(ObjectiveMembership)",
         says: "The owningType of a RequirementVerificationMembership must a RequirementUsage that is owned by an ObjectiveMembership.",
     },
     Rule {
@@ -6899,7 +6899,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFeatureChainExpressionTargetFeature",
         metaclass: ElementKind::FeatureChainExpression,
-        ocl: "targetFeature =     let nonParameterMemberships : Sequence(Membership) = ownedMembership->         reject(oclIsKindOf(ParameterMembership)) in     if nonParameterMemberships->isEmpty() or        not nonParameterMemberships->first().memberElement.oclIsKindOf(Feature)     then null     else nonParameterMemberships->first().memberElement.oclAsType(Feature)     endif",
+        ocl: "targetFeature =\n    let nonParameterMemberships : Sequence(Membership) = ownedMembership->\n        reject(oclIsKindOf(ParameterMembership)) in\n    if nonParameterMemberships->isEmpty() or\n       not nonParameterMemberships->first().memberElement.oclIsKindOf(Feature)\n    then null\n    else nonParameterMemberships->first().memberElement.oclAsType(Feature)\n    endif",
         says: "The targetFeature of a FeatureChainExpression is the memberElement of its first ownedMembership that is not a ParameterMembership.",
     },
     Rule {
@@ -6911,13 +6911,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveMetadataAccessExpressionReferencdElement",
         metaclass: ElementKind::MetadataAccessExpression,
-        ocl: "referencedElement =     let elements : Sequence(Element) = ownedMembership->         reject(oclIsKindOf(FeatureMembership)).memberElement in     if elements->isEmpty() then null     else elements->first()     endif",
+        ocl: "referencedElement =\n    let elements : Sequence(Element) = ownedMembership->\n        reject(oclIsKindOf(FeatureMembership)).memberElement in\n    if elements->isEmpty() then null\n    else elements->first()\n    endif",
         says: "The referencedElement of a MetadataAccessExpression is the memberElement of its first ownedMembership that is not a FeatureMembership.",
     },
     Rule {
         name: "deriveInvocationExpressionArgument",
         metaclass: ElementKind::InvocationExpression,
-        ocl: "instantiatedType.input->collect(inp |      ownedFeatures->select(redefines(inp)).valuation->     select(v | v <> null).value )",
+        ocl: "instantiatedType.input->collect(inp | \n    ownedFeatures->select(redefines(inp)).valuation->\n    select(v | v <> null).value\n)",
         says: "The arguments of an InvocationExpression are the value Expressions of the FeatureValues of its ownedFeatures, in an order corresponding to the order of the input parameters of the instantiatedType that the ownedFeatures redefine.",
     },
     Rule {
@@ -6929,13 +6929,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveConstructorExpressionArgument",
         metaclass: ElementKind::ConstructorExpression,
-        ocl: "instantiatedType.feature->collect(f |      result.ownedFeatures->select(redefines(f)).valuation->     select(v | v <> null).value )",
+        ocl: "instantiatedType.feature->collect(f | \n    result.ownedFeatures->select(redefines(f)).valuation->\n    select(v | v <> null).value\n)",
         says: "The arguments of a ConstructorExpression are the value Expressions of the FeatureValues of the ownedFeatures of its result parameter, in an order corresponding to the order of the features of the instantiatedType that the result ownedFeatures redefine.",
     },
     Rule {
         name: "deriveFeatureReferenceExpressionReferent",
         metaclass: ElementKind::FeatureReferenceExpression,
-        ocl: "referent =     let nonParameterMemberships : Sequence(Membership) = ownedMembership->         reject(oclIsKindOf(ParameterMembership)) in     if nonParameterMemberships->isEmpty() or        not nonParameterMemberships->first().memberElement.oclIsKindOf(Feature)     then null     else nonParameterMemberships->first().memberElement.oclAsType(Feature)     endif",
+        ocl: "referent =\n    let nonParameterMemberships : Sequence(Membership) = ownedMembership->\n        reject(oclIsKindOf(ParameterMembership)) in\n    if nonParameterMemberships->isEmpty() or\n       not nonParameterMemberships->first().memberElement.oclIsKindOf(Feature)\n    then null\n    else nonParameterMemberships->first().memberElement.oclAsType(Feature)\n    endif",
         says: "The referent of a FeatureReferenceExpression is the memberElement of its first ownedMembership that is not a ParameterMembership.",
     },
     Rule {
@@ -6947,13 +6947,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveExpressionResult",
         metaclass: ElementKind::Expression,
-        ocl: "result =     let resultParams : Sequence(Feature) =         featureMemberships->             selectByKind(ReturnParameterMembership).             ownedMemberParameter in     if resultParams->notEmpty() then resultParams->first()     else null     endif ",
+        ocl: "result =\n    let resultParams : Sequence(Feature) =\n        featureMemberships->\n            selectByKind(ReturnParameterMembership).\n            ownedMemberParameter in\n    if resultParams->notEmpty() then resultParams->first()\n    else null\n    endif\n",
         says: "The result parameter of an Expression is its parameter owned (possibly in a supertype) via a ReturnParameterMembership (if any).",
     },
     Rule {
         name: "deriveFunctionResult",
         metaclass: ElementKind::Function,
-        ocl: "result =     let resultParams : Sequence(Feature) =         featureMemberships->             selectByKind(ReturnParameterMembership).             ownedMemberParameter in     if resultParams->notEmpty() then resultParams->first()     else null     endif",
+        ocl: "result =\n    let resultParams : Sequence(Feature) =\n        featureMemberships->\n            selectByKind(ReturnParameterMembership).\n            ownedMemberParameter in\n    if resultParams->notEmpty() then resultParams->first()\n    else null\n    endif",
         says: "The result parameter of a Function is its parameter owned (possibly in a supertype) via a ReturnParameterMembership (if any).",
     },
     Rule {
@@ -6965,7 +6965,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFlowTargetInputFeature",
         metaclass: ElementKind::Flow,
-        ocl: "targetInputFeature =     if connectorEnd->size() < 2 or          connectorEnd->at(2).ownedFeature->isEmpty()     then null     else connectorEnd->at(2).ownedFeature->first()     endif",
+        ocl: "targetInputFeature =\n    if connectorEnd->size() < 2 or \n        connectorEnd->at(2).ownedFeature->isEmpty()\n    then null\n    else connectorEnd->at(2).ownedFeature->first()\n    endif",
         says: "The targetInputFeature of a Flow is the first ownedFeature of the second connectorEnd of the Flow.",
     },
     Rule {
@@ -6977,13 +6977,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFlowPayloadFeature",
         metaclass: ElementKind::Flow,
-        ocl: "payloadFeature =     let payloadFeatures : Sequence(PayloadFeature) =         ownedFeature->selectByKind(PayloadFeature) in     if payloadFeatures->isEmpty() then null     else payloadFeatures->first()     endif",
+        ocl: "payloadFeature =\n    let payloadFeatures : Sequence(PayloadFeature) =\n        ownedFeature->selectByKind(PayloadFeature) in\n    if payloadFeatures->isEmpty() then null\n    else payloadFeatures->first()\n    endif",
         says: "The payloadFeature of a Flow is the single one of its ownedFeatures that is a PayloadFeature.",
     },
     Rule {
         name: "deriveFlowSourceOutputFeature",
         metaclass: ElementKind::Flow,
-        ocl: "sourceOutputFeature =     if connectorEnd->isEmpty() or          connectorEnd.ownedFeature->isEmpty()     then null     else connectorEnd.ownedFeature->first()     endif",
+        ocl: "sourceOutputFeature =\n    if connectorEnd->isEmpty() or \n        connectorEnd.ownedFeature->isEmpty()\n    then null\n    else connectorEnd.ownedFeature->first()\n    endif",
         says: "The sourceOutputFeature of a Flow is the first ownedFeature of the first connectorEnd of the Flow.",
     },
     Rule {
@@ -6995,19 +6995,19 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveMultiplicityRangeBound",
         metaclass: ElementKind::MultiplicityRange,
-        ocl: "bound =     if upperBound = null then Sequence{}     else if lowerBound = null then Sequence{upperBound}     else Sequence{lowerBound, upperBound}     endif endif",
+        ocl: "bound =\n    if upperBound = null then Sequence{}\n    else if lowerBound = null then Sequence{upperBound}\n    else Sequence{lowerBound, upperBound}\n    endif endif",
         says: "The bounds of a MultiplicityRange are the lowerBound (if any) followed by the upperBound.",
     },
     Rule {
         name: "deriveMultiplicityRangeUpperBound",
         metaclass: ElementKind::MultiplicityRange,
-        ocl: "upperBound =     let ownedExpressions : Sequence(Expression) =         ownedMember->selectByKind(Expression) in     if ownedExpressions->isEmpty() then null     else if ownedExpressions->size() = 1 then ownedExpressions->at(1)     else ownedExpressions->at(2)     endif endif ",
+        ocl: "upperBound =\n    let ownedExpressions : Sequence(Expression) =\n        ownedMember->selectByKind(Expression) in\n    if ownedExpressions->isEmpty() then null\n    else if ownedExpressions->size() = 1 then ownedExpressions->at(1)\n    else ownedExpressions->at(2)\n    endif endif ",
         says: "If a MultiplicityRange has one ownedMember that is an Expression, then this is the upperBound. If it has more than one ownedMember that is an Expression, then the upperBound is the second of those. Otherwise, it is null.",
     },
     Rule {
         name: "deriveMultiplicityRangeLowerBound",
         metaclass: ElementKind::MultiplicityRange,
-        ocl: "lowerBound =     let ownedExpressions : Sequence(Expression) =         ownedMember->selectByKind(Expression) in     if ownedExpressions->size() < 2 then null     else ownedExpressions->first()     endif",
+        ocl: "lowerBound =\n    let ownedExpressions : Sequence(Expression) =\n        ownedMember->selectByKind(Expression) in\n    if ownedExpressions->size() < 2 then null\n    else ownedExpressions->first()\n    endif",
         says: "If a MultiplicityRange has two ownedMembers that are Expressions, then the lowerBound is the first of these, otherwise it is null.",
     },
     Rule {
@@ -7019,7 +7019,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveConnectorTargetFeature",
         metaclass: ElementKind::Connector,
-        ocl: "targetFeature =     if relatedFeature->size() < 2 then OrderedSet{}     else          relatedFeature->             subSequence(2, relatedFeature->size())->             asOrderedSet()     endif",
+        ocl: "targetFeature =\n    if relatedFeature->size() < 2 then OrderedSet{}\n    else \n        relatedFeature->\n            subSequence(2, relatedFeature->size())->\n            asOrderedSet()\n    endif",
         says: "The targetFeatures of a Connector are the relatedFeatures other than the sourceFeature.",
     },
     Rule {
@@ -7031,19 +7031,19 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveConnectorDefaultFeaturingType",
         metaclass: ElementKind::Connector,
-        ocl: "let commonFeaturingTypes : OrderedSet(Type) =      relatedFeature->closure(featuringType)->select(t |          relatedFeature->forAll(f | f.isFeaturedWithin(t))     ) in let nearestCommonFeaturingTypes : OrderedSet(Type) =     commonFeaturingTypes->reject(t1 |          commonFeaturingTypes->exists(t2 |              t2 <> t1 and t2->closure(featuringType)->contains(t1)     )) in if nearestCommonFeaturingTypes->isEmpty() then null else nearestCommonFeaturingTypes->first() endif",
+        ocl: "let commonFeaturingTypes : OrderedSet(Type) = \n    relatedFeature->closure(featuringType)->select(t | \n        relatedFeature->forAll(f | f.isFeaturedWithin(t))\n    ) in\nlet nearestCommonFeaturingTypes : OrderedSet(Type) =\n    commonFeaturingTypes->reject(t1 | \n        commonFeaturingTypes->exists(t2 | \n            t2 <> t1 and t2->closure(featuringType)->contains(t1)\n    )) in\nif nearestCommonFeaturingTypes->isEmpty() then null\nelse nearestCommonFeaturingTypes->first()\nendif",
         says: "The defaultFeaturingType of a Connector is the innermost common direct or indirect featuringType of the relatedFeatures of the Connector, so that each relatedElement is featured within the defaultFeaturingType, if such exists.",
     },
     Rule {
         name: "deriveMetadataFeatureMetaclass",
         metaclass: ElementKind::MetadataFeature,
-        ocl: "metaclass =      let metaclassTypes : Sequence(Type) = type->selectByKind(Metaclass) in     if metaclassTypes->isEmpty() then null     else metaClassTypes->first()     endif",
+        ocl: "metaclass = \n    let metaclassTypes : Sequence(Type) = type->selectByKind(Metaclass) in\n    if metaclassTypes->isEmpty() then null\n    else metaClassTypes->first()\n    endif",
         says: "The metaclass of a MetadataFeature is one of its types that is a Metaclass.",
     },
     Rule {
         name: "deriveAssociationTargetType",
         metaclass: ElementKind::Association,
-        ocl: "targetType =     if relatedType->size() < 2 then OrderedSet{}     else          relatedType->             subSequence(2, relatedType->size())->             asOrderedSet()      endif",
+        ocl: "targetType =\n    if relatedType->size() < 2 then OrderedSet{}\n    else \n        relatedType->\n            subSequence(2, relatedType->size())->\n            asOrderedSet() \n    endif",
         says: "",
     },
     Rule {
@@ -7061,7 +7061,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveTypeOwnedConjugator",
         metaclass: ElementKind::Type,
-        ocl: "ownedConjugator =     let ownedConjugators: Sequence(Conjugator) =          ownedRelationship->selectByKind(Conjugation) in     if ownedConjugators->isEmpty() then null      else ownedConjugators->at(1) endif",
+        ocl: "ownedConjugator =\n    let ownedConjugators: Sequence(Conjugator) = \n        ownedRelationship->selectByKind(Conjugation) in\n    if ownedConjugators->isEmpty() then null \n    else ownedConjugators->at(1) endif",
         says: "The ownedConjugator of a Type is the its single ownedRelationship that is a Conjugation.",
     },
     Rule {
@@ -7127,13 +7127,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveTypeMultiplicity",
         metaclass: ElementKind::Type,
-        ocl: "multiplicity =      let ownedMultiplicities: Sequence(Multiplicity) =         ownedMember->selectByKind(Multiplicity) in     if ownedMultiplicities->isEmpty() then null     else ownedMultiplicities->first()     endif",
+        ocl: "multiplicity = \n    let ownedMultiplicities: Sequence(Multiplicity) =\n        ownedMember->selectByKind(Multiplicity) in\n    if ownedMultiplicities->isEmpty() then null\n    else ownedMultiplicities->first()\n    endif",
         says: "If a Type has an owned Multiplicity, then that is its multiplicity. Otherwise, if the Type has an ownedSpecialization, then its multiplicity is the multiplicity of the general Type of that Specialization.",
     },
     Rule {
         name: "deriveTypeInput",
         metaclass: ElementKind::Type,
-        ocl: "input = feature->select(f |      let direction: FeatureDirectionKind = directionOf(f) in     direction = FeatureDirectionKind::_'in' or     direction = FeatureDirectionKind::inout)",
+        ocl: "input = feature->select(f | \n    let direction: FeatureDirectionKind = directionOf(f) in\n    direction = FeatureDirectionKind::_'in' or\n    direction = FeatureDirectionKind::inout)",
         says: "The inputs of a Type are those of its features that have a direction of in or inout relative to the Type, taking conjugation into account.",
     },
     Rule {
@@ -7145,7 +7145,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveTypeOutput",
         metaclass: ElementKind::Type,
-        ocl: "output = feature->select(f |      let direction: FeatureDirectionKind = directionOf(f) in     direction = FeatureDirectionKind::out or     direction = FeatureDirectionKind::inout)",
+        ocl: "output = feature->select(f | \n    let direction: FeatureDirectionKind = directionOf(f) in\n    direction = FeatureDirectionKind::out or\n    direction = FeatureDirectionKind::inout)",
         says: "The outputs of a Type are those of its features that have a direction of out or inout relative to the Type, taking conjugation into account.",
     },
     Rule {
@@ -7217,7 +7217,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFeatureCrossFeature",
         metaclass: ElementKind::Feature,
-        ocl: "crossFeature =     if ownedCrossSubsetting = null then null     else          let chainingFeatures: Sequence(Feature) =              ownedCrossSubsetting.crossedFeature.chainingFeature in         if chainingFeatures->size() < 2 then null         else chainingFeatures->at(2)     endif",
+        ocl: "crossFeature =\n    if ownedCrossSubsetting = null then null\n    else \n        let chainingFeatures: Sequence(Feature) = \n            ownedCrossSubsetting.crossedFeature.chainingFeature in\n        if chainingFeatures->size() < 2 then null\n        else chainingFeatures->at(2)\n    endif",
         says: "The crossFeature of a Feature is the second chainingFeature of the crossedFeature of the ownedCrossSubsetting of the Feature, if any.",
     },
     Rule {
@@ -7229,13 +7229,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFeatureOwnedCrossSubsetting",
         metaclass: ElementKind::Feature,
-        ocl: "ownedCrossSubsetting =     let crossSubsettings: Sequence(CrossSubsetting) =          ownedSubsetting->selectByKind(CrossSubsetting) in     if crossSubsettings->isEmpty() then null     else crossSubsettings->first()     endif",
+        ocl: "ownedCrossSubsetting =\n    let crossSubsettings: Sequence(CrossSubsetting) = \n        ownedSubsetting->selectByKind(CrossSubsetting) in\n    if crossSubsettings->isEmpty() then null\n    else crossSubsettings->first()\n    endif",
         says: "The ownedCrossSubsetting of a Feature is the ownedSubsetting that is a CrossSubsetting, if any.",
     },
     Rule {
         name: "deriveFeatureFeaturingType",
         metaclass: ElementKind::Feature,
-        ocl: "featuringType =     let featuringTypes : OrderedSet(Type) =          featuring.type->asOrderedSet() in     if chainingFeature->isEmpty() then featuringTypes     else         featuringTypes->             union(chainingFeature->first().featuringType)->             asOrderedSet()     endif",
+        ocl: "featuringType =\n    let featuringTypes : OrderedSet(Type) = \n        featuring.type->asOrderedSet() in\n    if chainingFeature->isEmpty() then featuringTypes\n    else\n        featuringTypes->\n            union(chainingFeature->first().featuringType)->\n            asOrderedSet()\n    endif",
         says: "The featuringTypes of a Feature include the featuringTypes of all the typeFeaturings of the Feature. If the Feature has chainingFeatures, then its featuringTypes also include the featuringTypes of the first chainingFeature.",
     },
     Rule {
@@ -7247,13 +7247,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveFeatureType",
         metaclass: ElementKind::Feature,
-        ocl: "type =      let types : OrderedSet(Types) = OrderedSet{self}->         -- Note: The closure operation automatically handles circular relationships.         closure(typingFeatures()).typing.type->asOrderedSet() in     types->reject(t1 | types->exist(t2 | t2 <> t1 and t2.specializes(t1)))",
+        ocl: "type = \n    let types : OrderedSet(Types) = OrderedSet{self}->\n        -- Note: The closure operation automatically handles circular relationships.\n        closure(typingFeatures()).typing.type->asOrderedSet() in\n    types->reject(t1 | types->exist(t2 | t2 <> t1 and t2.specializes(t1)))",
         says: "The types of a Feature are the union of the types of its typings and the types of the Features it subsets, with all redundant supertypes removed. If the Feature has chainingFeatures, then the union also includes the types of the last chainingFeature.",
     },
     Rule {
         name: "deriveFeatureOwnedReferenceSubsetting",
         metaclass: ElementKind::Feature,
-        ocl: "ownedReferenceSubsetting =     let referenceSubsettings : OrderedSet(ReferenceSubsetting) =         ownedSubsetting->selectByKind(ReferenceSubsetting) in     if referenceSubsettings->isEmpty() then null     else referenceSubsettings->first() endif",
+        ocl: "ownedReferenceSubsetting =\n    let referenceSubsettings : OrderedSet(ReferenceSubsetting) =\n        ownedSubsetting->selectByKind(ReferenceSubsetting) in\n    if referenceSubsettings->isEmpty() then null\n    else referenceSubsettings->first() endif",
         says: "The ownedReferenceSubsetting of a Feature is the first ownedSubsetting that is a ReferenceSubsetting (if any).",
     },
     Rule {
@@ -7271,7 +7271,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAnnotationOwnedAnnotatingElement",
         metaclass: ElementKind::Annotation,
-        ocl: "ownedAnnotatingElement =     let ownedAnnotatingElements : Sequence(AnnotatingElement) =          ownedRelatedElement->selectByKind(AnnotatingElement) in     if ownedAnnotatingElements->isEmpty() then null     else ownedAnnotatingElements->first()     endif",
+        ocl: "ownedAnnotatingElement =\n    let ownedAnnotatingElements : Sequence(AnnotatingElement) = \n        ownedRelatedElement->selectByKind(AnnotatingElement) in\n    if ownedAnnotatingElements->isEmpty() then null\n    else ownedAnnotatingElements->first()\n    endif",
         says: "The ownedAnnotatingElement of an Annotation is the first ownedRelatedElement that is an AnnotatingElement, if any.",
     },
     Rule {
@@ -7283,7 +7283,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAnnotatingElementAnnotation",
         metaclass: ElementKind::AnnotatingElement,
-        ocl: "annotation =      if owningAnnotatingRelationship = null then ownedAnnotatingRelationship     else owningAnnotatingRelationship->prepend(owningAnnotatingRelationship)     endif",
+        ocl: "annotation = \n    if owningAnnotatingRelationship = null then ownedAnnotatingRelationship\n    else owningAnnotatingRelationship->prepend(owningAnnotatingRelationship)\n    endif",
         says: "The annotations of an AnnotatingElement are its owningAnnotatingRelationship (if any) followed by all its ownedAnnotatingRelationships.",
     },
     Rule {
@@ -7295,7 +7295,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAnnotatingElementOwnedAnnotatingRelationship",
         metaclass: ElementKind::AnnotatingElement,
-        ocl: "ownedAnnotatingRelationship = ownedRelationship->     selectByKind(Annotation)->     select(a | a.annotatedElement <> self)",
+        ocl: "ownedAnnotatingRelationship = ownedRelationship->\n    selectByKind(Annotation)->\n    select(a | a.annotatedElement <> self)",
         says: "The ownedAnnotatingRelationships of an AnnotatingElement are its ownedRelationships that are Annotations, for which the AnnotatingElement is not the annotatedElement.",
     },
     Rule {
@@ -7373,7 +7373,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveElementQualifiedName",
         metaclass: ElementKind::Element,
-        ocl: "qualifiedName =     if owningNamespace = null then null     else if name <> null and          owningNamespace.ownedMember->         select(m | m.name = name).indexOf(self) <> 1 then null     else if owningNamespace.owner = null then escapedName()     else if owningNamespace.qualifiedName = null or              escapedName() = null then null     else owningNamespace.qualifiedName + '::' + escapedName()     endif endif endif endif",
+        ocl: "qualifiedName =\n    if owningNamespace = null then null\n    else if name <> null and \n        owningNamespace.ownedMember->\n        select(m | m.name = name).indexOf(self) <> 1 then null\n    else if owningNamespace.owner = null then escapedName()\n    else if owningNamespace.qualifiedName = null or \n            escapedName() = null then null\n    else owningNamespace.qualifiedName + '::' + escapedName()\n    endif endif endif endif",
         says: "If this Element does not have an owningNamespace, then its qualifiedName is null. If the owningNamespace of this Element is a root Namespace, then the qualifiedName of the Element is the escaped name of the Element (if any). If the owningNamespace is non-null but not a root Namespace, then the qualifiedName of this Element is constructed from the qualifiedName of the owningNamespace and the escaped name of the Element, unless the qualifiedName of the owningNamespace is null or the escaped name is null, in which case the qualifiedName of this Element is also null. Further, if the owningNamespace has other ownedMembers with the same non-null name as this Element, and this Element is not the first, then the qualifiedName of this Element is null.",
     },
     Rule {
@@ -7427,7 +7427,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveRequirementUsageRequiredConstraint",
         metaclass: ElementKind::RequirementUsage,
-        ocl: "requiredConstraint = ownedFeatureMembership->     selectByKind(RequirementConstraintMembership)->     select(kind = RequirementConstraintKind::requirement).     ownedConstraint",
+        ocl: "requiredConstraint = ownedFeatureMembership->\n    selectByKind(RequirementConstraintMembership)->\n    select(kind = RequirementConstraintKind::requirement).\n    ownedConstraint",
         says: "The requiredConstraints of a RequirementUsage are the ownedConstraints of the RequirementConstraintMemberships of the RequirementUsage with kind = requirement.",
     },
     Rule {
@@ -7451,7 +7451,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveRequirementUsageSubjectParameter",
         metaclass: ElementKind::RequirementUsage,
-        ocl: "subjectParameter =     let subjects : OrderedSet(SubjectMembership) =          featureMembership->selectByKind(SubjectMembership) in     if subjects->isEmpty() then null     else subjects->first().ownedSubjectParameter     endif",
+        ocl: "subjectParameter =\n    let subjects : OrderedSet(SubjectMembership) = \n        featureMembership->selectByKind(SubjectMembership) in\n    if subjects->isEmpty() then null\n    else subjects->first().ownedSubjectParameter\n    endif",
         says: "The subjectParameter of a RequirementUsage is the ownedSubjectParameter of its SubjectMembership (if any).",
     },
     Rule {
@@ -7463,13 +7463,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveRequirementUsageAssumedConstraint",
         metaclass: ElementKind::RequirementUsage,
-        ocl: "assumedConstraint = ownedFeatureMembership->     selectByKind(RequirementConstraintMembership)->     select(kind = RequirementConstraintKind::assumption).     ownedConstraint",
+        ocl: "assumedConstraint = ownedFeatureMembership->\n    selectByKind(RequirementConstraintMembership)->\n    select(kind = RequirementConstraintKind::assumption).\n    ownedConstraint",
         says: "The assumedConstraints of a RequirementUsage are the ownedConstraints of the RequirementConstraintMemberships of the RequirementDefinition with kind = assumption.",
     },
     Rule {
         name: "deriveRequirementDefinitionSubjectParameter",
         metaclass: ElementKind::RequirementDefinition,
-        ocl: "subjectParameter =     let subjects : OrderedSet(SubjectMembership) =          featureMembership->selectByKind(SubjectMembership) in     if subjects->isEmpty() then null     else subjects->first().ownedSubjectParameter     endif",
+        ocl: "subjectParameter =\n    let subjects : OrderedSet(SubjectMembership) = \n        featureMembership->selectByKind(SubjectMembership) in\n    if subjects->isEmpty() then null\n    else subjects->first().ownedSubjectParameter\n    endif",
         says: "The subjectParameter of a RequirementDefinition is the ownedSubjectParameter of its SubjectMembership (if any).",
     },
     Rule {
@@ -7487,13 +7487,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveRequirementDefinitionRequiredConstraint",
         metaclass: ElementKind::RequirementDefinition,
-        ocl: "requiredConstraint = ownedFeatureMembership->     selectByKind(RequirementConstraintMembership)->     select(kind = RequirementConstraintKind::requirement).     ownedConstraint",
+        ocl: "requiredConstraint = ownedFeatureMembership->\n    selectByKind(RequirementConstraintMembership)->\n    select(kind = RequirementConstraintKind::requirement).\n    ownedConstraint",
         says: "The requiredConstraints of a RequirementDefinition are the ownedConstraints of the RequirementConstraintMemberships of the RequirementDefinition with kind = requirement.",
     },
     Rule {
         name: "deriveRequirementDefinitionAssumedConstraint",
         metaclass: ElementKind::RequirementDefinition,
-        ocl: "assumedConstraint = ownedFeatureMembership->     selectByKind(RequirementConstraintMembership)->     select(kind = RequirementConstraintKind::assumption).     ownedConstraint",
+        ocl: "assumedConstraint = ownedFeatureMembership->\n    selectByKind(RequirementConstraintMembership)->\n    select(kind = RequirementConstraintKind::assumption).\n    ownedConstraint",
         says: "The assumedConstraints of a RequirementDefinition are the ownedConstraints of the RequirementConstraintMemberships of the RequirementDefinition with kind = assumption.",
     },
     Rule {
@@ -7505,19 +7505,19 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveRequirementDefinitionStakeholderParameter",
         metaclass: ElementKind::RequirementDefinition,
-        ocl: "stakeholderParameter = featureMembership->     selectByKind(StakholderMembership).     ownedStakeholderParameter",
+        ocl: "stakeholderParameter = featureMembership->\n    selectByKind(StakholderMembership).\n    ownedStakeholderParameter",
         says: "The stakeHolderParameters of a RequirementDefinition are the ownedStakeholderParameters of the StakeholderMemberships of the RequirementDefinition.",
     },
     Rule {
         name: "deriveRequirementConstraintMembershipReferencedConstraint",
         metaclass: ElementKind::RequirementConstraintMembership,
-        ocl: "referencedConstraint =     let referencedFeature : Feature =          ownedConstraint.referencedFeatureTarget() in     if referencedFeature = null then ownedConstraint     else if referencedFeature.oclIsKindOf(ConstraintUsage) then         refrencedFeature.oclAsType(ConstraintUsage)     else null     endif endif",
+        ocl: "referencedConstraint =\n    let referencedFeature : Feature = \n        ownedConstraint.referencedFeatureTarget() in\n    if referencedFeature = null then ownedConstraint\n    else if referencedFeature.oclIsKindOf(ConstraintUsage) then\n        refrencedFeature.oclAsType(ConstraintUsage)\n    else null\n    endif endif",
         says: "The referencedConstraint of a RequirementConstraintMembership is the featureTarget of the referencedFeature of the ownedReferenceSubsetting of the ownedConstraint, if there is one, and, otherwise, the ownedConstraint itself.",
     },
     Rule {
         name: "deriveSatisfyRequirementUsageSatisfyingFeature",
         metaclass: ElementKind::SatisfyRequirementUsage,
-        ocl: "satisfyingFeature =     let bindings: BindingConnector = ownedMember->         selectByKind(BindingConnector)->         select(b | b.relatedElement->includes(subjectParameter)) in     if bindings->isEmpty() or         bindings->first().relatedElement->exits(r | r <> subjectParameter)      then null     else bindings->first().relatedElement->any(r | r <> subjectParameter)     endif",
+        ocl: "satisfyingFeature =\n    let bindings: BindingConnector = ownedMember->\n        selectByKind(BindingConnector)->\n        select(b | b.relatedElement->includes(subjectParameter)) in\n    if bindings->isEmpty() or \n       bindings->first().relatedElement->exits(r | r <> subjectParameter) \n    then null\n    else bindings->first().relatedElement->any(r | r <> subjectParameter)\n    endif",
         says: "The satisfyingFeature of a SatisfyRequirementUsage is the Feature to which the subjectParameter is bound.",
     },
     Rule {
@@ -7529,13 +7529,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAssertConstraintUsageAssertedConstraint",
         metaclass: ElementKind::AssertConstraintUsage,
-        ocl: "assertedConstraint =     if referencedFeatureTarget() = null then self     else if referencedFeatureTarget().oclIsKindOf(ConstraintUsage) then         referencedFeatureTarget().oclAsType(ConstraintUsage)     else null     endif endif",
+        ocl: "assertedConstraint =\n    if referencedFeatureTarget() = null then self\n    else if referencedFeatureTarget().oclIsKindOf(ConstraintUsage) then\n        referencedFeatureTarget().oclAsType(ConstraintUsage)\n    else null\n    endif endif",
         says: "If an AssertConstraintUsage has no ownedReferenceSubsetting, then its assertedConstraint is the AssertConstraintUsage itself. Otherwise, the assertedConstraint is the featureTarget of the referencedFeature of the ownedReferenceSubsetting, which must be a ConstraintUsage.",
     },
     Rule {
         name: "deriveCaseUsageSubjectParameter",
         metaclass: ElementKind::CaseUsage,
-        ocl: "subjectParameter =     let subjects : OrderedSet(SubjectMembership) =          featureMembership->selectByKind(SubjectMembership) in     if subjects->isEmpty() then null     else subjects->first().ownedSubjectParameter     endif",
+        ocl: "subjectParameter =\n    let subjects : OrderedSet(SubjectMembership) = \n        featureMembership->selectByKind(SubjectMembership) in\n    if subjects->isEmpty() then null\n    else subjects->first().ownedSubjectParameter\n    endif",
         says: "The subjectParameter of a CaseUsage is the ownedSubjectParameter of its SubjectMembership (if any).",
     },
     Rule {
@@ -7547,7 +7547,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveCaseUsageObjectiveRequirement",
         metaclass: ElementKind::CaseUsage,
-        ocl: "objectiveRequirement =      let objectives: OrderedSet(RequirementUsage) =          featureMembership->             selectByKind(ObjectiveMembership).             ownedRequirement in     if objectives->isEmpty() then null     else objectives->first().ownedObjectiveRequirement     endif",
+        ocl: "objectiveRequirement = \n    let objectives: OrderedSet(RequirementUsage) = \n        featureMembership->\n            selectByKind(ObjectiveMembership).\n            ownedRequirement in\n    if objectives->isEmpty() then null\n    else objectives->first().ownedObjectiveRequirement\n    endif",
         says: "The objectiveRequirement of a CaseUsage is the RequirementUsage it owns via an ObjectiveMembership, if any.",
     },
     Rule {
@@ -7559,31 +7559,31 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveCaseDefinitionObjectiveRequirement",
         metaclass: ElementKind::CaseDefinition,
-        ocl: "objectiveRequirement =      let objectives: OrderedSet(RequirementUsage) =          featureMembership->             selectByKind(ObjectiveMembership).             ownedRequirement in     if objectives->isEmpty() then null     else objectives->first().ownedObjectiveRequirement     endif",
+        ocl: "objectiveRequirement = \n    let objectives: OrderedSet(RequirementUsage) = \n        featureMembership->\n            selectByKind(ObjectiveMembership).\n            ownedRequirement in\n    if objectives->isEmpty() then null\n    else objectives->first().ownedObjectiveRequirement\n    endif",
         says: "The objectiveRequirement of a CaseDefinition is the ownedObjectiveRequirement of its ObjectiveMembership, if any.",
     },
     Rule {
         name: "deriveCaseDefinitionSubjectParameter",
         metaclass: ElementKind::CaseDefinition,
-        ocl: "subjectParameter =     let subjectMems : OrderedSet(SubjectMembership) =          featureMembership->selectByKind(SubjectMembership) in     if subjectMems->isEmpty() then null     else subjectMems->first().ownedSubjectParameter     endif",
+        ocl: "subjectParameter =\n    let subjectMems : OrderedSet(SubjectMembership) = \n        featureMembership->selectByKind(SubjectMembership) in\n    if subjectMems->isEmpty() then null\n    else subjectMems->first().ownedSubjectParameter\n    endif",
         says: "The subjectParameter of a CaseDefinition is the ownedSubjectParameter of its SubjectMembership (if any).",
     },
     Rule {
         name: "deriveStateUsageDoAction",
         metaclass: ElementKind::StateUsage,
-        ocl: "doAction =     let doMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::do) in     if doMemberships->isEmpty() then null     else doMemberships->at(1)     endif",
+        ocl: "doAction =\n    let doMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::do) in\n    if doMemberships->isEmpty() then null\n    else doMemberships->at(1)\n    endif",
         says: "The doAction of a StateUsage is the action of the owned StateSubactionMembership with kind = do.",
     },
     Rule {
         name: "deriveStateUsageEntryAction",
         metaclass: ElementKind::StateUsage,
-        ocl: "entryAction =     let entryMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::entry) in     if entryMemberships->isEmpty() then null     else entryMemberships->at(1)     endif",
+        ocl: "entryAction =\n    let entryMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::entry) in\n    if entryMemberships->isEmpty() then null\n    else entryMemberships->at(1)\n    endif",
         says: "The entryAction of a StateUsage is the action of the owned StateSubactionMembership with kind = entry.",
     },
     Rule {
         name: "deriveStateUsageExitAction",
         metaclass: ElementKind::StateUsage,
-        ocl: "exitAction =     let exitMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::exit) in     if exitMemberships->isEmpty() then null     else exitMemberships->at(1)     endif",
+        ocl: "exitAction =\n    let exitMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::exit) in\n    if exitMemberships->isEmpty() then null\n    else exitMemberships->at(1)\n    endif",
         says: "The exitAction of a StateUsage is the action of the owned StateSubactionMembership with kind = exit .",
     },
     Rule {
@@ -7595,43 +7595,43 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveStateDefinitionDoAction",
         metaclass: ElementKind::StateDefinition,
-        ocl: "doAction =     let doMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::do) in     if doMemberships->isEmpty() then null     else doMemberships->at(1)     endif",
+        ocl: "doAction =\n    let doMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::do) in\n    if doMemberships->isEmpty() then null\n    else doMemberships->at(1)\n    endif",
         says: "The doAction of a StateDefinition is the action of the owned StateSubactionMembership with kind = do.",
     },
     Rule {
         name: "deriveStateDefinitionEntryAction",
         metaclass: ElementKind::StateDefinition,
-        ocl: "entryAction =     let entryMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::entry) in     if entryMemberships->isEmpty() then null     else entryMemberships->at(1)     endif",
+        ocl: "entryAction =\n    let entryMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::entry) in\n    if entryMemberships->isEmpty() then null\n    else entryMemberships->at(1)\n    endif",
         says: "The entryAction of a StateDefinition is the action of the owned StateSubactionMembership with kind = entry.",
     },
     Rule {
         name: "deriveStateDefinitionExitAction",
         metaclass: ElementKind::StateDefinition,
-        ocl: "exitAction =      let exitMemberships : Sequence(StateSubactionMembership) =         ownedMembership->             selectByKind(StateSubactionMembership)->             select(kind = StateSubactionKind::exit) in     if exitMemberships->isEmpty() then null     else exitMemberships->at(1)     endif",
+        ocl: "exitAction = \n    let exitMemberships : Sequence(StateSubactionMembership) =\n        ownedMembership->\n            selectByKind(StateSubactionMembership)->\n            select(kind = StateSubactionKind::exit) in\n    if exitMemberships->isEmpty() then null\n    else exitMemberships->at(1)\n    endif",
         says: "The exitAction of a StateDefinition is the action of the owned StateSubactionMembership with kind = exit .",
     },
     Rule {
         name: "deriveTransitionUsageTarget",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "target =     if succession.targetFeature->isEmpty() then null     else         let targetFeature : Feature =             succession.targetFeature->first().featureTarget in         if not targetFeature.oclIsKindOf(ActionUsage) then null         else targetFeature.oclAsType(ActionUsage)         endif     endif ",
+        ocl: "target =\n    if succession.targetFeature->isEmpty() then null\n    else\n        let targetFeature : Feature =\n            succession.targetFeature->first().featureTarget in\n        if not targetFeature.oclIsKindOf(ActionUsage) then null\n        else targetFeature.oclAsType(ActionUsage)\n        endif\n    endif\n",
         says: "The target of a TransitionUsage is given by the featureTarget of the targetFeature of its succession, which must be an ActionUsage.",
     },
     Rule {
         name: "deriveTransitionUsageGuardExpression",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "guardExpression = ownedFeatureMembership->     selectByKind(TransitionFeatureMembership)->     select(kind = TransitionFeatureKind::trigger).transitionFeature->     selectByKind(Expression)",
+        ocl: "guardExpression = ownedFeatureMembership->\n    selectByKind(TransitionFeatureMembership)->\n    select(kind = TransitionFeatureKind::trigger).transitionFeature->\n    selectByKind(Expression)",
         says: "The triggerActions of a TransitionUsage are the transitionFeatures of the ownedFeatureMemberships of the TransitionUsage with kind = trigger, which must all be Expressions.",
     },
     Rule {
         name: "deriveTransitionUsageSource",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "source =     let sourceFeature : Feature = sourceFeature() in     if sourceFeature = null then null     else sourceFeature.featureTarget.oclAsType(ActionUsage)",
+        ocl: "source =\n    let sourceFeature : Feature = sourceFeature() in\n    if sourceFeature = null then null\n    else sourceFeature.featureTarget.oclAsType(ActionUsage)",
         says: "The source of a TransitionUsage is featureTarget of the result of sourceFeature(), which must be an ActionUsage.",
     },
     Rule {
         name: "deriveTransitionUsageEffectAction",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "triggerAction = ownedFeatureMembership->     selectByKind(TransitionFeatureMembership)->     select(kind = TransitionFeatureKind::trigger).transitionFeatures->     selectByKind(AcceptActionUsage)",
+        ocl: "triggerAction = ownedFeatureMembership->\n    selectByKind(TransitionFeatureMembership)->\n    select(kind = TransitionFeatureKind::trigger).transitionFeatures->\n    selectByKind(AcceptActionUsage)",
         says: "The effectActions of a TransitionUsage are the transitionFeatures of the ownedFeatureMemberships of the TransitionUsage with kind = effect, which must all be ActionUsages.",
     },
     Rule {
@@ -7643,7 +7643,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveTransitionUsageTriggerAction",
         metaclass: ElementKind::TransitionUsage,
-        ocl: "triggerAction = ownedFeatureMembership->     selectByKind(TransitionFeatureMembership)->     select(kind = TransitionFeatureKind::trigger).transitionFeature->     selectByKind(AcceptActionUsage)",
+        ocl: "triggerAction = ownedFeatureMembership->\n    selectByKind(TransitionFeatureMembership)->\n    select(kind = TransitionFeatureKind::trigger).transitionFeature->\n    selectByKind(AcceptActionUsage)",
         says: "The triggerActions of a TransitionUsage are the transitionFeatures of the ownedFeatureMemberships of the TransitionUsage with kind = trigger, which must all be AcceptActionUsages.",
     },
     Rule {
@@ -7679,13 +7679,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAssignmentActionUsageReferent",
         metaclass: ElementKind::AssignmentActionUsage,
-        ocl: "referent =     let unownedFeatures : Sequence(Feature) = ownedMembership->         reject(oclIsKindOf(FeatureMembership)).memberElement->         selectByKind(Feature) in     if unownedFeatures->isEmpty() then null     else unownedFeatures->first().oclAsType(Feature)     endif",
+        ocl: "referent =\n    let unownedFeatures : Sequence(Feature) = ownedMembership->\n        reject(oclIsKindOf(FeatureMembership)).memberElement->\n        selectByKind(Feature) in\n    if unownedFeatures->isEmpty() then null\n    else unownedFeatures->first().oclAsType(Feature)\n    endif",
         says: "The referent of an AssignmentActionUsage is the first Feature that is the memberElement of a ownedMembership that is not a FeatureMembership.",
     },
     Rule {
         name: "deriveForLoopActionUsageLoopVariable",
         metaclass: ElementKind::ForLoopActionUsage,
-        ocl: "loopVariable =     if ownedFeature->isEmpty() or          not ownedFeature->first().oclIsKindOf(ReferenceUsage) then          null     else          ownedFeature->first().oclAsType(ReferenceUsage)     endif",
+        ocl: "loopVariable =\n    if ownedFeature->isEmpty() or \n        not ownedFeature->first().oclIsKindOf(ReferenceUsage) then \n        null\n    else \n        ownedFeature->first().oclAsType(ReferenceUsage)\n    endif",
         says: "The loopVariable of a ForLoopActionUsage is its first ownedFeature, which must be a ReferenceUsage.",
     },
     Rule {
@@ -7697,7 +7697,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveLoopActionUsageBodyAction",
         metaclass: ElementKind::LoopActionUsage,
-        ocl: "bodyAction =     let parameter : Feature = inputParameter(2) in     if parameter <> null and parameter.oclIsKindOf(Action) then         parameter.oclAsType(Action)     else         null     endif ",
+        ocl: "bodyAction =\n    let parameter : Feature = inputParameter(2) in\n    if parameter <> null and parameter.oclIsKindOf(Action) then\n        parameter.oclAsType(Action)\n    else\n        null\n    endif\n",
         says: "The bodyAction of a LoopActionUsage is its second input parameter, which must be an Action.",
     },
     Rule {
@@ -7727,13 +7727,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveWhileLoopActionUsageWhileArgument",
         metaclass: ElementKind::WhileLoopActionUsage,
-        ocl: "whileArgument =     let parameter : Feature = inputParameter(1) in     if parameter <> null and parameter.oclIsKindOf(Expression) then         parameter.oclAsType(Expression)     else         null     endif ",
+        ocl: "whileArgument =\n    let parameter : Feature = inputParameter(1) in\n    if parameter <> null and parameter.oclIsKindOf(Expression) then\n        parameter.oclAsType(Expression)\n    else\n        null\n    endif\n",
         says: "The whileArgument of a WhileLoopActionUsage is its first input parameter, which must be an Expression.",
     },
     Rule {
         name: "deriveWhileLoopActionUsageUntilArgument",
         metaclass: ElementKind::WhileLoopActionUsage,
-        ocl: "untilArgument =     let parameter : Feature = inputParameter(3) in     if parameter <> null and parameter.oclIsKindOf(Expression) then         parameter.oclAsType(Expression)     else         null     endif ",
+        ocl: "untilArgument =\n    let parameter : Feature = inputParameter(3) in\n    if parameter <> null and parameter.oclIsKindOf(Expression) then\n        parameter.oclAsType(Expression)\n    else\n        null\n    endif\n",
         says: "The whileArgument of a WhileLoopActionUsage is its third input parameter, which, if it exists, must be an Expression.",
     },
     Rule {
@@ -7757,19 +7757,19 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveIfActionUsageThenAction",
         metaclass: ElementKind::IfActionUsage,
-        ocl: "thenAction =      let parameter : Feature = inputParameter(2) in     if parameter <> null and parameter.oclIsKindOf(ActionUsage) then         parameter.oclAsType(ActionUsage)     else         null     endif",
+        ocl: "thenAction = \n    let parameter : Feature = inputParameter(2) in\n    if parameter <> null and parameter.oclIsKindOf(ActionUsage) then\n        parameter.oclAsType(ActionUsage)\n    else\n        null\n    endif",
         says: "The thenAction of an ifActionUsage is its second parameter, which must be an ActionUsage.",
     },
     Rule {
         name: "deriveIfActionUsageElseAction",
         metaclass: ElementKind::IfActionUsage,
-        ocl: "elseAction =      let parameter : Feature = inputParameter(3) in     if parameter <> null and parameter.oclIsKindOf(ActionUsage) then         parameter.oclAsType(ActionUsage)     else         null     endif",
+        ocl: "elseAction = \n    let parameter : Feature = inputParameter(3) in\n    if parameter <> null and parameter.oclIsKindOf(ActionUsage) then\n        parameter.oclAsType(ActionUsage)\n    else\n        null\n    endif",
         says: "The elseAction of an ifActionUsage is its third parameter, if there is one, which must then be an ActionUsage.",
     },
     Rule {
         name: "deriveIfActionUsageIfArgument",
         metaclass: ElementKind::IfActionUsage,
-        ocl: "ifArgument =      let parameter : Feature = inputParameter(1) in     if parameter <> null and parameter.oclIsKindOf(Expression) then         parameter.oclAsType(Expression)     else         null     endif",
+        ocl: "ifArgument = \n    let parameter : Feature = inputParameter(1) in\n    if parameter <> null and parameter.oclIsKindOf(Expression) then\n        parameter.oclAsType(Expression)\n    else\n        null\n    endif",
         says: "The ifArgument of an ifActionUsage is its first parameter, which must be an Expression.",
     },
     Rule {
@@ -7781,13 +7781,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveEventOccurrenceUsageEventOccurrence",
         metaclass: ElementKind::EventOccurrenceUsage,
-        ocl: "eventOccurrence =     if referencedFeatureTarget() = null then self     else if referencedFeatureTarget().oclIsKindOf(OccurrenceUsage) then         referencedFeatureTarget().oclAsType(OccurrenceUsage)     else null     endif endif",
+        ocl: "eventOccurrence =\n    if referencedFeatureTarget() = null then self\n    else if referencedFeatureTarget().oclIsKindOf(OccurrenceUsage) then\n        referencedFeatureTarget().oclAsType(OccurrenceUsage)\n    else null\n    endif endif",
         says: "If an EventOccurrenceUsage has no ownedReferenceSubsetting, then its eventOccurrence is the EventOccurrenceUsage itself. Otherwise, the eventOccurrence is the featureTarget of the referencedFeature of the ownedReferenceSubsetting (which must be an OccurrenceUsage).",
     },
     Rule {
         name: "deriveOccurrenceUsageIndividualDefinition",
         metaclass: ElementKind::OccurrenceUsage,
-        ocl: "individualDefinition =     let individualDefinitions : OrderedSet(OccurrenceDefinition) =          occurrenceDefinition->             selectByKind(OccurrenceDefinition)->             select(isIndividual) in     if individualDefinitions->isEmpty() then null     else individualDefinitions->first() endif",
+        ocl: "individualDefinition =\n    let individualDefinitions : OrderedSet(OccurrenceDefinition) = \n        occurrenceDefinition->\n            selectByKind(OccurrenceDefinition)->\n            select(isIndividual) in\n    if individualDefinitions->isEmpty() then null\n    else individualDefinitions->first() endif",
         says: "The individualDefinition of an OccurrenceUsage is the occurrenceDefinition that is an OccurrenceDefinition with isIndividual = true, if any.",
     },
     Rule {
@@ -7937,7 +7937,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveUsageMayTimeVary",
         metaclass: ElementKind::Usage,
-        ocl: "mayTimeVary =     owningType <> null and     owningType.specializesFromLibrary('Occurrences::Occurrence') and     not (         isPortion or         specializesFromLibrary('Links::SelfLink') or         specializesFromLibrary('Occurrences::HappensLink') or         isComposite and specializesFromLibrary('Actions::Action')     )",
+        ocl: "mayTimeVary =\n    owningType <> null and\n    owningType.specializesFromLibrary('Occurrences::Occurrence') and\n    not (\n        isPortion or\n        specializesFromLibrary('Links::SelfLink') or\n        specializesFromLibrary('Occurrences::HappensLink') or\n        isComposite and specializesFromLibrary('Actions::Action')\n    )",
         says: "A Usage mayTimeVary if and only if all of the following are true It has an owningType that specializes Occurrences::Occurrence (from the Kernel Semantic Library). It is not a portion. It does not specialize Links::SelfLink or Occurrences::HappensLink (from the Kernel Semantic Library). If isComposite = true, it does not specialize Actions::Action (from the Systems Model Library).",
     },
     Rule {
@@ -8183,19 +8183,19 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveAnalysisCaseUsageResultExpression",
         metaclass: ElementKind::AnalysisCaseUsage,
-        ocl: "resultExpression =     let results : OrderedSet(ResultExpressionMembership) =         featureMembersip->             selectByKind(ResultExpressionMembership) in     if results->isEmpty() then null     else results->first().ownedResultExpression     endif",
+        ocl: "resultExpression =\n    let results : OrderedSet(ResultExpressionMembership) =\n        featureMembersip->\n            selectByKind(ResultExpressionMembership) in\n    if results->isEmpty() then null\n    else results->first().ownedResultExpression\n    endif",
         says: "The resultExpression of a AnalysisCaseUsage is the ownedResultExpression of its ResultExpressionMembership, if any.",
     },
     Rule {
         name: "deriveAnalysisCaseDefinitionResultExpression",
         metaclass: ElementKind::AnalysisCaseDefinition,
-        ocl: "resultExpression =     let results : OrderedSet(ResultExpressionMembership) =         featureMembersip->             selectByKind(ResultExpressionMembership) in     if results->isEmpty() then null     else results->first().ownedResultExpression     endif",
+        ocl: "resultExpression =\n    let results : OrderedSet(ResultExpressionMembership) =\n        featureMembersip->\n            selectByKind(ResultExpressionMembership) in\n    if results->isEmpty() then null\n    else results->first().ownedResultExpression\n    endif",
         says: "The resultExpression of a AnalysisCaseDefinition is the ownedResultExpression of its ResultExpressionMembership, if any.",
     },
     Rule {
         name: "derivePortDefinitionConjugatedPortDefinition",
         metaclass: ElementKind::PortDefinition,
-        ocl: "conjugatedPortDefinition =  let conjugatedPortDefinitions : OrderedSet(ConjugatedPortDefinition) =     ownedMember->selectByKind(ConjugatedPortDefinition) in if conjugatedPortDefinitions->isEmpty() then null else conjugatedPortDefinitions->first() endif",
+        ocl: "conjugatedPortDefinition = \nlet conjugatedPortDefinitions : OrderedSet(ConjugatedPortDefinition) =\n    ownedMember->selectByKind(ConjugatedPortDefinition) in\nif conjugatedPortDefinitions->isEmpty() then null\nelse conjugatedPortDefinitions->first()\nendif",
         says: "The conjugatedPortDefinition of a PortDefinition is the ownedMember that is a ConjugatedPortDefinition.",
     },
     Rule {
@@ -8213,7 +8213,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveViewUsageExposedElement",
         metaclass: ElementKind::ViewUsage,
-        ocl: "exposedElement = ownedImport->selectByKind(Expose).     importedMemberships(Set{}).memberElement->     select(elm | includeAsExposed(elm))->     asOrderedSet()",
+        ocl: "exposedElement = ownedImport->selectByKind(Expose).\n    importedMemberships(Set{}).memberElement->\n    select(elm | includeAsExposed(elm))->\n    asOrderedSet()",
         says: "The exposedElements of a ViewUsage are those memberElements of the imported Memberships from all the Expose Relationships for which the includeAsExposed operation returns true.",
     },
     Rule {
@@ -8225,7 +8225,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveViewUsageViewRendering",
         metaclass: ElementKind::ViewUsage,
-        ocl: "viewRendering =     let renderings: OrderedSet(ViewRenderingMembership) =         featureMembership->selectByKind(ViewRenderingMembership) in     if renderings->isEmpty() then null     else renderings->first().referencedRendering     endif",
+        ocl: "viewRendering =\n    let renderings: OrderedSet(ViewRenderingMembership) =\n        featureMembership->selectByKind(ViewRenderingMembership) in\n    if renderings->isEmpty() then null\n    else renderings->first().referencedRendering\n    endif",
         says: "The viewRendering of a ViewUsage is the referencedRendering of its owned ViewRenderingMembership, if any.",
     },
     Rule {
@@ -8243,7 +8243,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveViewDefinitionViewRendering",
         metaclass: ElementKind::ViewDefinition,
-        ocl: "viewRendering =     let renderings: OrderedSet(ViewRenderingMembership) =         featureMembership->selectByKind(ViewRenderingMembership) in     if renderings->isEmpty() then null     else renderings->first().referencedRendering     endif",
+        ocl: "viewRendering =\n    let renderings: OrderedSet(ViewRenderingMembership) =\n        featureMembership->selectByKind(ViewRenderingMembership) in\n    if renderings->isEmpty() then null\n    else renderings->first().referencedRendering\n    endif",
         says: "The viewRendering of a ViewDefinition is the referencedRendering of its owned ViewRenderingMembership, if any.",
     },
     Rule {
@@ -8255,7 +8255,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveViewpointDefinitionViewpointStakeholder",
         metaclass: ElementKind::ViewpointDefinition,
-        ocl: "viewpointStakeholder = framedConcern.featureMemberhsip->     selectByKind(StakeholderMembership).     ownedStakeholderParameter",
+        ocl: "viewpointStakeholder = framedConcern.featureMemberhsip->\n    selectByKind(StakeholderMembership).\n    ownedStakeholderParameter",
         says: "The viewpointStakeholders of a ViewpointDefinition are the ownedStakeholderParameters of all featureMemberships that are StakeholderMemberships.",
     },
     Rule {
@@ -8267,7 +8267,7 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveVewRenderingMembershipReferencedRendering",
         metaclass: ElementKind::ViewRenderingMembership,
-        ocl: "referencedRendering =     let referencedFeature : Feature =          ownedRendering.referencedFeatureTarget() in     if referencedFeature = null then ownedRendering     else if referencedFeature.oclIsKindOf(RenderingUsage) then         refrencedFeature.oclAsType(RenderingUsage)     else null     endif endif",
+        ocl: "referencedRendering =\n    let referencedFeature : Feature = \n        ownedRendering.referencedFeatureTarget() in\n    if referencedFeature = null then ownedRendering\n    else if referencedFeature.oclIsKindOf(RenderingUsage) then\n        refrencedFeature.oclAsType(RenderingUsage)\n    else null\n    endif endif",
         says: "The referencedRendering of a ViewRenderingMembership is the the featureTarget of the referencedFeature of the ownedReferenceSubsetting (which must be a RenderingUsage) of the ownedRendering, if there is one, and, otherwise, the ownedRendering itself.",
     },
     Rule {
@@ -8285,13 +8285,13 @@ pub const DERIVATIONS: &[Rule] = &[
     Rule {
         name: "deriveVerificationCaseDefinitionVerifiedRequirement",
         metaclass: ElementKind::VerificationCaseDefinition,
-        ocl: "verifiedRequirement =     if objectiveRequirement = null then OrderedSet{}     else          objectiveRequirement.featureMembership->             selectByKind(RequirementVerificationMembership).             verifiedRequirement->asOrderedSet()     endif",
+        ocl: "verifiedRequirement =\n    if objectiveRequirement = null then OrderedSet{}\n    else \n        objectiveRequirement.featureMembership->\n            selectByKind(RequirementVerificationMembership).\n            verifiedRequirement->asOrderedSet()\n    endif",
         says: "The verifiedRequirements of a VerificationCaseDefinition are the verifiedRequirements of its RequirementVerificationMemberships.",
     },
     Rule {
         name: "deriveVerificationCaseUsageVerifiedRequirement",
         metaclass: ElementKind::VerificationCaseUsage,
-        ocl: "verifiedRequirement =     if objectiveRequirement = null then OrderedSet{}     else          objectiveRequirement.featureMembership->             selectByKind(RequirementVerificationMembership).             verifiedRequirement->asOrderedSet()     endif",
+        ocl: "verifiedRequirement =\n    if objectiveRequirement = null then OrderedSet{}\n    else \n        objectiveRequirement.featureMembership->\n            selectByKind(RequirementVerificationMembership).\n            verifiedRequirement->asOrderedSet()\n    endif",
         says: "The verifiedRequirements of a VerificationCaseUsage are the verifiedRequirements of its RequirementVerificationMemberships.",
     },
 ];
@@ -8322,13 +8322,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "sourceTargetFeature",
         metaclass: ElementKind::FeatureChainExpression,
         parameters: &[],
-        ocl: "let inputParameters : Feature = ownedFeatures->     select(direction = _'in') in if inputParameters->isEmpty() or     inputParameters->first().ownedFeature->isEmpty() then null else inputParameters->first().ownedFeature->first() endif",
+        ocl: "let inputParameters : Feature = ownedFeatures->\n    select(direction = _'in') in\nif inputParameters->isEmpty() or \n   inputParameters->first().ownedFeature->isEmpty()\nthen null\nelse inputParameters->first().ownedFeature->first()\nendif",
     },
     Operation {
         name: "instantiatedType",
         metaclass: ElementKind::InstantiationExpression,
         parameters: &[],
-        ocl: "let members : Sequence(Element) = ownedMembership->     reject(oclIsKindOf(FeatureMembership)).memberElement in if members->isEmpty() or not members->first().oclIsKindOf(Type) then null else typeMembers->first().oclAsType(Type) endif",
+        ocl: "let members : Sequence(Element) = ownedMembership->\n    reject(oclIsKindOf(FeatureMembership)).memberElement in\nif members->isEmpty() or not members->first().oclIsKindOf(Type) then null\nelse typeMembers->first().oclAsType(Type)\nendif",
     },
     Operation {
         name: "modelLevelEvaluable",
@@ -8340,7 +8340,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "evaluate",
         metaclass: ElementKind::MetadataAccessExpression,
         parameters: &["target", "result"],
-        ocl: "referencedElement.ownedElement->     select(oclIsKindOf(MetadataFeature)          and annotatedElement->includes(referencedElement))->     including(metaclassFeature())",
+        ocl: "referencedElement.ownedElement->\n    select(oclIsKindOf(MetadataFeature) \n        and annotatedElement->includes(referencedElement))->\n    including(metaclassFeature())",
     },
     Operation {
         name: "modelLevelEvaluable",
@@ -8364,7 +8364,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "instantiatedType",
         metaclass: ElementKind::OperatorExpression,
         parameters: &[],
-        ocl: "let libFunctions : Sequence(Element) =     Sequence{'BaseFunctions', 'DataFunctions', 'ControlFunctions'}->     collect(ns | resolveGlobal(ns + \"::'\" + operator + \"'\").     memberElement) in if libFunctions->isEmpty() then null else libFunctions->first().oclAsType(Type) endif",
+        ocl: "let libFunctions : Sequence(Element) =\n    Sequence{'BaseFunctions', 'DataFunctions', 'ControlFunctions'}->\n    collect(ns | resolveGlobal(ns + \"::'\" + operator + \"'\").\n    memberElement) in\nif libFunctions->isEmpty() then null\nelse libFunctions->first().oclAsType(Type)\nendif",
     },
     Operation {
         name: "modelLevelEvaluable",
@@ -8388,13 +8388,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "modelLevelEvaluable",
         metaclass: ElementKind::FeatureReferenceExpression,
         parameters: &["visited"],
-        ocl: "referent.conformsTo('Anything::self') or visited->excludes(referent) and  (referent.oclIsKindOf(Expression) and      referent.oclAsType(Expression).modelLevelEvaluable(visited->including(referent)) or referent.owningType <> null and      (referent.owningType.isOclKindOf(MetaClass) or      referent.owningType.isOclKindOf(MetadataFeature)) or referent.featuringType->isEmpty() and     (referent.valuation = null or      referent.valuation.modelLevelEvaluable(visited->including(referent))))",
+        ocl: "referent.conformsTo('Anything::self') or\nvisited->excludes(referent) and \n(referent.oclIsKindOf(Expression) and \n    referent.oclAsType(Expression).modelLevelEvaluable(visited->including(referent)) or\nreferent.owningType <> null and \n    (referent.owningType.isOclKindOf(MetaClass) or \n    referent.owningType.isOclKindOf(MetadataFeature)) or\nreferent.featuringType->isEmpty() and\n    (referent.valuation = null or \n    referent.valuation.modelLevelEvaluable(visited->including(referent))))",
     },
     Operation {
         name: "evaluate",
         metaclass: ElementKind::FeatureReferenceExpression,
         parameters: &["target", "result"],
-        ocl: "if not target.oclIsKindOf(Type) then Sequence{} else     let feature: Sequence(Feature) =          target.oclAsType(Type).feature->select(f |             f.ownedRedefinition.redefinedFeature->                 includes(referent)) in         if feature->notEmpty() then              feature.valuation.value.evaluate(target)         else if referent.featuringType->isEmpty()              then referent         else Sequence{}          endif endif endif",
+        ocl: "if not target.oclIsKindOf(Type) then Sequence{}\nelse\n    let feature: Sequence(Feature) = \n        target.oclAsType(Type).feature->select(f |\n            f.ownedRedefinition.redefinedFeature->\n                includes(referent)) in\n        if feature->notEmpty() then \n            feature.valuation.value.evaluate(target)\n        else if referent.featuringType->isEmpty() \n            then referent\n        else Sequence{} \n        endif endif\nendif",
     },
     Operation {
         name: "parameterDirection",
@@ -8406,19 +8406,19 @@ pub const OPERATIONS: &[Operation] = &[
         name: "modelLevelEvaluable",
         metaclass: ElementKind::Expression,
         parameters: &["visited"],
-        ocl: "ownedSpecialization->forAll(isImplied) and  ownedFeature->forAll(f |     (directionOf(f) = FeatureDirectionKind::_'in' or f = result) and         f.ownedFeature->isEmpty() and f.valuation = null or     f.owningFeatureMembership.oclIsKindOf(ResultExpressionMembership) and         f.oclAsType(Expression).modelLevelEvaluable(visited)     ",
+        ocl: "ownedSpecialization->forAll(isImplied) and \nownedFeature->forAll(f |\n    (directionOf(f) = FeatureDirectionKind::_'in' or f = result) and\n        f.ownedFeature->isEmpty() and f.valuation = null or\n    f.owningFeatureMembership.oclIsKindOf(ResultExpressionMembership) and\n        f.oclAsType(Expression).modelLevelEvaluable(visited)\n    ",
     },
     Operation {
         name: "evaluate",
         metaclass: ElementKind::Expression,
         parameters: &["target", "result"],
-        ocl: "let resultExprs : Sequence(Expression) =     ownedFeatureMembership->         selectByKind(ResultExpressionMembership).         ownedResultExpression in if resultExpr->isEmpty() then Sequence{} else resultExprs->first().evaluate(target) endif",
+        ocl: "let resultExprs : Sequence(Expression) =\n    ownedFeatureMembership->\n        selectByKind(ResultExpressionMembership).\n        ownedResultExpression in\nif resultExpr->isEmpty() then Sequence{}\nelse resultExprs->first().evaluate(target)\nendif",
     },
     Operation {
         name: "checkCondition",
         metaclass: ElementKind::Expression,
         parameters: &["target"],
-        ocl: "let results: Sequence(Element) = evaluate(target) in     result->size() = 1 and     results->first().oclIsKindOf(LiteralBoolean) and      results->first().oclAsType(LiteralBoolean).value",
+        ocl: "let results: Sequence(Element) = evaluate(target) in\n    result->size() = 1 and\n    results->first().oclIsKindOf(LiteralBoolean) and \n    results->first().oclAsType(LiteralBoolean).value",
     },
     Operation {
         name: "libraryNamespace",
@@ -8436,25 +8436,25 @@ pub const OPERATIONS: &[Operation] = &[
         name: "includeAsMember",
         metaclass: ElementKind::Package,
         parameters: &["element"],
-        ocl: "let metadataFeatures: Sequence(AnnotatingElement) =      element.ownedAnnotation.annotatingElement->         selectByKind(MetadataFeature) in     self.filterCondition->forAll(cond |          metadataFeatures->exists(elem |              cond.checkCondition(elem)))",
+        ocl: "let metadataFeatures: Sequence(AnnotatingElement) = \n    element.ownedAnnotation.annotatingElement->\n        selectByKind(MetadataFeature) in\n    self.filterCondition->forAll(cond | \n        metadataFeatures->exists(elem | \n            cond.checkCondition(elem)))",
     },
     Operation {
         name: "hasBounds",
         metaclass: ElementKind::MultiplicityRange,
         parameters: &["lower", "upper"],
-        ocl: "valueOf(upperBound) = upper and let lowerValue: UnlimitedNatural = valueOf(lowerBound) in (lowerValue = lower or  lowerValue = null and      (lower = upper or       lower = 0 and upper = *))  ",
+        ocl: "valueOf(upperBound) = upper and\nlet lowerValue: UnlimitedNatural = valueOf(lowerBound) in\n(lowerValue = lower or\n lowerValue = null and \n    (lower = upper or \n     lower = 0 and upper = *))\n ",
     },
     Operation {
         name: "valueOf",
         metaclass: ElementKind::MultiplicityRange,
         parameters: &["bound"],
-        ocl: "if bound = null or not bound.isModelLevelEvaluable then      null else     let boundEval: Sequence(Element) = bound.evaluate(owningType) in     if boundEval->size() <> 1 then null else         let valueEval: Element = boundEval->at(1) in         if valueEval.oclIsKindOf(LiteralInfinity) then *         else if valueEval.oclIsKindOf(LiteralInteger) then             let value : Integer =                  valueEval.oclAsKindOf(LiteralInteger).value in             if value >= 0 then value else null endif         else null         endif endif     endif endif ",
+        ocl: "if bound = null or not bound.isModelLevelEvaluable then \n    null\nelse\n    let boundEval: Sequence(Element) = bound.evaluate(owningType) in\n    if boundEval->size() <> 1 then null else\n        let valueEval: Element = boundEval->at(1) in\n        if valueEval.oclIsKindOf(LiteralInfinity) then *\n        else if valueEval.oclIsKindOf(LiteralInteger) then\n            let value : Integer = \n                valueEval.oclAsKindOf(LiteralInteger).value in\n            if value >= 0 then value else null endif\n        else null\n        endif endif\n    endif\nendif ",
     },
     Operation {
         name: "evaluateFeature",
         metaclass: ElementKind::MetadataFeature,
         parameters: &["baseFeature"],
-        ocl: "let selectedFeatures : Sequence(Feature) = feature->     select(closure(ownedRedefinition.redefinedFeature)->            includes(baseFeature)) in if selectedFeatures->isEmpty() then null else     let selectedFeature : Feature = selectedFeatures->first() in     let featureValues : FeatureValue = selectedFeature->         closure(ownedRedefinition.redefinedFeature).ownedMember->         selectAsKind(FeatureValue) in     if featureValues->isEmpty() then null     else featureValues->first().value.evaluate(self)     endif",
+        ocl: "let selectedFeatures : Sequence(Feature) = feature->\n    select(closure(ownedRedefinition.redefinedFeature)->\n           includes(baseFeature)) in\nif selectedFeatures->isEmpty() then null\nelse\n    let selectedFeature : Feature = selectedFeatures->first() in\n    let featureValues : FeatureValue = selectedFeature->\n        closure(ownedRedefinition.redefinedFeature).ownedMember->\n        selectAsKind(FeatureValue) in\n    if featureValues->isEmpty() then null\n    else featureValues->first().value.evaluate(self)\n    endif",
     },
     Operation {
         name: "isSemantic",
@@ -8478,7 +8478,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "visibleMemberships",
         metaclass: ElementKind::Type,
         parameters: &["excluded", "isRecursive", "includeAll"],
-        ocl: "let visibleMemberships : OrderedSet(Membership) =     self.oclAsType(Namespace).         visibleMemberships(excluded, isRecursive, includeAll) in let visibleInheritedMemberships : OrderedSet(Membership) =      inheritedMemberships(excluded->including(self), Set{}, isRecursive)->         select(includeAll or visibility = VisibilityKind::public) in visibleMemberships->union(visibleInheritedMemberships)",
+        ocl: "let visibleMemberships : OrderedSet(Membership) =\n    self.oclAsType(Namespace).\n        visibleMemberships(excluded, isRecursive, includeAll) in\nlet visibleInheritedMemberships : OrderedSet(Membership) = \n    inheritedMemberships(excluded->including(self), Set{}, isRecursive)->\n        select(includeAll or visibility = VisibilityKind::public) in\nvisibleMemberships->union(visibleInheritedMemberships)",
     },
     Operation {
         name: "inheritedMemberships",
@@ -8490,25 +8490,25 @@ pub const OPERATIONS: &[Operation] = &[
         name: "inheritableMemberships",
         metaclass: ElementKind::Type,
         parameters: &["excludedNamespaces", "excludedTypes", "excludeImplied"],
-        ocl: "let excludingSelf : Set(Type) = excludedType->including(self) in supertypes(excludeImplied)->reject(t | excludingSelf->includes(t)).     nonPrivateMemberships(excludedNamespaces, excludingSelf, excludeImplied) ",
+        ocl: "let excludingSelf : Set(Type) = excludedType->including(self) in\nsupertypes(excludeImplied)->reject(t | excludingSelf->includes(t)).\n    nonPrivateMemberships(excludedNamespaces, excludingSelf, excludeImplied)\n",
     },
     Operation {
         name: "nonPrivateMemberships",
         metaclass: ElementKind::Type,
         parameters: &["excludedNamespaces", "excludedTypes", "excludeImplied"],
-        ocl: "let publicMemberships : OrderedSet(Membership) =      membershipsOfVisibility(VisibilityKind::public, excludedNamespaces) in let protectedMemberships : OrderedSet(Membership) =      membershipsOfVisibility(VisibilityKind::protected, excludedNamespaces) in let inheritedMemberships : OrderedSet(Membership) =     inheritedMemberships(excludedNamespaces, excludedTypes, excludeImplied) in publicMemberships->     union(protectedMemberships)->     union(inheritedMemberships)",
+        ocl: "let publicMemberships : OrderedSet(Membership) = \n    membershipsOfVisibility(VisibilityKind::public, excludedNamespaces) in\nlet protectedMemberships : OrderedSet(Membership) = \n    membershipsOfVisibility(VisibilityKind::protected, excludedNamespaces) in\nlet inheritedMemberships : OrderedSet(Membership) =\n    inheritedMemberships(excludedNamespaces, excludedTypes, excludeImplied) in\npublicMemberships->\n    union(protectedMemberships)->\n    union(inheritedMemberships)",
     },
     Operation {
         name: "removeRedefinedFeatures",
         metaclass: ElementKind::Type,
         parameters: &["memberships"],
-        ocl: "let reducedMemberships : Sequence(Membership) =     memberships->reject(mem1 |         memberships->excluding(mem1)->             exists(mem2 | allRedefinedFeaturesOf(mem2)->                 includes(mem1.memberElement))) in let redefinedFeatures : Set(Feature) =      ownedFeature.redefinition.redefinedFeature->asSet() in reducedMemberships->reject(mem | allRedefinedFeaturesOf(mem)->     exists(feature | redefinedFeatures->includes(feature)))",
+        ocl: "let reducedMemberships : Sequence(Membership) =\n    memberships->reject(mem1 |\n        memberships->excluding(mem1)->\n            exists(mem2 | allRedefinedFeaturesOf(mem2)->\n                includes(mem1.memberElement))) in\nlet redefinedFeatures : Set(Feature) = \n    ownedFeature.redefinition.redefinedFeature->asSet() in\nreducedMemberships->reject(mem | allRedefinedFeaturesOf(mem)->\n    exists(feature | redefinedFeatures->includes(feature)))",
     },
     Operation {
         name: "allRedefinedFeaturesOf",
         metaclass: ElementKind::Type,
         parameters: &["membership"],
-        ocl: "if not membership.memberElement.oclIsType(Feature) then Set{}  else membership.memberElement.oclAsType(Feature).allRedefinedFeatures() endif",
+        ocl: "if not membership.memberElement.oclIsType(Feature) then Set{} \nelse membership.memberElement.oclAsType(Feature).allRedefinedFeatures()\nendif",
     },
     Operation {
         name: "directionOf",
@@ -8520,13 +8520,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "directionOfExcluding",
         metaclass: ElementKind::Type,
         parameters: &["feature", "excluded"],
-        ocl: "let excludedSelf : Set(Type) = excluded->including(self) in  if feature.owningType = self then feature.direction else     let directions : Sequence(FeatureDirectionKind) =         supertypes(false)->excluding(excludedSelf).         directionOfExcluding(feature, excludedSelf)->         select(d | d <> null) in     if directions->isEmpty() then null  else     let direction : FeatureDirectionKind = directions->first() in     if not isConjugated then direction     else if direction = FeatureDirectionKind::_'in' then FeatureDirectionKind::out     else if direction = FeatureDirectionKind::out then FeatureDirectionKind::_'in'     else direction     endif endif endif   endif endif",
+        ocl: "let excludedSelf : Set(Type) = excluded->including(self) in \nif feature.owningType = self then feature.direction\nelse\n    let directions : Sequence(FeatureDirectionKind) =\n        supertypes(false)->excluding(excludedSelf).\n        directionOfExcluding(feature, excludedSelf)->\n        select(d | d <> null) in\n    if directions->isEmpty() then null\n else\n    let direction : FeatureDirectionKind = directions->first() in\n    if not isConjugated then direction\n    else if direction = FeatureDirectionKind::_'in' then FeatureDirectionKind::out\n    else if direction = FeatureDirectionKind::out then FeatureDirectionKind::_'in'\n    else direction\n    endif endif endif   endif\nendif",
     },
     Operation {
         name: "supertypes",
         metaclass: ElementKind::Type,
         parameters: &["excludeImplied"],
-        ocl: "if isConjugated then Sequence{conjugator.originalType} else if not excludeImplied then ownedSpecialization.general else ownedSpecialization->reject(isImplied).general endif endif",
+        ocl: "if isConjugated then Sequence{conjugator.originalType}\nelse if not excludeImplied then ownedSpecialization.general\nelse ownedSpecialization->reject(isImplied).general\nendif\nendif",
     },
     Operation {
         name: "allSupertypes",
@@ -8544,7 +8544,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "specializesFromLibrary",
         metaclass: ElementKind::Type,
         parameters: &["libraryTypeName"],
-        ocl: "let mem : Membership = resolveGlobal(libraryTypeName) in mem <> null and mem.memberElement.oclIsKindOf(Type) and specializes(mem.memberElement.oclAsType(Type))",
+        ocl: "let mem : Membership = resolveGlobal(libraryTypeName) in\nmem <> null and mem.memberElement.oclIsKindOf(Type) and\nspecializes(mem.memberElement.oclAsType(Type))",
     },
     Operation {
         name: "isCompatibleWith",
@@ -8556,7 +8556,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "multiplicities",
         metaclass: ElementKind::Type,
         parameters: &[],
-        ocl: "if multiplicity <> null then OrderedSet{multiplicity} else      ownedSpecialization.general->closure(t |         if t.multiplicity <> null then OrderedSet{}         else ownedSpecialization.general     )->select(multiplicity <> null).multiplicity->asOrderedSet() endif",
+        ocl: "if multiplicity <> null then OrderedSet{multiplicity}\nelse \n    ownedSpecialization.general->closure(t |\n        if t.multiplicity <> null then OrderedSet{}\n        else ownedSpecialization.general\n    )->select(multiplicity <> null).multiplicity->asOrderedSet()\nendif",
     },
     Operation {
         name: "directionFor",
@@ -8568,13 +8568,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "effectiveShortName",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "if declaredShortName <> null or declaredName <> null then     declaredShortName else     let namingFeature : Feature = namingFeature() in     if namingFeature = null then         null     else         namingFeature.effectiveShortName()     endif endif",
+        ocl: "if declaredShortName <> null or declaredName <> null then\n    declaredShortName\nelse\n    let namingFeature : Feature = namingFeature() in\n    if namingFeature = null then\n        null\n    else\n        namingFeature.effectiveShortName()\n    endif\nendif",
     },
     Operation {
         name: "effectiveName",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "if declaredShortName <> null or declaredName <> null then     declaredName else     let namingFeature : Feature = namingFeature() in     if namingFeature = null then         null     else         namingFeature.effectiveName()     endif endif",
+        ocl: "if declaredShortName <> null or declaredName <> null then\n    declaredName\nelse\n    let namingFeature : Feature = namingFeature() in\n    if namingFeature = null then\n        null\n    else\n        namingFeature.effectiveName()\n    endif\nendif",
     },
     Operation {
         name: "namingFeature",
@@ -8586,7 +8586,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "supertypes",
         metaclass: ElementKind::Feature,
         parameters: &["excludeImplied"],
-        ocl: "let supertypes : OrderedSet(Type) =      self.oclAsType(Type).supertypes(excludeImplied) in if featureTarget = self then supertypes else supertypes->append(featureTarget) endif",
+        ocl: "let supertypes : OrderedSet(Type) = \n    self.oclAsType(Type).supertypes(excludeImplied) in\nif featureTarget = self then supertypes\nelse supertypes->append(featureTarget)\nendif",
     },
     Operation {
         name: "redefines",
@@ -8598,37 +8598,37 @@ pub const OPERATIONS: &[Operation] = &[
         name: "redefinesFromLibrary",
         metaclass: ElementKind::Feature,
         parameters: &["libraryFeatureName"],
-        ocl: "let mem: Membership = resolveGlobal(libraryFeatureName) in mem <> null and mem.memberElement.oclIsKindOf(Feature) and redefines(mem.memberElement.oclAsType(Feature))",
+        ocl: "let mem: Membership = resolveGlobal(libraryFeatureName) in\nmem <> null and mem.memberElement.oclIsKindOf(Feature) and\nredefines(mem.memberElement.oclAsType(Feature))",
     },
     Operation {
         name: "subsetsChain",
         metaclass: ElementKind::Feature,
         parameters: &["first", "second"],
-        ocl: "allSuperTypes()->selectAsKind(Feature)->     exists(f | let n: Integer = f.chainingFeature->size() in         n >= 2 and         f.chainingFeature->at(n-1) = first and         f.chainingFeature->at(n) = second)",
+        ocl: "allSuperTypes()->selectAsKind(Feature)->\n    exists(f | let n: Integer = f.chainingFeature->size() in\n        n >= 2 and\n        f.chainingFeature->at(n-1) = first and\n        f.chainingFeature->at(n) = second)",
     },
     Operation {
         name: "isCompatibleWith",
         metaclass: ElementKind::Feature,
         parameters: &["otherType"],
-        ocl: "specializes(otherType) or     supertype.oclIsKindOf(Feature) and     ownedFeature->isEmpty() and     otherType.ownedFeature->isEmpty() and     ownedRedefinitions.allRedefinedFeatures()->exists(f |           otherType.oclAsType(Feature).allRedefinedFeatures()->includes(f)) and     canAccess(otherType.oclAsType(Feature))",
+        ocl: "specializes(otherType) or\n    supertype.oclIsKindOf(Feature) and\n    ownedFeature->isEmpty() and\n    otherType.ownedFeature->isEmpty() and\n    ownedRedefinitions.allRedefinedFeatures()->exists(f |  \n        otherType.oclAsType(Feature).allRedefinedFeatures()->includes(f)) and\n    canAccess(otherType.oclAsType(Feature))",
     },
     Operation {
         name: "typingFeatures",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "if not isConjugated then     let subsettedFeatures : OrderedSet(Feature) =          subsetting->reject(s | s.oclIsKindOf(CrossSubsetting)).subsettedFeatures in      if chainingFeature->isEmpty() or        subsettedFeature->includes(chainingFeature->last())     then subsettedFeatures     else subsettedFeatures->append(chainingFeature->last())     endif else if conjugator.originalType.oclIsKindOf(Feature) then     OrderedSet{conjugator.originalType.oclAsType(Feature)} else OrderedSet{} endif endif",
+        ocl: "if not isConjugated then\n    let subsettedFeatures : OrderedSet(Feature) = \n        subsetting->reject(s | s.oclIsKindOf(CrossSubsetting)).subsettedFeatures in \n    if chainingFeature->isEmpty() or\n       subsettedFeature->includes(chainingFeature->last())\n    then subsettedFeatures\n    else subsettedFeatures->append(chainingFeature->last())\n    endif\nelse if conjugator.originalType.oclIsKindOf(Feature) then\n    OrderedSet{conjugator.originalType.oclAsType(Feature)}\nelse OrderedSet{}\nendif endif",
     },
     Operation {
         name: "asCartesianProduct",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "featuringType->select(t | t.owner <> self)->     union(featuringType->select(t | t.owner = self)->         selectByKind(Feature).asCartesianProduct())->     union(type)",
+        ocl: "featuringType->select(t | t.owner <> self)->\n    union(featuringType->select(t | t.owner = self)->\n        selectByKind(Feature).asCartesianProduct())->\n    union(type)",
     },
     Operation {
         name: "isCartesianProduct",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "type->size() = 1 and featuringType.size() = 1 and (featuringType.first().owner = self implies     featuringType.first().oclIsKindOf(Feature) and     featuringType.first().oclAsType(Feature).isCartesianProduct())",
+        ocl: "type->size() = 1 and\nfeaturingType.size() = 1 and\n(featuringType.first().owner = self implies\n    featuringType.first().oclIsKindOf(Feature) and\n    featuringType.first().oclAsType(Feature).isCartesianProduct())",
     },
     Operation {
         name: "isOwnedCrossFeature",
@@ -8640,7 +8640,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "ownedCrossFeature",
         metaclass: ElementKind::Feature,
         parameters: &[],
-        ocl: "if not isEnd or owningType = null then null else     let ownedMemberFeatures: Sequence(Feature) =         ownedMember->selectByKind(Feature)->             reject(oclIsKindOf(Multiplicity) or                     oclIsKindOf(MetadataFeature) or                    oclIsKindOf(FeatureValue))->             reject(owningMembership.oclIsKindOf(FeatureMembership)) in     if ownedMemberFeatures.isEmpty() then null     else ownedMemberFeatures->first()     endif",
+        ocl: "if not isEnd or owningType = null then null\nelse\n    let ownedMemberFeatures: Sequence(Feature) =\n        ownedMember->selectByKind(Feature)->\n            reject(oclIsKindOf(Multiplicity) or \n                   oclIsKindOf(MetadataFeature) or\n                   oclIsKindOf(FeatureValue))->\n            reject(owningMembership.oclIsKindOf(FeatureMembership)) in\n    if ownedMemberFeatures.isEmpty() then null\n    else ownedMemberFeatures->first()\n    endif",
     },
     Operation {
         name: "allRedefinedFeatures",
@@ -8652,31 +8652,31 @@ pub const OPERATIONS: &[Operation] = &[
         name: "isFeaturedWithin",
         metaclass: ElementKind::Feature,
         parameters: &["type"],
-        ocl: "if type = null then     featuringType->forAll(f | f = resolveGlobal('Base::Anything').memberElement) else     featuringType->forAll(f | type.isCompatibleWith(f)) or     isVariable and type.specializes(owningType) or     chainingFeature->notEmpty() and chainingFeature->first().isVariable and         type.specializes(chainingFeature->first().owningType) endif",
+        ocl: "if type = null then\n    featuringType->forAll(f | f = resolveGlobal('Base::Anything').memberElement)\nelse\n    featuringType->forAll(f | type.isCompatibleWith(f)) or\n    isVariable and type.specializes(owningType) or\n    chainingFeature->notEmpty() and chainingFeature->first().isVariable and\n        type.specializes(chainingFeature->first().owningType)\nendif",
     },
     Operation {
         name: "canAccess",
         metaclass: ElementKind::Feature,
         parameters: &["feature"],
-        ocl: "let anythingType: Element =     subsettingFeature.resolveGlobal('Base::Anything').memberElement in let allFeaturingTypes : Sequence(Type) =     featuringTypes->closure(t |         if not t.oclIsKindOf(Feature) then Sequence{}         else             let featuringTypes : OrderedSet(Type) = t.oclAsType(Feature).featuringType in             if featuringTypes->isEmpty() then Sequence{anythingType}             else featuringTypes             endif          endif) in allFeaturingTypes->exists(t | feature.isFeaturedWithin(t))",
+        ocl: "let anythingType: Element =\n    subsettingFeature.resolveGlobal('Base::Anything').memberElement in\nlet allFeaturingTypes : Sequence(Type) =\n    featuringTypes->closure(t |\n        if not t.oclIsKindOf(Feature) then Sequence{}\n        else\n            let featuringTypes : OrderedSet(Type) = t.oclAsType(Feature).featuringType in\n            if featuringTypes->isEmpty() then Sequence{anythingType}\n            else featuringTypes\n            endif \n        endif) in\nallFeaturingTypes->exists(t | feature.isFeaturedWithin(t))",
     },
     Operation {
         name: "isFeaturingType",
         metaclass: ElementKind::Feature,
         parameters: &["type"],
-        ocl: "owningType <> null and if not isVariable then type = owningType else if owningType = resolveGlobal('Occurrences::Occurrence').memberElement then     type = resolveGlobal('Occurrences::Occurrence::snapshots').memberElement  else      type.oclIsKindOf(Feature) and     let feature : Feature = type.oclAsType(Feature) in     feature.featuringType->includes(owningType) and     feature.redefinesFromLibrary('Occurrences::Occurrence::snapshots') endif ",
+        ocl: "owningType <> null and\nif not isVariable then type = owningType\nelse if owningType = resolveGlobal('Occurrences::Occurrence').memberElement then\n    type = resolveGlobal('Occurrences::Occurrence::snapshots').memberElement \nelse \n    type.oclIsKindOf(Feature) and\n    let feature : Feature = type.oclAsType(Feature) in\n    feature.featuringType->includes(owningType) and\n    feature.redefinesFromLibrary('Occurrences::Occurrence::snapshots')\nendif\n",
     },
     Operation {
         name: "importedMemberships",
         metaclass: ElementKind::NamespaceImport,
         parameters: &["excluded"],
-        ocl: "if excluded->includes(importedNamespace) then Sequence{} else importedNamespace.visibleMemberships(excluded, isRecursive, isImportAll)",
+        ocl: "if excluded->includes(importedNamespace) then Sequence{}\nelse importedNamespace.visibleMemberships(excluded, isRecursive, isImportAll)",
     },
     Operation {
         name: "importedMemberships",
         metaclass: ElementKind::MembershipImport,
         parameters: &["excluded"],
-        ocl: "if not isRecursive or     not importedElement.oclIsKindOf(Namespace) or    excluded->includes(importedElement) then Sequence{importedMembership} else importedElement.oclAsType(Namespace).         visibleMemberships(excluded, true, importAll)->         prepend(importedMembership) endif",
+        ocl: "if not isRecursive or \n   not importedElement.oclIsKindOf(Namespace) or\n   excluded->includes(importedElement)\nthen Sequence{importedMembership}\nelse importedElement.oclAsType(Namespace).\n        visibleMemberships(excluded, true, importAll)->\n        prepend(importedMembership)\nendif",
     },
     Operation {
         name: "path",
@@ -8688,19 +8688,19 @@ pub const OPERATIONS: &[Operation] = &[
         name: "namesOf",
         metaclass: ElementKind::Namespace,
         parameters: &["element"],
-        ocl: "let elementMemberships : Sequence(Membership) =      memberships->select(memberElement = element) in memberships.memberShortName->     union(memberships.memberName)->     asSet()",
+        ocl: "let elementMemberships : Sequence(Membership) = \n    memberships->select(memberElement = element) in\nmemberships.memberShortName->\n    union(memberships.memberName)->\n    asSet()",
     },
     Operation {
         name: "visibilityOf",
         metaclass: ElementKind::Namespace,
         parameters: &["mem"],
-        ocl: "if importedMembership->includes(mem) then     ownedImport->         select(importedMemberships(Set{})->includes(mem)).         first().visibility else if memberships->includes(mem) then     mem.visibility else     VisibilityKind::private endif",
+        ocl: "if importedMembership->includes(mem) then\n    ownedImport->\n        select(importedMemberships(Set{})->includes(mem)).\n        first().visibility\nelse if memberships->includes(mem) then\n    mem.visibility\nelse\n    VisibilityKind::private\nendif",
     },
     Operation {
         name: "visibleMemberships",
         metaclass: ElementKind::Namespace,
         parameters: &["excluded", "isRecursive", "includeAll"],
-        ocl: "let visibleMemberships : OrderedSet(Membership) =      if includeAll then membershipsOfVisibility(null, excluded)     else membershipsOfVisibility(VisibilityKind::public, excluded)     endif in if not isRecursive then visibleMemberships else visibleMemberships->union(ownedMember->     selectAsKind(Namespace).     select(includeAll or owningMembership.visibility = VisibilityKind::public)->     visibleMemberships(excluded->including(self), true, includeAll)) endif ",
+        ocl: "let visibleMemberships : OrderedSet(Membership) = \n    if includeAll then membershipsOfVisibility(null, excluded)\n    else membershipsOfVisibility(VisibilityKind::public, excluded)\n    endif in\nif not isRecursive then visibleMemberships\nelse visibleMemberships->union(ownedMember->\n    selectAsKind(Namespace).\n    select(includeAll or owningMembership.visibility = VisibilityKind::public)->\n    visibleMemberships(excluded->including(self), true, includeAll))\nendif\n",
     },
     Operation {
         name: "importedMemberships",
@@ -8712,13 +8712,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "membershipsOfVisibility",
         metaclass: ElementKind::Namespace,
         parameters: &["visibility", "excluded"],
-        ocl: "ownedMembership->     select(mem | visibility = null or mem.visibility = visibility)->     union(ownedImport->         select(imp | visibility = null or imp.visibility = visibility).         importedMemberships(excluded->including(self)))",
+        ocl: "ownedMembership->\n    select(mem | visibility = null or mem.visibility = visibility)->\n    union(ownedImport->\n        select(imp | visibility = null or imp.visibility = visibility).\n        importedMemberships(excluded->including(self)))",
     },
     Operation {
         name: "resolve",
         metaclass: ElementKind::Namespace,
         parameters: &["qualifiedName"],
-        ocl: "let qualification : String = qualificationOf(qualifiedName) in let name : String = unqualifiedNameOf(qualifiedName) in if qualification = null then resolveLocal(name) else if qualification = '$' then  resolveGlobal(name) else      let namespaceMembership : Membership = resolve(qualification) in     if namespaceMembership = null or         not namespaceMembership.memberElement.oclIsKindOf(Namespace)      then null     else          namespaceMembership.memberElement.oclAsType(Namespace).         resolveVisible(name)      endif endif endif",
+        ocl: "let qualification : String = qualificationOf(qualifiedName) in\nlet name : String = unqualifiedNameOf(qualifiedName) in\nif qualification = null then resolveLocal(name)\nelse if qualification = '$' then  resolveGlobal(name)\nelse \n    let namespaceMembership : Membership = resolve(qualification) in\n    if namespaceMembership = null or \n       not namespaceMembership.memberElement.oclIsKindOf(Namespace) \n    then null\n    else \n        namespaceMembership.memberElement.oclAsType(Namespace).\n        resolveVisible(name) \n    endif\nendif endif",
     },
     Operation {
         name: "resolveGlobal",
@@ -8730,13 +8730,13 @@ pub const OPERATIONS: &[Operation] = &[
         name: "resolveLocal",
         metaclass: ElementKind::Namespace,
         parameters: &["name"],
-        ocl: "if owningNamespace = null then resolveGlobal(name) else     let memberships : Membership = membership->         select(memberShortName = name or memberName = name) in     if memberships->notEmpty() then memberships->first()     else owningNamspace.resolveLocal(name)     endif endif",
+        ocl: "if owningNamespace = null then resolveGlobal(name)\nelse\n    let memberships : Membership = membership->\n        select(memberShortName = name or memberName = name) in\n    if memberships->notEmpty() then memberships->first()\n    else owningNamspace.resolveLocal(name)\n    endif\nendif",
     },
     Operation {
         name: "resolveVisible",
         metaclass: ElementKind::Namespace,
         parameters: &["name"],
-        ocl: "let memberships : Sequence(Membership) =     visibleMemberships(Set{}, false, false)->     select(memberShortName = name or memberName = name) in if memberships->isEmpty() then null else memberships->first() endif",
+        ocl: "let memberships : Sequence(Membership) =\n    visibleMemberships(Set{}, false, false)->\n    select(memberShortName = name or memberName = name) in\nif memberships->isEmpty() then null\nelse memberships->first()\nendif",
     },
     Operation {
         name: "qualificationOf",
@@ -8754,19 +8754,19 @@ pub const OPERATIONS: &[Operation] = &[
         name: "isDistinguishableFrom",
         metaclass: ElementKind::Membership,
         parameters: &["other"],
-        ocl: "not (memberElement.oclKindOf(other.memberElement.oclType()) or      other.memberElement.oclKindOf(memberElement.oclType())) or (shortMemberName = null or     (shortMemberName <> other.shortMemberName and      shortMemberName <> other.memberName)) and (memberName = null or     (memberName <> other.shortMemberName and      memberName <> other.memberName))) ",
+        ocl: "not (memberElement.oclKindOf(other.memberElement.oclType()) or\n     other.memberElement.oclKindOf(memberElement.oclType())) or\n(shortMemberName = null or\n    (shortMemberName <> other.shortMemberName and\n     shortMemberName <> other.memberName)) and\n(memberName = null or\n    (memberName <> other.shortMemberName and\n     memberName <> other.memberName)))\n",
     },
     Operation {
         name: "libraryNamespace",
         metaclass: ElementKind::Relationship,
         parameters: &[],
-        ocl: "if owningRelatedElement <> null then owningRelatedElement.libraryNamespace() else if owningRelationship <> null then owningRelationship.libraryNamespace()  else null endif endif",
+        ocl: "if owningRelatedElement <> null then owningRelatedElement.libraryNamespace()\nelse if owningRelationship <> null then owningRelationship.libraryNamespace() \nelse null endif endif",
     },
     Operation {
         name: "path",
         metaclass: ElementKind::Relationship,
         parameters: &[],
-        ocl: "if owningRelationship = null and owningRelatedElement <> null then     owningRelatedElement.path() + '/' +      owningRelatedElement.ownedRelationship->indexOf(self).toString()     -- A position index shall be converted to a decimal string representation      -- consisting of only decimal digits, with no sign, leading zeros or leading      -- or trailing whitespace. else self.oclAsType(Element).path() endif",
+        ocl: "if owningRelationship = null and owningRelatedElement <> null then\n    owningRelatedElement.path() + '/' + \n    owningRelatedElement.ownedRelationship->indexOf(self).toString()\n    -- A position index shall be converted to a decimal string representation \n    -- consisting of only decimal digits, with no sign, leading zeros or leading \n    -- or trailing whitespace.\nelse self.oclAsType(Element).path()\nendif",
     },
     Operation {
         name: "effectiveShortName",
@@ -8790,7 +8790,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "path",
         metaclass: ElementKind::Element,
         parameters: &[],
-        ocl: "if qualifiedName <> null then qualifiedName else if owningRelationship <> null then     owningRelationship.path() + '/' +      owningRelationship.ownedRelatedElement->indexOf(self).toString()     -- A position index shall be converted to a decimal string representation      -- consisting of only decimal digits, with no sign, leading zeros or leading      -- or trailing whitespace. else '' endif endif",
+        ocl: "if qualifiedName <> null then qualifiedName\nelse if owningRelationship <> null then\n    owningRelationship.path() + '/' + \n    owningRelationship.ownedRelatedElement->indexOf(self).toString()\n    -- A position index shall be converted to a decimal string representation \n    -- consisting of only decimal digits, with no sign, leading zeros or leading \n    -- or trailing whitespace.\nelse ''\nendif endif",
     },
     Operation {
         name: "modelLevelEvaluable",
@@ -8802,7 +8802,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "namingFeature",
         metaclass: ElementKind::ConstraintUsage,
         parameters: &[],
-        ocl: "if owningFeatureMembership <> null and owningFeatureMembership.oclIsKindOf(RequirementConstraintMembership) and ownedReferenceSubsetting <> null then     ownedReferenceSubsetting.referencedFeature.featureTarget else     self.oclAsType(OccurrenceUsage).namingFeature() endif",
+        ocl: "if owningFeatureMembership <> null and\nowningFeatureMembership.oclIsKindOf(RequirementConstraintMembership) and\nownedReferenceSubsetting <> null then\n    ownedReferenceSubsetting.referencedFeature.featureTarget\nelse\n    self.oclAsType(OccurrenceUsage).namingFeature()\nendif",
     },
     Operation {
         name: "modelLevelEvaluable",
@@ -8814,7 +8814,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "isSubstateUsage",
         metaclass: ElementKind::StateUsage,
         parameters: &["isParallel"],
-        ocl: "isComposite and owningType <> null and (owningType.oclIsKindOf(StateDefinition) and     owningType.oclAsType(StateDefinition).isParallel = isParallel or  owningType.oclIsKindOf(StateUsage) and     owningType.oclAsType(StateUsage).isParallel = isParallel) and not owningFeatureMembership.oclIsKindOf(StateSubactionMembership)",
+        ocl: "isComposite and owningType <> null and\n(owningType.oclIsKindOf(StateDefinition) and\n    owningType.oclAsType(StateDefinition).isParallel = isParallel or\n owningType.oclIsKindOf(StateUsage) and\n    owningType.oclAsType(StateUsage).isParallel = isParallel) and\nnot owningFeatureMembership.oclIsKindOf(StateSubactionMembership)",
     },
     Operation {
         name: "triggerPayloadParameter",
@@ -8826,7 +8826,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "sourceFeature",
         metaclass: ElementKind::TransitionUsage,
         parameters: &[],
-        ocl: "let features : Sequence(Feature) = ownedMembership->     reject(oclIsKindOf(FeatureMembership)).memberElement->     selectByKind(Feature)->     select(featureTarget.oclIsKindOf(ActionUsage)) in if features->isEmpty() then null else features->first() endif",
+        ocl: "let features : Sequence(Feature) = ownedMembership->\n    reject(oclIsKindOf(FeatureMembership)).memberElement->\n    selectByKind(Feature)->\n    select(featureTarget.oclIsKindOf(ActionUsage)) in\nif features->isEmpty() then null\nelse features->first()\nendif",
     },
     Operation {
         name: "namingFeature",
@@ -8850,37 +8850,37 @@ pub const OPERATIONS: &[Operation] = &[
         name: "argument",
         metaclass: ElementKind::ActionUsage,
         parameters: &["i"],
-        ocl: "if inputParameter(i) = null then null else     let featureValue : Sequence(FeatureValue) = inputParameter(i).         ownedMembership->select(oclIsKindOf(FeatureValue)) in     if featureValue->isEmpty() then null     else featureValue->at(1).value     endif endif",
+        ocl: "if inputParameter(i) = null then null\nelse\n    let featureValue : Sequence(FeatureValue) = inputParameter(i).\n        ownedMembership->select(oclIsKindOf(FeatureValue)) in\n    if featureValue->isEmpty() then null\n    else featureValue->at(1).value\n    endif\nendif",
     },
     Operation {
         name: "isSubactionUsage",
         metaclass: ElementKind::ActionUsage,
         parameters: &[],
-        ocl: "isComposite and owningType <> null and (owningType.oclIsKindOf(ActionDefinition) or  owningType.oclIsKindOf(ActionUsage)) and (owningFeatureMembership.oclIsKindOf(StateSubactionMembership) implies  owningFeatureMembership.oclAsType(StateSubactionMembership).kind =      StateSubactionKind::do)",
+        ocl: "isComposite and owningType <> null and\n(owningType.oclIsKindOf(ActionDefinition) or\n owningType.oclIsKindOf(ActionUsage)) and\n(owningFeatureMembership.oclIsKindOf(StateSubactionMembership) implies\n owningFeatureMembership.oclAsType(StateSubactionMembership).kind = \n    StateSubactionKind::do)",
     },
     Operation {
         name: "instantiatedType",
         metaclass: ElementKind::TriggerInvocationExpression,
         parameters: &[],
-        ocl: "resolveGlobal(     if kind = TriggerKind::when then         'Triggers::TriggerWhen'     else if kind = TriggerKind::at then         'Triggers::TriggerAt'     else         'Triggers::TriggerAfter'     endif endif ).memberElement.oclAsType(Type)",
+        ocl: "resolveGlobal(\n    if kind = TriggerKind::when then\n        'Triggers::TriggerWhen'\n    else if kind = TriggerKind::at then\n        'Triggers::TriggerAt'\n    else\n        'Triggers::TriggerAfter'\n    endif endif\n).memberElement.oclAsType(Type)",
     },
     Operation {
         name: "multiplicityHasBounds",
         metaclass: ElementKind::ControlNode,
         parameters: &["mult", "lower", "upper"],
-        ocl: "mult <> null and if mult.oclIsKindOf(MultiplicityRange) then     mult.oclAsType(MultiplicityRange).hasBounds(lower, upper) else     mult.allSuperTypes()->exists(         oclisKindOf(MultiplicityRange) and         oclAsType(MultiplicityRange).hasBounds(lower, upper) endif",
+        ocl: "mult <> null and\nif mult.oclIsKindOf(MultiplicityRange) then\n    mult.oclAsType(MultiplicityRange).hasBounds(lower, upper)\nelse\n    mult.allSuperTypes()->exists(\n        oclisKindOf(MultiplicityRange) and\n        oclAsType(MultiplicityRange).hasBounds(lower, upper)\nendif",
     },
     Operation {
         name: "isTriggerAction",
         metaclass: ElementKind::AcceptActionUsage,
         parameters: &[],
-        ocl: "owningType <> null and  owningType.oclIsKindOf(TransitionUsage) and owningType.oclAsType(TransitionUsage).triggerAction->includes(self)",
+        ocl: "owningType <> null and \nowningType.oclIsKindOf(TransitionUsage) and\nowningType.oclAsType(TransitionUsage).triggerAction->includes(self)",
     },
     Operation {
         name: "namingFeature",
         metaclass: ElementKind::Usage,
         parameters: &[],
-        ocl: "if not owningMembership.oclIsKindOf(VariantMembership) then     self.oclAsType(Feature).namingFeature() else if ownedReferenceSubsetting = null then null else ownedReferenceSubsetting.referencedFeature endif endif",
+        ocl: "if not owningMembership.oclIsKindOf(VariantMembership) then\n    self.oclAsType(Feature).namingFeature()\nelse if ownedReferenceSubsetting = null then null\nelse ownedReferenceSubsetting.referencedFeature\nendif endif",
     },
     Operation {
         name: "referencedFeatureTarget",
@@ -8892,7 +8892,7 @@ pub const OPERATIONS: &[Operation] = &[
         name: "namingFeature",
         metaclass: ElementKind::ReferenceUsage,
         parameters: &[],
-        ocl: "if owningType <> null and owningType.oclIsKindOf(TransitionUsage) and     owningType.oclAsType(TransitionUsage).inputParameter(2) = self then     owningType.oclAsType(TransitionUsage).triggerPayloadParameter() else self.oclAsType(Usage).namingFeature() endif",
+        ocl: "if owningType <> null and owningType.oclIsKindOf(TransitionUsage) and\n    owningType.oclAsType(TransitionUsage).inputParameter(2) = self then\n    owningType.oclAsType(TransitionUsage).triggerPayloadParameter()\nelse self.oclAsType(Usage).namingFeature()\nendif",
     },
     Operation {
         name: "effectiveName",
@@ -8904,6 +8904,6 @@ pub const OPERATIONS: &[Operation] = &[
         name: "includeAsExposed",
         metaclass: ElementKind::ViewUsage,
         parameters: &["element"],
-        ocl: "let metadataFeatures: Sequence(AnnotatingElement) =      element.ownedAnnotation.annotatingElement->         select(oclIsKindOf(MetadataFeature)) in self.membership->selectByKind(ElementFilterMembership).     condition->forAll(cond |          metadataFeatures->exists(elem |              cond.checkCondition(elem)))",
+        ocl: "let metadataFeatures: Sequence(AnnotatingElement) = \n    element.ownedAnnotation.annotatingElement->\n        select(oclIsKindOf(MetadataFeature)) in\nself.membership->selectByKind(ElementFilterMembership).\n    condition->forAll(cond | \n        metadataFeatures->exists(elem | \n            cond.checkCondition(elem)))",
     },
 ];

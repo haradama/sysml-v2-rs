@@ -93,9 +93,9 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
     let mut operations = Vec::new();
     for xml in [kerml_xmi, sysml_xmi] {
         let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
-        collect_rules(&doc, "validate", &mut rules);
-        collect_rules(&doc, "derive", &mut derivations);
-        collect_operations(&doc, &mut operations);
+        collect_rules(&doc, xml, "validate", &mut rules);
+        collect_rules(&doc, xml, "derive", &mut derivations);
+        collect_operations(&doc, xml, &mut operations);
     }
 
     // transitive ancestors (excluding self), name-sorted for determinism
@@ -124,7 +124,7 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
 /// as readily as it navigates a property, and the metamodel says what
 /// they come to in the same OCL. Four of the hundred and three carry no
 /// body, and those are the ones nothing here can call.
-fn collect_operations(doc: &roxmltree::Document, out: &mut Vec<Operation>) {
+fn collect_operations(doc: &roxmltree::Document, xml: &str, out: &mut Vec<Operation>) {
     for node in doc.descendants() {
         if !node.has_tag_name("ownedOperation") {
             continue;
@@ -132,7 +132,7 @@ fn collect_operations(doc: &roxmltree::Document, out: &mut Vec<Operation>) {
         let Some((name, ocl)) = node.attribute("name").zip(
             node.descendants()
                 .find(|it| it.has_tag_name("specification"))
-                .and_then(|spec| spec.attribute("body")),
+                .and_then(|spec| as_written(spec, xml)),
         ) else {
             continue;
         };
@@ -153,7 +153,7 @@ fn collect_operations(doc: &roxmltree::Document, out: &mut Vec<Operation>) {
             name: name.to_string(),
             metaclass: metaclass.to_string(),
             parameters,
-            ocl: ocl.to_string(),
+            ocl,
         });
     }
 }
@@ -162,10 +162,32 @@ fn collect_operations(doc: &roxmltree::Document, out: &mut Vec<Operation>) {
 /// them: `validate` for the constraints a model has to satisfy,
 /// `derive` for how a derived property is worked out.
 ///
+/// The `body` of a specification, read as it was written.
+///
+/// XML turns every line end inside an attribute value into a space, and
+/// an OCL `--` comment runs to the end of its line. Read after that
+/// normalisation, the `-- Note:` in `deriveFeatureType` and the two
+/// `--` lines in `validateRedefinitionFeaturingTypes` swallow every
+/// word written after them, and neither specification parses. The
+/// attribute's own range says where it stands in the file, so the text
+/// is taken from there, with only the four entities the metamodel
+/// writes put back.
+fn as_written(spec: roxmltree::Node, xml: &str) -> Option<String> {
+    let body = spec.attributes().find(|it| it.name() == "body")?;
+    Some(
+        xml[body.range_value()]
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            // last, so that `&amp;lt;` stays the four characters it says
+            .replace("&amp;", "&"),
+    )
+}
+
 /// A rule is written inside the class it is about, so the owning class
 /// names the metaclass -- thirteen of them carry no `constrainedElement`
 /// of their own, and where the two are both there they agree.
-fn collect_rules(doc: &roxmltree::Document, of: &str, rules: &mut Vec<Rule>) {
+fn collect_rules(doc: &roxmltree::Document, xml: &str, of: &str, rules: &mut Vec<Rule>) {
     for node in doc.descendants() {
         if !node.has_tag_name("ownedRule") {
             continue;
@@ -180,7 +202,7 @@ fn collect_rules(doc: &roxmltree::Document, of: &str, rules: &mut Vec<Rule>) {
             node.attribute("name").filter(|it| it.starts_with(of)),
             node.children()
                 .find(|c| c.has_tag_name("specification"))
-                .and_then(|spec| spec.attribute("body")),
+                .and_then(|spec| as_written(spec, xml)),
         ) else {
             continue;
         };
@@ -198,7 +220,7 @@ fn collect_rules(doc: &roxmltree::Document, of: &str, rules: &mut Vec<Rule>) {
         rules.push(Rule {
             name: name.to_string(),
             metaclass: metaclass.to_string(),
-            ocl: ocl.to_string(),
+            ocl,
             says,
         });
     }
