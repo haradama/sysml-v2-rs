@@ -150,12 +150,19 @@ enum Command {
     },
     /// Speak the Model Context Protocol over stdin and stdout, so an
     /// agent can ask whether a model parses and resolves, what names are
-    /// legal at a point, and what the standard library declares
+    /// legal at a point, what shape a definition has, what the standard
+    /// library declares, and can have an existing Rust API stated as
+    /// SysML or the Rust a model implies written for it
     Mcp {
         /// The standard library, so that references into it resolve;
         /// `SYSML_LIBRARY_PATH` says the same thing
         #[arg(long)]
         library: Option<PathBuf>,
+        /// The model being worked on, so a call that names no source of
+        /// its own is about it and one that names a file is read against
+        /// the rest; `SYSML_PROJECT_PATH` says the same thing
+        #[arg(long)]
+        project: Option<PathBuf>,
     },
     /// Talk to a SysML v2 API & Services model server
     Api {
@@ -280,17 +287,19 @@ fn main() -> ExitCode {
             library,
             output,
         } => rustgen(&paths, &library, output.as_deref()),
-        Command::Mcp { library } => {
+        Command::Mcp { library, project } => {
             // an agent's launcher often has nowhere to put a flag, so the
             // environment says it too -- the language server reads the
             // same variable
             let library =
                 library.or_else(|| std::env::var_os("SYSML_LIBRARY_PATH").map(Into::into));
+            let project =
+                project.or_else(|| std::env::var_os("SYSML_PROJECT_PATH").map(Into::into));
             // there is nowhere to report a failure to write: the only
             // way this ends badly is the client going away mid-answer,
             // and the exit code is what its launcher reads
             sysml_cli::mcp::serve(
-                &mut sysml_cli::mcp::Server::new(library.as_deref()),
+                &mut sysml_cli::mcp::Server::with_project(library.as_deref(), project.as_deref()),
                 std::io::BufReader::new(std::io::stdin()),
                 std::io::stdout(),
             )
@@ -769,7 +778,8 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
         .flat_map(|file| ws.file_roots(file).to_vec())
         .collect();
     match sysml_rust::generate(ws.model(), &roots) {
-        Ok(rust) => {
+        Ok(generated) => {
+            let rust = generated.rust;
             // counted by the lines that declare them: a `doc` in the
             // model becomes a `///` line, and counting substrings read
             // whatever it happened to say as another declaration
@@ -781,10 +791,14 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
                 .lines()
                 .filter(|l| l.starts_with("    pub fn ") || l.starts_with("    pub async fn "))
                 .count();
+            // What the model left open is the part a person still owes,
+            // and a count of it belongs with the count of what was
+            // written rather than only in comments inside the file.
+            let open = generated.open.len();
             emit(
                 &rust,
                 output,
-                &format!("{structs} struct(s) and {methods} method(s)"),
+                &format!("{structs} struct(s), {methods} method(s) and {open} thing(s) left open"),
             )
         }
         Err(err) => {
@@ -803,7 +817,8 @@ fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> Exi
         }
     };
     match sysml_rust::rustdoc_to_sysml(&text, package) {
-        Ok(sysml) => {
+        Ok(imported) => {
+            let sysml = imported.sysml;
             // counted off the tree, not the text: a `doc` that happens to
             // say "def" between two spaces is not a definition, and this
             // number is what a person checks the import by
@@ -813,7 +828,13 @@ fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> Exi
                 .descendants()
                 .filter(|node| node.kind() == sysml_syntax::SyntaxKind::DEFINITION)
                 .count();
-            emit(&sysml, output, &format!("{definitions} definition(s)"))
+            // and what had no shape is what is left to model by hand
+            let skipped = imported.skipped.len();
+            emit(
+                &sysml,
+                output,
+                &format!("{definitions} definition(s), {skipped} item(s) not imported"),
+            )
         }
         Err(err) => {
             eprintln!("error: {err}");

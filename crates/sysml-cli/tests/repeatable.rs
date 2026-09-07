@@ -53,6 +53,7 @@ fn written(ws: &sysml_semantics::Workspace, file: usize) -> (String, String, Str
     let roots = ws.file_roots(file).to_vec();
     let style = sysml_diagram::Style::default();
     let rust: String = sysml_rust::generate(ws.model(), &roots)
+        .map(|generated| generated.rust)
         .unwrap_or_default()
         .lines()
         .map(|line| match line.split_once("todo!(\"{}\", ") {
@@ -216,6 +217,7 @@ fn generated(name: &str, text: &str) -> Option<(String, String)> {
     ws.resolve_files(&[file]);
     let roots = ws.file_roots(file).to_vec();
     let rust: String = sysml_rust::generate(ws.model(), &roots)
+        .map(|generated| generated.rust)
         .unwrap_or_default()
         .lines()
         .map(|line| match line.split_once("todo!(\"{}\", ") {

@@ -101,7 +101,7 @@ impl std::error::Error for ImportError {}
 ///
 /// `package` names the generated package; left out, the crate names it
 /// (`inventory_store` -> `InventoryStoreApi`).
-pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, ImportError> {
+pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, ImportError> {
     let doc: Json = serde_json::from_str(json).map_err(|e| ImportError::NotJson(e.to_string()))?;
     let index = doc
         .get("index")
@@ -254,7 +254,21 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<String, Imp
         }
     }
     writeln!(out, "}}").unwrap();
-    Ok(out)
+    Ok(Imported {
+        sysml: out,
+        skipped,
+    })
+}
+
+/// A crate's public API as SysML, and what of it had no SysML shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Imported {
+    pub sysml: String,
+    /// Every item that could not be stated, and why. The package says
+    /// them in comments too; this is for whoever has to model them by
+    /// hand, and a list to work through is a poor thing to have to find
+    /// by reading.
+    pub skipped: Vec<String>,
 }
 
 /// The Rust scalars this importer gives a name of their own, each with

@@ -72,9 +72,10 @@ fn what_the_corpus_generates_compiles() {
         }
         ws.resolve_files(&[file]);
         let roots = ws.file_roots(file).to_vec();
-        let Ok(rust) = sysml_rust::generate(ws.model(), &roots) else {
+        let Ok(written) = sysml_rust::generate(ws.model(), &roots) else {
             continue; // a model this generator refuses is not a failure to compile
         };
+        let rust = written.rust;
         generated += 1;
 
         let name: String = model

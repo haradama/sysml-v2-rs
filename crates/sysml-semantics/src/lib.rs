@@ -31,6 +31,7 @@
 //! With the official standard library loaded, every reference in the
 //! library and in all official example models resolves (regression-tested).
 
+
 use std::collections::{HashMap, HashSet};
 
 use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value, Vis};
@@ -1800,6 +1801,15 @@ impl Workspace {
             return Some("result".to_string());
         }
         None
+    }
+
+    /// What an element specializes, as the resolver worked it out.
+    ///
+    /// The text of a model does not say this: a definition's shape is
+    /// what it inherits as much as what it declares, and only a resolved
+    /// workspace knows which is which.
+    pub fn supertypes(&mut self, elem: ElementId) -> Vec<ElementId> {
+        self.supertypes_of(elem)
     }
 
     /// Supertypes of an element for inherited-member lookup: resolved

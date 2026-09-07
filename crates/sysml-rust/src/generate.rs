@@ -44,6 +44,7 @@
 //! in, declaration order out -- and intended to be committed next to the
 //! model; regenerating and diffing is the drift check.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -55,6 +56,57 @@ use crate::binding;
 /// it. `Default` joins them when the model gave every field a value.
 const DERIVED: [&str; 3] = ["Debug", "Clone", "PartialEq"];
 use crate::expr::{self, translate, translate_as, Numbers, Translated};
+
+/// The Rust a model implies, and what the model left for a person to
+/// write.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Generated {
+    pub rust: String,
+    /// Every place the generator stopped short, in the order it met
+    /// them. The output says each of these in a comment too -- that is
+    /// for whoever reads the file; this is for whoever has to fill the
+    /// gap, and a work list is a poor thing to have to find by reading.
+    pub open: Vec<Open>,
+}
+
+/// One thing the generator did not write, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Open {
+    pub kind: OpenKind,
+    /// What in the model it is about, by the name the model gives it.
+    pub sysml: String,
+    /// What has to be written in Rust, where there is a name for it: the
+    /// trait whose method is yours to implement.
+    pub rust: Option<String>,
+    pub why: String,
+}
+
+/// What kind of gap it is -- which decides who fills it and how.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenKind {
+    /// A definition the model left abstract became a trait with no
+    /// default body: the compiler will ask for it.
+    Trait,
+    /// An expression outside the translated subset kept the model's own
+    /// words behind a `todo!`.
+    Todo,
+    /// A state machine's guards, effects and entry/exit notifications.
+    Hooks,
+    /// Something with no generated shape at all, said in a comment.
+    Skipped,
+}
+
+impl OpenKind {
+    /// The word for it, for an answer written as JSON.
+    pub fn name(self) -> &'static str {
+        match self {
+            OpenKind::Trait => "trait",
+            OpenKind::Todo => "todo",
+            OpenKind::Hooks => "hooks",
+            OpenKind::Skipped => "skipped",
+        }
+    }
+}
 
 /// What stops code generation outright (a model this generator cannot
 /// write faithfully); everything smaller is a comment in the output.
@@ -83,7 +135,7 @@ impl std::fmt::Display for RustgenError {
 impl std::error::Error for RustgenError {}
 
 /// Rust source for the definitions under `roots`.
-pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenError> {
+pub fn generate(model: &Model, roots: &[ElementId]) -> Result<Generated, RustgenError> {
     let mut out = String::new();
     writeln!(
         out,
@@ -114,11 +166,15 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<String, RustgenErr
     }
     for (def, why) in &generator.skipped {
         let name = model.name(*def).expect("collected named");
+        generator.open(OpenKind::Skipped, name, None, why);
         writeln!(out, "\n// not generated: `{name}` -- {why}")
             .expect("writing to a String cannot fail");
     }
     generator.requirements(roots, &mut out);
-    Ok(out)
+    Ok(Generated {
+        rust: out,
+        open: generator.open.into_inner(),
+    })
 }
 
 /// How one definition will be generated.
@@ -158,6 +214,31 @@ struct Generator<'a> {
     /// Every generated type's fields, worked out once they stop
     /// changing. Empty until then.
     fields: HashMap<ElementId, Option<Vec<Field>>>,
+    /// What the generator stopped short of writing. A cell because the
+    /// pass writes through `&self`: the alternative is to thread a
+    /// second `&mut` beside the output through every one of these
+    /// methods, which says nothing the name of this field does not.
+    open: RefCell<Vec<Open>>,
+}
+
+impl Generator<'_> {
+    /// Remember a gap the output is about to say in a comment. The two
+    /// are written together at every site so that neither can be added
+    /// without the other.
+    fn open(
+        &self,
+        kind: OpenKind,
+        sysml: impl Into<String>,
+        rust: Option<String>,
+        why: impl Into<String>,
+    ) {
+        self.open.borrow_mut().push(Open {
+            kind,
+            sysml: sysml.into(),
+            rust,
+            why: why.into(),
+        });
+    }
 }
 
 /// The generic signature of one struct and how its fields use it.
@@ -241,6 +322,7 @@ impl<'a> Generator<'a> {
             boxed: HashSet::new(),
             plans: HashMap::new(),
             fields: HashMap::new(),
+            open: RefCell::new(Vec::new()),
         };
         generator.break_cycles();
         generator.settle_unbuildable();
@@ -977,6 +1059,7 @@ impl<'a> Generator<'a> {
         }
         writeln!(out, "/// SysML: `part def {def_name}`").unwrap();
         for note in &notes {
+            self.open(OpenKind::Skipped, def_name.clone(), None, note);
             writeln!(out, "// not generated: {note}").unwrap();
         }
         // Where every field would start with `Default::default()`, the
@@ -1012,6 +1095,7 @@ impl<'a> Generator<'a> {
         }
         for field in plain_ports.iter().chain(&fields) {
             if let Some(dropped) = plan.dropped.get(&field.usage) {
+                self.open(OpenKind::Skipped, def_name.clone(), None, dropped);
                 writeln!(out, "    // not generated: {dropped}").unwrap();
                 continue;
             }
@@ -1213,6 +1297,7 @@ impl<'a> Generator<'a> {
         }
         writeln!(out, "/// SysML: `enum def {name}`").unwrap();
         for note in &notes {
+            self.open(OpenKind::Skipped, name.clone(), None, note);
             writeln!(out, "// not generated: {note}").unwrap();
         }
         // the first value is the default, which an attribute on that
@@ -1312,6 +1397,13 @@ impl<'a> Generator<'a> {
                 kind == ElementKind::TransitionUsage || kind == ElementKind::SuccessionAsUsage
             });
             if nested {
+                self.open(
+                    OpenKind::Skipped,
+                    *state_name,
+                    None,
+                    "a transition inside it -- only a transition naming both its ends \
+                     joins the table",
+                );
                 writeln!(
                     out,
                     "// not generated: a transition inside state `{state_name}` -- \
@@ -1372,6 +1464,12 @@ impl<'a> Generator<'a> {
             "\n/// The machine's open decisions; every hook has a default."
         )
         .unwrap();
+        self.open(
+            OpenKind::Hooks,
+            self.model.name(def).unwrap_or(&name),
+            Some(format!("{name}Hooks")),
+            "the guards, effects and entry/exit notifications of a state machine",
+        );
         writeln!(out, "#[allow(unused_variables)]").unwrap();
         writeln!(out, "pub trait {name}Hooks {{").unwrap();
         for transition in &transitions {
@@ -1591,6 +1689,12 @@ impl<'a> Generator<'a> {
                 match self.parameter_type(child) {
                     Some(ty) => declared = Some(ty),
                     None => {
+                        self.open(
+                            OpenKind::Skipped,
+                            name.clone(),
+                            None,
+                            "its return has no Rust type",
+                        );
                         writeln!(
                             out,
                             "\n// not generated: {keyword} def `{name}` -- its return has no Rust type"
@@ -1611,6 +1715,12 @@ impl<'a> Generator<'a> {
                 continue;
             };
             let Some(ty) = self.parameter_type(child) else {
+                self.open(
+                    OpenKind::Skipped,
+                    name.clone(),
+                    None,
+                    format!("parameter `{param}` has no Rust type"),
+                );
                 writeln!(
                     out,
                     "\n// not generated: {keyword} def `{name}` -- parameter `{param}` has no Rust type"
@@ -1658,6 +1768,12 @@ impl<'a> Generator<'a> {
                 .then_some(first)
         });
         let Some(returns) = returns else {
+            self.open(
+                OpenKind::Skipped,
+                name.clone(),
+                None,
+                "its result type is neither declared nor inferable",
+            );
             writeln!(
                 out,
                 "\n// not generated: {keyword} def `{name}` -- its result type is neither declared \
@@ -1690,6 +1806,12 @@ impl<'a> Generator<'a> {
                 "/// The model gives no formula; the implementation is yours."
             )
             .unwrap();
+            self.open(
+                OpenKind::Trait,
+                spelled,
+                Some(format!("{name}::{}", ident(spelled))),
+                "an abstract definition declares no formula",
+            );
             writeln!(out, "pub trait {name} {{").unwrap();
             writeln!(out, "    fn {}({signature}) -> {returns};", ident(spelled)).unwrap();
             writeln!(out, "}}").unwrap();
@@ -1704,6 +1826,19 @@ impl<'a> Generator<'a> {
             (Some(ValueClause::Text(text)), None) => (format!("todo!(\"{{}}\", {text:?})"), true),
             (None, None) => ("todo!()".to_string(), false),
         };
+        if body.starts_with("todo!") {
+            self.open(
+                OpenKind::Todo,
+                name.clone(),
+                Some(ident(spelled)),
+                match &clause {
+                    Some(ValueClause::Text(text)) => {
+                        format!("the formula is beyond the translated subset: `{text}`")
+                    }
+                    _ => "the model states no formula".to_string(),
+                },
+            );
+        }
 
         writeln!(out).unwrap();
         if let Some(doc) = documentation(model, def) {
@@ -1802,6 +1937,19 @@ impl<'a> Generator<'a> {
             (Some(ValueClause::Text(text)), None) => (format!("todo!(\"{{}}\", {text:?})"), true),
             (None, None) => ("todo!()".to_string(), false),
         };
+        if body.starts_with("todo!") {
+            self.open(
+                OpenKind::Todo,
+                name,
+                Some(ident(name)),
+                match &clause {
+                    Some(ValueClause::Text(text)) => {
+                        format!("the formula is beyond the translated subset: `{text}`")
+                    }
+                    _ => "the model states no formula".to_string(),
+                },
+            );
+        }
 
         let mut method = String::new();
         writeln!(method, "    /// SysML: `calc {name}`").unwrap();
@@ -2268,6 +2416,12 @@ impl<'a> Generator<'a> {
                 continue;
             };
             let Some(ty) = self.parameter_type(child) else {
+                self.open(
+                    OpenKind::Skipped,
+                    name.clone(),
+                    None,
+                    format!("parameter `{param}` has no Rust type"),
+                );
                 writeln!(
                     out,
                     "\n// not generated: action def `{name}` -- parameter `{param}` has no \
@@ -2279,6 +2433,12 @@ impl<'a> Generator<'a> {
             inputs.push(format!("{}: {ty}", ident(param)));
         }
         let Some(returns) = self.action_result(def) else {
+            self.open(
+                OpenKind::Skipped,
+                name.clone(),
+                None,
+                "a result of it has no Rust type",
+            );
             writeln!(
                 out,
                 "\n// not generated: action def `{name}` -- a result of it has no Rust type"
@@ -2323,6 +2483,15 @@ impl<'a> Generator<'a> {
             .filter(|body| !body.supertraits.is_empty())
             .map(|body| format!(": {}", body.supertraits.join(" + ")))
             .unwrap_or_default();
+        self.open(
+            OpenKind::Trait,
+            self.model.name(def).unwrap_or(&name),
+            Some(name.clone()),
+            match &body {
+                Ok(_) => "the model wired its parts up, so the parts are what is owed",
+                Err(_) => "the model names the behaviour without saying how it runs",
+            },
+        );
         writeln!(out, "pub trait {name}{supertraits} {{").unwrap();
         match &body {
             Ok(body) => {
@@ -2718,10 +2887,17 @@ impl<'a> Generator<'a> {
     ) -> Result<String, RustgenError> {
         let model = self.model;
         let usage_name = model.name(usage).expect("named, or it was skipped");
+        // Every way this method declines says the same two things -- which
+        // performed action, and why -- so it says them in one place, to the
+        // reader of the file and to whoever has to write what is missing.
+        let declined = |why: String| {
+            self.open(OpenKind::Skipped, usage_name, None, why.clone());
+            Ok(format!(
+                "    // not generated: perform `{usage_name}` -- {why}\n"
+            ))
+        };
         let Some(action) = model.type_of(usage) else {
-            return Ok(format!(
-                "    // not generated: perform `{usage_name}` -- its action did not resolve\n"
-            ));
+            return declined("its action did not resolve".to_string());
         };
         let Some(bound) = binding(model, action) else {
             // no binding to delegate through, but the model still named
@@ -2729,21 +2905,21 @@ impl<'a> Generator<'a> {
             // the part performs it with
             if self.shapes.get(&action) == Some(&Shape::Action) {
                 let Some(returns) = self.action_result(action) else {
-                    return Ok(format!(
-                        "    // not generated: perform `{usage_name}` -- a result of it has no \
-                         Rust type\n"
-                    ));
+                    return declined("a result of it has no Rust type".to_string());
                 };
                 return Ok(
                     match self.delegation(usage, action, fields, "perform", &returns, true, "&mut ")
                     {
                         Ok(method) => method,
-                        Err(note) => format!("    // not generated: {note}\n"),
+                        Err(note) => {
+                            self.open(OpenKind::Skipped, usage_name, None, note.clone());
+                            format!("    // not generated: {note}\n")
+                        }
                     },
                 );
             }
-            return Ok(format!(
-                "    // not generated: perform `{usage_name}` -- `{}` carries no `@rust` binding\n",
+            return declined(format!(
+                "`{}` carries no `@rust` binding",
                 model.name(action).unwrap_or("?")
             ));
         };
@@ -2753,9 +2929,7 @@ impl<'a> Generator<'a> {
             .map(String::as_str)
             .unwrap_or("");
         if takes_self == "self" {
-            return Ok(format!(
-                "    // not generated: perform `{usage_name}` -- `{path}` consumes its receiver\n"
-            ));
+            return declined(format!("`{path}` consumes its receiver"));
         }
         let provider = ports
             .iter()
@@ -2778,9 +2952,7 @@ impl<'a> Generator<'a> {
             };
             let name = model.name(parameter).unwrap_or("_");
             let Some((base, container)) = self.parameter_shape(parameter) else {
-                return Ok(format!(
-                    "    // not generated: perform `{usage_name}` -- parameter `{name}` has no Rust type\n"
-                ));
+                return declined(format!("parameter `{name}` has no Rust type"));
             };
             match (direction, name) {
                 ("in", _) => inputs.push((ident(name), contained(base, container))),
@@ -2798,9 +2970,7 @@ impl<'a> Generator<'a> {
         // there is no name for its second half, and guessing would put a
         // type in the signature that the real function does not return.
         if fallible && error.is_none() {
-            return Ok(format!(
-                "    // not generated: perform `{usage_name}` -- it can fail, but the model does not say with what\n"
-            ));
+            return declined("it can fail, but the model does not say with what".to_string());
         }
         let receiver = if takes_self == "&mut self" {
             "&mut self"

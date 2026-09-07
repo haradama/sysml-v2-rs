@@ -13,5 +13,5 @@ mod expr;
 mod generate;
 pub mod import;
 
-pub use generate::{generate, RustgenError};
-pub use import::{rustdoc_to_sysml, ImportError};
+pub use generate::{generate, Generated, Open, OpenKind, RustgenError};
+pub use import::{rustdoc_to_sysml, ImportError, Imported};

@@ -22,8 +22,12 @@ const SCALARS: &str = "package ScalarValues {\n\
 
 #[test]
 fn the_generated_package_is_deterministic_and_names_the_api() {
-    let first = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
-    let second = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let first = sysml_rust::rustdoc_to_sysml(&fixture(), None)
+        .unwrap()
+        .sysml;
+    let second = sysml_rust::rustdoc_to_sysml(&fixture(), None)
+        .unwrap()
+        .sysml;
     assert_eq!(first, second, "two runs must write identical bytes");
 
     assert!(first.starts_with("// generated from crate `inventory_store`"));
@@ -83,13 +87,17 @@ fn the_generated_package_is_deterministic_and_names_the_api() {
     assert!(first.contains("doc /* What to look up. */"));
 
     // a chosen package name wins over the derived one
-    let named = sysml_rust::rustdoc_to_sysml(&fixture(), Some("Warehouse")).unwrap();
+    let named = sysml_rust::rustdoc_to_sysml(&fixture(), Some("Warehouse"))
+        .unwrap()
+        .sysml;
     assert!(named.contains("package Warehouse {"));
 }
 
 #[test]
 fn the_generated_package_parses_resolves_and_binds() {
-    let sysml = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(&fixture(), None)
+        .unwrap()
+        .sysml;
     let parse = sysml_syntax::parse(&sysml);
     assert!(
         parse.ok(),
@@ -206,7 +214,7 @@ fn a_clean_crate_has_no_skip_list() {
             "f": { "name": "flag", "inner": { "struct_field": { "primitive": "bool" } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(sysml.contains("package TinyApi {"));
     assert!(sysml.contains("attribute flag : Boolean;"));
     assert!(!sysml.contains("not imported"));
@@ -241,7 +249,7 @@ fn odd_shapes_are_skipped_not_dropped() {
             "unnamed": { "inner": { "function": {} } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(sysml.contains("//   LIMIT -- constant"));
     assert!(sysml.contains("//   Strange.off -- unmappable type"));
     assert!(sysml.contains("//   half_result -- unsupported signature"));
@@ -278,7 +286,7 @@ fn a_re_exported_type_is_imported_and_can_be_referred_to() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(sysml.contains("item def Shape {"), "{sysml}");
     assert!(sysml.contains("in shape : Shape;"), "{sysml}");
     // the glob re-export names the same struct and must not double it
@@ -311,7 +319,7 @@ fn a_signature_never_names_a_type_that_was_refused() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(sysml.contains("enum def Mood {"), "{sysml}");
     assert!(sysml.contains("//   Fickle -- not a plain enum"), "{sysml}");
     assert!(
@@ -381,7 +389,9 @@ fn an_input_this_importer_cannot_read_is_refused_by_name() {
             "a": { "name": "Item", "inner": { "assoc_type": {} } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(associated, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(associated, None)
+        .unwrap()
+        .sysml;
     assert!(sysml.contains("port def Feeder {"), "{sysml}");
     assert!(!sysml.contains("action def Item"), "{sysml}");
     assert!(
@@ -419,7 +429,7 @@ fn two_rust_items_that_want_one_sysml_name_are_told_apart() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     // the type keeps the name, since a signature may refer to it
     assert!(sysml.contains("item def Config {"), "{sysml}");
     assert!(sysml.contains("port def Store {"), "{sysml}");
@@ -481,7 +491,7 @@ fn a_generic_item_of_any_kind_is_listed_rather_than_bound() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(sysml.contains("//   Wrapper -- generic"), "{sysml}");
     assert!(sysml.contains("//   Either -- generic"), "{sysml}");
     assert!(sysml.contains("//   Feeder -- generic"), "{sysml}");
@@ -531,7 +541,7 @@ fn a_container_in_a_container_and_a_borrowed_value_are_refused() {
                 "header": { "is_async": false } } } }
         }
     }"#;
-    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
     assert!(
         sysml.contains("//   Layers.maybe -- unmappable type"),
         "{sysml}"
@@ -563,7 +573,9 @@ fn a_container_in_a_container_and_a_borrowed_value_are_refused() {
 /// only way to know is to compile it against the real crate.
 #[test]
 fn what_the_importer_writes_calls_the_crate_it_was_read_from() {
-    let api = sysml_rust::rustdoc_to_sysml(&fixture(), None).unwrap();
+    let api = sysml_rust::rustdoc_to_sysml(&fixture(), None)
+        .unwrap()
+        .sysml;
     let mut ws = sysml_semantics::Workspace::new();
     ws.add_file("scalars.kerml", SCALARS);
     ws.add_file("api.sysml", &api);
@@ -579,7 +591,7 @@ fn what_the_importer_writes_calls_the_crate_it_was_read_from() {
     );
     assert_eq!(ws.resolve_all().unresolved, 0, "{api}");
     let roots = ws.file_roots(file).to_vec();
-    let rust = sysml_rust::generate(ws.model(), &roots).unwrap();
+    let rust = sysml_rust::generate(ws.model(), &roots).unwrap().rust;
     assert!(
         rust.contains("pub fn label(&self, name: &str) -> bool {"),
         "{rust}"

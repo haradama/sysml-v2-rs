@@ -44,7 +44,7 @@ fn generate(system: &str) -> Result<String, sysml_rust::RustgenError> {
     let stats = ws.resolve_all();
     assert_eq!(stats.unresolved, 0, "the test model must resolve");
     let roots = ws.file_roots(file).to_vec();
-    sysml_rust::generate(ws.model(), &roots)
+    sysml_rust::generate(ws.model(), &roots).map(|generated| generated.rust)
 }
 
 /// Generated Rust, put to the only test that counts: `rustc` on it.
@@ -830,7 +830,7 @@ fn a_perform_whose_action_never_resolved_is_a_comment() {
     let stats = ws.resolve_all();
     assert!(stats.unresolved > 0);
     let roots = ws.file_roots(file).to_vec();
-    let rust = sysml_rust::generate(ws.model(), &roots).unwrap();
+    let rust = sysml_rust::generate(ws.model(), &roots).unwrap().rust;
     assert!(rust.contains("perform `ghost` -- its action did not resolve"));
 }
 
@@ -921,7 +921,7 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     model.add_owned(holds_nothing, empty);
     model.set(holds_nothing, "value", Value::Ref(empty));
 
-    let rust = sysml_rust::generate(&model, &[part]).unwrap();
+    let rust = sysml_rust::generate(&model, &[part]).unwrap().rust;
     // the part has a binding now (retries = 3), so it is treated as an
     // imported API and not generated at all
     assert!(!rust.contains("struct Odd"));
@@ -941,7 +941,7 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     plain.add_owned(part, anonymous);
     let hollow_redefinition = plain.create(ElementKind::Redefinition);
     plain.add_owned(anonymous, hollow_redefinition);
-    let rust = sysml_rust::generate(&plain, &[part]).unwrap();
+    let rust = sysml_rust::generate(&plain, &[part]).unwrap().rust;
     assert!(rust.contains("perform `go` -- its action did not resolve"));
     assert!(rust.contains("pub struct Bare"));
 
@@ -958,7 +958,7 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     machine.add_owned(flow, broken);
     let unchained = machine.create(ElementKind::Feature);
     machine.add_owned(broken, unchained);
-    let rust = sysml_rust::generate(&machine, &[flow]).unwrap();
+    let rust = sysml_rust::generate(&machine, &[flow]).unwrap().rust;
     assert!(rust.contains("pub enum FlowState {"));
     assert!(!rust.contains("Broken"), "the transition must be skipped");
 }
@@ -1008,7 +1008,7 @@ fn half_broken_binding_settings_are_passed_over() {
 
     // no usable pair survived, so the part carries no binding and is a
     // plain generated struct
-    let rust = sysml_rust::generate(&model, &[part]).unwrap();
+    let rust = sysml_rust::generate(&model, &[part]).unwrap().rust;
     assert!(rust.contains("pub struct Shaky"));
 }
 

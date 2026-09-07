@@ -77,7 +77,8 @@ fn names_the_formats_would_read_as_their_own_syntax() {
     // ends its own comment or an identifier with a quote in it does not
     match sysml_rust::generate(ws.model(), &roots) {
         Err(e) => found.push(format!("rustgen\trefused: {e}")),
-        Ok(rust) => {
+        Ok(generated) => {
+            let rust = generated.rust;
             std::fs::write(std::env::temp_dir().join("awkward.rs"), &rust).ok();
             if let Err(e) = compiles(&rust, "awkward") {
                 found.push(format!("rustgen\t{e}"));

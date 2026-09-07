@@ -70,7 +70,7 @@ fn every_crate_imports_into_a_model_that_resolves() {
                 found.push(format!("refused\t{name}\t{e}"));
                 continue;
             }
-            Ok(Ok(text)) => text,
+            Ok(Ok(imported)) => imported.sysml,
         };
 
         let parse = sysml_syntax::parse(&sysml);
