@@ -2404,8 +2404,10 @@ impl Workspace {
         // enclosing scope rather than to the succession, so nothing an
         // operand search looks at holds it -- and a succession that
         // relates nothing is a step the model cannot say follows.
+        let mut beside = None;
         if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
-            if let Some(target) = self.wrapped_declaration(id, node) {
+            beside = self.declared_beside(id, node);
+            if let Some(target) = self.wrapped_declaration(id, node).or(beside) {
                 self.reified(
                     id,
                     ElementKind::Feature,
@@ -2428,8 +2430,19 @@ impl Workspace {
                     .filter_map(|it| it.into_token())
                     .any(|token| wanted.contains(&token.kind()))
             };
-            let says_source = written(&[SyntaxKind::FIRST_KW, SyntaxKind::FROM_KW]);
-            let says_target = written(&[SyntaxKind::THEN_KW, SyntaxKind::TO_KW]);
+            // `then message m of T from a to b;` writes the succession's
+            // own end with its leading keyword alone: the `from` and the
+            // `to` say where the flow it declares runs, and are not this
+            // relationship's to read.
+            let ends = match beside {
+                Some(_) => (&[SyntaxKind::FIRST_KW][..], &[SyntaxKind::THEN_KW][..]),
+                None => (
+                    &[SyntaxKind::FIRST_KW, SyntaxKind::FROM_KW][..],
+                    &[SyntaxKind::THEN_KW, SyntaxKind::TO_KW][..],
+                ),
+            };
+            let says_source = written(ends.0);
+            let says_target = written(ends.1);
             match (says_source, says_target) {
                 (false, true) => {
                     if let Some(source) = self.step_beside(id, Beside::Before) {
@@ -2629,6 +2642,23 @@ impl Workspace {
             .iter()
             .copied()
             .find(|member| self.source.get(member) == Some(&declared))
+    }
+
+    /// What the statement a succession was built from declares.
+    ///
+    /// `then merge continue;` writes the node and the succession into it
+    /// as one statement, so the two elements share the one syntax node
+    /// and the declaration is the sibling that node also became. A
+    /// `then message m of T;` writes a flow that way, which is a
+    /// connector itself -- so what is looked for is what the statement
+    /// declared, never the succession beside it.
+    fn declared_beside(&self, succession: ElementId, node: &SyntaxNode) -> Option<ElementId> {
+        let owner = self.model.owner(succession)?;
+        self.model.owned(owner).iter().copied().find(|&member| {
+            member != succession
+                && !self.model.kind(member).is_a(ElementKind::SuccessionAsUsage)
+                && self.source.get(&member) == Some(node)
+        })
     }
 
     /// Reify one connector end as a `Feature` whose `chainingFeature` holds

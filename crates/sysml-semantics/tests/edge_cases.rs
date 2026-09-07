@@ -1791,4 +1791,24 @@ fn a_succession_records_what_it_follows() {
     let ends = related("state def S {\n\tentry;\n\tthen Wait;\n\tstate Wait;\n}\n");
     assert_eq!(ends.len(), 2, "{ends:?}");
     assert_eq!(ends[1], "Wait");
+
+    // `then merge m;` writes the node and the succession into it as one
+    // statement, so the succession's other end is the sibling that
+    // statement also became -- not an operand anywhere in the text
+    assert_eq!(
+        related("action def A {\n\taction a;\n\tthen merge m;\n}\n"),
+        ["a", "m"]
+    );
+    // and where such a statement writes a `from` and a `to` of its own,
+    // they say where the flow runs rather than where the succession
+    // does: reading them as the succession's leaves it relating one
+    // thing, which `validateConnectorRelatedFeatures` rejects
+    assert_eq!(
+        all(
+            "occurrence def T;\noccurrence def O {\n\tevent occurrence a;\n\
+             \tevent occurrence b;\n\tevent occurrence e;\n\
+             \tthen message m of T from a to b;\n}\n"
+        ),
+        ["e-m"]
+    );
 }

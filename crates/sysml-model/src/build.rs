@@ -125,6 +125,22 @@ fn build_node(
     // the `enum` keyword.
     let enumerated = kind.is_a(ElementKind::EnumerationUsage)
         && owner.is_some_and(|owner| model.kind(owner).is_a(ElementKind::EnumerationDefinition));
+    // `then merge continue;` and `then send new S() to b;` are one
+    // statement that the abstract syntax makes two elements of: the node
+    // or action the statement declares, and the succession its leading
+    // `then` writes into it. `control_kind` answers with the declaration,
+    // because that is what the rest of the flow refers to by name -- so
+    // the succession is built here beside it, ahead of it in the body,
+    // where what it continues from is the step written above.
+    if let Some(owner) = owner {
+        if kind != ElementKind::SuccessionAsUsage
+            && matches!(tokens(node).next(), Some(THEN_KW | FIRST_KW))
+        {
+            let flow = model.create(ElementKind::SuccessionAsUsage);
+            model.add_owned(owner, flow);
+            built.source.push((flow, node.clone()));
+        }
+    }
     let id = model.create(kind);
     built.source.push((id, node.clone()));
     match owner {
@@ -1647,6 +1663,67 @@ mod tests {
             assert_eq!(spelled("upperBound").as_deref(), upper, "{written}");
             assert_eq!(spelled("bound").as_deref(), single, "{written}");
         }
+    }
+
+    /// One statement, two elements: `then merge m;` writes the node the
+    /// rest of the flow names *and* the succession into it, and the
+    /// abstract syntax has both. Built as the node alone, the model says
+    /// the flow arrives there from nowhere.
+    #[test]
+    fn a_statement_that_declares_a_step_still_writes_the_succession_into_it() {
+        for (source, declared) in [
+            (
+                "action def A {\n\taction x;\n\tthen merge m;\n}\n",
+                ElementKind::MergeNode,
+            ),
+            (
+                "attribute def S;\naction def A {\n\taction x;\n\tthen accept s : S;\n}\n",
+                ElementKind::AcceptActionUsage,
+            ),
+        ] {
+            let (model, roots) = build_model(&sysml_syntax::parse(source));
+            let action = roots
+                .iter()
+                .copied()
+                .find(|&root| model.name(root) == Some("A"))
+                .expect("`A` is declared");
+            let inside: Vec<ElementKind> = model
+                .owned(action)
+                .iter()
+                .map(|&it| model.kind(it))
+                .collect();
+            let at = inside
+                .iter()
+                .position(|&kind| kind == declared)
+                .unwrap_or_else(|| panic!("{declared:?} is built: {inside:?}"));
+            // ahead of the declaration, where what it continues from is
+            // the step written above
+            assert_eq!(inside[at - 1], ElementKind::SuccessionAsUsage, "{inside:?}");
+        }
+
+        // but a statement that is only the succession stays the one
+        // element it has always been
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\taction x;\n\tthen y;\n\taction y;\n}\n",
+        ));
+        let action = roots
+            .iter()
+            .copied()
+            .find(|&root| model.name(root) == Some("A"))
+            .expect("`A` is declared");
+        let inside: Vec<ElementKind> = model
+            .owned(action)
+            .iter()
+            .map(|&it| model.kind(it))
+            .collect();
+        assert_eq!(
+            inside
+                .iter()
+                .filter(|&&kind| kind == ElementKind::SuccessionAsUsage)
+                .count(),
+            1,
+            "{inside:?}"
+        );
     }
 
     /// `then send new S() via p;` declares the action as much as `then
