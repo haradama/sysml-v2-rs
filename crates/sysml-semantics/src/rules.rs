@@ -199,14 +199,36 @@ impl Workspace {
         // Grouped by metaclass once. Asked element by element, every
         // rule walks the whole model to find the few it is about, and
         // the whole model is where this is meant to be run.
-        let mut by_kind: HashMap<ElementKind, Vec<ElementId>> = HashMap::new();
+        // Every element under those files, not only the ones a syntax
+        // node stands for. Name resolution reifies the relationships the
+        // notation leaves implicit -- a typing, a subsetting, the ends of
+        // a connector -- and the constraints are about those as much as
+        // about what the source wrote. Asking only what was written left
+        // every rule about a `Subsetting` asked of nothing, with two
+        // thousand of them in the model.
+        let mut under: Vec<ElementId> = Vec::new();
+        let mut seen: HashSet<ElementId> = HashSet::new();
         for &file in files {
             for &elem in self.file_elements(file) {
-                by_kind
-                    .entry(self.model().kind(elem))
-                    .or_default()
-                    .push(elem);
+                let mut stack = vec![elem];
+                while let Some(id) = stack.pop() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    under.push(id);
+                    stack.extend(self.model().owned(id).iter().copied());
+                }
             }
+        }
+        // in the order the model holds them, so a report reads down the
+        // file rather than in the order the walk came upon them
+        under.sort_unstable();
+        let mut by_kind: HashMap<ElementKind, Vec<ElementId>> = HashMap::new();
+        for elem in under {
+            by_kind
+                .entry(self.model().kind(elem))
+                .or_default()
+                .push(elem);
         }
 
         // Which metaclasses this model builds at all. A `selectByKind`
