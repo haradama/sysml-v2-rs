@@ -31,6 +31,8 @@
 //! With the official standard library loaded, every reference in the
 //! library and in all official example models resolves (regression-tested).
 
+mod ocl;
+pub mod rules;
 
 use std::collections::{HashMap, HashSet};
 
@@ -860,6 +862,12 @@ impl Workspace {
 
     pub fn file_count(&self) -> usize {
         self.files.len()
+    }
+
+    /// Every element built from one file, in the order the builder made
+    /// them.
+    pub fn file_elements(&self, file: usize) -> &[ElementId] {
+        &self.files[file].elements
     }
 
     pub fn file_parse(&self, file: usize) -> &Parse {

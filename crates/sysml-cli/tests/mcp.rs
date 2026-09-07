@@ -939,3 +939,36 @@ fn a_project_file_that_cannot_be_read_is_left_out_and_said_so() {
     let answer = answered(&in_project(&dir, &[call("check", json!({}))])[0]);
     assert_eq!(answer["ok"], true, "{answer}");
 }
+
+/// Beyond every name resolving, the specification states constraints a
+/// model has to satisfy, and `check` runs them.
+#[test]
+fn check_runs_the_constraints_the_specification_states() {
+    // a control node at the top of a file is a feature of nothing, and
+    // the specification says a control node is composite
+    let broken = answered(&session(&[call("check", json!({ "text": "action a;\njoin j;\n" }))])[0]);
+    assert_eq!(broken["ok"], false, "{broken}");
+    // the names still all resolve: this is the other half of the answer
+    assert_eq!(
+        broken["unresolved"].as_array().unwrap().len(),
+        0,
+        "{broken}"
+    );
+    let violation = &broken["rules"]["violations"][0];
+    assert_eq!(
+        violation["rule"], "validateControlNodeIsComposite",
+        "{broken}"
+    );
+    assert_eq!(violation["element"], "j", "{broken}");
+    assert!(violation["says"].as_str().unwrap().contains("composite"));
+
+    // and a model that breaks none of them says so, with a count of
+    // what could not be asked at all
+    let sound = answered(&session(&[call("check", json!({ "text": "part def Car;\n" }))])[0]);
+    assert_eq!(sound["ok"], true, "{sound}");
+    assert_eq!(sound["rules"]["violations"], json!([]), "{sound}");
+    assert!(
+        sound["rules"]["unevaluated"].as_u64().unwrap() > 0,
+        "{sound}"
+    );
+}

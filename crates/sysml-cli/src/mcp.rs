@@ -316,14 +316,36 @@ impl Server {
             .iter()
             .map(|f| place(f, json!({ "name": f.what })))
             .collect();
+        // What the specification itself requires, over and above every
+        // name resolving. `unevaluated` is a count and not a list: it
+        // says nothing about this model -- it says which parts of the
+        // abstract syntax this toolchain does not build -- and what a
+        // client acts on is the violations.
+        let checked = ws.check_rules(&open);
+        let violations: Vec<Value> = checked
+            .violations
+            .iter()
+            .map(|violation| {
+                json!({
+                    "rule": violation.rule,
+                    "says": violation.says,
+                    "element": ws.qualified_name_of(violation.element),
+                })
+            })
+            .collect();
         Ok(json!({
-            "ok": unresolved.is_empty(),
+            "ok": unresolved.is_empty() && checked.violations.is_empty(),
             "library": self.library,
             "project": self.project.as_ref().map(|it| it.root.clone()),
             "parseErrors": [],
             "resolved": stats.resolved,
             "references": stats.resolved + stats.unresolved,
             "unresolved": unresolved,
+            "rules": {
+                "violations": violations,
+                "held": checked.held.len(),
+                "unevaluated": checked.unevaluated.len(),
+            },
         }))
     }
 
@@ -753,7 +775,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "check",
-            "description": "Parse a SysML v2 / KerML model and resolve every name in it against the standard library. Answers which references resolve to nothing, and where -- across every file that was opened, each finding under its own path. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. Use this on anything you write before believing it.",
+            "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path -- and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. `rules.unevaluated` counts the constraints that could not be asked at all, which says what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
             "inputSchema": {
                 "type": "object",
                 "properties": source_properties,

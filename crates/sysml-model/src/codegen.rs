@@ -39,6 +39,18 @@ struct Enum {
     literals: Vec<String>,
 }
 
+/// One well-formedness constraint, as the specification states it.
+#[derive(Debug)]
+struct Rule {
+    name: String,
+    /// The metaclass it is about: the class the rule is written inside.
+    metaclass: String,
+    /// The OCL that has to hold of every instance of that metaclass.
+    ocl: String,
+    /// What the specification says the rule means, in prose.
+    says: String,
+}
+
 /// Generate the Rust metamodel source from the KerML and SysML XMI
 /// documents (in that order — SysML references KerML elements by URI).
 pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
@@ -56,6 +68,11 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
         collect_classifiers(&doc, &ids, &mut classes, &mut enums);
     }
+    let mut rules: Vec<Rule> = Vec::new();
+    for xml in [kerml_xmi, sysml_xmi] {
+        let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
+        collect_rules(&doc, &mut rules);
+    }
 
     // transitive ancestors (excluding self), name-sorted for determinism
     let mut ancestors: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -67,7 +84,69 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         ancestors.insert(name.clone(), acc);
     }
 
-    generate(&classes, &enums, &ancestors)
+    generate(&classes, &enums, &ancestors, &rules)
+}
+
+/// The constraints the metamodel states, in the order it states them.
+///
+/// A rule is written inside the class it is about, so the owning class
+/// names the metaclass -- thirteen of them carry no `constrainedElement`
+/// of their own, and where the two are both there they agree.
+fn collect_rules(doc: &roxmltree::Document, rules: &mut Vec<Rule>) {
+    for node in doc.descendants() {
+        if !node.has_tag_name("ownedRule") {
+            continue;
+        }
+        // The metamodel writes three kinds of rule under one tag: the
+        // `validate*` ones a model has to satisfy, and the `check*` and
+        // `derive*` ones saying how a derived property is worked out.
+        // Only the first is a constraint, and only one carrying OCL can
+        // be evaluated -- so the two are one question.
+        let (Some(name), Some(ocl)) = (
+            node.attribute("name")
+                .filter(|it| it.starts_with("validate")),
+            node.children()
+                .find(|c| c.has_tag_name("specification"))
+                .and_then(|spec| spec.attribute("body")),
+        ) else {
+            continue;
+        };
+        let metaclass = node
+            .ancestors()
+            .find(|up| xmi_type(up) == Some("uml:Class"))
+            .and_then(|up| up.attribute("name"))
+            .expect("a rule is written inside the class it constrains");
+        let says = node
+            .children()
+            .find(|c| c.has_tag_name("ownedComment"))
+            .and_then(|comment| comment.attribute("body"))
+            .map(plain)
+            .unwrap_or_default();
+        rules.push(Rule {
+            name: name.to_string(),
+            metaclass: metaclass.to_string(),
+            ocl: ocl.to_string(),
+            says,
+        });
+    }
+}
+
+/// The prose of a comment, with the HTML the metamodel writes it in
+/// taken out: what is wanted is a sentence a reader can act on, and
+/// `&lt;code&gt;` around a name is not part of it.
+fn plain(html: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    for ch in html.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    // one space between words, whatever the source wrapped with
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Regenerate `crates/sysml-model/src/generated.rs` from the vendored
@@ -235,6 +314,7 @@ fn generate(
     classes: &BTreeMap<String, Class>,
     enums: &BTreeMap<String, Enum>,
     ancestors: &BTreeMap<String, Vec<String>>,
+    rules: &[Rule],
 ) -> String {
     let mut o = String::new();
     let w = &mut o;
@@ -497,8 +577,50 @@ fn generate(
     }
 
     accessors(classes, enums, w);
+    constraints(rules, w);
 
     o
+}
+
+/// The specification's own well-formedness constraints, as data.
+///
+/// The OCL is carried across verbatim rather than compiled here: what
+/// evaluates it is `sysml-semantics`, and a rule whose text this file
+/// paraphrased would be a rule the specification did not write.
+fn constraints(rules: &[Rule], w: &mut String) {
+    writeln!(
+        w,
+        "\n/// One well-formedness constraint of the abstract syntax, as the\n\
+         /// specification states it.\n\
+         #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n\
+         pub struct Rule {{\n\
+         \x20   /// The name the specification gives it, e.g. `validateFeatureChainExpressionOperator`.\n\
+         \x20   pub name: &'static str,\n\
+         \x20   /// The metaclass every instance of which it holds of.\n\
+         \x20   pub metaclass: ElementKind,\n\
+         \x20   /// The OCL that has to hold, as the metamodel writes it.\n\
+         \x20   pub ocl: &'static str,\n\
+         \x20   /// What the specification says it means.\n\
+         \x20   pub says: &'static str,\n\
+         }}\n"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "/// Every constraint the KerML and SysML abstract syntax states,\n\
+         /// in the order the metamodel states them."
+    )
+    .unwrap();
+    writeln!(w, "pub const RULES: &[Rule] = &[").unwrap();
+    for rule in rules {
+        writeln!(w, "    Rule {{").unwrap();
+        writeln!(w, "        name: {:?},", rule.name).unwrap();
+        writeln!(w, "        metaclass: ElementKind::{},", rule.metaclass).unwrap();
+        writeln!(w, "        ocl: {:?},", rule.ocl).unwrap();
+        writeln!(w, "        says: {:?},", rule.says).unwrap();
+        writeln!(w, "    }},").unwrap();
+    }
+    writeln!(w, "];").unwrap();
 }
 
 /// The metamodel's features as typed accessors on `Model`, one per
