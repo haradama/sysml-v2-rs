@@ -635,9 +635,12 @@ impl Scope<'_> {
                 // of them agree
                 let mut seen: Vec<Val> = Vec::new();
                 for item in items {
-                    let value = match lambda {
-                        Some(_) => self.over(&item, lambda),
-                        None => item,
+                    // `->isUnique()` with nothing written at all says
+                    // no two of the elements agree; anything written is
+                    // read of each of them
+                    let value = match (lambda, args) {
+                        (None, []) => item,
+                        _ => self.over(&item, args, lambda),
                     };
                     if let Some(unknown) = value.unknown() {
                         return unknown;
@@ -674,7 +677,7 @@ impl Scope<'_> {
             "forAll" | "exists" | "select" | "reject" | "collect" | "any" => {
                 let mut kept = Vec::new();
                 for item in items {
-                    let value = self.over(&item, lambda);
+                    let value = self.over(&item, args, lambda);
                     if let Some(unknown) = value.unknown() {
                         return unknown;
                     }
@@ -700,11 +703,28 @@ impl Scope<'_> {
     }
 
     /// A lambda body, over one element of a collection.
-    fn over(&mut self, item: &Val, lambda: Option<&(String, Box<Expr>)>) -> Val {
+    fn over(&mut self, item: &Val, args: &[Expr], lambda: Option<&(String, Box<Expr>)>) -> Val {
         let Some((bound, body)) = lambda else {
-            // `->select(visibility = VisibilityKind::public)` binds
-            // nothing and reads its body against each element
-            return Val::Unknown("a collection operation written without a variable".to_string());
+            // `->exists(not oclIsKindOf(OwningMembership))` names no
+            // variable: OCL reads the body of each element in turn, and
+            // that is what an unqualified name in it stands for. `self`
+            // is not taken over by the iterator, so it is bound to what
+            // it meant outside rather than left to follow the element
+            // the body is being read of -- no rule the specification
+            // states writes one inside such a body, and one that did
+            // would mean the context and not the item.
+            let ([body], Val::Elem(item)) = (args, item) else {
+                return unknown_from(item, "the element an implicit iterator reads");
+            };
+            let outer = std::mem::replace(&mut self.self_, *item);
+            let shadowed = self.bound.insert("self".to_string(), Val::Elem(outer));
+            let result = self.eval(body);
+            self.self_ = outer;
+            match shadowed {
+                Some(old) => self.bound.insert("self".to_string(), old),
+                None => self.bound.remove("self"),
+            };
+            return result;
         };
         let shadowed = self.bound.insert(bound.clone(), item.clone());
         let result = self.eval(body);
@@ -1062,6 +1082,23 @@ mod tests {
         // `or` where the left half does not settle it
         assert_eq!(ws.judge("1 = 2 or 1 = 1", car), Some(true));
 
+        // a collection operation that leaves its variable unwritten is
+        // read of each element in turn -- and says so rather than
+        // guessing where the elements are not elements at all
+        assert_eq!(
+            ws.judge("Sequence{1, 2}->exists(oclIsKindOf(Feature))", car),
+            None
+        );
+        // and `self` is not taken over by one, however deep: it still
+        // means the element the constraint is being asked of
+        assert_eq!(
+            ws.judge(
+                "Set{self}->exists(Set{self}->exists(self.declaredName = 'Car'))",
+                car
+            ),
+            Some(true)
+        );
+
         // navigating a collection of elements, and navigating something
         // that is not an element at all
         assert_eq!(
@@ -1239,6 +1276,31 @@ mod tests {
         // and so is one asked of something that is not an element:
         // every operation the specification defines is of a metaclass
         assert_eq!(ws.judge("self.isAbstract.noSuchOperation()", car), None);
+    }
+
+    /// `assign v := 1;` refers to `v` without owning it, and the
+    /// specification asks for exactly that: `An AssignmentActionUsage
+    /// must have an ownedMembership that is not an OwningMembership and
+    /// whose memberElement is a Feature.` Asking it needs the implicit
+    /// iterator as well, since the constraint binds no variable to read
+    /// the memberships of.
+    #[test]
+    fn what_an_assignment_refers_to_is_there_to_be_asked_for() {
+        let mut ws = Workspace::new();
+        let file = ws.add_file(
+            "test.sysml",
+            "action def A {\n\tattribute v;\n\taction x;\n\tthen assign v := 1;\n}\n",
+        );
+        ws.resolve_all();
+        let checked = ws.check_rules(&[file]);
+
+        assert!(checked.violations.is_empty(), "{checked:?}");
+        assert!(
+            checked
+                .held
+                .contains(&"validateAssignmentActionUsageReferent"),
+            "{checked:?}"
+        );
     }
 
     /// A control node written at the top of a file is a feature of
