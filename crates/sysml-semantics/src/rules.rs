@@ -834,6 +834,28 @@ impl Scope<'_> {
                 }
                 Val::Set(kept)
             }
+            "closure" => {
+                // OCL's transitive closure: the body read of each
+                // element, then of everything that comes back, until
+                // nothing new turns up. What it started from is in the
+                // answer only where the walk reaches it again, and the
+                // ones already found are what stops it going round.
+                let mut found: Vec<Val> = Vec::new();
+                let mut queue = items;
+                while let Some(item) = queue.pop() {
+                    let value = self.over(&item, args, lambda);
+                    if let Some(unknown) = value.unknown() {
+                        return unknown;
+                    }
+                    for next in value.many() {
+                        if !found.iter().any(|it| equal(it, &next) == Val::Bool(true)) {
+                            found.push(next.clone());
+                            queue.push(next);
+                        }
+                    }
+                }
+                Val::Set(found)
+            }
             "forAll" | "exists" | "select" | "reject" | "collect" | "any" => {
                 let mut kept = Vec::new();
                 for item in items {
@@ -890,7 +912,9 @@ impl Scope<'_> {
     /// An operation on one thing rather than on a collection of them.
     fn operation(&mut self, target: &Val, name: &str, args: &[Expr]) -> Val {
         match name {
-            "oclIsKindOf" | "oclIsTypeOf" => {
+            // `oclIsType` is how the specification spells the exact-type
+            // question OCL calls `oclIsTypeOf`
+            "oclIsKindOf" | "oclIsTypeOf" | "oclIsType" => {
                 let (Some(kind), Some(actual)) =
                     (args.first().and_then(metaclass_named), self.kind_of(target))
                 else {
@@ -1301,6 +1325,34 @@ mod tests {
             ws.judge("Sequence{1, 2}->exists(oclIsKindOf(Feature))", car),
             None
         );
+        // the transitive closure of a body, which stops when nothing
+        // new turns up rather than going round for ever
+        assert_eq!(
+            ws.judge("Set{1}->closure(n | Set{})->isEmpty()", car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge(
+                "Set{1}->closure(n | if n = 1 then Set{2} else Set{} endif)->size() = 1",
+                car
+            ),
+            Some(true)
+        );
+        // and one that keeps coming back to where it started stops
+        // there rather than going round for ever
+        assert_eq!(
+            ws.judge("Set{1}->closure(n | Set{1})->size() = 1", car),
+            Some(true)
+        );
+        // a walk it cannot take a step of does not answer half of one
+        assert_eq!(
+            ws.judge("Set{self}->closure(t | t.operator)->isEmpty()", car),
+            None
+        );
+        // the exact-type question, which the specification spells
+        // `oclIsType` and OCL spells `oclIsTypeOf`
+        assert_eq!(ws.judge("oclIsType(PartDefinition)", car), Some(true));
+        assert_eq!(ws.judge("oclIsType(Definition)", car), Some(false));
         // an iterator reads one body, and a collection operation
         // written with more than one is not OCL this reads
         assert_eq!(ws.judge("Set{1}->exists(1 = 1, 2 = 2)", car), None);
