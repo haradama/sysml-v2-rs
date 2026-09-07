@@ -1930,3 +1930,72 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
         ["nowhere"]
     );
 }
+
+/// `abstract function LiteralEvaluation specializes Evaluation { return
+/// : ScalarValue[1]; }` -- the library writes no `redefines`, and the
+/// standard says it does not have to: a result parameter of a function
+/// that specializes another redefines that one's.
+///
+/// Without the redefinition, the specializing function has two result
+/// parameters -- its own and the one it inherits -- and "a function has
+/// exactly one" is true of none of the five hundred in the corpus that
+/// declare one. The walk carries on past a general type that declares
+/// no result of its own, since one may be inherited in turn.
+#[test]
+fn a_result_parameter_redefines_the_one_the_general_function_declares() {
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "f.kerml",
+        "classifier T;\n\
+         function General { return : T; }\n\
+         function Middle specializes General;\n\
+         function Special specializes Middle { return : T; }\n",
+    );
+    ws.resolve_all();
+    assert!(ws.materialize_implied() > 0);
+    let model = ws.model();
+    let named = |name: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    };
+    let result_of = |of: sysml_model::ElementId| {
+        model
+            .owned(of)
+            .iter()
+            .copied()
+            .find(|&it| model.member_role(it) == Some(sysml_model::Role::Return))
+            .expect("a return was declared")
+    };
+    let special = result_of(named("Special"));
+    let general = result_of(named("General"));
+    let implied: Vec<_> = model
+        .owned(special)
+        .iter()
+        .copied()
+        .filter(|&it| model.kind(it) == ElementKind::Redefinition)
+        .collect();
+    assert_eq!(implied.len(), 1, "one implied redefinition, past Middle");
+    let redefinition = implied[0];
+    assert_eq!(
+        model.get(redefinition, "redefinedFeature"),
+        Some(&sysml_model::Value::Ref(general))
+    );
+    assert_eq!(
+        model.get(redefinition, "isImplied"),
+        Some(&sysml_model::Value::Bool(true))
+    );
+    // `validateElementIsImpliedIncluded` -- what owns an implied
+    // relationship says that it does
+    assert_eq!(
+        model.get(special, "isImpliedIncluded"),
+        Some(&sysml_model::Value::Bool(true))
+    );
+    // General declares the result the others inherit, so it redefines
+    // nothing and says nothing about implied relationships
+    assert!(model
+        .owned(general)
+        .iter()
+        .all(|&it| model.kind(it) != ElementKind::Redefinition));
+}

@@ -2203,7 +2203,86 @@ impl Workspace {
                 written += 1;
             }
         }
+        written += self.imply_return_redefinitions();
         written
+    }
+
+    /// The redefinition a declared result parameter implies.
+    ///
+    /// `abstract function LiteralEvaluation specializes Evaluation {
+    /// return : ScalarValue[1]; }` -- the library writes no `redefines`,
+    /// and the standard says it does not have to: a result parameter of
+    /// a function that specializes another redefines that one's. Without
+    /// the redefinition the specializing function has two result
+    /// parameters, its own and the one it inherits, and "a function has
+    /// exactly one" is true of none of the five hundred in the corpus
+    /// that declare one.
+    fn imply_return_redefinitions(&mut self) -> usize {
+        let mut written = 0;
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            let Some(result) = self.result_parameter(elem) else {
+                continue;
+            };
+            // What it already says it redefines is what it redefines.
+            if self
+                .model
+                .owned(result)
+                .iter()
+                .any(|&it| self.model.kind(it).is_a(ElementKind::Redefinition))
+            {
+                continue;
+            }
+            let Some(inherited) = self.inherited_result(elem, result) else {
+                continue;
+            };
+            let redefinition = self.model.create(ElementKind::Redefinition);
+            self.model.add_owned(result, redefinition);
+            self.model
+                .set(redefinition, "redefiningFeature", Value::Ref(result));
+            self.model
+                .set(redefinition, "redefinedFeature", Value::Ref(inherited));
+            self.model.set(redefinition, "isImplied", Value::Bool(true));
+            // `validateElementIsImpliedIncluded` -- what owns an implied
+            // relationship says that it does
+            self.model
+                .set(result, "isImpliedIncluded", Value::Bool(true));
+            written += 1;
+        }
+        written
+    }
+
+    /// The result parameter the nearest general type declares.
+    ///
+    /// A function may specialize one that declares no result of its own
+    /// and inherits it in turn -- `LiteralBooleanEvaluation` through
+    /// `BooleanEvaluation` -- so the walk carries on up rather than
+    /// stopping where the first general type is silent.
+    fn inherited_result(&mut self, elem: ElementId, mine: ElementId) -> Option<ElementId> {
+        let mut queue = self.supertypes_of(elem);
+        let mut seen = vec![elem];
+        let mut at = 0;
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            match self.result_parameter(up) {
+                Some(result) if result != mine => return Some(result),
+                _ => queue.extend(self.supertypes_of(up)),
+            }
+        }
+        None
+    }
+
+    /// The one member a type declares with `return`, where it declares one.
+    fn result_parameter(&self, elem: ElementId) -> Option<ElementId> {
+        self.model
+            .owned(elem)
+            .iter()
+            .copied()
+            .find(|&it| self.model.member_role(it) == Some(Role::Return))
     }
 
     fn imports_of(&self, ns: ElementId) -> Vec<ElementId> {
