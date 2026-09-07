@@ -14,12 +14,70 @@
 //! out unknown is reported as *not evaluated* rather than as either.
 //! What can be checked is checked; what cannot is named.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use sysml_model::{ElementId, ElementKind, Value};
 
 use crate::ocl::{self, Expr, Op};
 use crate::Workspace;
+
+/// How each derived property is worked out, by the metaclass it belongs
+/// to and the name it answers to.
+///
+/// The metamodel states these in OCL beside the constraints, so a
+/// derived property is answered by evaluating what the specification
+/// says it is rather than by a second account of it written here.
+/// Parsed once: there are 235 of them and they are asked for constantly.
+fn derivations() -> &'static [(ElementKind, String, Expr)] {
+    static PARSED: OnceLock<Vec<(ElementKind, String, Expr)>> = OnceLock::new();
+    PARSED.get_or_init(|| {
+        let mut out = Vec::new();
+        for rule in sysml_model::DERIVATIONS {
+            // `property = expression` names what it derives; where the
+            // metamodel wrote the expression alone, the rule's own name
+            // does -- `deriveInvocationExpressionArgument` after the
+            // metaclass is `argument`.
+            let (name, body) = match assignment(rule.ocl) {
+                Some((name, body)) => (name.to_string(), body),
+                None => (named_after(rule), rule.ocl),
+            };
+            let Ok(expr) = ocl::parse(body) else {
+                continue;
+            };
+            out.push((rule.metaclass, name, expr));
+        }
+        out
+    })
+}
+
+/// `property = expression` split in two, where the body is of that
+/// shape. A question about the text rather than about what it parses
+/// to: the metamodel writes the property first, and `a <= b` has an `=`
+/// in it without anything before it being a property.
+fn assignment(ocl: &str) -> Option<(&str, &str)> {
+    let (head, body) = ocl.split_once('=')?;
+    let name = head.trim();
+    let named = !name.is_empty() && name.chars().all(|it| it.is_alphanumeric() || it == '_');
+    named.then_some((name, body))
+}
+
+/// The property a derivation is about, read off its name where the body
+/// does not say: `derive` then the metaclass then the property.
+fn named_after(rule: &sysml_model::Rule) -> String {
+    let tail = rule
+        .name
+        .strip_prefix("derive")
+        .and_then(|rest| rest.strip_prefix(rule.metaclass.name()))
+        .unwrap_or(rule.name);
+    let mut chars = tail.chars();
+    let first: String = chars
+        .by_ref()
+        .take(1)
+        .flat_map(char::to_lowercase)
+        .collect();
+    first + chars.as_str()
+}
 
 /// One constraint that does not hold, and of what.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +130,12 @@ impl Workspace {
             }
         }
 
+        // Which metaclasses this model builds at all. A `selectByKind`
+        // that keeps nothing says one thing where the model has such
+        // elements elsewhere and another where it has none anywhere:
+        // the second is this toolchain not building them.
+        let present: HashSet<ElementKind> = by_kind.keys().copied().collect();
+
         let mut checked = Checked::default();
         for (rule, expr, refused) in &parsed {
             let Some(expr) = expr else {
@@ -88,7 +152,7 @@ impl Workspace {
             let mut asked = false;
             let mut unknown = None;
             for elem in about {
-                match self.holds(expr, elem) {
+                match self.holds(expr, elem, &present) {
                     Ok(true) => asked = true,
                     Ok(false) => {
                         asked = true;
@@ -116,11 +180,18 @@ impl Workspace {
 
     /// Evaluate one constraint of one element: whether it holds, or why
     /// this model cannot say.
-    fn holds(&mut self, expr: &Expr, elem: ElementId) -> Result<bool, String> {
+    fn holds(
+        &mut self,
+        expr: &Expr,
+        elem: ElementId,
+        present: &HashSet<ElementKind>,
+    ) -> Result<bool, String> {
         let mut scope = Scope {
             ws: self,
             bound: HashMap::new(),
             self_: elem,
+            deriving: false,
+            present,
         };
         match scope.eval(expr) {
             Val::Bool(it) => Ok(it),
@@ -171,6 +242,13 @@ struct Scope<'a> {
     /// `let` and lambda variables.
     bound: HashMap<String, Val>,
     self_: ElementId,
+    /// Whether a derivation is already being worked out. One is worked
+    /// out from what the model stores, not from further derivations:
+    /// that terminates by construction rather than by watching for a
+    /// derivation that comes back round to itself.
+    deriving: bool,
+    /// The metaclasses this model builds anywhere.
+    present: &'a HashSet<ElementKind>,
 }
 
 impl Scope<'_> {
@@ -344,16 +422,52 @@ impl Scope<'_> {
             Some(Value::Real(_)) => Val::Unknown(format!("`{name}` holds a real number")),
             Some(Value::Ref(it)) => Val::Elem(*it),
             Some(Value::RefList(them)) => Val::Set(them.iter().map(|&it| Val::Elem(it)).collect()),
-            // A property with nothing under it is not an empty one.
-            // Whether the builder would have filled it in is not
-            // something the absence can say -- `relatedFeature` is kept
-            // for some metaclasses and not others -- and reading it as
-            // empty is how a checker comes to report a violation of a
-            // model that never said anything of the sort.
-            None => Val::Unknown(format!(
-                "`{name}` is part of the abstract syntax that this model does not build here"
-            )),
+            // A derived property is never stored -- the metamodel says
+            // so -- and what answers for it is the specification's own
+            // account of how it is worked out.
+            None => match self.derive(elem, name) {
+                Some(value) => value,
+                // A property with nothing under it is not an empty one.
+                // Whether the builder would have filled it in is not
+                // something the absence can say -- `relatedFeature` is
+                // kept for some metaclasses and not others -- and
+                // reading it as empty is how a checker comes to report a
+                // violation of a model that never said anything of the
+                // sort.
+                None => Val::Unknown(format!(
+                    "`{name}` is part of the abstract syntax that this model does not build here"
+                )),
+            },
         }
+    }
+
+    /// A derived property, worked out the way the specification says.
+    ///
+    /// The derivation is evaluated of the element itself, in a scope of
+    /// its own: what it says is about that element, not about whatever
+    /// lambda the navigation happened to be inside.
+    fn derive(&mut self, elem: ElementId, name: &str) -> Option<Val> {
+        let kind = self.ws.model().kind(elem);
+        // A derivation is written in terms of other properties, and
+        // some of those are derived in turn -- an annotating element's
+        // annotated element is its annotation's. Working those out too
+        // would need a guard against a chain that comes back round to
+        // where it started, and no model reaches one; not working them
+        // out needs nothing, and says so.
+        if self.deriving {
+            return None;
+        }
+        let (_, _, body) = derivations()
+            .iter()
+            .find(|(about, property, _)| property == name && kind.is_a(*about))?;
+        let mut scope = Scope {
+            ws: self.ws,
+            bound: HashMap::new(),
+            self_: elem,
+            deriving: true,
+            present: self.present,
+        };
+        Some(scope.eval(body))
     }
 
     fn call(
@@ -484,15 +598,23 @@ impl Scope<'_> {
                 let Some(kind) = args.first().and_then(metaclass_named) else {
                     return Val::Unknown(format!("`{name}` of a kind this does not know"));
                 };
-                Val::Set(
-                    items
-                        .into_iter()
-                        .filter(|item| {
-                            matches!(item, Val::Elem(id)
-                            if self.ws.model().kind(*id).is_a(kind))
-                        })
-                        .collect(),
-                )
+                let kept: Vec<Val> = items
+                    .into_iter()
+                    .filter(|item| {
+                        matches!(item, Val::Elem(id) if self.ws.model().kind(*id).is_a(kind))
+                    })
+                    .collect();
+                // Keeping none of them is the ambiguous answer where the
+                // model has no element of that kind anywhere: an
+                // implicit conjugated port definition is not absent from
+                // one port, it is absent from this toolchain.
+                if kept.is_empty() && !self.present.iter().any(|it| it.is_a(kind)) {
+                    return Val::Unknown(format!(
+                        "no `{}` is built anywhere in this model",
+                        kind.name()
+                    ));
+                }
+                Val::Set(kept)
             }
             "forAll" | "exists" | "select" | "reject" | "collect" | "any" => {
                 let mut kept = Vec::new();
@@ -692,7 +814,9 @@ impl Workspace {
     /// the evaluation, and this is what tests it.
     fn judge(&mut self, ocl: &str, elem: ElementId) -> Option<bool> {
         let expr = ocl::parse(ocl).expect("the test writes OCL this reads");
-        self.holds(&expr, elem).ok()
+        let present: HashSet<ElementKind> =
+            self.model().ids().map(|it| self.model().kind(it)).collect();
+        self.holds(&expr, elem, &present).ok()
     }
 }
 
@@ -945,6 +1069,50 @@ mod tests {
         assert_eq!(ws.judge("operator->size() = 0", car), None);
         // a body that is not a condition at all
         assert_eq!(ws.judge("declaredName", car), None);
+    }
+
+    /// A derived property is one the metamodel declares is never
+    /// stored, so a model that held it would hold it twice. What
+    /// answers for it is the specification's own account of how it is
+    /// worked out, evaluated the same way a constraint is.
+    #[test]
+    fn a_derived_property_is_worked_out_the_way_the_specification_says() {
+        let (mut ws, a) = about("part def Car {\n\tattribute a;\n\tpart w;\n}\n", "a");
+        // `deriveUsageIsReference: isReference = not isComposite`, and
+        // an attribute is referential
+        assert_eq!(ws.judge("isReference", a), Some(true));
+
+        let (mut ws, w) = about("part def Car {\n\tattribute a;\n\tpart w;\n}\n", "w");
+        assert_eq!(ws.judge("isReference", w), Some(false));
+
+        // and a derivation written in terms of itself stops rather than
+        // running for ever
+        let (mut ws, car) = about("part def Car;\n", "Car");
+        assert_eq!(ws.judge("ownedMember->isEmpty()", car), None);
+    }
+
+    /// A `selectByKind` that keeps nothing says one thing where the
+    /// model has such elements elsewhere and another where it has none
+    /// anywhere: the second is this toolchain not building them, and
+    /// answering "none, so the rule is satisfied" is a false assurance.
+    #[test]
+    fn keeping_none_of_a_kind_nothing_builds_is_unknown() {
+        let (mut ws, car) = about("part def Car {\n\tpart w;\n}\n", "Car");
+        // nothing here builds a conjugation, so "at most one of them"
+        // is not something this can vouch for
+        assert_eq!(
+            ws.judge(
+                "ownedRelationship->selectByKind(Conjugation)->size() <= 1",
+                car
+            ),
+            None
+        );
+        // where the kind is built, the selection is the answer
+        let (mut ws, w) = about("part def Car {\n\tpart v;\n\tpart w :> v;\n}\n", "w");
+        assert_eq!(
+            ws.judge("ownedRelationship->selectByKind(Subsetting)->size() = 1", w),
+            Some(true)
+        );
     }
 
     /// A control node written at the top of a file is a feature of

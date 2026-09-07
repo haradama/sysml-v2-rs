@@ -1339,6 +1339,13 @@ fn is_composite(
     {
         return false;
     }
+    // `validateAttributeUsageIsReference: isReference` -- "An
+    // AttributeUsage is always referential", and the same of an
+    // `EventOccurrenceUsage`. A value is not something its owner is made
+    // of, whether or not the source wrote `ref`.
+    if kind.is_a(ElementKind::AttributeUsage) || kind.is_a(ElementKind::EventOccurrenceUsage) {
+        return false;
+    }
     let Some(owner) = owner else {
         return false;
     };
@@ -1608,6 +1615,12 @@ mod tests {
                 .unwrap_or_else(|| panic!("`{name}` is declared"));
             model.get(id, property).cloned()
         };
+        // `validateAttributeUsageIsReference: isReference` -- "An
+        // AttributeUsage is always referential" -- and `isReference =
+        // not isComposite`, so an attribute is not something its owner
+        // is made of however it is written
+        assert_eq!(flag("d", "isComposite"), Some(Value::Bool(false)));
+        assert_eq!(flag("k", "isComposite"), Some(Value::Bool(false)));
         for (name, property) in [
             ("Choice", "isVariation"),
             ("Serial1", "isIndividual"),

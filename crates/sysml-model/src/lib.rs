@@ -91,7 +91,9 @@ pub enum Role {
 }
 
 pub use build::{build_into, build_model, Built};
-pub use generated::{ElementKind, EnumType, FeatureMeta, FeatureType, PrimitiveType, Rule, RULES};
+pub use generated::{
+    ElementKind, EnumType, FeatureMeta, FeatureType, PrimitiveType, Rule, DERIVATIONS, RULES,
+};
 
 /// Whether a value has the shape the metamodel gives a property.
 ///

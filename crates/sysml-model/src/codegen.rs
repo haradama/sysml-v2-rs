@@ -68,10 +68,11 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
         collect_classifiers(&doc, &ids, &mut classes, &mut enums);
     }
-    let mut rules: Vec<Rule> = Vec::new();
+    let (mut rules, mut derivations) = (Vec::new(), Vec::new());
     for xml in [kerml_xmi, sysml_xmi] {
         let doc = roxmltree::Document::parse(xml).expect("invalid XMI");
-        collect_rules(&doc, &mut rules);
+        collect_rules(&doc, "validate", &mut rules);
+        collect_rules(&doc, "derive", &mut derivations);
     }
 
     // transitive ancestors (excluding self), name-sorted for determinism
@@ -84,27 +85,29 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
         ancestors.insert(name.clone(), acc);
     }
 
-    generate(&classes, &enums, &ancestors, &rules)
+    generate(&classes, &enums, &ancestors, &rules, &derivations)
 }
 
-/// The constraints the metamodel states, in the order it states them.
+/// The rules of one kind the metamodel states, in the order it states
+/// them: `validate` for the constraints a model has to satisfy,
+/// `derive` for how a derived property is worked out.
 ///
 /// A rule is written inside the class it is about, so the owning class
 /// names the metaclass -- thirteen of them carry no `constrainedElement`
 /// of their own, and where the two are both there they agree.
-fn collect_rules(doc: &roxmltree::Document, rules: &mut Vec<Rule>) {
+fn collect_rules(doc: &roxmltree::Document, of: &str, rules: &mut Vec<Rule>) {
     for node in doc.descendants() {
         if !node.has_tag_name("ownedRule") {
             continue;
         }
-        // The metamodel writes three kinds of rule under one tag: the
-        // `validate*` ones a model has to satisfy, and the `check*` and
-        // `derive*` ones saying how a derived property is worked out.
-        // Only the first is a constraint, and only one carrying OCL can
-        // be evaluated -- so the two are one question.
+        // The metamodel writes three kinds of rule under one tag:
+        // `validate*` for what a model has to satisfy, `derive*` for how
+        // a derived property is worked out, and `check*` for what the
+        // two are stated in terms of. Only one carrying OCL can be
+        // read, so which kind and whether it can be read are one
+        // question.
         let (Some(name), Some(ocl)) = (
-            node.attribute("name")
-                .filter(|it| it.starts_with("validate")),
+            node.attribute("name").filter(|it| it.starts_with(of)),
             node.children()
                 .find(|c| c.has_tag_name("specification"))
                 .and_then(|spec| spec.attribute("body")),
@@ -315,6 +318,7 @@ fn generate(
     enums: &BTreeMap<String, Enum>,
     ancestors: &BTreeMap<String, Vec<String>>,
     rules: &[Rule],
+    derivations: &[Rule],
 ) -> String {
     let mut o = String::new();
     let w = &mut o;
@@ -578,8 +582,35 @@ fn generate(
 
     accessors(classes, enums, w);
     constraints(rules, w);
+    derivations_of(derivations, w);
 
     o
+}
+
+/// How the specification says each derived property is worked out.
+///
+/// A derived property is one the metamodel declares is never stored, so
+/// a model that holds it holds it twice. What answers for it is this,
+/// evaluated -- which is why the OCL comes across verbatim here too.
+fn derivations_of(derivations: &[Rule], w: &mut String) {
+    writeln!(
+        w,
+        "\n/// How the abstract syntax works out each of its derived\n\
+         /// properties, as the specification states it. Same shape as a\n\
+         /// [`Rule`]: `ocl` is written `property = expression`, or as the\n\
+         /// expression alone where the metamodel wrote it that way.\n\
+         pub const DERIVATIONS: &[Rule] = &["
+    )
+    .unwrap();
+    for rule in derivations {
+        writeln!(w, "    Rule {{").unwrap();
+        writeln!(w, "        name: {:?},", rule.name).unwrap();
+        writeln!(w, "        metaclass: ElementKind::{},", rule.metaclass).unwrap();
+        writeln!(w, "        ocl: {:?},", rule.ocl).unwrap();
+        writeln!(w, "        says: {:?},", rule.says).unwrap();
+        writeln!(w, "    }},").unwrap();
+    }
+    writeln!(w, "];").unwrap();
 }
 
 /// The specification's own well-formedness constraints, as data.
