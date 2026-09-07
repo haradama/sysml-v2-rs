@@ -231,6 +231,7 @@ impl Workspace {
             ws: self,
             bound: HashMap::new(),
             self_: elem,
+            implicit: None,
             depth: 0,
             present,
         };
@@ -292,6 +293,11 @@ struct Scope<'a> {
     /// `let` and lambda variables.
     bound: HashMap<String, Val>,
     self_: ElementId,
+    /// What an unqualified name is read of where a collection operation
+    /// left its variable unwritten. `self` is not taken over by one --
+    /// it still means the element the constraint is being asked of --
+    /// so the two are kept apart.
+    implicit: Option<Val>,
     /// How many derivations and operations deep this already is. They
     /// are written in terms of one another, so a bound is what stops a
     /// chain that comes back round to where it started -- which
@@ -363,7 +369,7 @@ impl Scope<'_> {
         if name == "self" {
             return Val::Elem(self.self_);
         }
-        let target = Val::Elem(self.self_);
+        let target = self.implicit.clone().unwrap_or(Val::Elem(self.self_));
         self.navigate(&target, name)
     }
 
@@ -505,11 +511,14 @@ impl Scope<'_> {
                         })
                 })
                 .collect();
-            // Finding none of them is the ambiguous answer: the builder
-            // reifies some of the relationships the abstract syntax has
-            // and not others, so an empty answer is as likely to be one
-            // it does not build as one the element does not have.
-            if owned.is_empty() {
+            // Finding none of them is the ambiguous answer where the
+            // answer is relationships: the builder reifies some of the
+            // ones the abstract syntax has and not others, so an empty
+            // answer is as likely to be one it does not build as one the
+            // element does not have. A membership is not like that --
+            // one stands for each member the element owns, so owning no
+            // member of that kind is what an empty answer means.
+            if owned.is_empty() && !kind.is_a(ElementKind::Membership) {
                 return Val::Unknown(format!(
                     "`{name}` is empty here, and this model does not build every {} \
                      the abstract syntax has",
@@ -613,6 +622,7 @@ impl Scope<'_> {
             ws: self.ws,
             bound: HashMap::new(),
             self_: elem,
+            implicit: None,
             depth: self.depth + 1,
             present: self.present,
         };
@@ -629,7 +639,7 @@ impl Scope<'_> {
     ) -> Val {
         let target = match target {
             Some(expr) => self.eval(expr),
-            None => Val::Elem(self.self_),
+            None => self.implicit.clone().unwrap_or(Val::Elem(self.self_)),
         };
         if let Some(unknown) = target.unknown() {
             return unknown;
@@ -758,7 +768,13 @@ impl Scope<'_> {
                 // model has no element of that kind anywhere: an
                 // implicit conjugated port definition is not absent from
                 // one port, it is absent from this toolchain.
-                if kept.is_empty() && !self.present.iter().any(|it| it.is_a(kind)) {
+                // A membership is put back together from the
+                // containment rather than built, so it is in no such
+                // tally: keeping none of them means there are none.
+                if kept.is_empty()
+                    && !kind.is_a(ElementKind::Membership)
+                    && !self.present.iter().any(|it| it.is_a(kind))
+                {
                     return Val::Unknown(format!(
                         "no `{}` is built anywhere in this model",
                         kind.name()
@@ -799,23 +815,15 @@ impl Scope<'_> {
         let Some((bound, body)) = lambda else {
             // `->exists(not oclIsKindOf(OwningMembership))` names no
             // variable: OCL reads the body of each element in turn, and
-            // that is what an unqualified name in it stands for. `self`
-            // is not taken over by the iterator, so it is bound to what
-            // it meant outside rather than left to follow the element
-            // the body is being read of -- no rule the specification
-            // states writes one inside such a body, and one that did
-            // would mean the context and not the item.
-            let ([body], Val::Elem(item)) = (args, item) else {
-                return unknown_from(item, "the element an implicit iterator reads");
+            // that is what an unqualified name in it stands for.
+            let [body] = args else {
+                return Val::Unknown(
+                    "a collection operation written with more than one body".to_string(),
+                );
             };
-            let outer = std::mem::replace(&mut self.self_, *item);
-            let shadowed = self.bound.insert("self".to_string(), Val::Elem(outer));
+            let outer = self.implicit.replace(item.clone());
             let result = self.eval(body);
-            self.self_ = outer;
-            match shadowed {
-                Some(old) => self.bound.insert("self".to_string(), old),
-                None => self.bound.remove("self"),
-            };
+            self.implicit = outer;
             return result;
         };
         let shadowed = self.bound.insert(bound.clone(), item.clone());
@@ -875,6 +883,28 @@ impl Scope<'_> {
                     None => Val::Unknown(format!("`{qualified}` is not in this workspace")),
                 }
             }
+            // What a type specializes. The specification writes
+            // `Feature::supertypes` in terms of `Type::supertypes`
+            // through an `oclAsType`, which an operation looked up by
+            // the metaclass of its target cannot tell apart from the
+            // call it is written inside. This workspace works the same
+            // question out for inherited-member lookup, so that is the
+            // answer -- with what the standard implies included, which
+            // is what every rule asking for them asks for.
+            "supertypes" => match (target, self.argument(args)) {
+                (Val::Elem(elem), Val::Bool(false)) => Val::Set(
+                    self.ws
+                        .supertypes(*elem)
+                        .into_iter()
+                        .map(Val::Elem)
+                        .collect(),
+                ),
+                (_, other) => unknown_from(
+                    &other,
+                    "`supertypes` of something that is not a type, or excluding what the \
+                     standard implies",
+                ),
+            },
             // The abstract syntax defines its own operations in OCL
             // beside its constraints, so what one answers is what the
             // specification says it answers.
@@ -907,6 +937,7 @@ impl Scope<'_> {
             ws: self.ws,
             bound,
             self_: *elem,
+            implicit: None,
             depth: self.depth + 1,
             present: self.present,
         };
@@ -1191,6 +1222,15 @@ mod tests {
             ws.judge("Sequence{1, 2}->exists(oclIsKindOf(Feature))", car),
             None
         );
+        // an iterator reads one body, and a collection operation
+        // written with more than one is not OCL this reads
+        assert_eq!(ws.judge("Set{1}->exists(1 = 1, 2 = 2)", car), None);
+        // and what a type specializes is worked out here with the
+        // standard's implied supertypes in it, which is what every rule
+        // asking for them asks for -- so leaving them out is not
+        // something this can answer
+        assert_eq!(ws.judge("supertypes(true)->isEmpty()", car), None);
+        assert_eq!(ws.judge("supertypes(false)->notEmpty()", car), Some(true));
         // a metaclass is a question about something that stands for one,
         // and a number stands for none -- so selecting by kind keeps it
         // out rather than reading it as one
@@ -1322,10 +1362,17 @@ mod tests {
         let (mut ws, w) = about("part def Car {\n\tattribute a;\n\tpart w;\n}\n", "w");
         assert_eq!(ws.judge("isReference", w), Some(false));
 
-        // and a derivation written in terms of itself stops rather than
-        // running for ever
+        // A derivation reaching for what the model does not build is
+        // answered by neither, and one reaching for what it does is
+        // answered outright. `ownedMember` is read off the memberships,
+        // and a membership stands for each member the containment
+        // holds -- so a definition that owns nothing owns no member,
+        // and there is nothing an empty answer could be hiding. An
+        // owned specialization is not like that: the builder reifies
+        // some of them and not others.
         let (mut ws, car) = about("part def Car;\n", "Car");
-        assert_eq!(ws.judge("ownedMember->isEmpty()", car), None);
+        assert_eq!(ws.judge("ownedMember->isEmpty()", car), Some(true));
+        assert_eq!(ws.judge("ownedSpecialization->isEmpty()", car), None);
     }
 
     /// A `selectByKind` that keeps nothing says one thing where the
