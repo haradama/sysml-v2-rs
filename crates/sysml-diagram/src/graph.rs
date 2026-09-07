@@ -1215,9 +1215,7 @@ fn connector_ends(model: &Model, connector: ElementId) -> Vec<End> {
         .iter()
         .filter(|&&end| relates || model.get(end, "isEnd") == Some(&Value::Bool(true)))
         .filter_map(|&end| {
-            let (target, role) = chained_end(model, end)
-                .or_else(|| referenced_end(model, end))
-                .or_else(|| typed_end(model, end))?;
+            let (target, role) = chained_end(model, end).or_else(|| typed_end(model, end))?;
             Some(End {
                 target,
                 role,
@@ -1278,9 +1276,7 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
 
 /// An end written inline, as `connect w.hub to a.mount`.
 fn chained_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
-    let Some(Value::RefList(chain)) = model.get(end, "chainingFeature") else {
-        return None;
-    };
+    let chain = sysml_model::end_reaches(model, end);
     let (part, reached) = chain.split_first()?;
     // `connect w.hub.pin to ...` reaches past the box's own features, and
     // the standard stands a proxy in for what it reached: `proxy-label =
@@ -1291,22 +1287,6 @@ fn chained_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
         .filter_map(|&step| model.name(step))
         .collect();
     Some((*part, named.join(".")))
-}
-
-/// An end declared as its own member, as `end ::> vehicleMassRequirement;`.
-/// What it references is both the box and the name to put on the line.
-fn referenced_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
-    // only a reference subsetting carries `referencedFeature`, so the
-    // property alone picks the relationship out of whatever the end owns
-    model
-        .owned(end)
-        .iter()
-        .find_map(|&rel| match model.get(rel, "referencedFeature") {
-            Some(Value::Ref(target)) => {
-                Some((*target, model.name(*target).unwrap_or_default().to_string()))
-            }
-            _ => None,
-        })
 }
 
 /// One edge per client-supplier pair of every `dependency` in scope.
@@ -1907,6 +1887,14 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
         if !model.kind(child).is_a(ElementKind::Feature)
             || model.kind(child).is_a(ElementKind::TransitionUsage)
         {
+            continue;
+        }
+        // An end name resolution reified stands for what the end
+        // reaches and is drawn as a line, not listed as a member. It
+        // carries no name of its own -- what it reaches lends it one --
+        // so what tells it from a member written as a reference is that
+        // it is an end.
+        if model.name(child).is_none() && model.get(child, "isEnd") == Some(&Value::Bool(true)) {
             continue;
         }
         let Some(name) = model.effective_name(child) else {

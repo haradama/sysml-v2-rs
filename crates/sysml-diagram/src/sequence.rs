@@ -8,7 +8,7 @@
 
 use std::fmt::Write;
 
-use sysml_model::{ElementId, ElementKind, Model, Value};
+use sysml_model::{ElementId, ElementKind, Model};
 
 use crate::graph::{assembled_from, connector_label, connector_relation, keyword, Relation};
 use crate::svg::{document, escape, markers};
@@ -113,9 +113,7 @@ struct Reach {
 /// An end naming only the event -- a chain of one -- belongs to that
 /// event's own lifeline, since there is no participant above it.
 fn reach_of(model: &Model, end: ElementId) -> Option<Reach> {
-    let Some(Value::RefList(chain)) = model.get(end, "chainingFeature") else {
-        return None;
-    };
+    let chain = sysml_model::end_reaches(model, end);
     let (&event, before) = chain.split_last()?;
     let taking_part = if before.is_empty() {
         chain.clone()

@@ -2318,7 +2318,12 @@ impl Workspace {
     /// see it twice. What this pass has already taken is passed over,
     /// so `connect a to a`, which really does write one end twice,
     /// still gets two.
-    fn reified(&mut self, owner: ElementId, kind: ElementKind, props: &[(&str, Value)]) {
+    fn reified(
+        &mut self,
+        owner: ElementId,
+        kind: ElementKind,
+        props: &[(&str, Value)],
+    ) -> ElementId {
         let already = self.model.owned(owner).iter().copied().find(|&child| {
             self.model.kind(child) == kind
                 && !self.claimed.contains(&child)
@@ -2338,6 +2343,7 @@ impl Workspace {
             }
         };
         self.claimed.insert(made);
+        made
     }
 
     /// Create the relationship element for one resolved target.
@@ -2414,11 +2420,7 @@ impl Workspace {
         if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
             beside = self.declared_beside(id, node);
             if let Some(target) = self.wrapped_declaration(id, node).or(beside) {
-                self.reified(
-                    id,
-                    ElementKind::Feature,
-                    &[("chainingFeature", Value::RefList(vec![target]))],
-                );
+                self.end_reaching(id, vec![target]);
                 related.push(target);
             }
         }
@@ -2461,6 +2463,27 @@ impl Workspace {
                     }
                 }
                 _ => {}
+            }
+        }
+        // `accept Go then s2;` is a transition out of the state it is
+        // written in. It says where it goes and not where it comes from,
+        // and where it comes from is the state around it -- without
+        // that, the succession it owns relates one thing, which
+        // `validateConnectorRelatedFeatures` says a concrete connector
+        // cannot do.
+        if related.len() == 1
+            && self.model.kind(id).is_a(ElementKind::TransitionUsage)
+            && !has_leading(node, SyntaxKind::FIRST_KW)
+        {
+            // the state it follows, as a succession takes the step
+            // before it; failing that the one it is written inside
+            let leaves = self.step_beside(id, Beside::Before).or_else(|| {
+                self.model
+                    .owner(id)
+                    .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Step))
+            });
+            if let Some(state) = leaves {
+                related.insert(0, state);
             }
         }
         if !related.is_empty() {
@@ -2754,11 +2777,26 @@ impl Workspace {
     /// something by a route the specification does not have.
     fn refers_to(&mut self, reference: ElementId, target: ElementId) {
         self.try_set(reference, "referent", Value::Ref(target));
-        self.reified(
-            reference,
-            ElementKind::Membership,
-            &[("memberElement", Value::Ref(target))],
-        );
+        // The builder stood the membership there ahead of the text the
+        // expression was written as, since the standard takes the first
+        // one. What it relates is only known once the name is looked up.
+        let standing = self
+            .model
+            .owned(reference)
+            .iter()
+            .copied()
+            .find(|&child| self.model.kind(child).is_a(ElementKind::Membership));
+        // `attribute simpleUnitSelf : SimpleUnit = self;` -- `self` names
+        // the feature every occurrence has of itself, and this model
+        // resolves it to the type it is written in because that is the
+        // scope it means. Which feature it stands for is not something
+        // this can say, so the membership is left relating nothing
+        // rather than relating a type where the standard has a feature.
+        if let Some(membership) =
+            standing.filter(|_| self.model.kind(target).is_a(ElementKind::Feature))
+        {
+            self.try_set(membership, "memberElement", Value::Ref(target));
+        }
     }
 
     /// What the statement a succession was built from declares.
@@ -2792,11 +2830,39 @@ impl Workspace {
                 chain.push(step);
             }
         }
-        self.reified(
-            connector,
-            ElementKind::Feature,
-            &[("chainingFeature", Value::RefList(chain))],
-        );
+        self.end_reaching(connector, chain);
+    }
+
+    /// Stand a `Feature` for one connector end, reaching what it names.
+    ///
+    /// One name is not a chain: `validateFeatureChainingFeatureNotOne`
+    /// gives a feature either no chaining features or more than one, so
+    /// an end naming a single feature refers to it through a subsetting
+    /// instead. Read either way by [`sysml_model::end_reaches`].
+    fn end_reaching(&mut self, connector: ElementId, chain: Vec<ElementId>) {
+        // What a connector relates it relates through ends of its own:
+        // `EndFeatureMembership` is how the standard owns one, and
+        // saying so is also what tells such a feature from a member the
+        // source wrote as a reference.
+        let end = self.reified(connector, ElementKind::Feature, &[]);
+        self.try_set(end, "isEnd", Value::Bool(true));
+        match chain.as_slice() {
+            // One name is not a chain: the standard gives a feature
+            // either no chaining features or more than one, so an end
+            // naming a single feature refers to it instead.
+            [only] => {
+                let only = *only;
+                self.reified(
+                    end,
+                    ElementKind::ReferenceSubsetting,
+                    &[
+                        ("referencingFeature", Value::Ref(end)),
+                        ("referencedFeature", Value::Ref(only)),
+                    ],
+                );
+            }
+            _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
+        }
     }
 
     /// A transition's `accept x : T` writes a typing that belongs to the
@@ -3380,6 +3446,14 @@ fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
     None
 }
 
+/// Whether a statement writes a keyword of its own, rather than one
+/// nested in something it declares.
+fn has_leading(node: &SyntaxNode, keyword: SyntaxKind) -> bool {
+    node.children_with_tokens()
+        .filter_map(|part| part.into_token())
+        .any(|token| token.kind() == keyword)
+}
+
 /// The operands naming a connector's or transition's ends.
 ///
 /// A connector relates every reference it holds. A transition writes an
@@ -3505,6 +3579,18 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
                 after_keyword = false;
             }
         }
+    }
+    // `transition first a accept s do action D then b;` -- `do` takes
+    // the rest of the statement with it, so the target parses inside the
+    // action the effect declares. It is the transition's target either
+    // way, and read only from the statement's own children the
+    // transition relates one thing.
+    if out.len() < 2 && of.is_a(ElementKind::TransitionUsage) {
+        let carried = node
+            .children()
+            .filter(|child| child.kind() == SyntaxKind::USAGE)
+            .find_map(|child| operand_after(&child, SyntaxKind::THEN_KW));
+        out.extend(carried);
     }
     out
 }

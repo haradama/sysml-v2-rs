@@ -206,6 +206,26 @@ pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> 
     }
 }
 
+/// What a connector end reaches, in the order it reaches it.
+///
+/// An end written as a chain -- `connect w.hub to a.mount` -- holds the
+/// steps as its `chainingFeature`. One naming a single feature refers to
+/// it through an owned `ReferenceSubsetting` instead, because
+/// `validateFeatureChainingFeatureNotOne` gives a feature either no
+/// chaining features or more than one. Both are the same question, so
+/// both are answered here rather than at each place that asks.
+pub fn end_reaches(model: &Model, end: ElementId) -> Vec<ElementId> {
+    if let Some(Value::RefList(chain)) = model.get(end, "chainingFeature") {
+        return chain.clone();
+    }
+    model
+        .owned(end)
+        .iter()
+        .filter(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
+        .filter_map(|&child| model.get(child, "referencedFeature")?.as_id())
+        .collect()
+}
+
 pub use build::BUILT_FLAGS;
 pub use build::{build_into, build_model, Built};
 pub use generated::{

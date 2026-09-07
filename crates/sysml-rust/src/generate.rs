@@ -918,6 +918,16 @@ impl<'a> Generator<'a> {
 
     /// One attribute or composed part as a field, if it has a Rust type.
     fn field(&self, def: ElementId, level: ElementId, usage: ElementId) -> Option<Field> {
+        // An end name resolution reified stands for what a connector
+        // reaches, not for anything the source declared. It carries no
+        // name of its own -- what it reaches lends it one -- so what
+        // tells it from a member written as a reference is that it is
+        // an end.
+        if self.model.name(usage).is_none()
+            && self.model.get(usage, "isEnd") == Some(&Value::Bool(true))
+        {
+            return None;
+        }
         // an unnamed redefinition answers to the name it redefines, and
         // KerML's rule for that -- which follows references as well as
         // redefinitions, and a chain of either -- is the model's own
@@ -1615,10 +1625,7 @@ impl<'a> Generator<'a> {
                 if model.kind(child) != ElementKind::Feature {
                     return None;
                 }
-                match model.get(child, "chainingFeature") {
-                    Some(Value::RefList(chain)) => chain.last().copied(),
-                    _ => None,
-                }
+                sysml_model::end_reaches(model, child).last().copied()
             })
             .collect();
         let state_name = |id: ElementId| {
@@ -2358,7 +2365,7 @@ impl<'a> Generator<'a> {
             .owned(usage)
             .iter()
             .filter(|&&child| self.model.kind(child) == ElementKind::Feature)
-            .map(|&child| self.model.chaining_feature(child).to_vec())
+            .map(|&child| sysml_model::end_reaches(self.model, child))
             .filter(|chain| !chain.is_empty())
             .collect();
         match chains.as_slice() {

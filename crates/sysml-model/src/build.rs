@@ -526,6 +526,7 @@ fn bound_expression(
             model.set(bound, "value", value);
         }
         ElementKind::FeatureReferenceExpression => {
+            refers_through(model, bound, kind);
             if let Value::String(text) = value {
                 represent_textually(model, bound, &text);
             }
@@ -593,8 +594,25 @@ fn value_expression(model: &mut Model, membership: ElementId, written: &SyntaxNo
     };
     let expression = model.create(kind);
     model.add_owned(membership, expression);
+    refers_through(model, expression, kind);
     represent_textually(model, expression, written.text().to_string().trim());
     expression
+}
+
+/// Stand a `Membership` on a feature reference expression for what it
+/// will turn out to refer to.
+///
+/// `deriveFeatureReferenceExpressionReferent` takes the *first* owned
+/// membership that is not a parameter's, so the one holding the referent
+/// has to come before whatever else the expression owns -- the text it
+/// was written as, among other things. Name resolution fills in what it
+/// relates once the name has been looked up; until then it relates
+/// nothing, which is what an unresolved name amounts to.
+fn refers_through(model: &mut Model, expression: ElementId, kind: ElementKind) {
+    if kind == ElementKind::FeatureReferenceExpression {
+        let membership = model.create(ElementKind::Membership);
+        model.add_owned(expression, membership);
+    }
 }
 
 /// The literal a value clause holds, when it holds one this model reifies.
@@ -1764,7 +1782,11 @@ mod tests {
         // one bound was written, so the pair of them was not
         assert_eq!(reference(&model, range, "lowerBound"), None);
         assert_eq!(model.kind(bound), ElementKind::FeatureReferenceExpression);
-        let written = model.owned(bound)[0];
+        // the membership it refers through stands first, because the
+        // standard takes the first one an expression owns; the text it
+        // was written as follows
+        assert_eq!(model.kind(model.owned(bound)[0]), ElementKind::Membership);
+        let written = model.owned(bound)[1];
         assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
         assert_eq!(
             model.get(written, "body").and_then(Value::as_str),
