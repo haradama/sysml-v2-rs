@@ -322,7 +322,7 @@ impl Workspace {
 }
 
 /// What an OCL expression comes to.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Val {
     /// Nothing here can answer: a property the abstract syntax has and
     /// this model does not, or an operation not implemented. Carries
@@ -843,7 +843,12 @@ impl Scope<'_> {
             "size" => Val::Int(items.len() as i64),
             "isEmpty" => Val::Bool(items.is_empty()),
             "notEmpty" => Val::Bool(!items.is_empty()),
-            "asSet" | "asOrderedSet" | "asBag" | "asSequence" | "flatten" => {
+            // A `Set` and an `OrderedSet` hold each value once; a `Bag`
+            // and a `Sequence` hold what they were given.
+            "asSet" | "asOrderedSet" => {
+                Val::Set(once_each(items.iter().flat_map(Val::many).collect()))
+            }
+            "asBag" | "asSequence" | "flatten" => {
                 Val::Set(items.iter().flat_map(Val::many).collect())
             }
             "first" => items.first().cloned().unwrap_or(Val::Null),
@@ -879,7 +884,7 @@ impl Scope<'_> {
             "union" => {
                 let mut out = items;
                 out.extend(taken.many());
-                Val::Set(out)
+                Val::Set(once_each(out))
             }
             "intersection" => {
                 let other = taken.many();
@@ -1161,6 +1166,23 @@ fn unknown_from(value: &Val, what: &str) -> Val {
 }
 
 /// Two values, compared the way OCL compares them.
+/// The same collection with nothing in it twice.
+///
+/// The memberships a type inherits arrive by as many routes as its
+/// supertypes have in common: a literal reaches `Base::things::that`
+/// five times over, and every feature of `Occurrences::Occurrence`
+/// three times. An OCL `Set` and `OrderedSet` hold each value once, so
+/// counting the duplicates makes "exactly one return parameter" true of
+/// nothing at all -- and makes the walk that finds them several times
+/// the work it is.
+fn once_each(items: Vec<Val>) -> Vec<Val> {
+    let mut seen = HashSet::new();
+    items
+        .into_iter()
+        .filter(|it| seen.insert(it.clone()))
+        .collect()
+}
+
 fn equal(left: &Val, right: &Val) -> Val {
     if let Some(unknown) = left.unknown().or_else(|| right.unknown()) {
         return unknown;
@@ -1720,6 +1742,30 @@ mod tests {
         // definition for it is still unanswered rather than answered
         // under a name that happens to be one letter away
         assert_eq!(ws.judge("featuringTypes->isEmpty()", car), None);
+    }
+
+    /// A `Set` and an `OrderedSet` hold each value once; a `Bag` and a
+    /// `Sequence` hold what they were given.
+    ///
+    /// What this is really about is the memberships a type inherits.
+    /// They arrive by as many routes as its supertypes have in common,
+    /// and a literal reaches `Base::things::that` five times over. Held
+    /// five times, "exactly one return parameter" is true of nothing.
+    #[test]
+    fn a_set_holds_each_value_once_and_a_sequence_holds_what_it_was_given() {
+        let (mut ws, car) = about("part def Car {\n\tpart w;\n}\n", "Car");
+        assert_eq!(
+            ws.judge("Set{1, 1, 2}->asSet()->size() = 2", car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("Set{1, 2}->union(Set{2, 3})->size() = 3", car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("Set{1, 1, 2}->asSequence()->size() = 3", car),
+            Some(true)
+        );
     }
 
     /// A flag the builder reads off the source for every metaclass that
