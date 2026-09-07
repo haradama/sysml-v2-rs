@@ -642,6 +642,20 @@ impl Scope<'_> {
         if name == "owningAnnotatedElement" && model.kind(elem).is_a(ElementKind::Annotation) {
             return Val::Null;
         }
+        // The one derived property of a Type the metamodel states in
+        // prose alone: it "indicates whether this Type has an
+        // ownedConjugator", and a conjugator is a Conjugation the type
+        // owns. `class B conjugates A;` writes one; the statement form
+        // gives it to the namespace instead, and by the standard's own
+        // account that leaves the type it names unconjugated.
+        if name == "isConjugated" && model.kind(elem).is_a(ElementKind::Type) {
+            return Val::Bool(
+                model
+                    .owned(elem)
+                    .iter()
+                    .any(|&child| model.kind(child).is_a(ElementKind::Conjugation)),
+            );
+        }
         if name == "owner" {
             return match model.owner(elem) {
                 Some(owner) => Val::Elem(owner),
@@ -1636,6 +1650,28 @@ mod tests {
             ws.judge("ownedRelationship->selectByKind(Subsetting)->size() = 1", w),
             Some(true)
         );
+    }
+
+    /// `isConjugated` is the one derived property of a Type that the
+    /// metamodel states in prose and states nowhere in OCL, so nothing
+    /// the evaluation reads can work it out. It is answered from what
+    /// the type owns, which is what the prose says it means.
+    #[test]
+    fn a_type_is_conjugated_when_it_owns_the_conjugation_that_says_so() {
+        let conjugated = "package K {\n\tclass A;\n\tclass B conjugates A;\n}\n";
+        let mut ws = Workspace::new();
+        ws.add_file("c.kerml", conjugated);
+        ws.resolve_all();
+        let named = |ws: &Workspace, want: &str| {
+            ws.named_elements()
+                .find(|(_, name)| *name == want)
+                .map(|(id, _)| id)
+                .expect("the class is declared")
+        };
+        let (a, b) = (named(&ws, "A"), named(&ws, "B"));
+        assert_eq!(ws.judge("isConjugated", b), Some(true));
+        // the original of a conjugation is not itself conjugated
+        assert_eq!(ws.judge("isConjugated", a), Some(false));
     }
 
     /// A flag the builder reads off the source for every metaclass that

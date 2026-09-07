@@ -2414,7 +2414,14 @@ impl Workspace {
                 "featureChained",
                 "chainingFeature",
             ),
-            // relationship_parts only yields the four kinds above plus TYPING
+            // `class B conjugates A;` -- the conjugation is owned by the
+            // type that is conjugated, which is what tells it from
+            // `conjugation c conjugate B conjugates A;`, where the
+            // namespace owns it and B is not itself a conjugated type.
+            SyntaxKind::CONJUGATES_KW => {
+                (ElementKind::Conjugation, "conjugatedType", "originalType")
+            }
+            // relationship_parts only yields the five kinds above plus TYPING
             _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
         };
         self.reified(
@@ -3359,9 +3366,9 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
             | SyntaxKind::REFERENCES => Some((part.kind(), part)),
             // KerML writes `unions T`, `chains a.b`, `disjoint from T`
             // and their kin as the one shape, told apart by the keyword
-            // leading it. Four of them relate a type or a feature to
-            // what it is made of; the rest say something else and are
-            // read, where they are read at all, elsewhere.
+            // leading it. Five of them relate a type or a feature to
+            // another; the rest say something else and are read, where
+            // they are read at all, elsewhere.
             SyntaxKind::RELATION => {
                 let lead = part
                     .children_with_tokens()
@@ -3374,6 +3381,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                         | SyntaxKind::INTERSECTS_KW
                         | SyntaxKind::DIFFERENCES_KW
                         | SyntaxKind::CHAINS_KW
+                        | SyntaxKind::CONJUGATES_KW
                 )
                 .then_some((lead, part))
             }
@@ -3953,6 +3961,50 @@ mod tests {
                 (ElementKind::FeatureTyping, Some("g"), Some("A")),
                 (ElementKind::Subsetting, Some("g"), None),
                 (ElementKind::Subsetting, None, Some("f")),
+            ]
+        );
+    }
+
+    /// `class B conjugates A;` writes the conjugation as a clause, and
+    /// the type that is conjugated owns it. `conjugation c conjugate B
+    /// conjugates A;` writes the same relationship as a statement, which
+    /// the namespace owns -- and by the standard's own account that
+    /// leaves B unconjugated, since a conjugated type is one with a
+    /// conjugator of its own.
+    #[test]
+    fn a_conjugates_clause_belongs_to_the_type_it_conjugates() {
+        let (ws, stats) = resolved_workspace(&[(
+            "c.kerml",
+            "package K {\n\
+             \tclass A;\n\
+             \tclass B conjugates A;\n\
+             \tconjugation c conjugate A conjugates B;\n\
+             }\n",
+        )]);
+        assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+        let model = ws.model();
+        let conjugations: Vec<(Option<&str>, Option<&str>, Option<&str>)> = model
+            .ids()
+            .filter(|&id| model.kind(id) == ElementKind::Conjugation)
+            .map(|id| {
+                let end = |prop| {
+                    model
+                        .get(id, prop)
+                        .and_then(Value::as_id)
+                        .and_then(|at| model.name(at))
+                };
+                let owner = model.owner(id).and_then(|up| model.name(up));
+                (owner, end("conjugatedType"), end("originalType"))
+            })
+            .collect();
+        assert_eq!(
+            conjugations,
+            [
+                // written as a statement: the namespace's own, and the
+                // shape it writes its two types in is not read here
+                (Some("K"), None, None),
+                // written as a clause: B's own, relating B to A
+                (Some("B"), Some("B"), Some("A")),
             ]
         );
     }
