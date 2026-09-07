@@ -552,6 +552,13 @@ fn reify_feature_value(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     }
     if has_token(&clause, COLON_EQ) {
         model.set(membership, "isInitial", Value::Bool(true));
+        // `validateFeatureValueIsInitial` -- "a FeatureValue that is
+        // initial has a feature whose value can change". `:=` gives a
+        // starting value rather than the value, which is what makes it
+        // one.
+        if model.kind(owner).feature("isVariable").is_some() {
+            model.set(owner, "isVariable", Value::Bool(true));
+        }
     }
 
     let Some(written) = clause

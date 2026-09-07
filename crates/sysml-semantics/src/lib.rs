@@ -2739,9 +2739,26 @@ impl Workspace {
                 .get(slot)
                 .and_then(|&p| self.reference_expression(p))
             {
-                self.try_set(reference, "referent", Value::Ref(target));
+                self.refers_to(reference, target);
             }
         }
+    }
+
+    /// Record what a `FeatureReferenceExpression` stands for.
+    ///
+    /// `= ledPinNumber` refers to a feature without owning it, and the
+    /// standard reads the referent back off the membership that says so
+    /// -- `deriveFeatureReferenceExpressionReferent` takes the first
+    /// owned membership that is not a parameter's. Holding the answer
+    /// and not the membership leaves the expression referring to
+    /// something by a route the specification does not have.
+    fn refers_to(&mut self, reference: ElementId, target: ElementId) {
+        self.try_set(reference, "referent", Value::Ref(target));
+        self.reified(
+            reference,
+            ElementKind::Membership,
+            &[("memberElement", Value::Ref(target))],
+        );
     }
 
     /// What the statement a succession was built from declares.
@@ -2956,7 +2973,7 @@ impl Workspace {
                     // this is the feature
                     if chain == *expr {
                         if let Some(reference) = self.reference_expression(owner) {
-                            self.try_set(reference, "referent", Value::Ref(target));
+                            self.refers_to(reference, target);
                         }
                     }
                 }
