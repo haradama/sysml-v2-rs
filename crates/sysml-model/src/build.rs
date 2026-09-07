@@ -404,9 +404,31 @@ fn closes_a_loop(node: &SyntaxNode) -> bool {
 /// consumer.
 fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     use SyntaxKind::*;
-    let Some(clause) = node.children().find(|child| child.kind() == MULTIPLICITY) else {
-        return;
-    };
+    // `part x [0..*]` writes the clause as a node of its own. A control
+    // statement writes the same thing where an index would go -- `then
+    // timeslice ownership[0..*]` -- and a two-ended range arrives whole
+    // there rather than as bounds either side of a `..`, so it is opened
+    // up to be read the one way.
+    let written: Vec<sysml_syntax::SyntaxElement> =
+        match node.children().find(|child| child.kind() == MULTIPLICITY) {
+            Some(clause) => clause.children_with_tokens().collect(),
+            None if node.kind() == CONTROL_STMT => {
+                let Some(indexed) = node.children().find(|child| child.kind() == INDEX_EXPR) else {
+                    return;
+                };
+                indexed
+                    .children_with_tokens()
+                    .skip_while(|part| part.kind() != L_BRACKET)
+                    .flat_map(|part| match part.as_node() {
+                        Some(range) if range.kind() == BINARY_EXPR => {
+                            range.children_with_tokens().collect::<Vec<_>>()
+                        }
+                        _ => vec![part],
+                    })
+                    .collect()
+            }
+            None => return,
+        };
     let range = model.create(ElementKind::MultiplicityRange);
     model.add_owned(owner, range);
     model.set(owner, "multiplicity", Value::Ref(range));
@@ -418,7 +440,7 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     // kept as the text it was written as, which every consumer already
     // treats as a bound it does not know.
     let mut segments: Vec<Vec<sysml_syntax::SyntaxElement>> = vec![Vec::new()];
-    for part in clause.children_with_tokens() {
+    for part in written {
         match part.kind() {
             L_BRACKET | R_BRACKET | WHITESPACE | LINE_NOTE | BLOCK_NOTE => {}
             DOT_DOT => segments.push(Vec::new()),
