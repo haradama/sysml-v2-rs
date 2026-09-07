@@ -567,6 +567,7 @@ impl Scope<'_> {
     /// does not carry it.
     fn property(&mut self, elem: ElementId, name: &str) -> Val {
         let model = self.ws.model();
+        let name = written_as_meant(model.kind(elem), name);
         // What the metamodel calls an owned X is an owned element that
         // is an X, and an owning Y the owner where the owner is a Y.
         // Both are the containment the model does keep.
@@ -1197,6 +1198,29 @@ fn redefining(kind: ElementKind, name: &str) -> Option<&'static str> {
     found
 }
 
+/// A property name the specification's OCL writes with an `s` the
+/// metaclass does not declare, read as the one it does.
+///
+/// `featuringTypes`, `associationEnds`, `connectorEnds`,
+/// `featureMemberships` and `subsettedFeatures` are all written that
+/// way, and the metaclasses declare all five in the singular. There is
+/// no other reading: the written name belongs to no metaclass at all,
+/// and the two are one letter apart. The alternative is answering none
+/// of the six constraints that navigate through them.
+///
+/// This only speaks where the written name is declared nowhere on the
+/// metaclass, so a property the model simply does not build still says
+/// so rather than being answered under another name.
+fn written_as_meant(kind: ElementKind, name: &str) -> &str {
+    if kind.feature(name).is_some() {
+        return name;
+    }
+    match name.strip_suffix('s').and_then(|one| kind.feature(one)) {
+        Some(meta) => meta.name,
+        None => name,
+    }
+}
+
 /// Whether an element is owned as a relationship rather than as a
 /// member.
 ///
@@ -1672,6 +1696,30 @@ mod tests {
         assert_eq!(ws.judge("isConjugated", b), Some(true));
         // the original of a conjugation is not itself conjugated
         assert_eq!(ws.judge("isConjugated", a), Some(false));
+    }
+
+    /// The specification's own OCL names five properties with a final
+    /// `s` that no metaclass declares, and declares all five without
+    /// it. Read as written they answer nothing at all; read as meant
+    /// they answer what the constraint is asking about.
+    #[test]
+    fn a_name_the_specification_writes_with_an_s_it_declares_without_one() {
+        let (mut ws, car) = about("part def Car {\n\tpart w;\n}\n", "Car");
+        // `Type::featureMembership` is what the metamodel declares, and
+        // `validateElementFilterMembershipConditionIsBoolean` navigates
+        // `featureMemberships`
+        assert_eq!(
+            ws.judge(
+                "featureMemberships->size() = featureMembership->size()",
+                car
+            ),
+            Some(true)
+        );
+        // and the reading only speaks where the written name is
+        // declared nowhere: `featuringType` is a Feature's, so asking a
+        // definition for it is still unanswered rather than answered
+        // under a name that happens to be one letter away
+        assert_eq!(ws.judge("featuringTypes->isEmpty()", car), None);
     }
 
     /// A flag the builder reads off the source for every metaclass that
