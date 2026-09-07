@@ -558,6 +558,21 @@ impl Scope<'_> {
                 None => Val::Null,
             };
         }
+        // What an element was written with, which the model keeps on the
+        // element rather than on the membership standing over it --
+        // `private import P::*` says the import is private, and the
+        // default the standard gives a member is `public`.
+        if name == "visibility" && model.kind(elem).feature(name).is_some() {
+            // Writing nothing means `public` of a member and `private`
+            // of an import: what a namespace declares is visible from
+            // outside it, and what it brings in is not passed on.
+            let unwritten = match model.kind(elem).is_a(ElementKind::Import) {
+                true => sysml_model::Vis::Private,
+                false => sysml_model::Vis::Public,
+            };
+            let visibility = model.member_visibility(elem).unwrap_or(unwritten);
+            return Val::Str(visibility.keyword().to_string());
+        }
         match model.get(elem, name) {
             Some(Value::Bool(it)) => Val::Bool(*it),
             Some(Value::String(it)) => Val::Str(it.clone()),
@@ -1028,6 +1043,9 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
         "owningMembership" => ElementKind::Membership,
         "owningFeatureMembership" => ElementKind::FeatureMembership,
         "owningRelationship" => ElementKind::Relationship,
+        // `import P::*;` is owned by the namespace it brings the names
+        // into, which is the containment like any other
+        "importOwningNamespace" => ElementKind::Namespace,
         _ => return None,
     };
     Some(kind)
@@ -1559,6 +1577,32 @@ mod tests {
             Some(true)
         );
         assert_eq!(ws.judge(&at(3, "memberName = null"), hub), Some(true));
+
+        // An alias is a membership the model does build, and it answers
+        // the same way. Writing nothing means `public` of a member and
+        // `private` of an import: what a namespace declares is visible
+        // from outside it, and what it brings in is not passed on.
+        let (mut ws, alias) = about("package P;\nalias Q for P;\n", "Q");
+        assert_eq!(
+            ws.judge("visibility = VisibilityKind::public", alias),
+            Some(true)
+        );
+        let (mut ws, brought) = about(
+            "package P {\n\tpart def X;\n}\npackage R {\n\
+                                       \timport P::*;\n}\n",
+            "R",
+        );
+        let import = ws
+            .model()
+            .owned(brought)
+            .iter()
+            .copied()
+            .find(|&child| ws.model().kind(child).is_a(ElementKind::Import))
+            .expect("the import is built");
+        assert_eq!(
+            ws.judge("visibility = VisibilityKind::private", import),
+            Some(true)
+        );
     }
 
     /// A control node written at the top of a file is wrong in two ways

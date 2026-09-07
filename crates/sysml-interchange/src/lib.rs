@@ -299,9 +299,10 @@ const FOLDED: [ElementKind; 17] = [
 /// The list is what the builder and the resolver between them write; the
 /// CLI's corpus sweep round-trips every file in the corpus and reports
 /// the drift when one is missing from it.
-const STORED_DERIVED: [&str; 17] = [
+const STORED_DERIVED: [&str; 18] = [
     "bound",
     "chainingFeature",
+    "condition",
     "effectAction",
     "featureWithValue",
     "guardExpression",
@@ -792,12 +793,11 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             // an import says how far what it brings in travels; written
             // without a keyword, the metamodel has it stop where it is
             "visibility" if kind.is_a(ElementKind::Import) => Some(
-                match model.member_visibility(id).unwrap_or(Vis::Private) {
-                    Vis::Public => "public",
-                    Vis::Protected => "protected",
-                    Vis::Private => "private",
-                }
-                .into(),
+                model
+                    .member_visibility(id)
+                    .unwrap_or(Vis::Private)
+                    .keyword()
+                    .into(),
             ),
             // the specializations an element owns, by their metaclass
             "ownedSpecialization" if is_type => {
@@ -1091,12 +1091,11 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     .map_or(Json::Null, Json::from),
                 "owningType" => reference(&owner),
                 // the standard spells it out even where nothing was written
-                "visibility" => match model.member_visibility(id).unwrap_or(Vis::Public) {
-                    Vis::Public => "public",
-                    Vis::Protected => "protected",
-                    Vis::Private => "private",
-                }
-                .into(),
+                "visibility" => model
+                    .member_visibility(id)
+                    .unwrap_or(Vis::Public)
+                    .keyword()
+                    .into(),
                 // a transition feature's membership says which it is,
                 // and so do a state's subactions and a requirement's
                 // constraints, in their own vocabularies
@@ -1468,7 +1467,23 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
                         other => other?,
                     };
                     if let Some(converted) = converted {
-                        model.set(*id, key, converted);
+                        // An import says how far what it brings in
+                        // travels, and the model keeps that where it
+                        // keeps every membership-borne fact -- beside
+                        // the element rather than among its properties,
+                        // which is where the exporter reads it from.
+                        match (key.as_str(), &converted) {
+                            ("visibility", Value::EnumLit(written))
+                                if kind.is_a(ElementKind::Import) =>
+                            {
+                                if let Some(visibility) = Vis::written(written) {
+                                    model.set_member_visibility(*id, visibility);
+                                }
+                            }
+                            _ => {
+                                model.set(*id, key, converted);
+                            }
+                        }
                     }
                 }
             }
@@ -1720,11 +1735,11 @@ mod tests {
         let rm = rebuilt.owned(roots[0])[2];
         assert_eq!(rebuilt.get(ra, "value"), Some(&Value::Int(42)));
         assert_eq!(rebuilt.get(rb, "value"), Some(&Value::Real(2.5)));
-        // enum literals come back as strings
-        assert_eq!(
-            rebuilt.get(rm, "visibility").and_then(Value::as_str),
-            Some("private")
-        );
+        // enum literals come back as strings, and an import's
+        // visibility comes back beside the element rather than among
+        // its properties -- which is where the exporter reads it from,
+        // so it is what makes the round trip close
+        assert_eq!(rebuilt.member_visibility(rm), Some(Vis::Private));
         assert_eq!(rebuilt.get(rm, "isImportAll"), Some(&Value::Bool(true)));
         assert_eq!(rebuilt.get(rm, "importedMembership"), Some(&Value::Ref(ra)));
         let rd = rebuilt.owned(roots[0])[3];
@@ -2910,12 +2925,16 @@ mod tests {
         .zip(&roots)
         .map(|(property, &id)| model.get(id, property))
         .collect();
+        assert_eq!(model.member_visibility(roots[2]), Some(Vis::Protected));
         assert_eq!(
             literals,
             [
                 Some(&Value::EnumLit("in")),
                 Some(&Value::EnumLit("snapshot")),
-                Some(&Value::EnumLit("protected")),
+                // an import says how far what it brings in travels, and
+                // the model keeps that beside the element rather than
+                // among its properties
+                None,
                 Some(&Value::EnumLit("assumption")),
                 Some(&Value::EnumLit("do")),
                 Some(&Value::EnumLit("guard")),

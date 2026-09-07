@@ -151,7 +151,11 @@ fn build_node(
     if let Some(name) = declared_name(node).or_else(|| statement_declared_name(node)) {
         model.set(id, "declaredName", Value::String(name));
     }
-    if let Some(visibility) = member_visibility(node) {
+    if let Some(visibility) = member_visibility(node)
+        // `validateExposeVisibility` -- "an Expose always has protected
+        // visibility", whether or not the source wrote one
+        .or_else(|| kind.is_a(ElementKind::Expose).then_some(Vis::Protected))
+    {
         model.set_member_visibility(id, visibility);
     }
     if let Some(role) = member_role(node).or_else(|| enumerated.then_some(Role::Variant)) {
@@ -248,9 +252,14 @@ fn build_node(
     // P::**` everything nested under what it names. Neither was
     // arriving, so both went out as the plain import they are not.
     if kind.is_a(ElementKind::Import) {
-        if has_token(node, ALL_KW) {
-            model.set(id, "isImportAll", Value::Bool(true));
-        }
+        // An import that does not say `all` brings in only what is
+        // public, and saying nothing is not the same as not knowing.
+        // `expose` says it either way: `validateExposeIsImportAll` --
+        // "an Expose is always an import of everything" -- and a view
+        // that showed only the public members of what it is pointed at
+        // would leave the rest out of the drawing.
+        let everything = has_token(node, ALL_KW) || kind.is_a(ElementKind::Expose);
+        model.set(id, "isImportAll", Value::Bool(everything));
         if node
             .descendants_with_tokens()
             .filter_map(|part| part.into_token())
@@ -287,6 +296,10 @@ fn build_node(
             let condition = model.create(ElementKind::Expression);
             model.add_owned(id, condition);
             represent_textually(model, condition, written.text().to_string().trim());
+            // `filter @Safety;` filters by what the expression comes to,
+            // and the membership names it outright: without that the
+            // model owns an expression and says nothing about what it is
+            model.set(id, "condition", Value::Ref(condition));
         }
     }
     if kind == ElementKind::Expression && node.kind() == EXPR_STMT {

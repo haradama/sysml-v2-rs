@@ -47,6 +47,28 @@ pub enum Vis {
     Private,
 }
 
+impl Vis {
+    /// The visibility a keyword names, as the standard spells it.
+    pub fn written(word: &str) -> Option<Vis> {
+        match word {
+            "public" => Some(Vis::Public),
+            "protected" => Some(Vis::Protected),
+            "private" => Some(Vis::Private),
+            _ => None,
+        }
+    }
+
+    /// The keyword that names it, which is how the standard writes one
+    /// down and how a model interchanges it.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Vis::Public => "public",
+            Vis::Protected => "protected",
+            Vis::Private => "private",
+        }
+    }
+}
+
 /// What a membership makes of the element it owns.
 ///
 /// The keyword that declared the member decides it here, and two other
@@ -779,5 +801,15 @@ mod tests {
         model.add_owned(transition, guard);
         model.set(transition, "guardExpression", Value::Ref(guard));
         assert_eq!(transition_role(&model, guard), Some("guard"));
+    }
+
+    /// The three the standard spells, and nothing else: foreign data may
+    /// say anything, and a word that names no visibility names none.
+    #[test]
+    fn a_visibility_is_read_back_from_the_word_that_names_it() {
+        for visibility in [Vis::Public, Vis::Protected, Vis::Private] {
+            assert_eq!(Vis::written(visibility.keyword()), Some(visibility));
+        }
+        assert_eq!(Vis::written("sideways"), None);
     }
 }
