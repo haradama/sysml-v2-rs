@@ -3300,6 +3300,21 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         Expression => &["Performances::evaluations"],
         BooleanExpression => &["Performances::booleanEvaluations"],
         Invariant => &["Performances::trueEvaluations"],
+        // Each kind of literal has an evaluation of its own in the
+        // library, and each of those declares the `return` that is the
+        // literal's result. Without them a literal specializes nothing
+        // and has no result at all, which is what nine tenths of the
+        // constraints about a result parameter were tripping over.
+        LiteralBoolean => &["Performances::literalBooleanEvaluations"],
+        LiteralInteger => &["Performances::literalIntegerEvaluations"],
+        LiteralRational => &["Performances::literalRationalEvaluations"],
+        LiteralString => &["Performances::literalStringEvaluations"],
+        // the library states no evaluation for an infinite literal, so
+        // it is a literal evaluation and nothing narrower
+        LiteralInfinity => &["Performances::literalEvaluations"],
+        NullExpression => &["Performances::nullEvaluations"],
+        MetadataAccessExpression => &["Performances::metadataAccessEvaluations"],
+        FeatureReferenceExpression => &["Performances::evaluations"],
         Connector => &["Links::links"],
         BindingConnector => &["Links::selfLinks"],
         _ => &[],

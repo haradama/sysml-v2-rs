@@ -67,3 +67,82 @@ fn kerml_examples_resolve_completely_against_the_library() {
         &ws.unresolved()[..stats.unresolved.min(10)]
     );
 }
+
+/// A literal specializes the evaluation the library states for its kind,
+/// and that evaluation is what declares the literal's result: `abstract
+/// function LiteralIntegerEvaluation specializes LiteralEvaluation {
+/// return : Integer[1]; }`.
+///
+/// Each kind of literal is a metaclass of its own, and none of them was
+/// given the implicit specialization the library states, so a literal
+/// specialized nothing and had no type, no result and no members at
+/// all. The library states no evaluation for an infinite literal, so
+/// that one is a literal evaluation and nothing narrower.
+#[test]
+fn a_literal_specializes_the_evaluation_the_library_states_for_it() {
+    let Some(root) = vendor() else { return };
+    let mut ws = Workspace::new();
+    ws.load_dir(&root.join("sysml.library")).unwrap();
+    let file = ws.add_file(
+        "literals.sysml",
+        "package L {\n\
+         \tattribute i = 1;\n\
+         \tattribute r = 1.5;\n\
+         \tattribute s = \"a\";\n\
+         \tattribute b = true;\n\
+         \tattribute n [0..*];\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let literals: Vec<sysml_model::ElementId> = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .filter(|&id| {
+            ws.model()
+                .kind(id)
+                .is_a(sysml_model::ElementKind::LiteralExpression)
+        })
+        .collect();
+    let mut named: Vec<(String, String)> = Vec::new();
+    for id in literals {
+        let kind = ws.model().kind(id).name().to_string();
+        let up = ws
+            .supertypes(id)
+            .first()
+            .map(|&up| ws.qualified_name_of(up))
+            .unwrap_or_default();
+        named.push((kind, up));
+    }
+    named.sort();
+    assert_eq!(
+        named,
+        [
+            (
+                "LiteralBoolean".to_string(),
+                "Performances::literalBooleanEvaluations".to_string()
+            ),
+            (
+                "LiteralInfinity".to_string(),
+                "Performances::literalEvaluations".to_string()
+            ),
+            (
+                "LiteralInteger".to_string(),
+                "Performances::literalIntegerEvaluations".to_string()
+            ),
+            (
+                "LiteralInteger".to_string(),
+                "Performances::literalIntegerEvaluations".to_string()
+            ),
+            (
+                "LiteralRational".to_string(),
+                "Performances::literalRationalEvaluations".to_string()
+            ),
+            (
+                "LiteralString".to_string(),
+                "Performances::literalStringEvaluations".to_string()
+            ),
+        ]
+    );
+}
