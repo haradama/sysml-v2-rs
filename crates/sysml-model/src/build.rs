@@ -305,6 +305,7 @@ fn build_node(
     if kind == ElementKind::AcceptActionUsage {
         reify_accept_payload(model, node, id);
     }
+    reify_action_arguments(model, node, id, kind);
     // `IfNode : IfActionUsage = ... 'if' ownedRelationship +=
     // ExpressionParameterMember ...` and the two loops the same way: the
     // condition is what the node is about, and it was being read and
@@ -634,6 +635,71 @@ fn reify_accept_payload(
     model.add_owned(owner, payload);
     model.set(payload, "declaredName", Value::String(name));
     Some(payload)
+}
+
+/// Reify what a `send` or an `accept` acts on.
+///
+/// `SendNode : SendActionUsage = 'send' ArgumentMember ( 'via'
+/// ArgumentMember )? ( 'to' ArgumentMember )?` -- each clause writes an
+/// argument, which the standard keeps as an input parameter of the
+/// action holding what was written as its value and reads back by
+/// position: `senderArgument = argument(2)`, `receiverArgument =
+/// argument(3)`. The parameters stand there whether or not the source
+/// wrote a clause for each, which is what `validateSendActionParameters`
+/// and `validateAcceptActionUsageParameters` say outright.
+///
+/// Without them the port a message goes out of is nowhere in the model,
+/// so `via displayPort` named nothing and a name that stands for nothing
+/// went unreported.
+fn reify_action_arguments(
+    model: &mut Model,
+    node: &SyntaxNode,
+    action: ElementId,
+    kind: ElementKind,
+) {
+    // in the order the standard declares the parameters, against the
+    // keyword the notation writes each after. The payload is the first
+    // of them and is written after the keyword naming the action itself,
+    // so no keyword introduces it.
+    let slots: &[Option<SyntaxKind>] = match kind {
+        ElementKind::SendActionUsage => &[None, Some(SyntaxKind::VIA_KW), Some(SyntaxKind::TO_KW)],
+        ElementKind::AcceptActionUsage => &[None, Some(SyntaxKind::VIA_KW)],
+        _ => return,
+    };
+    for slot in slots {
+        let parameter = model.create(ElementKind::ReferenceUsage);
+        model.add_owned(action, parameter);
+        model.set(parameter, "direction", Value::EnumLit("in"));
+        let Some(written) = slot.and_then(|keyword| operand_after(node, keyword)) else {
+            continue;
+        };
+        let membership = model.create(ElementKind::FeatureValue);
+        model.add_owned(parameter, membership);
+        model.set(membership, "featureWithValue", Value::Ref(parameter));
+        let expression = value_expression(model, membership, &written);
+        model.set(membership, "value", Value::Ref(expression));
+    }
+}
+
+/// The reference a keyword introduces, where the statement writes one
+/// directly after it.
+fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
+    let mut after = false;
+    for element in node.children_with_tokens() {
+        match element.as_token() {
+            Some(token) if token.kind().is_trivia() => {}
+            // any other keyword closes the slot the reference sits in
+            Some(token) => after = token.kind() == keyword,
+            None => {
+                let child = element.into_node().expect("checked for a token above");
+                if after {
+                    return matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
+                        .then_some(child);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Reify the condition a transition is guarded by.

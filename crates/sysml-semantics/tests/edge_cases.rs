@@ -1839,3 +1839,94 @@ fn a_message_says_where_it_runs_as_well_as_what_it_follows() {
     assert_eq!(ends("FlowUsage"), ["a", "b"]);
     assert_eq!(ends("SuccessionAsUsage"), ["e", "m"]);
 }
+
+/// `send new S() via p to b;` says which port a message leaves by and
+/// who receives it, `accept s via p;` where one arrives, and `assign v
+/// := 1;` which feature it sets. None of those names was being looked
+/// up at all, so each stood for nothing -- and a name that stands for
+/// nothing was not reported either, which is worse than reporting it.
+///
+/// The standard keeps the first two as arguments of the action, in the
+/// input parameters it declares in order and reads back by position
+/// (`senderArgument = argument(2)`, `receiverArgument = argument(3)`),
+/// and the last as the one membership an assignment does not own.
+#[test]
+fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "test.sysml",
+        "attribute def S;\npart def P { port p; }\n\
+         action def A {\n\tattribute v;\n\tpart hub : P;\n\taction x;\n\
+         \tthen assign v := 1;\n\tthen send new S() via hub.p to x;\n\
+         \tthen accept s via hub.p;\n}\n",
+    );
+    ws.resolve_all();
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    let model = ws.model();
+    let only = |metaclass: &str| {
+        model
+            .ids()
+            .find(|&id| model.kind(id).name() == metaclass)
+            .unwrap_or_else(|| panic!("the {metaclass} is built"))
+    };
+    let parameters = |action: sysml_model::ElementId| {
+        model
+            .owned(action)
+            .iter()
+            .copied()
+            .filter(|&child| model.kind(child) == ElementKind::ReferenceUsage)
+            .collect::<Vec<_>>()
+    };
+    // the argument an expression stands for, by the name it resolved to
+    let argument = |parameter: sysml_model::ElementId| {
+        let value = model
+            .owned(parameter)
+            .iter()
+            .copied()
+            .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
+        let expression = model.get(value, "value")?.as_id()?;
+        let referent = model.get(expression, "referent")?.as_id()?;
+        model.name(referent).map(str::to_string)
+    };
+
+    // payload, sender and receiver -- three of them whether or not the
+    // source wrote a clause for each, which is what
+    // `validateSendActionParameters` says
+    let send = parameters(only("SendActionUsage"));
+    assert_eq!(send.len(), 3);
+    assert_eq!(argument(send[0]), None, "the payload writes no name");
+    assert_eq!(argument(send[1]).as_deref(), Some("p"));
+    assert_eq!(argument(send[2]).as_deref(), Some("x"));
+
+    // and two for an accept: payload and receiver
+    let accept = parameters(only("AcceptActionUsage"));
+    assert_eq!(accept.len(), 2);
+    assert_eq!(argument(accept[1]).as_deref(), Some("p"));
+
+    // the assignment refers to what it sets without owning it
+    let assign = only("AssignmentActionUsage");
+    let referred = model
+        .owned(assign)
+        .iter()
+        .copied()
+        .find(|&child| model.kind(child) == ElementKind::Membership)
+        .and_then(|membership| model.get(membership, "memberElement")?.as_id())
+        .and_then(|target| model.name(target));
+    assert_eq!(referred, Some("v"));
+
+    // and a name that stands for nothing is reported, which is what
+    // looking it up was for
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "miss.sysml",
+        "action def A {\n\tthen assign nowhere := 1;\n}\n",
+    );
+    ws.resolve_all();
+    assert_eq!(
+        ws.unresolved()
+            .iter()
+            .map(|it| it.name.clone())
+            .collect::<Vec<_>>(),
+        ["nowhere"]
+    );
+}

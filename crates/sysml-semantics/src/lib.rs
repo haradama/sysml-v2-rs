@@ -1025,6 +1025,7 @@ impl Workspace {
             ) {
                 self.resolve_connector_ends(id, &node, &mut stats);
                 self.resolve_trigger_type(id, &node, &mut stats);
+                self.resolve_action_arguments(id, &node, &mut stats);
                 continue;
             }
             // `comment about A, B /* ... */` and `metadata m : M about
@@ -1095,6 +1096,11 @@ impl Workspace {
             ) {
                 continue;
             }
+            // `action initialization assign index := 1;` writes the
+            // action's own name before the keyword, so the statement
+            // parses as a usage rather than as a control statement --
+            // and what it assigns is a name to look up either way
+            self.resolve_action_arguments(id, &node, &mut stats);
             // `attribute pin : PinNumber = ledPinNumber;` -- the value is
             // an expression like any other, and the name in it is a
             // reference like any other
@@ -2642,6 +2648,89 @@ impl Workspace {
             .iter()
             .copied()
             .find(|member| self.source.get(member) == Some(&declared))
+    }
+
+    /// What a `send`, an `accept` or an `assign` names.
+    ///
+    /// `send new S() via displayPort to screen;` says which port the
+    /// message leaves by and who receives it, and `assign v := 1;` which
+    /// feature it sets. None of the three was being looked up at all, so
+    /// the names stood for nothing -- and a name that stands for nothing
+    /// was not reported either, which is worse than reporting it.
+    ///
+    /// The standard keeps the first two as arguments of the action, in
+    /// the input parameters the builder laid out in the order the
+    /// specification declares them, and the last as a membership the
+    /// assignment does not own: `deriveAssignmentActionUsageReferent`
+    /// reads back the first member of one, and
+    /// `validateAssignmentActionUsageReferent` says there must be one.
+    fn resolve_action_arguments(
+        &mut self,
+        id: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let kind = self.model.kind(id);
+        let arguments: &[(usize, SyntaxKind)] = match kind {
+            ElementKind::SendActionUsage => &[(1, SyntaxKind::VIA_KW), (2, SyntaxKind::TO_KW)],
+            ElementKind::AcceptActionUsage => &[(1, SyntaxKind::VIA_KW)],
+            ElementKind::AssignmentActionUsage => &[],
+            _ => return,
+        };
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let mut resolve = |ws: &mut Self, operand: SyntaxNode| {
+            let segments = operand_segments(&operand);
+            let at = operand_ranges(&operand);
+            let name_range = *at.last().expect("an operand spells a name");
+            match ws.resolve_operand(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    ws.record(file, operand.text_range(), name_range, &at, target);
+                    Some(target)
+                }
+                None => {
+                    ws.record_miss(file, operand.text_range(), &segments, stats);
+                    None
+                }
+            }
+        };
+        // `assign v := 1;` refers to `v` without owning it, which is the
+        // one membership of an assignment that is not an owning one
+        if kind == ElementKind::AssignmentActionUsage {
+            if let Some(target) = operand_after(node, SyntaxKind::ASSIGN_KW)
+                .and_then(|operand| resolve(self, operand))
+            {
+                self.reified(
+                    id,
+                    ElementKind::Membership,
+                    &[("memberElement", Value::Ref(target))],
+                );
+            }
+            return;
+        }
+        let parameters: Vec<ElementId> = self
+            .model
+            .owned(id)
+            .iter()
+            .copied()
+            .filter(|&child| self.model.kind(child) == ElementKind::ReferenceUsage)
+            .collect();
+        for &(slot, keyword) in arguments {
+            let Some(operand) = operand_after(node, keyword) else {
+                continue;
+            };
+            let Some(target) = resolve(self, operand) else {
+                continue;
+            };
+            // the expression the builder made of it stands for that
+            // feature, the way `= ledPinNumber` does
+            if let Some(reference) = parameters
+                .get(slot)
+                .and_then(|&p| self.reference_expression(p))
+            {
+                self.try_set(reference, "referent", Value::Ref(target));
+            }
+        }
     }
 
     /// What the statement a succession was built from declares.
