@@ -102,6 +102,13 @@ pub struct Finding {
     pub what: String,
 }
 
+/// Which side of a succession an unwritten end is on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Beside {
+    Before,
+    After,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveStats {
     pub resolved: usize,
@@ -2407,15 +2414,34 @@ impl Workspace {
                 related.push(target);
             }
         }
-        // `then b;` names where the flow goes and not where it comes
-        // from, and a succession relates both: what comes before it in
-        // the same body is the source. Without it the model says a step
+        // A succession relates two things and the notation lets one of
+        // them go unwritten. `then b;` says where the flow goes and not
+        // where it comes from; `first start;` says the other. Which one
+        // is missing is what the statement wrote, and the answer is its
+        // neighbour in the same body. Without it the model says a step
         // follows nothing, and `validateConnectorRelatedFeatures` -- "a
         // concrete Connector must have at least two relatedFeatures" --
         // is the specification saying so.
         if related.len() == 1 && self.model.kind(id).is_a(ElementKind::SuccessionAsUsage) {
-            if let Some(source) = self.step_before(id) {
-                related.insert(0, source);
+            let written = |wanted: &[SyntaxKind]| {
+                node.children_with_tokens()
+                    .filter_map(|it| it.into_token())
+                    .any(|token| wanted.contains(&token.kind()))
+            };
+            let says_source = written(&[SyntaxKind::FIRST_KW, SyntaxKind::FROM_KW]);
+            let says_target = written(&[SyntaxKind::THEN_KW, SyntaxKind::TO_KW]);
+            match (says_source, says_target) {
+                (false, true) => {
+                    if let Some(source) = self.step_beside(id, Beside::Before) {
+                        related.insert(0, source);
+                    }
+                }
+                (true, false) => {
+                    if let Some(target) = self.step_beside(id, Beside::After) {
+                        related.push(target);
+                    }
+                }
+                _ => {}
             }
         }
         if !related.is_empty() {
@@ -2423,26 +2449,35 @@ impl Workspace {
         }
     }
 
-    /// What a succession follows: the nearest member of the same body
-    /// declared before it that a succession can start from.
+    /// What a succession runs from or to, where the statement left it
+    /// unwritten: the nearest member of the same body on that side that
+    /// a succession can join.
     ///
     /// A step or an occurrence, since a sequence model writes `event
     /// occurrence e; then f;`. Where the nearest one is another
-    /// succession the answer is where *it* went: `then a; then b;` runs
-    /// a to b, not the first succession to b.
-    fn step_before(&self, succession: ElementId) -> Option<ElementId> {
+    /// succession the answer is the end of it facing this one: `then a;
+    /// then b;` runs a to b, not the first succession to b.
+    fn step_beside(&self, succession: ElementId, side: Beside) -> Option<ElementId> {
         let owner = self.model.owner(succession)?;
         let members = self.model.owned(owner);
         let at = members.iter().position(|&it| it == succession)?;
-        for &member in members[..at].iter().rev() {
+        let beside: Vec<ElementId> = match side {
+            Beside::Before => members[..at].iter().rev().copied().collect(),
+            Beside::After => members[at + 1..].to_vec(),
+        };
+        for member in beside {
             let kind = self.model.kind(member);
             if kind.is_a(ElementKind::ConnectorAsUsage) {
-                // the one before it went somewhere, and that is where
-                // this one starts. `relatedFeature` is set only where
-                // there is something to set, so a list that is there
-                // has an end in it.
-                if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature") {
-                    return related.last().copied();
+                // Looking back, the one before this went somewhere and
+                // that is where this one starts. Looking forward there
+                // is nothing to read: what comes after has not been
+                // resolved yet and says where it goes to nobody, so it
+                // is walked past to whatever it was written around.
+                if side == Beside::Before {
+                    if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature")
+                    {
+                        return related.last().copied();
+                    }
                 }
                 continue;
             }
@@ -3226,9 +3261,12 @@ fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
         SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
         // `connection c : L connect a to b;` and `flow f of T from a to b;`
         // declare a name and a type before the ends arrive, and
-        // `succession a then b;` writes its ends around the keyword
+        // `succession a then b;` writes its ends around the keyword.
+        // `allocation a : L allocate x to y;` introduces its first end
+        // the same way `connect` does.
         _ => &[
             SyntaxKind::CONNECT_KW,
+            SyntaxKind::ALLOCATE_KW,
             SyntaxKind::TO_KW,
             SyntaxKind::FROM_KW,
             SyntaxKind::FIRST_KW,

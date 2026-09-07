@@ -154,24 +154,7 @@ fn build_node(
     // stated: dropping it does not leave the model silent, it leaves it
     // saying `false` -- `variation part def` interchanged as one that
     // is not a variation.
-    for (keyword, flag) in [
-        (ABSTRACT_KW, "isAbstract"),
-        // `Message : FlowUsage = OccurrenceUsagePrefix 'message' ...
-        // { isAbstract = true }` -- the specification has no metaclass of
-        // its own for a message, and marks it this way instead. It is what
-        // tells `message m from a to b` from `flow f from a to b`.
-        (MESSAGE_KW, "isAbstract"),
-        (CONSTANT_KW, "isConstant"),
-        (CONST_KW, "isConstant"),
-        (DERIVED_KW, "isDerived"),
-        (INDIVIDUAL_KW, "isIndividual"),
-        (ORDERED_KW, "isOrdered"),
-        (PARALLEL_KW, "isParallel"),
-        (PORTION_KW, "isPortion"),
-        (STANDARD_KW, "isStandard"),
-        (VAR_KW, "isVariable"),
-        (VARIATION_KW, "isVariation"),
-    ] {
+    for (keyword, flag) in KEYWORD_FLAGS {
         if scope_has(node, keyword) && kind.feature(flag).is_some() {
             model.set(id, flag, Value::Bool(true));
         }
@@ -810,6 +793,29 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     if is_target_transition(node) {
         return Some(ElementKind::TransitionUsage);
     }
+    // `then send new S() via p;` declares the action as much as `then
+    // merge continue;` declares the node, and for the same reason the
+    // declaration wins: read as the succession alone, the action the
+    // source wrote is in the model nowhere at all. What the statement
+    // continues from is then the step before it, which is how a
+    // succession with one end written reads anyway.
+    // and only where the action is the statement's own: `transition t1
+    // first a do send 1 to p then b` writes one as the effect it carries
+    // across, and the transition is what the statement declares.
+    let continues = (has_token(node, SyntaxKind::THEN_KW) || has_token(node, SyntaxKind::FIRST_KW))
+        && !has_token(node, SyntaxKind::TRANSITION_KW)
+        && !has_token(node, SyntaxKind::DO_KW);
+    if continues {
+        if let Some(declared) = tokens(node).find_map(|token| match token {
+            SyntaxKind::SEND_KW => Some(ElementKind::SendActionUsage),
+            SyntaxKind::ACCEPT_KW => Some(ElementKind::AcceptActionUsage),
+            SyntaxKind::ASSIGN_KW => Some(ElementKind::AssignmentActionUsage),
+            SyntaxKind::TERMINATE_KW => Some(ElementKind::TerminateActionUsage),
+            _ => None,
+        }) {
+            return Some(declared);
+        }
+    }
     let node_kind = tokens(node).find_map(|token| match token {
         SyntaxKind::TRANSITION_KW => Some(ElementKind::TransitionUsage),
         // `while x > 0 { ... }` and `for t in xs { ... }` are action
@@ -928,6 +934,52 @@ fn relation_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
         .collect::<Vec<_>>()
         .into_iter()
 }
+
+/// The flags the notation writes as a keyword, and the property the
+/// standard keeps each on.
+///
+/// `Message : FlowUsage = OccurrenceUsagePrefix 'message' ... {
+/// isAbstract = true }` -- the specification has no metaclass of its own
+/// for a message and marks it this way instead, which is what tells
+/// `message m from a to b` from `flow f from a to b`.
+const KEYWORD_FLAGS: [(SyntaxKind, &str); 12] = [
+    (SyntaxKind::ABSTRACT_KW, "isAbstract"),
+    (SyntaxKind::MESSAGE_KW, "isAbstract"),
+    (SyntaxKind::CONSTANT_KW, "isConstant"),
+    (SyntaxKind::CONST_KW, "isConstant"),
+    (SyntaxKind::DERIVED_KW, "isDerived"),
+    (SyntaxKind::INDIVIDUAL_KW, "isIndividual"),
+    (SyntaxKind::ORDERED_KW, "isOrdered"),
+    (SyntaxKind::PARALLEL_KW, "isParallel"),
+    (SyntaxKind::PORTION_KW, "isPortion"),
+    (SyntaxKind::STANDARD_KW, "isStandard"),
+    (SyntaxKind::VAR_KW, "isVariable"),
+    (SyntaxKind::VARIATION_KW, "isVariation"),
+];
+
+/// Every flag this builder reads off the source for any metaclass that
+/// declares it.
+///
+/// The distinction this draws is what lets a reader tell one kind of
+/// silence from another. An element of a metaclass that declares one of
+/// these and carries no value for it is one whose source said nothing,
+/// so what the specification declares as the property's default is the
+/// answer. Any other property missing is this builder not building it,
+/// which says nothing about the model at all.
+pub const BUILT_FLAGS: [&str; 12] = [
+    "isAbstract",
+    "isConstant",
+    "isDerived",
+    "isIndividual",
+    "isNegated",
+    "isOrdered",
+    "isParallel",
+    "isPortion",
+    "isStandard",
+    "isUnique",
+    "isVariable",
+    "isVariation",
+];
 
 /// The element a keyword declares when it appears inside a control
 /// statement, if it declares one.
@@ -1597,6 +1649,68 @@ mod tests {
         }
     }
 
+    /// `then send new S() via p;` declares the action as much as `then
+    /// merge continue;` declares the node. Read as the succession its
+    /// leading keyword would otherwise make, the action the source wrote
+    /// is in the model nowhere at all.
+    #[test]
+    fn an_action_written_after_then_is_the_action_it_declares() {
+        for (source, expected) in [
+            (
+                "attribute def S;\npart def P { port p; }\n\
+                 action def A {\n\taction x;\n\tthen send new S() via P::p;\n}\n",
+                ElementKind::SendActionUsage,
+            ),
+            (
+                "attribute def S;\naction def A {\n\taction x;\n\tthen accept s : S;\n}\n",
+                ElementKind::AcceptActionUsage,
+            ),
+            (
+                "action def A {\n\tattribute v;\n\taction x;\n\tthen assign v := 1;\n}\n",
+                ElementKind::AssignmentActionUsage,
+            ),
+            (
+                "action def A {\n\taction x;\n\tthen terminate y;\n}\n",
+                ElementKind::TerminateActionUsage,
+            ),
+        ] {
+            let (model, roots) = build_model(&sysml_syntax::parse(source));
+            let action = roots
+                .iter()
+                .flat_map(|&root| model.owned(root).to_vec())
+                .find(|&member| model.name(member) == Some("A"))
+                .or_else(|| roots.iter().copied().find(|&r| model.name(r) == Some("A")))
+                .expect("`A` is declared");
+            let inside: Vec<ElementKind> = model
+                .owned(action)
+                .iter()
+                .map(|&it| model.kind(it))
+                .collect();
+            assert!(inside.contains(&expected), "{inside:?} for {source:?}");
+        }
+
+        // but a transition writes one as the effect it carries across,
+        // and the transition is what that statement declares
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "part def B { port p; }\nstate def S {\n\tstate a;\n\tstate b;\n\
+             \tpart sink : B;\n\ttransition t1 first a do send 1 to sink.p then b;\n}\n",
+        ));
+        let state = model
+            .ids()
+            .find(|&id| model.name(id) == Some("S"))
+            .expect("`S` is declared");
+        let inside: Vec<ElementKind> = model
+            .owned(state)
+            .iter()
+            .map(|&it| model.kind(it))
+            .collect();
+        assert!(inside.contains(&ElementKind::TransitionUsage), "{inside:?}");
+        assert!(
+            !inside.contains(&ElementKind::SendActionUsage),
+            "the effect is the transition's, not a member beside it: {inside:?}"
+        );
+    }
+
     #[test]
     fn a_trailing_expression_becomes_the_result_member() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -1652,6 +1766,21 @@ mod tests {
         // is made of however it is written
         assert_eq!(flag("d", "isComposite"), Some(Value::Bool(false)));
         assert_eq!(flag("k", "isComposite"), Some(Value::Bool(false)));
+        // Every flag the builder reads off the source says what the
+        // specification declares it to be where the source is silent,
+        // and every one of them carries such a default: that is what
+        // lets a reader tell a model that said nothing from a model
+        // this does not build.
+        for flag in BUILT_FLAGS {
+            let carried = ElementKind::PartUsage
+                .feature(flag)
+                .or_else(|| ElementKind::PartDefinition.feature(flag))
+                .or_else(|| ElementKind::Feature.feature(flag));
+            assert!(
+                carried.is_none_or(|meta| meta.default.is_some()),
+                "`{flag}` has no default for the model to fall back on"
+            );
+        }
         // and the flags the specification states outright rather than
         // leaving to a keyword: a variation is abstract
         // (`validateDefinitionVariationIsAbstract`) and a constant

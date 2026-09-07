@@ -87,7 +87,7 @@ fn generates_a_minimal_metamodel() {
     assert!(code.contains("ElementKind::Sub => &[ElementKind::Thing]"));
     assert!(code.contains("FeatureType::Enumeration(EnumType::Color)"));
     assert!(code.contains(
-        r#"FeatureMeta { name: "items", ty: FeatureType::Class(ElementKind::Thing), many: true, derived: true }"#
+        r#"FeatureMeta { name: "items", ty: FeatureType::Class(ElementKind::Thing), many: true, derived: true, default: None }"#
     ));
     assert!(code.contains(r#"Color::Red => "red""#));
     // the metamodel's features as typed accessors, one per shape

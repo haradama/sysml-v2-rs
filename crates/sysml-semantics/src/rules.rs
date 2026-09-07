@@ -425,6 +425,24 @@ impl Scope<'_> {
             // A derived property is never stored -- the metamodel says
             // so -- and what answers for it is the specification's own
             // account of how it is worked out.
+            // A flag the builder reads off the source for every
+            // metaclass that has it: nothing written is the model
+            // saying what the specification declares the default to be,
+            // and the metamodel states that beside the property.
+            None if sysml_model::BUILT_FLAGS.contains(&name)
+                && model
+                    .kind(elem)
+                    .feature(name)
+                    .is_some_and(|meta| meta.default.is_some()) =>
+            {
+                Val::Bool(
+                    model
+                        .kind(elem)
+                        .feature(name)
+                        .and_then(|meta| meta.default)
+                        .expect("the arm this matched"),
+                )
+            }
             None => match self.derive(elem, name) {
                 Some(value) => value,
                 // A property with nothing under it is not an empty one.
@@ -1113,6 +1131,27 @@ mod tests {
             ws.judge("ownedRelationship->selectByKind(Subsetting)->size() = 1", w),
             Some(true)
         );
+    }
+
+    /// A flag the builder reads off the source for every metaclass that
+    /// has it is one a model can be silent about, and silence there is
+    /// the specification's own default rather than something this
+    /// cannot answer.
+    #[test]
+    fn a_flag_the_source_did_not_write_is_the_default_the_specification_states() {
+        let (mut ws, car) = about("part def Car;\n", "Car");
+        // written nowhere, and the metamodel says what that means
+        assert_eq!(ws.judge("isAbstract", car), Some(false));
+        assert_eq!(ws.judge("isVariation", car), Some(false));
+        // `isUnique` is the one that holds unless the source says
+        // otherwise, and the answer comes from the metamodel either way
+        let (mut ws, w) = about("part def Car {\n\tpart w;\n}\n", "w");
+        assert_eq!(ws.judge("isUnique", w), Some(true));
+        let (mut ws, w) = about("part def Car {\n\tpart w [*] nonunique;\n}\n", "w");
+        assert_eq!(ws.judge("isUnique", w), Some(false));
+
+        // and a property the builder does not read is still unknown
+        assert_eq!(ws.judge("operator = \'.\'", w), None);
     }
 
     /// A control node written at the top of a file is a feature of

@@ -25,6 +25,11 @@ struct Feature {
     ty: FeatureTy,
     many: bool,
     derived: bool,
+    /// What the metamodel says the property is where a model says
+    /// nothing, for the boolean flags that carry one. `<defaultValue
+    /// xmi:type="uml:LiteralBoolean"/>` with no value is `false`, which
+    /// is how the metamodel writes most of them.
+    default: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -274,7 +279,22 @@ fn parse_feature(attr: &roxmltree::Node, ids: &BTreeMap<String, String>) -> Feat
         .find(|c| c.has_tag_name("upperValue"))
         .and_then(|u| u.attribute("value"))
         .is_some_and(|v| v != "1");
+    // A boolean flag is either set or it is not, so every one of them
+    // has a default and it is `false` unless the metamodel says
+    // otherwise -- written `<defaultValue xmi:type="uml:LiteralBoolean"/>`
+    // with no value for most of them, `value="true"` for the few that
+    // hold unless said, and left out altogether for a handful.
+    //
+    // The others default through an `InstanceValue` naming an
+    // enumeration literal, which nothing here asks for.
+    let default = matches!(ty, FeatureTy::Data("Boolean")).then(|| {
+        attr.children()
+            .find(|c| c.has_tag_name("defaultValue"))
+            .and_then(|d| d.attribute("value"))
+            == Some("true")
+    });
     Feature {
+        default,
         name: name.to_string(),
         ty,
         many,
@@ -480,8 +500,9 @@ fn generate(
             };
             writeln!(
                 w,
-                "                FeatureMeta {{ name: \"{}\", ty: {ty}, many: {}, derived: {} }},",
-                f.name, f.many, f.derived
+                "                FeatureMeta {{ name: \"{}\", ty: {ty}, many: {}, \
+                 derived: {}, default: {:?} }},",
+                f.name, f.many, f.derived, f.default
             )
             .unwrap();
         }
@@ -524,6 +545,13 @@ fn generate(
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
     writeln!(w, "pub struct FeatureMeta {{").unwrap();
     writeln!(w, "    pub name: &'static str,").unwrap();
+    writeln!(
+        w,
+        "    /// What the specification says the property is where a model\n\
+         \x20   /// says nothing, for the boolean flags that carry one.\n\
+         \x20   pub default: Option<bool>,"
+    )
+    .unwrap();
     writeln!(w, "    pub ty: FeatureType,").unwrap();
     writeln!(w, "    pub many: bool,").unwrap();
     writeln!(w, "    pub derived: bool,").unwrap();

@@ -90,6 +90,7 @@ pub enum Role {
     Render,
 }
 
+pub use build::BUILT_FLAGS;
 pub use build::{build_into, build_model, Built};
 pub use generated::{
     ElementKind, EnumType, FeatureMeta, FeatureType, PrimitiveType, Rule, DERIVATIONS, RULES,
