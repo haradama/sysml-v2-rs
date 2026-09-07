@@ -1087,6 +1087,16 @@ impl Workspace {
                 }
                 continue;
             }
+            // `subset g.g subsets b.f.a;` writes as a statement of its
+            // own what `feature g :> f` writes as a clause. Written as a
+            // clause the declaration is the element and the
+            // relationship is reified under it; written as a statement
+            // the relationship *is* the element, and both of the things
+            // it relates are names on it that nothing else reads.
+            if node.kind() == SyntaxKind::RELATION_STMT {
+                self.resolve_relation_ends(id, &node, &mut stats);
+                continue;
+            }
             // a payload carries a typing of its own -- `flow f of Fuel`
             // -- and is an element the builder made, so it resolves like
             // any declaration
@@ -2417,6 +2427,51 @@ impl Workspace {
         );
     }
 
+    /// The two types a relationship written as its own statement relates.
+    ///
+    /// `feature g :> f;` reifies a `Subsetting` under `g` and gives it
+    /// both ends from the declaration it hangs off. `subset g subsets
+    /// f;` says the same thing with no declaration to hang off: the
+    /// `Subsetting` is what was written, and it reaches the model with
+    /// neither end until the name before the clause and the name inside
+    /// it are read here.
+    fn resolve_relation_ends(
+        &mut self,
+        id: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) {
+        let Some((keyword, source_prop, target_prop)) = relation_ends(self.model.kind(id)) else {
+            return;
+        };
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        if let Some(operand) = operand_after(node, keyword) {
+            let segments = operand_segments(&operand);
+            let range = operand.text_range();
+            match self.resolve_written(id, &segments, false) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    let name_range = last_name_range(&operand);
+                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    self.model.set(id, source_prop, Value::Ref(target));
+                }
+                None => self.record_miss(file, range, &segments, stats),
+            }
+        }
+        for (_, targets) in relationship_parts(node) {
+            for t in targets {
+                match self.resolve_written(id, &t.segments, false) {
+                    Some(target) => {
+                        stats.resolved += 1;
+                        self.record(file, t.range, t.name_range, &t.at, target);
+                        self.model.set(id, target_prop, Value::Ref(target));
+                    }
+                    None => self.record_miss(file, t.range, &t.segments, stats),
+                }
+            }
+        }
+    }
+
     /// Resolve the operands of a `connect`/`bind`/`allocate` statement and
     /// record what they point at as the connector's `relatedFeature`s, so a
     /// consumer can read the connected ends off the model.
@@ -3481,6 +3536,37 @@ fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
     }
 }
 
+/// What a relationship written as a statement of its own says, for the
+/// kinds that write both ends as plain names: the keyword the first of
+/// them follows, and the properties the standard keeps the two on.
+///
+/// `disjoining d disjoint A from B;`, `conjugation c conjugate A ~ B;`
+/// and their kin write their ends in shapes of their own and are not
+/// read here.
+fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static str, &'static str)> {
+    let ends = match kind {
+        ElementKind::Specialization => (SyntaxKind::SUBTYPE_KW, "specific", "general"),
+        ElementKind::Subclassification => (
+            SyntaxKind::SUBCLASSIFIER_KW,
+            "subclassifier",
+            "superclassifier",
+        ),
+        ElementKind::Subsetting => (
+            SyntaxKind::SUBSET_KW,
+            "subsettingFeature",
+            "subsettedFeature",
+        ),
+        ElementKind::Redefinition => (
+            SyntaxKind::REDEFINITION_KW,
+            "redefiningFeature",
+            "redefinedFeature",
+        ),
+        ElementKind::FeatureTyping => (SyntaxKind::TYPING_KW, "typedFeature", "type"),
+        _ => return None,
+    };
+    Some(ends)
+}
+
 /// The reference written directly after `keyword`, if the next thing is one.
 fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
     let mut seen = false;
@@ -3811,6 +3897,64 @@ mod tests {
         assert_eq!(count(ElementKind::Subclassification), 1);
         assert_eq!(count(ElementKind::FeatureTyping), 2);
         assert_eq!(count(ElementKind::Redefinition), 1);
+    }
+
+    /// `subset g subsets f;` relates the same two features as `feature
+    /// g :> f;`, with the relationship written as the statement instead
+    /// of reified under a declaration. Read only where a declaration
+    /// carries it, the statement form reached the model relating nothing
+    /// to nothing.
+    ///
+    /// `disjoining d disjoint A from B;` writes its two types in a shape
+    /// of its own and is passed over here; the last two statements miss
+    /// on either side, which leaves that end unsaid rather than guessed.
+    #[test]
+    fn a_relationship_written_as_a_statement_says_what_it_relates() {
+        let (ws, stats) = resolved_workspace(&[(
+            "r.kerml",
+            "package K {\n\
+             \tclassifier A;\n\
+             \tclassifier B;\n\
+             \tfeature f : A;\n\
+             \tfeature g : A;\n\
+             \tspecialization s subtype A :> B;\n\
+             \tsubclassifier B :> A;\n\
+             \tsubset g subsets f;\n\
+             \tredefinition g redefines f;\n\
+             \ttyping g : A;\n\
+             \tdisjoining d disjoint A from B;\n\
+             \tsubset g subsets nowhere;\n\
+             \tsubset nowhere subsets f;\n\
+             }\n",
+        )]);
+        assert_eq!(stats.unresolved, 2, "unresolved: {:?}", ws.unresolved());
+        let model = ws.model();
+        let related: Vec<(ElementKind, Option<&str>, Option<&str>)> = model
+            .owned(ws.file_roots(0)[0])
+            .iter()
+            .filter_map(|&id| {
+                let (_, source, target) = relation_ends(model.kind(id))?;
+                let end = |prop| {
+                    model
+                        .get(id, prop)
+                        .and_then(Value::as_id)
+                        .and_then(|at| model.name(at))
+                };
+                Some((model.kind(id), end(source), end(target)))
+            })
+            .collect();
+        assert_eq!(
+            related,
+            [
+                (ElementKind::Specialization, Some("A"), Some("B")),
+                (ElementKind::Subclassification, Some("B"), Some("A")),
+                (ElementKind::Subsetting, Some("g"), Some("f")),
+                (ElementKind::Redefinition, Some("g"), Some("f")),
+                (ElementKind::FeatureTyping, Some("g"), Some("A")),
+                (ElementKind::Subsetting, Some("g"), None),
+                (ElementKind::Subsetting, None, Some("f")),
+            ]
+        );
     }
 
     #[test]
