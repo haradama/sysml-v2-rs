@@ -1803,12 +1803,39 @@ fn a_succession_records_what_it_follows() {
     // they say where the flow runs rather than where the succession
     // does: reading them as the succession's leaves it relating one
     // thing, which `validateConnectorRelatedFeatures` rejects
-    assert_eq!(
-        all(
-            "occurrence def T;\noccurrence def O {\n\tevent occurrence a;\n\
-             \tevent occurrence b;\n\tevent occurrence e;\n\
-             \tthen message m of T from a to b;\n}\n"
-        ),
-        ["e-m"]
-    );
+    assert_eq!(all(MESSAGE), ["e-m"]);
+}
+
+/// `then message m of T from a to b;` writes a flow and the succession
+/// into it, and each has ends of its own: the flow runs from `a` to `b`,
+/// the step into the flow from what stands above it.
+const MESSAGE: &str = "occurrence def T;\noccurrence def O {\n\tevent occurrence a;\n\
+                       \tevent occurrence b;\n\tevent occurrence e;\n\
+                       \tthen message m of T from a to b;\n}\n";
+
+/// Which keywords name an end is a question about the element asking and
+/// not about the syntax alone: one statement is two elements here, and
+/// read off the syntax the two take each other's ends.
+#[test]
+fn a_message_says_where_it_runs_as_well_as_what_it_follows() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file("test.sysml", MESSAGE);
+    ws.resolve_all();
+    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    let model = ws.model();
+    let ends = |metaclass: &str| {
+        let id = model
+            .ids()
+            .find(|&id| model.kind(id).name() == metaclass)
+            .unwrap_or_else(|| panic!("the {metaclass} is built"));
+        match model.get(id, "relatedFeature") {
+            Some(sysml_model::Value::RefList(related)) => related
+                .iter()
+                .map(|&end| model.name(end).unwrap_or("?").to_string())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+    assert_eq!(ends("FlowUsage"), ["a", "b"]);
+    assert_eq!(ends("SuccessionAsUsage"), ["e", "m"]);
 }

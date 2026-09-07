@@ -2381,7 +2381,7 @@ impl Workspace {
     ) {
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         let mut related = Vec::new();
-        for operand in end_operands(node) {
+        for operand in end_operands(node, self.model.kind(id)) {
             // an operand with no identifiers resolves to nothing, which the
             // `None` arm below reports like any other unresolved end
             let segments = operand_segments(&operand);
@@ -3268,7 +3268,11 @@ fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 /// A connector relates every reference it holds. A transition writes an
 /// optional name of its own first (`transition off_to_on first off then
 /// on`), so only the references introduced by `first`/`then` are ends.
-fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
+///
+/// One statement can be two elements, and then the answer depends on
+/// which of them is asking -- so it is asked of the element's metaclass
+/// rather than of the syntax alone.
+fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
     let is_reference = |kind| matches!(kind, SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR);
     let introduces_end = match node.kind() {
         // A connector statement relates every reference it holds --
@@ -3286,6 +3290,18 @@ fn end_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
                     _ => Vec::new(),
                 })
                 .collect()
+        }
+        // `then message m of T from a to b;` is the flow and the
+        // succession into it, and each has ends of its own: the flow
+        // runs from `a` to `b`, and the step runs into the flow from
+        // whatever was written above it. Among the elements a control
+        // statement builds, a flow is the only connector that is not
+        // itself a succession.
+        SyntaxKind::CONTROL_STMT
+            if of.is_a(ElementKind::ConnectorAsUsage)
+                && !of.is_a(ElementKind::SuccessionAsUsage) =>
+        {
+            &[SyntaxKind::FROM_KW, SyntaxKind::TO_KW][..]
         }
         // `transition t first a ... then b` writes a name of its own first
         SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
