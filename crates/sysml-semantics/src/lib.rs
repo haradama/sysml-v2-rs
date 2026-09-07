@@ -2464,7 +2464,18 @@ impl Workspace {
             }
         }
         if !related.is_empty() {
-            self.try_set(id, "relatedFeature", Value::RefList(related));
+            // A transition relates its source and target through the
+            // `Succession` it owns rather than by being a connector
+            // itself, so that is where the two ends belong.
+            let holder = self
+                .model
+                .owned(id)
+                .iter()
+                .copied()
+                .find(|&child| self.model.kind(child).is_a(ElementKind::SuccessionAsUsage))
+                .filter(|_| self.model.kind(id).is_a(ElementKind::TransitionUsage))
+                .unwrap_or(id);
+            self.try_set(holder, "relatedFeature", Value::RefList(related));
         }
     }
 

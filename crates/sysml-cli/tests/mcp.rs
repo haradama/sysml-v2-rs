@@ -944,8 +944,9 @@ fn a_project_file_that_cannot_be_read_is_left_out_and_said_so() {
 /// model has to satisfy, and `check` runs them.
 #[test]
 fn check_runs_the_constraints_the_specification_states() {
-    // a control node at the top of a file is a feature of nothing, and
-    // the specification says a control node is composite
+    // a control node at the top of a file is wrong in two ways the
+    // specification names: a control node is composite, and what owns
+    // one is an action
     let broken = answered(&session(&[call("check", json!({ "text": "action a;\njoin j;\n" }))])[0]);
     assert_eq!(broken["ok"], false, "{broken}");
     // the names still all resolve: this is the other half of the answer
@@ -954,13 +955,24 @@ fn check_runs_the_constraints_the_specification_states() {
         0,
         "{broken}"
     );
-    let violation = &broken["rules"]["violations"][0];
+    let violations = broken["rules"]["violations"].as_array().unwrap();
+    let named: Vec<&str> = violations
+        .iter()
+        .map(|it| it["rule"].as_str().unwrap())
+        .collect();
     assert_eq!(
-        violation["rule"], "validateControlNodeIsComposite",
+        named,
+        [
+            "validateControlNodeOwningType",
+            "validateControlNodeIsComposite"
+        ],
         "{broken}"
     );
-    assert_eq!(violation["element"], "j", "{broken}");
-    assert!(violation["says"].as_str().unwrap().contains("composite"));
+    assert!(violations.iter().all(|it| it["element"] == "j"), "{broken}");
+    assert!(violations[1]["says"]
+        .as_str()
+        .unwrap()
+        .contains("composite"));
 
     // and a model that breaks none of them says so, with a count of
     // what could not be asked at all

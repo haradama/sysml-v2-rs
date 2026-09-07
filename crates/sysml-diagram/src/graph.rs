@@ -2758,16 +2758,20 @@ mod tests {
         };
         // an action a definition owns is composite too -- the standard
         // has `Parts::Part::ownedActions` for exactly that
-        assert_eq!(
-            joined(Relation::Composition),
-            ["Fuel", "Pin", "Spin", "Wheel"]
-        );
+        assert_eq!(joined(Relation::Composition), ["Fuel", "Spin", "Wheel"]);
         // `ref` says reference outright, and so does a direction: a
         // parameter is not part of what its owner is. So does being an
         // attribute: `validateAttributeUsageIsReference` -- "An
         // AttributeUsage is always referential" -- so `attribute v :
         // Volt` is drawn with the hollow diamond a reference carries.
-        assert_eq!(joined(Relation::Reference), ["Driver", "Fuel", "Volt"]);
+        // A port is one as well: `validatePortUsageIsReference` says a
+        // port owned by anything that is not itself a port is
+        // referential, since `port p : Pin` says where a Car connects
+        // and not what one is made of.
+        assert_eq!(
+            joined(Relation::Reference),
+            ["Driver", "Fuel", "Pin", "Volt"]
+        );
     }
 
     #[test]

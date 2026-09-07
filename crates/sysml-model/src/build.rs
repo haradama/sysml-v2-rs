@@ -301,6 +301,12 @@ fn build_node(
         }
         reify_guard(model, node, id);
         reify_effect(model, node, id);
+        // A transition is not a connector: what it relates it relates
+        // through a `Succession` of its own, which is what
+        // `validateTransitionUsageSuccession` asks for. Name resolution
+        // fills in the two ends, which are the transition's own.
+        let succession = model.create(ElementKind::SuccessionAsUsage);
+        model.add_owned(id, succession);
     }
     if kind == ElementKind::AcceptActionUsage {
         reify_accept_payload(model, node, id);
@@ -310,6 +316,13 @@ fn build_node(
     // ExpressionParameterMember ...` and the two loops the same way: the
     // condition is what the node is about, and it was being read and
     // dropped.
+    // `ForLoopNode : ForLoopActionUsage = 'for' LoopVariableMember 'in'
+    // ExpressionParameterMember ...` -- the variable is written first and
+    // is the first feature the loop owns, which is what
+    // `validateForLoopActionUsageLoopVariable` asks of it.
+    if kind == ElementKind::ForLoopActionUsage {
+        reify_loop_variable(model, node, id);
+    }
     if matches!(
         kind,
         ElementKind::IfActionUsage
@@ -317,9 +330,6 @@ fn build_node(
             | ElementKind::ForLoopActionUsage
     ) {
         reify_condition(model, node, id);
-    }
-    if kind == ElementKind::ForLoopActionUsage {
-        reify_loop_variable(model, node, id);
     }
     if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id);
@@ -1076,6 +1086,13 @@ fn control_node_kind(token: SyntaxKind) -> Option<ElementKind> {
         SyntaxKind::FORK_KW => Some(ElementKind::ForkNode),
         SyntaxKind::JOIN_KW => Some(ElementKind::JoinNode),
         SyntaxKind::MESSAGE_KW => Some(ElementKind::FlowUsage),
+        // `then timeslice ownership[0..*] ordered { ... }` is written
+        // flat the same way, and read as the succession alone it took
+        // the portion's body with it: what the body declared came out
+        // owned by the step rather than by the portion, which is what
+        // `validateOccurrenceUsagePortionKind` -- a portion is owned by
+        // an occurrence -- says of the result.
+        SyntaxKind::SNAPSHOT_KW | SyntaxKind::TIMESLICE_KW => Some(ElementKind::OccurrenceUsage),
         _ => None,
     }
 }
@@ -1190,11 +1207,20 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
             continue;
         }
         let child = element.into_node().expect("checked for a token above");
-        if reached_declaration && child.kind() == SyntaxKind::NAME_REF {
+        // `timeslice ownership[0..*]` writes the multiplicity where an
+        // index would go, so the name it declares is inside that
+        let named = match child.kind() {
+            SyntaxKind::NAME_REF => Some(child),
+            SyntaxKind::INDEX_EXPR => child
+                .children()
+                .find(|part| part.kind() == SyntaxKind::NAME_REF),
+            _ => None,
+        };
+        if let Some(named) = named.filter(|_| reached_declaration) {
             if bare_then {
                 return None;
             }
-            return Some(unquote(child.first_token()?.text()));
+            return Some(unquote(named.first_token()?.text()));
         }
     }
     None
@@ -1520,6 +1546,12 @@ fn is_composite(
     }
     if owning.is_a(ElementKind::PortDefinition) || owning.is_a(ElementKind::PortUsage) {
         return kind.is_a(ElementKind::PortUsage);
+    }
+    // `validatePortUsageIsReference` -- a port owned by anything that is
+    // not itself a port is referential. `part def P { port p; }` says
+    // where a P connects, not what one is made of.
+    if kind.is_a(ElementKind::PortUsage) {
+        return false;
     }
     true
 }
