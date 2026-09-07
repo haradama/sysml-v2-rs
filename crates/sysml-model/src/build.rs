@@ -176,6 +176,25 @@ fn build_node(
             model.set(id, flag, Value::Bool(true));
         }
     }
+    // Flags the specification states outright rather than leaving to a
+    // keyword. A model that carries one of a pair without the other is
+    // one the specification's own constraints reject, and the source
+    // said both:
+    //
+    // - `validateEnumerationDefinitionIsVariation` -- an enumeration
+    //   definition is a variation, written `enum def` or not
+    // - `validateDefinitionVariationIsAbstract` and its `Usage`
+    //   counterpart -- a variation is abstract
+    // - `validateFeatureConstantIsVariable` -- a constant feature is a
+    //   variable one whose value cannot change
+    if kind.is_a(ElementKind::EnumerationDefinition) && kind.feature("isVariation").is_some() {
+        model.set(id, "isVariation", Value::Bool(true));
+    }
+    for (stated, implied) in [("isVariation", "isAbstract"), ("isConstant", "isVariable")] {
+        if model.get(id, stated) == Some(&Value::Bool(true)) && kind.feature(implied).is_some() {
+            model.set(id, implied, Value::Bool(true));
+        }
+    }
     // `PortionUsage : OccurrenceUsage = ... portionKind = PortionKind ...
     // { isPortion = true }` -- `snapshot s : O;` says both which portion
     // it is and that it is one, and neither was arriving.
@@ -838,7 +857,19 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
         let performs = node
             .children()
             .any(|child| child.kind() == SyntaxKind::NAME_REF);
-        (subaction && !nests && performs).then_some(ElementKind::PerformActionUsage)
+        if subaction && !nests {
+            // `entry;` on its own still declares an action -- an empty
+            // one -- and `entry; then off;` is a succession out of it.
+            // Building nothing left the succession relating one thing,
+            // which `validateConnectorRelatedFeatures` says a concrete
+            // connector cannot do.
+            return Some(if performs {
+                ElementKind::PerformActionUsage
+            } else {
+                ElementKind::ActionUsage
+            });
+        }
+        None
     })
 }
 
@@ -1621,6 +1652,26 @@ mod tests {
         // is made of however it is written
         assert_eq!(flag("d", "isComposite"), Some(Value::Bool(false)));
         assert_eq!(flag("k", "isComposite"), Some(Value::Bool(false)));
+        // and the flags the specification states outright rather than
+        // leaving to a keyword: a variation is abstract
+        // (`validateDefinitionVariationIsAbstract`) and a constant
+        // feature is a variable one (`validateFeatureConstantIsVariable`)
+        assert_eq!(flag("Choice", "isAbstract"), Some(Value::Bool(true)));
+        assert_eq!(flag("k", "isVariable"), Some(Value::Bool(true)));
+        // `validateEnumerationDefinitionIsVariation` -- an enumeration
+        // definition is a variation, written `enum def` and no more
+        let (enums, _) = build_model(&sysml_syntax::parse("enum def Colour { red; }\n"));
+        let colour = enums
+            .ids()
+            .find(|&id| enums.name(id) == Some("Colour"))
+            .expect("`Colour` is declared");
+        assert_eq!(
+            enums.get(colour, "isVariation"),
+            Some(&Value::Bool(true)),
+            "an enumeration is a variation"
+        );
+        assert_eq!(enums.get(colour, "isAbstract"), Some(&Value::Bool(true)));
+
         for (name, property) in [
             ("Choice", "isVariation"),
             ("Serial1", "isIndividual"),

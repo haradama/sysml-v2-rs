@@ -2407,9 +2407,50 @@ impl Workspace {
                 related.push(target);
             }
         }
+        // `then b;` names where the flow goes and not where it comes
+        // from, and a succession relates both: what comes before it in
+        // the same body is the source. Without it the model says a step
+        // follows nothing, and `validateConnectorRelatedFeatures` -- "a
+        // concrete Connector must have at least two relatedFeatures" --
+        // is the specification saying so.
+        if related.len() == 1 && self.model.kind(id).is_a(ElementKind::SuccessionAsUsage) {
+            if let Some(source) = self.step_before(id) {
+                related.insert(0, source);
+            }
+        }
         if !related.is_empty() {
             self.try_set(id, "relatedFeature", Value::RefList(related));
         }
+    }
+
+    /// What a succession follows: the nearest member of the same body
+    /// declared before it that a succession can start from.
+    ///
+    /// A step or an occurrence, since a sequence model writes `event
+    /// occurrence e; then f;`. Where the nearest one is another
+    /// succession the answer is where *it* went: `then a; then b;` runs
+    /// a to b, not the first succession to b.
+    fn step_before(&self, succession: ElementId) -> Option<ElementId> {
+        let owner = self.model.owner(succession)?;
+        let members = self.model.owned(owner);
+        let at = members.iter().position(|&it| it == succession)?;
+        for &member in members[..at].iter().rev() {
+            let kind = self.model.kind(member);
+            if kind.is_a(ElementKind::ConnectorAsUsage) {
+                // the one before it went somewhere, and that is where
+                // this one starts. `relatedFeature` is set only where
+                // there is something to set, so a list that is there
+                // has an end in it.
+                if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature") {
+                    return related.last().copied();
+                }
+                continue;
+            }
+            if kind.is_a(ElementKind::Step) || kind.is_a(ElementKind::OccurrenceUsage) {
+                return Some(member);
+            }
+        }
+        None
     }
 
     /// What a comment says it is about.

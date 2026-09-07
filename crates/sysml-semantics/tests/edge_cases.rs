@@ -1717,3 +1717,78 @@ package R {
     )]);
     assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
 }
+
+/// `then b;` names where the flow goes and not where it comes from, and
+/// a succession relates both. The specification says so itself --
+/// `validateConnectorRelatedFeatures`, "a concrete Connector must have
+/// at least two relatedFeatures" -- and without the source the model
+/// says a step follows nothing.
+#[test]
+fn a_succession_records_what_it_follows() {
+    let related = |source: &str| {
+        let mut ws = sysml_semantics::Workspace::new();
+        ws.add_file("test.sysml", source);
+        ws.resolve_all();
+        let model = ws.model();
+        let succession = model
+            .ids()
+            .find(|&id| model.kind(id).name() == "SuccessionAsUsage")
+            .expect("the succession is built");
+        match model.get(succession, "relatedFeature") {
+            Some(sysml_model::Value::RefList(ends)) => ends
+                .iter()
+                .map(|&end| model.name(end).unwrap_or("?").to_string())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+
+    // the step written before it
+    assert_eq!(
+        related("action def A {\n\taction a;\n\tthen b;\n\taction b;\n}\n"),
+        ["a", "b"]
+    );
+    // an occurrence too, which is how a sequence model is written
+    assert_eq!(
+        related(
+            "occurrence def O;\npart def P {\n\tevent occurrence e : O;\n\tthen f;\n\
+             \tevent occurrence f : O;\n}\n"
+        ),
+        ["e", "f"]
+    );
+    // where the one before it is another succession, the answer is
+    // where that one went: `then b; then c;` runs b to c
+    let all = |source: &str| {
+        let mut ws = sysml_semantics::Workspace::new();
+        ws.add_file("test.sysml", source);
+        ws.resolve_all();
+        let model = ws.model();
+        model
+            .ids()
+            .filter(|&id| model.kind(id).name() == "SuccessionAsUsage")
+            .map(|id| match model.get(id, "relatedFeature") {
+                Some(sysml_model::Value::RefList(ends)) => ends
+                    .iter()
+                    .map(|&end| model.name(end).unwrap_or("?").to_string())
+                    .collect::<Vec<_>>()
+                    .join("-"),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        all("action def A {\n\taction a;\n\tthen b;\n\tthen c;\n\taction b;\n\taction c;\n}\n"),
+        ["a-b", "b-c"]
+    );
+
+    // a connector before it that relates nothing is stepped over: it is
+    // not where anything comes from
+    assert_eq!(
+        related("action def A {\n\taction a;\n\tbind p = q;\n\tthen b;\n\taction b;\n}\n"),
+        ["a", "b"]
+    );
+    // and `entry;` on its own declares an action for one to start from
+    let ends = related("state def S {\n\tentry;\n\tthen Wait;\n\tstate Wait;\n}\n");
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert_eq!(ends[1], "Wait");
+}
