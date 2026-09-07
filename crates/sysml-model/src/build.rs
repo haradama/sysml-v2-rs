@@ -207,6 +207,13 @@ fn build_node(
             model.set(id, "isPortion", Value::Bool(true));
         }
     }
+    // `validateConnectionDefinitionIsSufficient` -- "a
+    // ConnectionDefinition is always sufficient": everything that
+    // connects the way it says is one of its connections, and the
+    // specification states that rather than leaving it to a keyword.
+    if kind.is_a(ElementKind::ConnectionDefinition) && kind.feature("isSufficient").is_some() {
+        model.set(id, "isSufficient", Value::Bool(true));
+    }
     // `nonunique` is the only one of these that turns a flag off: the
     // standard's default is that a feature's values are unique, and a
     // model saying they are not must not arrive saying they are.

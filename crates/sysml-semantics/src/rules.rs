@@ -93,6 +93,15 @@ struct Defined {
     body: Expr,
 }
 
+/// Flags this toolchain writes wherever they hold, beyond the ones the
+/// builder reads off a keyword.
+///
+/// Name resolution writes every specialization the semantic libraries
+/// imply, marking the relationship and the element that gained one. So a
+/// relationship carrying neither is one nothing implied, which is what
+/// the metamodel declares the default to be.
+const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
+
 /// Constraints whose OCL parses and says something other than what the
 /// constraint says in words.
 ///
@@ -625,7 +634,7 @@ impl Scope<'_> {
             // metaclass that has it: nothing written is the model
             // saying what the specification declares the default to be,
             // and the metamodel states that beside the property.
-            None if sysml_model::BUILT_FLAGS.contains(&name)
+            None if (sysml_model::BUILT_FLAGS.contains(&name) || WRITTEN_FLAGS.contains(&name))
                 && model
                     .kind(elem)
                     .feature(name)
@@ -641,6 +650,21 @@ impl Scope<'_> {
             }
             None => match self.derive(elem, name) {
                 Some(value) => value,
+                // A property the metaclass does not declare at all is
+                // not one this model fails to build. Some are the
+                // specification's own text asking for something that is
+                // not there -- `connectorEnds` where the metamodel
+                // declares `connectorEnd` -- and some are navigations
+                // the metamodel writes as an end owned by an
+                // association rather than as an attribute of the class,
+                // which is not among what the metaclasses declare.
+                // Either way the fault is not here.
+                None if self.ws.model().kind(elem).feature(name).is_none() => {
+                    Val::Unknown(format!(
+                        "the metamodel declares no `{name}` on `{}`",
+                        self.ws.model().kind(elem).name()
+                    ))
+                }
                 // A property with nothing under it is not an empty one.
                 // Whether the builder would have filled it in is not
                 // something the absence can say -- `relatedFeature` is
@@ -1744,9 +1768,18 @@ mod tests {
             ws.judge("specific.declaredName = 'B'", subclassification),
             Some(true)
         );
-        // and one the metaclass does not have under either name is
-        // still unknown rather than guessed at
-        assert_eq!(ws.judge("isImplied", subclassification), None);
+        // Nothing implied this one: the source wrote it, and name
+        // resolution marks every specialization it implies, so an
+        // unmarked one is not implied rather than unknown.
+        assert_eq!(ws.judge("isImplied", subclassification), Some(false));
+        // A name the metamodel declares nowhere is not a property this
+        // model fails to build, and saying so puts the fault where it
+        // belongs -- `connectorEnds` is the specification's own OCL
+        // asking for something that is not there.
+        assert_eq!(
+            ws.judge("connectorEnds->isEmpty()", subclassification),
+            None
+        );
     }
 
     /// A control node written at the top of a file is wrong in two ways
