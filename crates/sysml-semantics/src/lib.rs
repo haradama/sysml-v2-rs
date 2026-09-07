@@ -3206,7 +3206,10 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         }
         UseCaseDefinition | UseCaseUsage | IncludeUseCaseUsage => &["UseCases::UseCase"],
         ViewDefinition | ViewUsage => &["Views::View"],
-        ViewpointDefinition | ViewpointUsage => &["Views::Viewpoint"],
+        // the library's own words: "ViewpointCheck ... is the base type
+        // of all ViewpointDefinitions". There is no `Views::Viewpoint`,
+        // so a viewpoint was specializing nothing at all.
+        ViewpointDefinition | ViewpointUsage => &["Views::ViewpointCheck"],
         RenderingDefinition | RenderingUsage => &["Views::Rendering"],
         MetadataDefinition | MetadataUsage => &["Metadata::MetadataItem"],
         OccurrenceDefinition | OccurrenceUsage | EventOccurrenceUsage => {

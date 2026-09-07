@@ -102,6 +102,22 @@ struct Defined {
 /// the metamodel declares the default to be.
 const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 
+/// Where the specification's own OCL names something it does not
+/// declare, and what it plainly means.
+///
+/// `Type::inheritableMemberships` takes `excludedTypes` and its body
+/// reads `excludedType`. There is no other reading: no metaclass has a
+/// property of that name, the operation has no other parameter it could
+/// be, and the two are one letter apart. Twenty constraints reach the
+/// memberships a type inherits through that operation, so the choice is
+/// between reading what it means and answering none of them.
+///
+/// This is not the same as the two below. Those say something other than
+/// what the constraint says in words, and running them would report a
+/// violation of a model that is sound; the corpus is what says whether
+/// reading this one as it is meant is right.
+const MISSPELLED: [(&str, &str); 1] = [("excludedType", "excludedTypes")];
+
 /// Constraints whose OCL parses and says something other than what the
 /// constraint says in words.
 ///
@@ -152,7 +168,7 @@ fn named_after(rule: &sysml_model::Rule) -> String {
 /// started. A bound stops it by construction; watching for the return
 /// needs a guard no model can be shown to reach, which is a guard
 /// nothing checks.
-const DEPTH: usize = 4;
+const DEPTH: usize = 12;
 
 /// One constraint that does not hold, and of what.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -425,6 +441,13 @@ impl Scope<'_> {
     fn name(&mut self, name: &str) -> Val {
         if let Some(value) = self.bound.get(name) {
             return value.clone();
+        }
+        if let Some(meant) = MISSPELLED
+            .iter()
+            .find(|(written, _)| *written == name)
+            .and_then(|(_, meant)| self.bound.get(*meant))
+        {
+            return meant.clone();
         }
         if name == "self" {
             return Val::Elem(self.self_);
@@ -746,6 +769,19 @@ impl Scope<'_> {
         // operation on an element reads it as one
         if arrow || COLLECTION.contains(&name) {
             return self.collection(&target, name, args, lambda);
+        }
+        // `supertypes(excludeImplied)->reject(...).nonPrivateMemberships(...)`
+        // -- an operation written of many things is written of each of
+        // them, the way a property read of many is read of each.
+        if let Val::Set(items) = &target {
+            let mut out = Vec::new();
+            for item in items.clone() {
+                match self.operation(&item, name, args) {
+                    Val::Set(more) => out.extend(more),
+                    one => out.push(one),
+                }
+            }
+            return Val::Set(out);
         }
         self.operation(&target, name, args)
     }
@@ -1159,6 +1195,11 @@ fn owned_kind(name: &str) -> Option<ElementKind> {
         "ownedSpecialization" => ElementKind::Specialization,
         "ownedSubsetting" => ElementKind::Subsetting,
         "ownedRedefinition" => ElementKind::Redefinition,
+        // The metamodel writes `Feature::redefinition` as an end owned
+        // by an association rather than as an attribute of the class,
+        // so no metaclass declares it. It is the redefinitions of a
+        // feature, and in this model a feature owns every one it has.
+        "redefinition" => ElementKind::Redefinition,
         "ownedFeatureMembership" => ElementKind::FeatureMembership,
         "ownedImport" => ElementKind::Import,
         _ => return None,
@@ -1413,6 +1454,12 @@ mod tests {
         // out rather than reading it as one
         assert_eq!(
             ws.judge("Set{1}->selectByKind(Package)->isEmpty()", car),
+            Some(true)
+        );
+        // an operation written of many things is written of each of
+        // them, and what each answers with joins what the rest do
+        assert_eq!(
+            ws.judge("Set{self}.supertypes(false)->notEmpty()", car),
             Some(true)
         );
         // and `self` is not taken over by one, however deep: it still
