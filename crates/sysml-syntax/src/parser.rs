@@ -20,11 +20,21 @@ use crate::{Diagnostic, SyntaxKind, SyntaxKind::*, SyntaxNode};
 pub struct Parse {
     green: GreenNode,
     errors: Vec<Diagnostic>,
+    dialect: crate::Dialect,
 }
 
 impl Parse {
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
+    }
+
+    /// Which notation this was read as.
+    ///
+    /// The two share a syntax tree but not a set of metaclasses: what
+    /// SysML writes as a usage with no kind keyword is a
+    /// `ReferenceUsage`, and KerML has no such thing.
+    pub fn dialect(&self) -> crate::Dialect {
+        self.dialect
     }
 
     pub fn errors(&self) -> &[Diagnostic] {
@@ -59,6 +69,7 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
     Parse {
         green: parser.builder.finish(),
         errors: parser.errors,
+        dialect,
     }
 }
 

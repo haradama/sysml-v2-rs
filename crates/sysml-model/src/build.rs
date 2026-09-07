@@ -15,6 +15,10 @@ use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 pub struct Built {
     pub roots: Vec<ElementId>,
     pub source: Vec<(ElementId, SyntaxNode)>,
+    /// Which notation the file was written in. The two share a syntax
+    /// tree but not a set of metaclasses, so a node that names no kind
+    /// becomes a different thing in each.
+    dialect: sysml_syntax::Dialect,
 }
 
 /// Build a [`Model`] from a parsed source file. Returns the model and the
@@ -30,6 +34,7 @@ pub fn build_into(model: &mut Model, parse: &Parse) -> Built {
     let mut built = Built {
         roots: Vec::new(),
         source: Vec::new(),
+        dialect: parse.dialect(),
     };
     for child in parse.syntax().children() {
         build_node(model, &child, None, &mut built);
@@ -63,7 +68,7 @@ fn build_node(
     let kind = match node.kind() {
         PACKAGE => Some(package_kind(node)),
         DEFINITION => Some(definition_kind(node)),
-        USAGE => Some(usage_kind(node, owner, model)),
+        USAGE => Some(usage_kind(node, owner, model, built.dialect)),
         // `specialization s subtype A :> B;` and its kin relate two types
         // written elsewhere. They are relationships in their own right,
         // with names of their own, and nothing stood for them at all.
@@ -1376,7 +1381,12 @@ fn definition_kind(node: &SyntaxNode) -> ElementKind {
     kind_or(name, ElementKind::Classifier)
 }
 
-fn usage_kind(node: &SyntaxNode, owner: Option<ElementId>, model: &Model) -> ElementKind {
+fn usage_kind(
+    node: &SyntaxNode,
+    owner: Option<ElementId>,
+    model: &Model,
+    dialect: sysml_syntax::Dialect,
+) -> ElementKind {
     use SyntaxKind::*;
     let kws = kind_keywords(node);
     let scope: Vec<SyntaxKind> = scope_tokens(node).chain(leading_keywords(node)).collect();
@@ -1481,6 +1491,13 @@ fn usage_kind(node: &SyntaxNode, owner: Option<ElementId>, model: &Model) -> Ele
         {
             "EnumerationUsage"
         }
+        // KerML lets a feature leave out the `feature` keyword where a
+        // modifier stands in front of it -- `composite tanks : Tank;`,
+        // `in test : Boolean;`, `end guardedLink [0..1]` -- and it is a
+        // plain feature. `ReferenceUsage` is SysML's, and reading one
+        // into a KerML file makes every such declaration referential
+        // whatever it says.
+        _ if dialect == sysml_syntax::Dialect::KerML => "Feature",
         // A usage that names no kind is a reference: `ref x;` spells it
         // out, and `subject s;` or a bare `x : T;` mean the same thing.
         _ => "ReferenceUsage",
@@ -1610,6 +1627,15 @@ fn is_composite(
     let owning = model.kind(owner);
     if !owning.is_a(ElementKind::Type) {
         return false;
+    }
+    // The two notations default the other way about. KerML writes
+    // `composite feature ...` where it means one, and the metamodel
+    // declares `isComposite = false` for everything else; SysML's `part
+    // wheel;` is what its owner is made of unless it says `ref`. So a
+    // feature declared in KerML is composite only where it says so,
+    // and a usage is composite unless it says otherwise.
+    if !kind.is_a(ElementKind::Usage) {
+        return has_token(node, SyntaxKind::COMPOSITE_KW);
     }
     if owning.is_a(ElementKind::PortDefinition) || owning.is_a(ElementKind::PortUsage) {
         return kind.is_a(ElementKind::PortUsage);
@@ -1898,6 +1924,48 @@ mod tests {
     /// `then send new S() via p;` declares the action as much as `then
     /// merge continue;` declares the node. Read as the succession its
     /// leading keyword would otherwise make, the action the source wrote
+    /// The two notations default composition the other way about.
+    /// KerML writes `composite feature ...` where it means one and the
+    /// metamodel declares `isComposite = false` for everything else;
+    /// SysML's `part wheel;` is what its owner is made of unless it
+    /// says `ref`. Reading the SysML default into KerML made every
+    /// feature of the standard library composite, including
+    /// `Base::Anything::self`.
+    #[test]
+    fn kerml_composes_only_where_it_says_so_and_sysml_unless_it_says_otherwise() {
+        let kerml = sysml_syntax::parse_dialect(
+            "class V {\n\
+             \tcomposite tanks : Tank;\n\
+             \tfeature plain : Tank;\n\
+             }\n\
+             class Tank;\n",
+            sysml_syntax::Dialect::KerML,
+        );
+        let (model, _) = build_model(&kerml);
+        let composed = |name: &str| {
+            let id = model
+                .ids()
+                .find(|&id| model.name(id) == Some(name))
+                .unwrap_or_else(|| panic!("`{name}` is declared"));
+            model.get(id, "isComposite").cloned()
+        };
+        assert_eq!(composed("tanks"), Some(Value::Bool(true)));
+        assert_eq!(composed("plain"), Some(Value::Bool(false)));
+
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "part def V {\n\tpart wheel;\n\tref part borrowed;\n}\n",
+        ));
+        let composed = |name: &str| {
+            let id = model
+                .ids()
+                .find(|&id| model.name(id) == Some(name))
+                .unwrap_or_else(|| panic!("`{name}` is declared"));
+            model.get(id, "isComposite").cloned()
+        };
+        assert_eq!(composed("wheel"), Some(Value::Bool(true)));
+        assert_eq!(composed("borrowed"), Some(Value::Bool(false)));
+    }
+
     /// is in the model nowhere at all.
     #[test]
     fn an_action_written_after_then_is_the_action_it_declares() {
