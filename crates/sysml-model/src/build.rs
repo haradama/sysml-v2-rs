@@ -1096,12 +1096,10 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
         // (`StatePerformActionUsage : PerformActionUsage`) rather than as
         // a wrapper around a declaration. Without this the subaction of
         // every state written that way was dropped, body and all.
-        let subaction = tokens(node).next().is_some_and(|token| {
-            matches!(
-                token,
-                SyntaxKind::ENTRY_KW | SyntaxKind::DO_KW | SyntaxKind::EXIT_KW
-            )
-        });
+        let subaction = matches!(
+            tokens(node).next(),
+            Some(SyntaxKind::ENTRY_KW | SyntaxKind::DO_KW | SyntaxKind::EXIT_KW)
+        );
         let nests = node
             .children()
             .any(|child| matches!(child.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE));
@@ -1124,18 +1122,28 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     })
 }
 
-/// Whether a control statement is a transition out of the state it is
-/// written in rather than the succession its `then` reads as.
+/// Whether a control statement is a transition rather than the
+/// succession its `then` reads as.
 ///
 /// `TargetTransitionUsage` puts a trigger, a guard or both before the
-/// `then`; a bare `then b` and a `first a then b` are successions. The
-/// guard alone (`if hot then cool;`) is left out here: an action body
-/// writes an `if` node with no `then` at all, and telling the two apart
-/// needs the owner rather than the statement.
+/// `then`; a bare `then b` and a `first a then b` are successions. A
+/// guard alone is a transition too -- `GuardedTargetSuccession :
+/// TransitionUsage = GuardExpressionMember 'then'
+/// TransitionSuccessionMember` -- and what tells `if hot then cool;`
+/// from the `if` node of a structured body is the `then`, which a node
+/// writing its branches in braces does not have.
 fn is_target_transition(node: &SyntaxNode) -> bool {
+    // `else A3;` writes the branch a guard did not take, and writes no
+    // `then` at all: `DefaultTargetSuccession : TransitionUsage =
+    // 'else' TransitionSuccessionMember`. The `else` of a structured
+    // `if c { ... } else { ... }` is a token of that one statement, so
+    // a statement of its own that begins with the keyword is this.
+    if matches!(tokens(node).next(), Some(SyntaxKind::ELSE_KW)) {
+        return true;
+    }
     tokens(node)
         .take_while(|token| *token != SyntaxKind::THEN_KW)
-        .any(|token| token == SyntaxKind::ACCEPT_KW)
+        .any(|token| matches!(token, SyntaxKind::ACCEPT_KW | SyntaxKind::IF_KW))
         && has_token(node, SyntaxKind::THEN_KW)
 }
 
@@ -2136,7 +2144,8 @@ mod tests {
     /// answered first and the loop was in the model nowhere at all,
     /// with the body it was handed. `action aLoop while c { ... }`
     /// introduces a name rather than a plain action, and what the loop
-    /// asks begins after the keyword that says which loop it is.
+    /// asks begins after the keyword that says which loop it is. A
+    /// `for` is the same both ways round.
     #[test]
     fn a_loop_after_a_then_or_under_a_name_is_still_a_loop() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -2144,20 +2153,98 @@ mod tests {
              \tattribute i;\n\
              \tthen while i > 0 { action d; }\n\
              \tthen action aLoop while i > 0 { action e; }\n\
+             \tthen for t in 1..3 { action f; }\n\
+             \taction aFor for u in 1..3 { action g; }\n\
              }\n",
         ));
-        let loops: Vec<Vec<ElementKind>> = model
+        let loops: Vec<(ElementKind, Vec<ElementKind>)> = model
             .owned(roots[0])
             .iter()
-            .filter(|&&it| model.kind(it) == ElementKind::WhileLoopActionUsage)
-            .map(|&it| model.owned(it).iter().map(|&c| model.kind(c)).collect())
+            .filter(|&&it| {
+                matches!(
+                    model.kind(it),
+                    ElementKind::WhileLoopActionUsage | ElementKind::ForLoopActionUsage
+                )
+            })
+            .map(|&it| {
+                (
+                    model.kind(it),
+                    model.owned(it).iter().map(|&c| model.kind(c)).collect(),
+                )
+            })
             .collect();
-        // each asks something and is handed a body
+        // each asks something and is handed a body: a `while` its
+        // condition, a `for` the variable it binds and what it runs over
+        let while_loop = ElementKind::WhileLoopActionUsage;
+        let for_loop = ElementKind::ForLoopActionUsage;
         assert_eq!(
             loops,
             [
-                vec![ElementKind::Expression, ElementKind::ActionUsage],
-                vec![ElementKind::Expression, ElementKind::ActionUsage],
+                (
+                    while_loop,
+                    vec![ElementKind::Expression, ElementKind::ActionUsage]
+                ),
+                (
+                    while_loop,
+                    vec![ElementKind::Expression, ElementKind::ActionUsage]
+                ),
+                (
+                    for_loop,
+                    vec![
+                        ElementKind::ReferenceUsage,
+                        ElementKind::Expression,
+                        ElementKind::ActionUsage
+                    ]
+                ),
+                (
+                    for_loop,
+                    vec![
+                        ElementKind::ReferenceUsage,
+                        ElementKind::Expression,
+                        ElementKind::ActionUsage
+                    ]
+                ),
+            ]
+        );
+    }
+
+    /// A guard before a `then`, and a lone `else`, are transitions.
+    ///
+    /// `if x > 1 then A2;` after a decision node is
+    /// `GuardedTargetSuccession : TransitionUsage`, and the `else A3;`
+    /// under it is `DefaultTargetSuccession : TransitionUsage`. Read as
+    /// the `if` node of a structured body, the first declared an action
+    /// with a branch it never had; the second declared nothing at all,
+    /// and the branch the source wrote was in the model nowhere. What
+    /// tells them from a structured node is the `then` -- `if c { ... }
+    /// else { ... }` writes its branches in braces and no `then`.
+    #[test]
+    fn a_guard_before_a_then_and_a_lone_else_are_transitions() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tattribute x;\n\
+             \tdecide;\n\
+             \tif x > 1 then A2;\n\
+             \telse A3;\n\
+             \tif x > 1 { action A4; }\n\
+             \taction A2; action A3;\n\
+             }\n",
+        ));
+        let kinds: Vec<ElementKind> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&it| model.kind(it))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ElementKind::AttributeUsage,
+                ElementKind::DecisionNode,
+                ElementKind::TransitionUsage,
+                ElementKind::TransitionUsage,
+                ElementKind::IfActionUsage,
+                ElementKind::ActionUsage,
+                ElementKind::ActionUsage,
             ]
         );
     }
@@ -2825,12 +2912,12 @@ mod tests {
 
     #[test]
     fn a_condition_the_parser_pieced_together_is_kept_whole() {
-        // `if x , y then b;` is not a condition anybody meant, but the
+        // `if x , y { ... }` is not a condition anybody meant, but the
         // parser recovers it as several pieces rather than one
         // expression, and what the model keeps has to be all of them --
-        // reading only the first would say the loop asks about `x`
+        // reading only the first would say the branch asks about `x`
         let (model, roots) = build_model(&sysml_syntax::parse(
-            "action def A {\n\tif x , y then b;\n}\n",
+            "action def A {\n\tif x , y { action b; }\n}\n",
         ));
         let branch = model.owned(roots[0])[0];
         assert_eq!(model.kind(branch), ElementKind::IfActionUsage);

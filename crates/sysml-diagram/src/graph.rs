@@ -4893,7 +4893,7 @@ mod interconnection_tests {
              \tattribute hot : Real;\n\
              \taction heat : Step;\n\
              \taction cool : Step;\n\
-             \tif hot > 100 then cool else heat;\n\
+             \tif hot > 100 { action chill : Step; }\n\
              \twhile hot > 0 { action tick : Step; }\n\
              \tfor t in 1..3 { action each : Step; }\n\
              }\n",
@@ -4929,15 +4929,15 @@ mod interconnection_tests {
                 .collect::<Vec<_>>(),
             ["heat : Step", "cool : Step", "", "", ""]
         );
-        // the body of a loop is drawn inside it -- `loop-body` holds an
-        // action flow view of its own
+        // the body of a branch or a loop is drawn inside it -- each
+        // holds an action flow view of its own
         assert_eq!(
             diagram
                 .nodes
                 .iter()
                 .flat_map(|node| node.children.iter().map(|child| child.name.as_str()))
                 .collect::<Vec<_>>(),
-            ["tick : Step", "each : Step"]
+            ["chill : Step", "tick : Step", "each : Step"]
         );
     }
 

@@ -753,10 +753,10 @@ impl Parser<'_> {
                 OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | ACCEPT_KW
                 | AT_KW | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
                 | PARALLEL_KW | ASSIGN_KW | SEND_KW | MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW
-                | TERMINATE_KW | LOOP_KW | NEW_KW | ORDERED_KW | NONUNIQUE_KW | CONNECT_KW
-                | BIND_KW | MESSAGE_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW | REDEFINITION_KW
-                | TYPING_KW | SPECIALIZATION_KW | SUBCLASSIFIER_KW | COMMA | QUESTION
-                | QUESTION_QUESTION | FAT_ARROW | LANGUAGE_KW => self.bump(),
+                | TERMINATE_KW | LOOP_KW | FOR_KW | NEW_KW | ORDERED_KW | NONUNIQUE_KW
+                | CONNECT_KW | BIND_KW | MESSAGE_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW
+                | REDEFINITION_KW | TYPING_KW | SPECIALIZATION_KW | SUBCLASSIFIER_KW | COMMA
+                | QUESTION | QUESTION_QUESTION | FAT_ARROW | LANGUAGE_KW => self.bump(),
                 // nested declarations inside statements: `then perform body;`,
                 // `then private action whileLoop { ... }`
                 PERFORM_KW | EXHIBIT_KW | EVENT_KW | INCLUDE_KW | SATISFY_KW | ASSERT_KW
