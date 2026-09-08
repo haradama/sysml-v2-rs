@@ -158,6 +158,82 @@ fn a_literal_specializes_the_evaluation_the_library_states_for_it() {
 /// def E1 { a; }` has no `a` anywhere else to bring along, and looking
 /// for one reaches past the enumeration to whatever else is called `a`.
 #[test]
+fn a_flow_specializes_the_messages_the_library_states_for_it() {
+    let Some(root) = vendor() else { return };
+    let mut ws = Workspace::new();
+    ws.load_dir(&root.join("sysml.library")).unwrap();
+    let file = ws.add_file(
+        "m.sysml",
+        "package M {\n\
+         \tattribute def A;\n\
+         \tpart def P { out o : A; in i : A; }\n\
+         \tflow def F;\n\
+         \tpart p1 : P;\n\
+         \tpart p2 : P;\n\
+         \tflow f from p1.o to p2.i;\n\
+         \tmessage m;\n\
+         \tsuccession flow sf from p1.o to p2.i;\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let ups = |ws: &mut Workspace, want: &str| -> Vec<String> {
+        let elem = ws
+            .model()
+            .descendants(ws.file_roots(file)[0])
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"));
+        ws.supertypes(elem)
+            .iter()
+            .map(|&up| ws.qualified_name_of(up))
+            .collect()
+    };
+    // every flow usage subsets `messages`; only one with ends of its own
+    // subsets `flows`, which is where the ends come from
+    let f = ups(&mut ws, "f");
+    assert!(
+        f.contains(&"Flows::flows".to_string()) && f.contains(&"Flows::messages".to_string()),
+        "a flow with ends subsets both: {f:?}"
+    );
+    let m = ups(&mut ws, "m");
+    assert!(
+        !m.contains(&"Flows::flows".to_string()) && m.contains(&"Flows::messages".to_string()),
+        "a message subsets `messages` alone: {m:?}"
+    );
+    let sf = ups(&mut ws, "sf");
+    assert!(
+        sf.contains(&"Flows::successionFlows".to_string()),
+        "a succession flow subsets the succession flows: {sf:?}"
+    );
+    // a definition specializes definitions: the general one, since it
+    // declares no ends of its own
+    let d = ups(&mut ws, "F");
+    assert!(
+        d.contains(&"Flows::MessageAction".to_string())
+            && !d.contains(&"Flows::Message".to_string()),
+        "a flow definition with no ends specializes `MessageAction`: {d:?}"
+    );
+
+    // `Flows::Flow` is a *sub*class of `Flows::Message`, so implying it
+    // of every flow made the library's own `messages` inherit the ends
+    // of the type that specializes it
+    let messages = ws
+        .model()
+        .ids()
+        .find(|&id| ws.qualified_name_of(id) == "Flows::messages")
+        .expect("the library declares `messages`");
+    let ends: Vec<String> = ws
+        .supertypes(messages)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert!(
+        !ends.iter().any(|it| it == "Flows::Flow"),
+        "`messages` does not specialize what specializes it: {ends:?}"
+    );
+}
+
+#[test]
 fn what_the_standard_implies_is_named_from_the_root() {
     let Some(root) = vendor() else { return };
     let mut ws = Workspace::new();

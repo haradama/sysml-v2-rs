@@ -1143,10 +1143,18 @@ impl Scope<'_> {
         // four the answer has stopped improving, and the bound is what
         // keeps two properties derived from each other from going round
         // for ever.
-        let (_, _, body) = derivations()
-            .iter()
-            .find(|(about, property, _)| property == name && kind.is_a(*about))
-            .filter(|_| self.depth < DEPTH)?;
+        let mut wanted = name;
+        let found = loop {
+            let hit = derivations()
+                .iter()
+                .find(|(about, property, _)| property == wanted && kind.is_a(*about));
+            match (hit, redefined_property(kind, wanted)) {
+                (Some(hit), _) => break Some(hit),
+                (None, Some(up)) => wanted = up,
+                (None, None) => break None,
+            }
+        };
+        let (_, _, body) = found.filter(|_| self.depth < DEPTH)?;
         let mut scope = Scope {
             ws: self.ws,
             bound: HashMap::new(),
@@ -1720,6 +1728,20 @@ fn equal(left: &Val, right: &Val) -> Val {
         (Val::Null, Val::Set(items)) | (Val::Set(items), Val::Null) => Val::Bool(items.is_empty()),
         _ => Val::Bool(left == right),
     }
+}
+
+/// The property `name` itself redefines, where it redefines one.
+///
+/// This is `redefining` read the other way. A constraint written of a
+/// redefining property -- `connectorEnd`, say -- is answered by the
+/// derivation of what it redefines (`endFeature`) when the metamodel
+/// gives the redefining name no derivation of its own.
+fn redefined_property(kind: ElementKind, name: &str) -> Option<&'static str> {
+    std::iter::once(kind)
+        .chain(kind.ancestors().iter().copied())
+        .flat_map(|it| it.own_features())
+        .find(|meta| meta.name == name)
+        .and_then(|meta| meta.redefines)
 }
 
 /// The property of `kind` that redefines `name`, where one does.

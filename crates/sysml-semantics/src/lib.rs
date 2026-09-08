@@ -1349,8 +1349,12 @@ impl Workspace {
         // that declares none of its own -- `interface i :
         // WheelHubInterface;` -- reaches whichever of the two its type
         // reached.
-        if self.own_ends(elem).len() != 2 {
+        let ends = self.own_ends(elem).len();
+        if ends != 2 {
             implied.retain(|path| !BINARY.contains(path));
+        }
+        if ends == 0 {
+            implied.retain(|path| !OWNING_ENDS.contains(path));
         }
         implied
     }
@@ -3830,12 +3834,18 @@ fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
 /// `validateAssociationBinarySpecialization` says the same of an
 /// association. Each of these is listed in front of what it narrows, so
 /// dropping it leaves the one an n-ary relationship reaches.
-const BINARY: [&str; 4] = [
+const BINARY: [&str; 5] = [
     "Links::BinaryLink",
     "Objects::BinaryLinkObject",
     "Connections::BinaryConnection",
     "Interfaces::BinaryInterface",
+    "Flows::Message",
 ];
+
+/// What is implied only of something that owns ends of its own, however
+/// many. `checkFlowUsageFlowSpecialization` asks for `notEmpty`, where
+/// the binary rules above ask for exactly two.
+const OWNING_ENDS: [&str; 1] = ["Flows::flows"];
 
 fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
     use ElementKind::*;
@@ -3884,7 +3894,12 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         OccurrenceDefinition | OccurrenceUsage | EventOccurrenceUsage => {
             &["Occurrences::Occurrence"]
         }
-        FlowDefinition | FlowUsage => &["Flows::Flow", "Flows::MessageFlow"],
+        // `Flow` is a *sub*class of `Message`, and there is no
+        // `Flows::MessageFlow` at all: a flow was inheriting the ends of
+        // the very type that specializes it.
+        FlowDefinition => &["Flows::Message", "Flows::MessageAction"],
+        FlowUsage => &["Flows::flows", "Flows::messages"],
+        SuccessionFlowUsage => &["Flows::successionFlows"],
         SuccessionAsUsage | Succession => &["Occurrences::HappensBefore"],
         // KerML classifiers
         Classifier => &["Base::Anything"],
