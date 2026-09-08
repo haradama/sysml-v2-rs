@@ -112,11 +112,22 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// memberships a type inherits through that operation, so the choice is
 /// between reading what it means and answering none of them.
 ///
+/// `validateAssertConstraintUsageReference` calls
+/// `referencedFeaureTarget()`, and the metamodel declares no operation
+/// of that name. Its two siblings -- the same constraint about a
+/// requirement and about a state -- are written out in the same file
+/// with `referencedFeatureTarget()`, and so is the second call in this
+/// one. Read as written the guard cannot be answered, and the rule
+/// stops on `oclIsKindOf` of the null it was guarding against.
+///
 /// This is not the same as the two below. Those say something other than
 /// what the constraint says in words, and running them would report a
 /// violation of a model that is sound; the corpus is what says whether
-/// reading this one as it is meant is right.
-const MISSPELLED: [(&str, &str); 1] = [("excludedType", "excludedTypes")];
+/// reading these as they are meant is right.
+const MISSPELLED: [(&str, &str); 2] = [
+    ("excludedType", "excludedTypes"),
+    ("referencedFeaureTarget", "referencedFeatureTarget"),
+];
 
 /// Constraints whose OCL parses and says something other than what the
 /// constraint says in words.
@@ -493,6 +504,10 @@ impl Scope<'_> {
             (Op::Gt, Val::Int(a), Val::Int(b)) => Val::Bool(a > b),
             (Op::Ge, Val::Int(a), Val::Int(b)) => Val::Bool(a >= b),
             (Op::Sub, Val::Int(a), Val::Int(b)) => Val::Int(a - b),
+            (Op::Add, Val::Int(a), Val::Int(b)) => Val::Int(a + b),
+            // `qualifiedName + '::' + escapedName()` -- the one thing
+            // the specification adds strings for is building a name
+            (Op::Add, Val::Str(a), Val::Str(b)) => Val::Str(format!("{a}{b}")),
             (Op::Range, Val::Int(a), Val::Int(b)) => Val::Set((*a..=*b).map(Val::Int).collect()),
             _ => match right.unknown() {
                 Some(unknown) => unknown,
@@ -882,6 +897,38 @@ impl Scope<'_> {
                 }
                 other => unknown_from(&other, "the index of `at`"),
             },
+            // `relatedFeature->subSequence(2, relatedFeature->size())`
+            // is how a connector says every end but the first. Counted
+            // from one and taking both ends, as OCL does.
+            "subSequence" => {
+                let [first, last] = args else {
+                    return Val::Unknown(
+                        "`subSequence` written without the two ends it takes".to_string(),
+                    );
+                };
+                let (first, last) = (self.eval(first), self.eval(last));
+                let (from, to) = match (&first, &last) {
+                    (Val::Int(from), Val::Int(to)) => (*from, *to),
+                    (other, Val::Int(_)) | (_, other) => {
+                        return unknown_from(other, "an end of `subSequence`")
+                    }
+                };
+                // one past the end is the empty sequence, which is what
+                // `subSequence(2, 1)` of a single related feature says
+                if from < 1 || to < from - 1 {
+                    return Val::Unknown(format!(
+                        "`subSequence({from}, {to})`, which is no part of a sequence"
+                    ));
+                }
+                Val::Set(
+                    items
+                        .iter()
+                        .take(to as usize)
+                        .skip(from as usize - 1)
+                        .cloned()
+                        .collect(),
+                )
+            }
             "including" => {
                 let mut out = items;
                 out.push(taken);
@@ -1138,9 +1185,10 @@ impl Scope<'_> {
             return None;
         };
         let kind = self.ws.model().kind(*elem);
+        let called = meant(name);
         let defined = operations()
             .iter()
-            .find(|it| it.called == name && it.parameters.len() == args.len() && kind.is_a(it.of))
+            .find(|it| it.called == called && it.parameters.len() == args.len() && kind.is_a(it.of))
             .filter(|_| self.depth < DEPTH)?;
         let bound: HashMap<String, Val> = defined
             .parameters
@@ -1273,6 +1321,14 @@ fn written_as_meant(kind: ElementKind, name: &str) -> &str {
     }
 }
 
+/// What the specification's OCL meant by a name it does not declare.
+fn meant(written: &str) -> &str {
+    match MISSPELLED.iter().find(|(slip, _)| *slip == written) {
+        Some((_, meant)) => meant,
+        None => written,
+    }
+}
+
 /// Whether an element is owned as a relationship rather than as a
 /// member.
 ///
@@ -1321,6 +1377,12 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
         // `comment about A` reifies the annotation under the comment,
         // so the annotating element is the one that owns it
         "owningAnnotatingElement" => ElementKind::AnnotatingElement,
+        // The other side of that: an annotating element is owned by an
+        // annotation only where the abstract syntax nests it inside
+        // one, and this model never does -- the annotation is what the
+        // comment owns, so a comment is owned by whatever it is written
+        // in and never by an annotation.
+        "owningAnnotatingRelationship" => ElementKind::Annotation,
         _ => return None,
     };
     Some(kind)
@@ -1357,6 +1419,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     /// A workspace over one file, and the element declared under `name`.
@@ -1538,6 +1601,44 @@ mod tests {
         // a walk it cannot take a step of does not answer half of one
         assert_eq!(
             ws.judge("Set{self}->closure(t | t.operator)->isEmpty()", car),
+            None
+        );
+        // `owningNamespace.qualifiedName + '::' + escapedName()` --
+        // the specification adds strings to build a name, and numbers
+        // where it counts
+        assert_eq!(ws.judge("'a' + 'b' = 'ab'", car), Some(true));
+        assert_eq!(ws.judge("1 + 2 = 3", car), Some(true));
+        // `Set(Element){}` names the type its emptiness is empty of,
+        // which says nothing the values do not
+        assert_eq!(ws.judge("Set(Element){}->isEmpty()", car), Some(true));
+        // `relatedFeature->subSequence(2, size)` is every end but the
+        // first, counted from one and taking both ends
+        assert_eq!(
+            ws.judge("Sequence{1, 2, 3}->subSequence(2, 3)->size() = 2", car),
+            Some(true)
+        );
+        // one past the end is the empty sequence, which is what a
+        // connector with a single related feature asks for
+        assert_eq!(
+            ws.judge("Sequence{1}->subSequence(2, 1)->isEmpty()", car),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge("Sequence{1}->subSequence(0, 1)->size() = 1", car),
+            None
+        );
+        // an end that is not a number, on either side, and one written
+        // without the pair of them
+        assert_eq!(
+            ws.judge("Sequence{1}->subSequence('a', 1)->isEmpty()", car),
+            None
+        );
+        assert_eq!(
+            ws.judge("Sequence{1}->subSequence(1, 'a')->isEmpty()", car),
+            None
+        );
+        assert_eq!(
+            ws.judge("Sequence{1}->subSequence(1)->isEmpty()", car),
             None
         );
         // the exact-type question, which the specification spells

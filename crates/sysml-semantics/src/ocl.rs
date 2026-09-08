@@ -56,6 +56,9 @@ pub(crate) enum Op {
     Gt,
     Ge,
     Sub,
+    /// `owningNamespace.qualifiedName + '::' + escapedName()`, which is
+    /// how a qualified name is put together and how a path is written.
+    Add,
     /// `2..n`, which the one rule that counts a chain writes.
     Range,
     And,
@@ -189,6 +192,23 @@ impl Parser {
         matched
     }
 
+    /// Take the `{` a collection literal opens with, and the element
+    /// type written before it where one is.
+    fn opens_collection(&mut self) -> bool {
+        if self.eat("{") {
+            return true;
+        }
+        let from = self.at;
+        let named = self.eat("(") && self.peek().is_some_and(|it| it.kind == Tok::Name) && {
+            self.at += 1;
+            self.eat(")") && self.eat("{")
+        };
+        if !named {
+            self.at = from;
+        }
+        named
+    }
+
     fn expect(&mut self, text: &str) -> Result<(), String> {
         if self.eat(text) {
             return Ok(());
@@ -273,9 +293,16 @@ impl Parser {
 
     fn additive(&mut self) -> Result<Expr, String> {
         let mut left = self.unary()?;
-        while self.eat("-") {
+        loop {
+            let op = if self.eat("-") {
+                Op::Sub
+            } else if self.eat("+") {
+                Op::Add
+            } else {
+                break;
+            };
             let right = self.unary()?;
-            left = Expr::Binary(Op::Sub, Box::new(left), Box::new(right));
+            left = Expr::Binary(op, Box::new(left), Box::new(right));
         }
         Ok(left)
     }
@@ -437,8 +464,11 @@ impl Parser {
                     "false" => Ok(Expr::Bool(false)),
                     // `Set{a, b}` and its kin: what is in it is what
                     // matters, and which kind of collection it is does
-                    // not, since nothing here counts duplicates
-                    "Set" | "OrderedSet" | "Sequence" | "Bag" if self.eat("{") => {
+                    // not, since nothing here counts duplicates. The
+                    // metamodel writes one of them as `Set(Element){}`,
+                    // naming the type its emptiness is empty of, which
+                    // says nothing the values do not.
+                    "Set" | "OrderedSet" | "Sequence" | "Bag" if self.opens_collection() => {
                         let mut items = Vec::new();
                         if !self.eat("}") {
                             items.push(self.expression()?);
@@ -505,6 +535,71 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The derivations and operations this subset cannot read, which is
+    /// a different list from the constraints and a longer one.
+    ///
+    /// Two kinds sit in it. Some are the specification's own text:
+    /// `Namespace::resolveGlobal` and three of its neighbours are
+    /// written as prose about what they would do rather than as OCL,
+    /// and `Expression::modelLevelEvaluable` stops in the middle of a
+    /// `forAll(` it never closes, as `deriveFeatureCrossFeature` and
+    /// `deriveTransitionUsageSource` each stop one `endif` short. The
+    /// rest are this subset's: `MultiplicityRange::valueOf` answers `*`
+    /// for an unbounded literal and nothing here reads that yet.
+    ///
+    /// It is pinned so that the list cannot grow unnoticed, and so that
+    /// closing one of the gaps shows up here as the gain it is.
+    #[test]
+    fn what_the_specification_writes_that_this_subset_cannot_read() {
+        const UNREADABLE: [&str; 19] = [
+            "ControlNode::multiplicityHasBounds",
+            "Expression::modelLevelEvaluable",
+            "Feature::isFeaturingType",
+            "Feature::ownedCrossFeature",
+            "FeatureChainExpression::sourceTargetFeature",
+            "Membership::isDistinguishableFrom",
+            "MetadataFeature::evaluateFeature",
+            "MetadataFeature::syntaxElement",
+            "MultiplicityRange::hasBounds",
+            "MultiplicityRange::valueOf",
+            "Namespace::qualificationOf",
+            "Namespace::resolveGlobal",
+            "Namespace::unqualifiedNameOf",
+            "Namespace::visibilityOf",
+            "NamespaceImport::importedMemberships",
+            "OperatorExpression::instantiatedType",
+            "Type::multiplicities",
+            "derive deriveFeatureCrossFeature",
+            "derive deriveTransitionUsageSource",
+        ];
+        let mut refused = Vec::new();
+        for rule in sysml_model::DERIVATIONS {
+            // the metamodel writes `property = expression`, and where
+            // it wrote the expression alone the rule's name says which
+            let body = match rule.ocl.split_once('=') {
+                Some((head, body)) if head.trim().chars().all(char::is_alphanumeric) => body,
+                _ => rule.ocl,
+            };
+            if let Err(why) = parse(body) {
+                refused.push((format!("derive {}", rule.name), why));
+            }
+        }
+        for op in sysml_model::OPERATIONS {
+            if let Err(why) = parse(op.ocl) {
+                refused.push((format!("{}::{}", op.metaclass.name(), op.name), why));
+            }
+        }
+        refused.sort();
+        refused.dedup_by(|a, b| a.0 == b.0);
+        let names: Vec<&str> = refused.iter().map(|(name, _)| name.as_str()).collect();
+        let said = refused
+            .iter()
+            .map(|(name, why)| format!("{name}: {why}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(names, UNREADABLE, "{said}");
+    }
 
     /// One constraint of the specification cannot be read, and it is a
     /// defect in the specification's own text rather than a gap in this
