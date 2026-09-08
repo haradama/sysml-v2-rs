@@ -854,10 +854,14 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     // it binds, which `reify_loop_variable` declares. Kept whole, the
     // loop arrives asking for `i in xs`, which is a comparison.
     let mut asked = String::new();
-    let mut started = !has_token(node, FOR_KW);
+    // `then while c { ... }` writes the flow it continues before the
+    // loop it declares, and what the loop asks begins after the keyword
+    // that says which loop it is. A `for` asks for what follows `in`.
+    let mut started =
+        !has_token(node, FOR_KW) && !matches!(tokens(node).next(), Some(THEN_KW | FIRST_KW));
     for part in node.children_with_tokens() {
         if !started {
-            started = part.kind() == IN_KW;
+            started = matches!(part.kind(), IN_KW | WHILE_KW | UNTIL_KW | LOOP_KW | IF_KW);
             continue;
         }
         match part.kind() {
@@ -1025,6 +1029,16 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
             SyntaxKind::ACCEPT_KW => Some(ElementKind::AcceptActionUsage),
             SyntaxKind::ASSIGN_KW => Some(ElementKind::AssignmentActionUsage),
             SyntaxKind::TERMINATE_KW => Some(ElementKind::TerminateActionUsage),
+            // `then while c { ... }` and `then for i in xs { ... }`
+            // declare the loop as much as `then merge continue;`
+            // declares the node. Read in the order they are written the
+            // leading `then` answers first, and the loop the source
+            // wrote is in the model nowhere at all -- with the body it
+            // was handed.
+            SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW | SyntaxKind::LOOP_KW => {
+                Some(ElementKind::WhileLoopActionUsage)
+            }
+            SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
             _ => None,
         }) {
             return Some(declared);
@@ -1511,6 +1525,18 @@ fn usage_kind(
         if let Some(name) = candidate {
             return kind_or(name, ElementKind::Usage);
         }
+    }
+    // `action aLoop while c { ... }` names the loop it declares:
+    // `WhileLoopNode : WhileLoopActionUsage = ActionNodePrefix ( 'while'
+    // ... ) ...`, where the `action` before it introduces a name rather
+    // than a plain action. Read as one, the loop is in the model
+    // nowhere and the `until` after it stands for a second.
+    if let Some(loops) = tokens(node).find_map(|token| match token {
+        WHILE_KW | UNTIL_KW | LOOP_KW => Some(ElementKind::WhileLoopActionUsage),
+        FOR_KW => Some(ElementKind::ForLoopActionUsage),
+        _ => None,
+    }) {
+        return loops;
     }
     let name = match kws.first() {
         Some(PART_KW) => "PartUsage",
@@ -2099,6 +2125,40 @@ mod tests {
         assert_eq!(
             shape(members[2]),
             [(ElementKind::ReferenceUsage, 0), (branch, 1)]
+        );
+    }
+
+    /// A loop written after a `then`, and one given a name, are still
+    /// the loop they declare.
+    ///
+    /// `then while c { ... }` writes the flow it continues *and* the
+    /// loop; read in the order the keywords appear, the leading `then`
+    /// answered first and the loop was in the model nowhere at all,
+    /// with the body it was handed. `action aLoop while c { ... }`
+    /// introduces a name rather than a plain action, and what the loop
+    /// asks begins after the keyword that says which loop it is.
+    #[test]
+    fn a_loop_after_a_then_or_under_a_name_is_still_a_loop() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tattribute i;\n\
+             \tthen while i > 0 { action d; }\n\
+             \tthen action aLoop while i > 0 { action e; }\n\
+             }\n",
+        ));
+        let loops: Vec<Vec<ElementKind>> = model
+            .owned(roots[0])
+            .iter()
+            .filter(|&&it| model.kind(it) == ElementKind::WhileLoopActionUsage)
+            .map(|&it| model.owned(it).iter().map(|&c| model.kind(c)).collect())
+            .collect();
+        // each asks something and is handed a body
+        assert_eq!(
+            loops,
+            [
+                vec![ElementKind::Expression, ElementKind::ActionUsage],
+                vec![ElementKind::Expression, ElementKind::ActionUsage],
+            ]
         );
     }
 
