@@ -804,6 +804,30 @@ impl Scope<'_> {
                     .any(|&child| model.kind(child).is_a(ElementKind::Conjugation)),
             );
         }
+        // Every membership in a namespace: the containments it keeps
+        // and what its imports bring in. The metamodel derives it as a
+        // union of the two, and the resolver works out what an import
+        // brings in for name lookup already.
+        if name == "membership" && model.kind(elem).is_a(ElementKind::Namespace) {
+            let mut all: Vec<Val> = model
+                .owned(elem)
+                .iter()
+                // an import is a relationship and not a membership, so
+                // it is not one of them however many it brings in
+                .filter(|&&member| !is_bare_relationship(model.kind(member)))
+                .map(|&member| Val::Membership {
+                    owner: elem,
+                    member,
+                })
+                .collect();
+            for member in self.ws.imported_members(elem) {
+                all.push(Val::Membership {
+                    owner: elem,
+                    member,
+                });
+            }
+            return Val::Set(once_each(all));
+        }
         // The memberships a type inherits. The metamodel works this
         // out through five operations that call one another over every
         // supertype -- `removeRedefinedFeatures(inheritableMemberships(
@@ -2279,6 +2303,24 @@ mod tests {
             ),
             Some(true)
         );
+    }
+
+    /// Every membership in a namespace: the containments it keeps and
+    /// what its imports bring in. The metamodel derives it as the union
+    /// of the two, and the resolver works out what an import brings in
+    /// for name lookup already.
+    #[test]
+    fn every_membership_of_a_namespace_is_what_it_keeps_and_what_it_brings_in() {
+        const MODEL: &str = "package P {\n\tpart a;\n}\n                             package Q {\n\timport P::*;\n\tpart b;\n}\n";
+        let (mut ws, q) = about(MODEL, "Q");
+        // what it owns is `b`; the import is a relationship and not a
+        // membership, however many it brings in
+        assert_eq!(ws.judge("ownedMembership->size() = 1", q), Some(true));
+        // and `a` comes in besides
+        assert_eq!(ws.judge("membership->size() = 2", q), Some(true));
+        // a namespace importing nothing keeps only what it owns
+        let (mut ws, p) = about(MODEL, "P");
+        assert_eq!(ws.judge("membership->size() = 1", p), Some(true));
     }
 
     /// A flag the builder reads off the source for every metaclass that
