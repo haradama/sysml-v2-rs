@@ -858,12 +858,17 @@ impl Parser<'_> {
     /// A comma continues a type-reference list only when what follows looks
     /// like another plain reference — `in x : X, out y : Y` must leave the
     /// comma to the parameter list.
+    ///
+    /// A value may follow the last of them: `attribute <H> henry :
+    /// PermeanceUnit, InductanceUnit = Wb/A` types the attribute by two
+    /// units and then says what it is. Read as a declaration the comma
+    /// belonged to, `henry` was typed by the first alone.
     fn continues_ref_list(&self) -> bool {
         self.at(COMMA)
             && (self.nth_is_name(1) || self.nth(1) == TILDE)
             && !matches!(
                 self.nth(2),
-                COLON | COLON_GT | COLON_GT_GT | COLON_COLON_GT | EQ | COLON_EQ | DEFAULT_KW
+                COLON | COLON_GT | COLON_GT_GT | COLON_COLON_GT | COLON_EQ | DEFAULT_KW
             )
     }
 

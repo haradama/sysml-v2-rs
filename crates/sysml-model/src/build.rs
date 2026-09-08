@@ -273,11 +273,18 @@ fn build_node(
         // `subject` or a `return` is directed by the membership that
         // owns it instead, and is a parameter for the same reason.
         let directed = model.get(id, "direction").is_some();
-        model.set(
-            id,
-            "isComposite",
-            Value::Bool(!directed && is_composite(node, kind, owner, model)),
-        );
+        // Only a `FeatureMembership` features what it owns, and only
+        // what is featured can be part of it. `variant action a1;` is
+        // owned through a `VariantMembership`, so the variation is not
+        // made of it -- `validateUsageIsReferential` says as much from
+        // the other side, since a usage with no featuring type must be
+        // referential.
+        let composite = owner.is_some_and(|owner| {
+            crate::membership_kind(model, id).is_a(ElementKind::FeatureMembership)
+                && !directed
+                && is_composite(node, kind, model.kind(owner))
+        });
+        model.set(id, "isComposite", Value::Bool(composite));
     }
     // `port def P` defines two things. The standard has a
     // `PortDefinition` own exactly one `ConjugatedPortDefinition`,
@@ -1883,12 +1890,7 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
 /// that a port owns nothing composite but its nested ports:
 /// `ownedUsage->reject(oclIsKindOf(PortUsage))->forAll(not
 /// isComposite)`. Everything else a type owns is composite.
-fn is_composite(
-    node: &SyntaxNode,
-    kind: ElementKind,
-    owner: Option<ElementId>,
-    model: &Model,
-) -> bool {
+fn is_composite(node: &SyntaxNode, kind: ElementKind, owning: ElementKind) -> bool {
     if scope_has(node, SyntaxKind::REF_KW)
         || kind == ElementKind::ReferenceUsage
         || has_token(node, SyntaxKind::END_KW)
@@ -1901,13 +1903,6 @@ fn is_composite(
     // `EventOccurrenceUsage`. A value is not something its owner is made
     // of, whether or not the source wrote `ref`.
     if kind.is_a(ElementKind::AttributeUsage) || kind.is_a(ElementKind::EventOccurrenceUsage) {
-        return false;
-    }
-    let Some(owner) = owner else {
-        return false;
-    };
-    let owning = model.kind(owner);
-    if !owning.is_a(ElementKind::Type) {
         return false;
     }
     // The two notations default the other way about. KerML writes

@@ -1053,6 +1053,140 @@ fn imported_members_walk_the_imports() {
     assert_eq!(ws.import_of(imports[1]), Some(x));
 }
 
+/// `featured by T` says what features a feature, and what it names may
+/// be declared inside that very feature -- `member step merge ...
+/// featured by TakePicture_snapshots { member feature
+/// TakePicture_snapshots ... }`. Read from around it instead, the name
+/// resolves to nothing.
+#[test]
+fn a_featured_by_is_read_from_inside_the_feature_it_is_written_in() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.kerml",
+        "package K {\n\
+         \tclassifier C;\n\
+         \tfeature outer : C;\n\
+         \tfeature host : C featured by inner {\n\
+         \t\tfeature inner : C;\n\t}\n\
+         \tfeature deep : C featured by held::nested {\n\
+         \t\tfeature held : C {\n\t\t\tfeature nested : C;\n\t\t}\n\t}\n\
+         \tfeature plain : C featured by outer;\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let named = |ws: &sysml_semantics::Workspace, want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let featured_by = |ws: &sysml_semantics::Workspace, of: &str| {
+        ws.model()
+            .owned(named(ws, of))
+            .iter()
+            .copied()
+            .find(|&it| ws.model().kind(it) == sysml_model::ElementKind::TypeFeaturing)
+            .and_then(|it| match ws.model().get(it, "featuringType") {
+                Some(&sysml_model::Value::Ref(to)) => Some(to),
+                _ => None,
+            })
+            .expect("the featuring is built")
+    };
+    assert_eq!(featured_by(&ws, "host"), named(&ws, "inner"));
+    assert_eq!(featured_by(&ws, "deep"), named(&ws, "nested"));
+    assert_eq!(featured_by(&ws, "plain"), named(&ws, "outer"));
+}
+
+/// `attribute <H> henry : PermeanceUnit, InductanceUnit = Wb/A` types
+/// the attribute by both and then says what it is. Read as though the
+/// comma opened a declaration of its own, only the first type stuck.
+#[test]
+fn a_value_may_follow_the_last_of_a_type_list() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "package P {\n\
+         \tattribute def A;\n\
+         \tattribute def B;\n\
+         \tattribute h : A, B = 1;\n}\n",
+    );
+    ws.resolve_all();
+    let named = |want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let (a, b, h) = (named("A"), named("B"), named("h"));
+    let ups = ws.supertypes(h);
+    assert!(
+        ups.contains(&a) && ups.contains(&b),
+        "typed by both: {ups:?}"
+    );
+}
+
+/// `first merge::snap.deep then ...` names one feature and then a step
+/// within it. Counted a segment at a time the end's chain gains a step
+/// the notation never wrote.
+#[test]
+fn an_end_chain_is_cut_where_the_dots_fall() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "action def A {\n\
+         \taction m {\n\t\taction snap {\n\t\t\taction deep;\n\t\t}\n\t}\n\
+         \tfirst m::snap.deep then m;\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let succession = ws
+        .model()
+        .ids()
+        .find(|&id| {
+            ws.model()
+                .kind(id)
+                .is_a(sysml_model::ElementKind::SuccessionAsUsage)
+        })
+        .expect("the succession is built");
+    let chained: Vec<usize> = ws
+        .model()
+        .owned(succession)
+        .iter()
+        .filter(|&&end| ws.model().get(end, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter_map(|&end| match ws.model().get(end, "chainingFeature") {
+            Some(sysml_model::Value::RefList(chain)) => Some(chain.len()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(chained, vec![2], "one chain of two steps: {chained:?}");
+}
+
+/// `variant action a1;` is owned through a `VariantMembership`, and only
+/// a `FeatureMembership` features what it owns -- so a variation is not
+/// made of its variants, which is what `validateUsageIsReferential` says
+/// from the other side.
+#[test]
+fn a_variant_is_referred_to_rather_than_made_of() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "package P {\n\
+         \tvariation action def A {\n\t\tvariant action a1;\n\t}\n\
+         \taction def B {\n\t\taction b1;\n\t}\n}\n",
+    );
+    ws.resolve_all();
+    let composite = |want: &str| {
+        let id = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"));
+        ws.model().get(id, "isComposite").cloned()
+    };
+    assert_eq!(composite("a1"), Some(sysml_model::Value::Bool(false)));
+    assert_eq!(composite("b1"), Some(sysml_model::Value::Bool(true)));
+}
+
 /// `MetadataUsageDeclaration = ( Identification ( ':' | 'typed' 'by' ) )?
 /// OwnedFeatureTyping` -- what follows `metadata` is the definition the
 /// usage is typed by, and is a name of its own only where one is spelled

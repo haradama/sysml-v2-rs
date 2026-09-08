@@ -105,7 +105,7 @@ pub struct Finding {
 /// How a connector end reached what it relates.
 enum Reached {
     /// the name the statement wrote
-    Written(Vec<String>),
+    Written(Vec<String>, Vec<usize>),
     /// the neighbour standing in for an end the statement left unwritten
     Beside(ElementId),
 }
@@ -1151,11 +1151,24 @@ impl Workspace {
             let is_definition = node.kind() == SyntaxKind::DEFINITION;
             for (part_kind, targets) in relationship_parts(&node) {
                 for t in targets {
-                    match self.resolve_written(
-                        id,
-                        &t.segments,
-                        may_name_itself(part_kind, is_definition),
-                    ) {
+                    // `member step merge ... featured by
+                    // TakePicture_snapshots { member feature
+                    // TakePicture_snapshots ... }` -- what features a
+                    // feature may be declared inside it, and the
+                    // featuring is written inside it too, so the name is
+                    // read from there before it is read from around.
+                    let found = match part_kind {
+                        SyntaxKind::FEATURED_KW => self.resolve_inside(id, &t.segments),
+                        _ => None,
+                    };
+                    let found = found.or_else(|| {
+                        self.resolve_written(
+                            id,
+                            &t.segments,
+                            may_name_itself(part_kind, is_definition),
+                        )
+                    });
+                    match found {
                         Some(target) => {
                             stats.resolved += 1;
                             let file = self.elem_file.get(&id).copied().unwrap_or(0);
@@ -1771,6 +1784,17 @@ impl Workspace {
             walked.push(current);
         }
         self.chain = walked;
+        Some(current)
+    }
+
+    /// A name read from inside `elem`, which is where a relationship
+    /// written in its declaration sits.
+    fn resolve_inside(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
+        let first = segments.first().filter(|it| !it.is_empty())?;
+        let mut current = self.lookup(elem, first, Access::Internal, true, None)?;
+        for seg in &segments[1..] {
+            current = self.lookup(current, seg, Access::External, true, None)?;
+        }
         Some(current)
     }
 
@@ -2960,7 +2984,15 @@ impl Workspace {
             SyntaxKind::CONJUGATES_KW => {
                 (ElementKind::Conjugation, "conjugatedType", "originalType")
             }
-            // relationship_parts only yields the five kinds above plus TYPING
+            // `member feature inCart : ShoppingCart featured by
+            // Product_Account;` -- what features a feature, written
+            // beside the declaration rather than as a statement of its
+            // own. Without it the feature is featured by whatever owns
+            // it, which is what it says the feature is *not*.
+            SyntaxKind::FEATURED_KW => {
+                (ElementKind::TypeFeaturing, "featureOfType", "featuringType")
+            }
+            // relationship_parts only yields the kinds above plus TYPING
             _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
         };
         self.reified(
@@ -3064,7 +3096,7 @@ impl Workspace {
                     stats.resolved += 1;
                     self.record(file, range, name_range, &operand_ranges(&operand), target);
                     related.push(target);
-                    reached.push(Reached::Written(segments));
+                    reached.push(Reached::Written(segments, operand_chain_steps(&operand)));
                 }
                 None => {
                     self.record_miss(file, range, &segments, stats);
@@ -3158,7 +3190,7 @@ impl Workspace {
             .unwrap_or(id);
         for step in reached {
             match step {
-                Reached::Written(segments) => self.reify_end(holder, &segments),
+                Reached::Written(segments, steps) => self.reify_end(holder, &segments, &steps),
                 Reached::Beside(target) => self.end_reaching(holder, vec![target]),
             }
         }
@@ -3492,10 +3524,10 @@ impl Workspace {
     /// The final target alone cannot say which part an end belongs to --
     /// `w1.hub` and `w2.hub` resolve to the same port of the same type --
     /// so the chain is what an interconnection view needs.
-    fn reify_end(&mut self, connector: ElementId, segments: &[String]) {
+    fn reify_end(&mut self, connector: ElementId, segments: &[String], steps: &[usize]) {
         let mut chain = Vec::new();
         // the full path already resolved, so every prefix normally does too
-        for depth in 1..=segments.len() {
+        for &depth in steps {
             if let Some(step) = self.resolve_from(connector, &segments[..depth]) {
                 chain.push(step);
             }
@@ -4098,6 +4130,36 @@ fn chain_steps(qname: &SyntaxNode) -> Vec<usize> {
     steps
 }
 
+/// Where the `.`s fall in a reference operand, as depths into what
+/// [`operand_segments`] read off it.
+///
+/// `merge::TakePicture_snapshots.merge` is a chain of two -- the feature
+/// `merge::TakePicture_snapshots`, then `merge` within it -- while
+/// `a::b::c` is one name. Counted a segment at a time the chain gains a
+/// step the notation never wrote, and
+/// `validateFeatureChainingFeatureConformance` then asks whether the
+/// second is featured within a first that is only half a name.
+fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
+    let mut steps = Vec::new();
+    let mut at = 0;
+    for token in operand
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        match token.kind() {
+            SyntaxKind::IDENT
+            | SyntaxKind::UNRESTRICTED_NAME
+            | SyntaxKind::DOLLAR
+            | SyntaxKind::STAR
+            | SyntaxKind::STAR_STAR => at += 1,
+            SyntaxKind::DOT => steps.push(at),
+            _ => {}
+        }
+    }
+    steps.push(at);
+    steps
+}
+
 /// The range of the last identifier in a reference operand -- what a
 /// rename of the thing it names rewrites, as opposed to the whole `a.b`.
 fn last_name_range(operand: &SyntaxNode) -> TextRange {
@@ -4184,6 +4246,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                         | SyntaxKind::DIFFERENCES_KW
                         | SyntaxKind::CHAINS_KW
                         | SyntaxKind::CONJUGATES_KW
+                        | SyntaxKind::FEATURED_KW
                 )
                 .then_some((lead, part))
             }

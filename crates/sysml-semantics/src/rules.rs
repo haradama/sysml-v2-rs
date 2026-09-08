@@ -183,14 +183,20 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// constraint about the types of a feature reads.
 ///
 /// `deriveMetadataFeatureMetaclass` binds `metaclassTypes` and reads
-/// `metaClassTypes` back on the next line but one. Nothing binds the
-/// name it reads, and the name it bound is read nowhere.
-const MISSPELLED: [(&str, &str); 5] = [
+/// `metaClassTypes` back on the next line but one, and
+/// `validateRedefinitionFeaturingTypes` binds `redefinedFeaturingTypes`
+/// and reads `redefinedFeaturingType` back on the line after. Nothing
+/// binds the name either of them reads, the name each bound is read
+/// nowhere, and both are written correctly beside the slip -- the
+/// second reads `redefiningFeaturingTypes` in the very comparison that
+/// misspells its other half.
+const MISSPELLED: [(&str, &str); 6] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
     ("exist", "exists"),
     ("metaClassTypes", "metaclassTypes"),
+    ("redefinedFeaturingType", "redefinedFeaturingTypes"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -302,10 +308,30 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// control node). The corpus is what says which pair to keep: the
 /// ControlNode two hold of every succession in it.
 ///
+/// `validateSubsettingFeaturingTypes` is `subsettingFeature.canAccess(
+/// subsettedFeature)`, and `Feature::canAccess` holds the subsetted
+/// feature to being featured within one of the featuring types the
+/// subsetting feature reaches. The Kernel Semantic Library refutes it:
+/// `assoc HappensWhile` has `end feature thisOccurrence redefines
+/// timeEnclosedOccurrences::shorterOccurrence`, and `shorterOccurrence`
+/// is featured by the feature `timeEnclosedOccurrences`, which the
+/// association does not specialize. Eleven hundred subsettings in the
+/// corpus are of that shape, and the pilot implementation implements
+/// neither `canAccess` nor this constraint.
+///
+/// `validateRedefinitionFeaturingTypes` says in words that the
+/// redefining feature "must have at least one featuringType that is not
+/// also a featuringType of the redefinedFeature", and in OCL that the
+/// two sets are unequal, which is not the same thing. Neither holds of
+/// `FeatureChains.kerml`, where `redefinition b.f redefines b.a;`
+/// redefines one feature of `B` by another: both are featured by `B`
+/// alone, so the sets are equal and there is no featuring type the one
+/// has and the other has not.
+///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
 /// cannot even parse are pinned in `ocl.rs` alongside.
-const MISWRITTEN: [(&str, &str); 4] = [
+const MISWRITTEN: [(&str, &str); 6] = [
     (
         "validateDefinitionVariationSpecialization",
         "the specification's own OCL reads `specific` where the constraint says `general`",
@@ -313,6 +339,17 @@ const MISWRITTEN: [(&str, &str); 4] = [
     (
         "validateUsageVariationSpecialization",
         "the specification's own OCL reads `specific` where the constraint says `general`",
+    ),
+    (
+        "validateRedefinitionFeaturingTypes",
+        "the OCL asks for two sets of featuring types to differ where the constraint asks for \
+         one the redefining feature has and the redefined one has not, and neither holds of a \
+         redefinition between two features of the same type",
+    ),
+    (
+        "validateSubsettingFeaturingTypes",
+        "`canAccess` holds a subsetted feature to being featured within what the subsetting \
+         one reaches, and the Kernel Semantic Library's own association ends do not",
     ),
     (
         "validateMergeNodeIncomingSuccessions",
@@ -822,6 +859,56 @@ impl Scope<'_> {
         self.ws.reverse = (model.len(), index);
     }
 
+    /// What features `elem`: what a `featured by` writes, else the type
+    /// that owns it as a feature -- and where nothing does either, what
+    /// features the feature it is written inside.
+    ///
+    /// That last step is what tells a multiplicity apart from a feature.
+    /// A type owns its multiplicity through an `OwningMembership` and
+    /// not a `FeatureMembership`, so a multiplicity has no `owningType`
+    /// and is featured wherever the feature carrying it is -- which is
+    /// what `validateFeatureMultiplicityDomain` asks for ("the
+    /// featuringTypes of the multiplicity must be the same as those of
+    /// the Feature itself") and what
+    /// `validateClassifierMultiplicityDomain` asks for from the other
+    /// side, a classifier's multiplicity having none at all.
+    ///
+    /// A chain is featured where its first step is, which is the one
+    /// part of the unreadable derivation that is written plainly.
+    ///
+    /// Both walks end: the first climbs the ownership tree, and the
+    /// second reads a `chainingFeature`, which only a connector end
+    /// carries and whose steps are the features the source named.
+    fn collect_featuring_types(&mut self, elem: ElementId, into: &mut Vec<ElementId>) {
+        let model = self.ws.model();
+        let written: Vec<ElementId> = model
+            .owned(elem)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it).is_a(ElementKind::TypeFeaturing))
+            .flat_map(|it| model.featuring_type(it))
+            .copied()
+            .collect();
+        let owner = model.owner(elem);
+        let owns_it_as_a_feature = owner.is_some_and(|_| {
+            sysml_model::membership_kind(model, elem).is_a(ElementKind::FeatureMembership)
+        });
+        let inside = owner.filter(|&it| model.kind(it).is_a(ElementKind::Feature));
+        let first_step = match model.get(elem, "chainingFeature") {
+            Some(Value::RefList(chain)) => chain.first().copied(),
+            _ => None,
+        };
+        match (written.is_empty(), owns_it_as_a_feature, inside) {
+            (false, _, _) => into.extend(written),
+            (true, true, _) => into.extend(owner),
+            (true, false, Some(inside)) => self.collect_featuring_types(inside, into),
+            (true, false, None) => {}
+        }
+        if let Some(step) = first_step {
+            self.collect_featuring_types(step, into);
+        }
+    }
+
     /// The name an element answers to from the root namespace, or null
     /// where it has none: an unnamed element, or one inside one.
     fn qualified_name(&self, elem: ElementId) -> Val {
@@ -1047,6 +1134,16 @@ impl Scope<'_> {
                     .map(|them| them.iter().copied().map(Val::Elem).collect())
                     .unwrap_or_default(),
             );
+        }
+        // "The Types that feature this Feature". The metamodel derives
+        // it from a `featuring` that no metaclass declares, so the
+        // derivation cannot be read -- but the metamodel says what it
+        // comes to all the same, in `Feature::isFeaturingType`: "if not
+        // isVariable then type = owningType".
+        if name == "featuringType" && model.kind(elem).is_a(ElementKind::Feature) {
+            let mut them = Vec::new();
+            self.collect_featuring_types(elem, &mut them);
+            return Val::Set(them.into_iter().map(Val::Elem).collect());
         }
         // Every membership in a namespace: the containments it keeps
         // and what its imports bring in. The metamodel derives it as a
@@ -2157,6 +2254,34 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the element is declared");
         (ws, elem)
+    }
+
+    /// "The Types that feature this Feature": the type that owns it as
+    /// a feature, or what a `featured by` says instead -- and, for a
+    /// multiplicity, which no type owns as a feature, wherever the
+    /// feature carrying it is featured.
+    #[test]
+    fn what_features_a_feature_is_what_owns_it_or_what_it_says() {
+        let source = "package K {\n\
+             \tclassifier C;\n\
+             \tclassifier D {\n\t\tfeature x : C[0..1];\n\t}\n\
+             \tfeature w : C featured by D;\n\
+             \tfeature v : C;\n}\n";
+        let features_d = "featuringType->size() = 1 and featuringType->forAll(declaredName = 'D')";
+        let (mut ws, x) = about_kerml(source, "x");
+        assert_eq!(ws.judge(features_d, x), Some(true));
+        // the multiplicity of `x` is owned by `x` and not as a feature
+        // of it, so it is featured where `x` is
+        assert_eq!(
+            ws.judge("multiplicity.featuringType = featuringType", x),
+            Some(true)
+        );
+
+        let (mut ws, w) = about_kerml(source, "w");
+        assert_eq!(ws.judge(features_d, w), Some(true));
+        // and a package owns nothing as a feature of itself
+        let (mut ws, v) = about_kerml(source, "v");
+        assert_eq!(ws.judge("featuringType->isEmpty()", v), Some(true));
     }
 
     /// The ends the metamodel gives to an association rather than to
