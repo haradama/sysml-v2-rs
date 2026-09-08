@@ -738,6 +738,48 @@ impl Scope<'_> {
         }
     }
 
+    /// The name an element answers to from the root namespace, or null
+    /// where it has none: an unnamed element, or one inside one.
+    fn qualified_name(&self, elem: ElementId) -> Val {
+        let model = self.ws.model();
+        let mut segments = Vec::new();
+        let mut at = Some(elem);
+        while let Some(it) = at.filter(|&it| it != self.ws.root) {
+            let Some(named) = model.name(it) else {
+                return Val::Null;
+            };
+            segments.push(named);
+            at = model.owner(it);
+        }
+        segments.reverse();
+        match segments.is_empty() {
+            // the root namespace is what every other name is read from
+            // and answers to no name of its own
+            true => Val::Null,
+            false => Val::Str(segments.join("::")),
+        }
+    }
+
+    /// The element a qualified name names, read from the root.
+    ///
+    /// `Namespace::resolveGlobal` is one of the four the metamodel
+    /// writes as prose about what it would do rather than as OCL. The
+    /// index is over declared names, so the last segment finds the
+    /// candidates and the whole name picks one out.
+    fn global(&mut self, qualified: &str) -> Option<ElementId> {
+        if let Some(&found) = self.ws.globals.get(qualified) {
+            return found;
+        }
+        let declared = qualified.rsplit("::").next().unwrap_or(qualified);
+        let found = self
+            .ws
+            .search_names(declared, 500)
+            .into_iter()
+            .find(|&it| self.ws.qualified_name_of(it) == qualified);
+        self.ws.globals.insert(qualified.to_string(), found);
+        found
+    }
+
     /// One property of one element, or [`Val::Unknown`] where this model
     /// does not carry it.
     fn property(&mut self, elem: ElementId, name: &str) -> Val {
@@ -947,6 +989,15 @@ impl Scope<'_> {
                 Some(owner) => Val::Elem(owner),
                 None => Val::Null,
             };
+        }
+        // `owningNamespace.qualifiedName + '::' + escapedName()`, one
+        // namespace at a time, through an `escapedName()` the metamodel
+        // writes with `indexOf`. The resolver spells the same name to
+        // resolve one, so that is the answer -- and null where anything
+        // along the way has no name, which is where the derivation's own
+        // `null` would have propagated from.
+        if name == "qualifiedName" {
+            return self.qualified_name(elem);
         }
         // What an element was written with, which the model keeps on the
         // element rather than on the membership standing over it --
@@ -1477,6 +1528,48 @@ impl Scope<'_> {
             // property does not need the cast -- it spells the cast
             // both ways
             "oclAsType" | "oclAsKindOf" => target.clone(),
+            // What the model calls this element's metaclass. The
+            // reflective libraries hold one per class of the abstract
+            // syntax, and every constraint that asks for a type asks
+            // for it so as to name it and look it up again -- so the
+            // answer is that declaration, found the way the pilot
+            // implementation finds it.
+            "oclType" => {
+                let Some(kind) = self.kind_of(target) else {
+                    return Val::Unknown(
+                        "the metaclass of something that is not an element".to_string(),
+                    );
+                };
+                METACLASS_PACKAGES
+                    .iter()
+                    .find_map(|package| self.global(&format!("{package}::{}", kind.name())))
+                    .map_or_else(
+                        || {
+                            Val::Unknown(format!(
+                                "the library declares no metaclass `{}`",
+                                kind.name()
+                            ))
+                        },
+                        Val::Elem,
+                    )
+            }
+            // A name read from the root namespace, which answers with
+            // the membership the namespace holds it under.
+            "resolveGlobal" => match self.argument(args) {
+                Val::Str(qualified) => match self.global(&qualified) {
+                    Some(found) => Val::Membership {
+                        // a name resolves inside a namespace; the root
+                        // is the one thing held under no membership,
+                        // and it answers to no name to be found by
+                        owner: self.ws.model().owner(found).unwrap_or(self.ws.root),
+                        member: found,
+                    },
+                    // not in this workspace, which is the answer OCL
+                    // gives for a name that resolves to nothing
+                    None => Val::Null,
+                },
+                other => unknown_from(&other, "a name to resolve that is not a string"),
+            },
             "specializes" => {
                 let (Val::Elem(elem), Val::Elem(up)) = (target, self.argument(args)) else {
                     return Val::Unknown(
@@ -1491,16 +1584,7 @@ impl Scope<'_> {
                         "`specializesFromLibrary` of something that is not an element".to_string(),
                     );
                 };
-                // by the name it answers to, then by the whole of it:
-                // the index is over declared names, and the root
-                // namespace is no scope a library name resolves from
-                let declared = qualified.rsplit("::").next().unwrap_or(&qualified);
-                let found = self
-                    .ws
-                    .search_names(declared, 500)
-                    .into_iter()
-                    .find(|&it| self.ws.qualified_name_of(it) == qualified);
-                match found {
+                match self.global(&qualified) {
                     Some(up) => Val::Bool(self.specializes(*elem, up)),
                     // the library is not loaded, which is not the model
                     // failing a rule
@@ -1730,6 +1814,17 @@ fn equal(left: &Val, right: &Val) -> Val {
     }
 }
 
+/// Where the reflective libraries declare a metaclass, in the order the
+/// pilot implementation looks for one: `KerML.kerml` splits the KerML
+/// abstract syntax into three packages and `SysML.sysml` keeps the SysML
+/// one in a single package, and the class name is the same in each.
+const METACLASS_PACKAGES: [&str; 4] = [
+    "KerML::Root",
+    "KerML::Core",
+    "KerML::Kernel",
+    "SysML::Systems",
+];
+
 /// The property `name` itself redefines, where it redefines one.
 ///
 /// This is `redefining` read the other way. A constraint written of a
@@ -1939,6 +2034,76 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the element is declared");
         (ws, elem)
+    }
+
+    /// The three the specification writes a metadata feature's
+    /// constraint in terms of: the name an element answers to from the
+    /// root, the element a name reads back to, and the metaclass of a
+    /// thing -- which the constraint names so as to read it back.
+    #[test]
+    fn a_name_is_read_from_the_root_and_a_metaclass_named_by_it() {
+        let mut ws = Workspace::new();
+        ws.add_file(
+            "kerml.kerml",
+            "standard library package KerML {\n\
+             \tpackage Core {\n\t\tmetaclass PartDefinition;\n\t}\n}\n",
+        );
+        ws.add_file(
+            "test.sysml",
+            "part def Car {\n\tdoc /* what is driven */\n\tpart w;\n}\n",
+        );
+        ws.resolve_all();
+        let named = |ws: &Workspace, want: &str| {
+            ws.named_elements()
+                .find(|(_, declared)| *declared == want)
+                .map(|(id, _)| id)
+                .expect("the element is declared")
+        };
+        let (car, wheel) = (named(&ws, "Car"), named(&ws, "w"));
+
+        assert_eq!(ws.judge("qualifiedName = 'Car'", car), Some(true));
+        assert_eq!(ws.judge("qualifiedName = 'Car::w'", wheel), Some(true));
+        // and the metaclass by the name it answers to, read back to
+        // the same element it was named from
+        assert_eq!(
+            ws.judge(
+                "oclType().qualifiedName = 'KerML::Core::PartDefinition'",
+                car
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            ws.judge(
+                "resolveGlobal('KerML::Core::PartDefinition').memberElement = oclType()",
+                car
+            ),
+            Some(true)
+        );
+        // a name nothing answers to reads back to nothing, which is
+        // an answer and not a refusal to answer
+        assert_eq!(
+            ws.judge("resolveGlobal('Nowhere::atAll') = null", car),
+            Some(true)
+        );
+        // and what cannot be asked says so rather than guessing: a
+        // metaclass the library does not declare, the metaclass of
+        // something that is not an element, a name that is not one,
+        // and the name of something with none
+        assert_eq!(ws.judge("oclType() = null", wheel), None);
+        assert_eq!(ws.judge("declaredName.oclType() = null", car), None);
+        assert_eq!(ws.judge("resolveGlobal(1) = null", car), None);
+        let unnamed = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().name(id).is_none() && ws.model().owner(id).is_some())
+            .expect("the model builds something anonymous");
+        assert_eq!(ws.judge("qualifiedName = null", unnamed), Some(true));
+        let root = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().owner(id).is_none())
+            .expect("everything is read from the root");
+        assert_eq!(ws.judge("qualifiedName = null", root), Some(true));
     }
 
     #[test]

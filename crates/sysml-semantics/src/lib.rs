@@ -175,6 +175,11 @@ pub struct Workspace {
     elem_file: HashMap<ElementId, usize>,
     // caches
     supertypes: HashMap<ElementId, Vec<ElementId>>,
+    /// Elements by the whole name they answer to from the root. A
+    /// constraint that names a library element asks for the same
+    /// handful over and over -- once per element it is checked of --
+    /// and working one out is a scan of every name in the workspace.
+    pub(crate) globals: HashMap<String, Option<ElementId>>,
     in_progress: HashSet<ElementId>,
     /// The imports and aliases whose targets are being worked out, from
     /// the outermost in. An import naturally consults itself while
@@ -257,6 +262,9 @@ impl Clone for Workspace {
             source: self.source.clone(),
             elem_file: self.elem_file.clone(),
             supertypes: self.supertypes.clone(),
+            // a speculative walk may write elements, and a name that
+            // resolved to nothing before one is not settled
+            globals: HashMap::new(),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
             blocked: 0,
@@ -297,6 +305,7 @@ impl Workspace {
             source: HashMap::new(),
             elem_file: HashMap::new(),
             supertypes: HashMap::new(),
+            globals: HashMap::new(),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
             blocked: 0,
