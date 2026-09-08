@@ -125,24 +125,50 @@ pub enum Role {
 /// facts on the member ([`MemberSide`]), so whatever needs the standard's
 /// view of it -- an interchange writer, the constraint checker -- puts
 /// the membership back together from here rather than each its own way.
+/// The membership the standard names for a member written in one of
+/// the roles the notation has a keyword for.
+pub fn membership_of(role: Role) -> ElementKind {
+    // no catch-all: a role added to the model is a compile error here
+    // until it says which membership the standard names for it
+    match role {
+        Role::Subject => ElementKind::SubjectMembership,
+        Role::Actor => ElementKind::ActorMembership,
+        Role::Stakeholder => ElementKind::StakeholderMembership,
+        Role::Objective => ElementKind::ObjectiveMembership,
+        Role::Variant => ElementKind::VariantMembership,
+        Role::Return => ElementKind::ReturnParameterMembership,
+        Role::Result => ElementKind::ResultExpressionMembership,
+        Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
+        Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
+        Role::Frame => ElementKind::FramedConcernMembership,
+        Role::Verify => ElementKind::RequirementVerificationMembership,
+        Role::Render => ElementKind::ViewRenderingMembership,
+    }
+}
+
+/// The direction a membership fixes for what it owns, where it fixes
+/// one.
+///
+/// `ParameterMembership::parameterDirection = FeatureDirectionKind::
+/// _'in'` and `ReturnParameterMembership::parameterDirection =
+/// FeatureDirectionKind::out`. A `subject`, an `actor`, a `stakeholder`
+/// and a `return` are parameters of what owns them, and the notation
+/// writes their direction nowhere: `input->first() = subjectParameter`
+/// asks for a subject that is an input, and none of them was one.
+pub fn parameter_direction(role: Role) -> Option<&'static str> {
+    let membership = membership_of(role);
+    if membership.is_a(ElementKind::ReturnParameterMembership) {
+        Some("out")
+    } else if membership.is_a(ElementKind::ParameterMembership) {
+        Some("in")
+    } else {
+        None
+    }
+}
+
 pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     if let Some(role) = model.member_role(owned) {
-        // no catch-all: a role added to the model is a compile error
-        // here until it says which membership the standard names for it
-        return match role {
-            Role::Subject => ElementKind::SubjectMembership,
-            Role::Actor => ElementKind::ActorMembership,
-            Role::Stakeholder => ElementKind::StakeholderMembership,
-            Role::Objective => ElementKind::ObjectiveMembership,
-            Role::Variant => ElementKind::VariantMembership,
-            Role::Return => ElementKind::ReturnParameterMembership,
-            Role::Result => ElementKind::ResultExpressionMembership,
-            Role::Entry | Role::Do | Role::Exit => ElementKind::StateSubactionMembership,
-            Role::Assume | Role::Require => ElementKind::RequirementConstraintMembership,
-            Role::Frame => ElementKind::FramedConcernMembership,
-            Role::Verify => ElementKind::RequirementVerificationMembership,
-            Role::Render => ElementKind::ViewRenderingMembership,
-        };
+        return membership_of(role);
     }
     let owner_kind = match model.owner(owned) {
         Some(owner) => model.kind(owner),
@@ -203,6 +229,19 @@ pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
             && !model.kind(it).is_a(ElementKind::Multiplicity)
             && !model.kind(it).is_a(ElementKind::MetadataUsage)
     })
+}
+
+/// What an accept node waits for.
+///
+/// `deriveAcceptActionUsagePayloadParameter` -- "the payloadParameter of
+/// an AcceptActionUsage is its first parameter" -- and a parameter is a
+/// feature the node was handed, which is to say a directed one.
+pub fn payload_parameter(model: &Model, accept: ElementId) -> Option<ElementId> {
+    model
+        .owned(accept)
+        .iter()
+        .copied()
+        .find(|&child| model.get(child, "direction").is_some())
 }
 
 /// What a transition feature is to its transition -- the `kind` its

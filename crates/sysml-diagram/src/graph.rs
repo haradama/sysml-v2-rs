@@ -1070,8 +1070,12 @@ fn transition_label(model: &Model, transition: ElementId) -> Option<String> {
         head.push(name.to_string());
     }
     if let Some(trigger) = first_reference(model, transition, "triggerAction") {
-        let payload = model.name(trigger).unwrap_or_default();
-        let typed = type_name(model, trigger)
+        // `TriggerAction : AcceptActionUsage = AcceptParameterPart` --
+        // what the transition waits for is the accept action's first
+        // parameter, and the action itself is written with no name
+        let waits = sysml_model::payload_parameter(model, trigger).unwrap_or(trigger);
+        let payload = model.name(waits).unwrap_or_default();
+        let typed = type_name(model, waits)
             .map(|ty| format!(" : {ty}"))
             .unwrap_or_default();
         head.push(format!("accept {payload}{typed}"));

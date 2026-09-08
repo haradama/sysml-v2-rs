@@ -93,6 +93,39 @@ struct Defined {
     body: Expr,
 }
 
+/// The names a membership metaclass gives to the one thing it owns.
+///
+/// `SubjectMembership::ownedSubjectParameter`,
+/// `StateSubactionMembership::action`,
+/// `ElementFilterMembership::condition` and their kin: each is the
+/// member, under whichever name the metaclass declares. Their
+/// `referenced` counterparts -- `referencedConcern`,
+/// `verifiedRequirement` -- name something the membership does not own,
+/// and are left alone.
+/// `ParameterMembership::ownedMemberParameter` is left out. Answered,
+/// it reaches three constraints about what an expression comes to --
+/// the result of a feature reference, the type of a multiplicity bound
+/// -- and this model keeps an expression as the text it was written as
+/// rather than as the parameters the specification counts. Read as the
+/// member, `result` is a definite nothing rather than an unanswered
+/// question, and twenty-eight hundred of a sound corpus are reported as
+/// violations.
+const OWNED_MEMBER: [&str; 13] = [
+    "action",
+    "condition",
+    "ownedActorParameter",
+    "ownedConcern",
+    "ownedConstraint",
+    "ownedObjectiveRequirement",
+    "ownedRendering",
+    "ownedRequirement",
+    "ownedResultExpression",
+    "ownedStakeholderParameter",
+    "ownedSubjectParameter",
+    "ownedVariantUsage",
+    "transitionFeature",
+];
+
 /// Flags this toolchain writes wherever they hold, beyond the ones the
 /// builder reads off a keyword.
 ///
@@ -124,24 +157,15 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// what the constraint says in words, and running them would report a
 /// violation of a model that is sound; the corpus is what says whether
 /// reading these as they are meant is right.
-/// `Type::directionOf` declares its one parameter `feature` and its
-/// body reads `directionOfExcluding(f, Set{})`. Its sibling
-/// `directionOfExcluding` writes `feature` throughout, and there is
-/// nothing else `f` can be: the operation takes one parameter and no
-/// metaclass declares a property of that name. Ten constraints reach a
-/// feature's direction through it.
-///
-/// A name is read this way only where it is bound to nothing and what
-/// it means is, so the `f` of `feature->select(f | ...)` -- which the
-/// metamodel writes a few lines away -- is the `f` that was bound and
-/// not this one.
 /// `ControlNode::multiplicityHasBounds` calls `oclisKindOf`, which is
 /// spelled `oclIsKindOf` everywhere else in the metamodel and twice in
 /// the very body that misspells it once.
-const MISSPELLED: [(&str, &str); 4] = [
+///
+/// Each of these is read as meant where the body calls it, which is the
+/// only place a name that belongs to nothing can appear.
+const MISSPELLED: [(&str, &str); 3] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
-    ("f", "feature"),
     ("oclisKindOf", "oclIsKindOf"),
 ];
 
@@ -568,13 +592,6 @@ impl Scope<'_> {
         if let Some(value) = self.bound.get(name) {
             return value.clone();
         }
-        if let Some(meant) = MISSPELLED
-            .iter()
-            .find(|(written, _)| *written == name)
-            .and_then(|(_, meant)| self.bound.get(*meant))
-        {
-            return meant.clone();
-        }
         if name == "self" {
             return Val::Elem(self.self_);
         }
@@ -668,6 +685,20 @@ impl Scope<'_> {
             | "ownedMemberFeature"
             | "ownedRelatedElement"
             | "relatedElement" => Val::Elem(member),
+            // Each membership metaclass names what it owns under a name
+            // of its own -- `SubjectMembership::ownedSubjectParameter`,
+            // `VariantMembership::ownedVariantUsage` -- and every one of
+            // them is the member. The metaclass this membership stands
+            // for is what says which of the names it answers to: the
+            // `referenced` half of the pairs beside them names something
+            // the membership does not own, and is not this.
+            name if OWNED_MEMBER.contains(&name)
+                && sysml_model::membership_kind(self.ws.model(), member)
+                    .feature(name)
+                    .is_some() =>
+            {
+                Val::Elem(member)
+            }
             "membershipOwningNamespace"
             | "owningRelatedElement"
             | "owningNamespace"
@@ -1439,6 +1470,27 @@ impl Scope<'_> {
                     None => Val::Unknown(format!("`{qualified}` is not in this workspace")),
                 }
             }
+            // Which way a feature is passed, as seen from a type.
+            // `Type::directionOf(feature)` and its
+            // `directionOfExcluding`, and `Feature::directionFor(type)`
+            // from the other side. The specification defines it by
+            // recursion over every supertype of every feature of every
+            // type, which the bound on derivation depth stops short of
+            // -- and it stands between every constraint that counts
+            // what a behaviour is handed and an answer.
+            "directionOf" | "directionOfExcluding" => match (target, self.argument(args)) {
+                (Val::Elem(of), Val::Elem(feature)) => self.direction_of(*of, feature),
+                (_, other) => {
+                    unknown_from(&other, "the direction of something that is not a feature")
+                }
+            },
+            "directionFor" => match (target, self.argument(args)) {
+                (Val::Elem(feature), Val::Elem(of)) => self.direction_of(of, *feature),
+                (_, other) => unknown_from(
+                    &other,
+                    "the direction seen from something that is not a type",
+                ),
+            },
             // What a type specializes. The specification writes
             // `Feature::supertypes` in terms of `Type::supertypes`
             // through an `oclAsType`, which an operation looked up by
@@ -1498,6 +1550,54 @@ impl Scope<'_> {
             present: self.present,
         };
         Some(scope.eval(&defined.body))
+    }
+
+    /// Which way a feature is passed, as seen from a type.
+    ///
+    /// The direction a type gives a feature is the one the feature was
+    /// declared with where the type owns it, and otherwise the first
+    /// one its supertypes give -- reversed at each conjugation, since
+    /// conjugating a type turns what it takes in into what it puts out.
+    fn direction_of(&mut self, of: ElementId, feature: ElementId) -> Val {
+        let mut seen = Vec::new();
+        match self.direction_seen(of, feature, &mut seen) {
+            Some(direction) => Val::Str(direction.to_string()),
+            None => Val::Null,
+        }
+    }
+
+    fn direction_seen(
+        &mut self,
+        of: ElementId,
+        feature: ElementId,
+        seen: &mut Vec<ElementId>,
+    ) -> Option<&'static str> {
+        if seen.contains(&of) {
+            return None;
+        }
+        seen.push(of);
+        if self.ws.model().owner(feature) == Some(of) {
+            return match self.ws.model().get(feature, "direction") {
+                Some(Value::EnumLit(it)) => Some(it),
+                _ => None,
+            };
+        }
+        let direction = self
+            .ws
+            .supertypes(of)
+            .into_iter()
+            .find_map(|up| self.direction_seen(up, feature, seen))?;
+        let conjugated = self
+            .ws
+            .model()
+            .owned(of)
+            .iter()
+            .any(|&child| self.ws.model().kind(child).is_a(ElementKind::Conjugation));
+        Some(match (conjugated, direction) {
+            (true, "in") => "out",
+            (true, "out") => "in",
+            (_, it) => it,
+        })
     }
 
     /// Whether `elem` specializes `up`, directly or through anything in
@@ -2418,6 +2518,105 @@ mod tests {
 
         // and a property the builder does not read is still unknown
         assert_eq!(ws.judge("operator = \'.\'", w), None);
+    }
+
+    /// Which way a feature is passed, as seen from a type.
+    ///
+    /// `Type::directionOfExcluding` is defined by recursion over every
+    /// supertype of every feature of every type, which the bound on
+    /// derivation depth stops short of -- and it stands between every
+    /// constraint that counts what a behaviour is handed and an answer.
+    /// A conjugated type turns what it takes in into what it puts out.
+    #[test]
+    fn the_direction_of_a_feature_is_seen_from_a_type() {
+        let (mut ws, def) = about(
+            "port def P {\n\tin attribute a;\n}\npart def Q :> P;\n",
+            "P",
+        );
+        assert_eq!(
+            ws.judge(
+                "directionOf(feature->any(true)) = FeatureDirectionKind::_'in'",
+                def
+            ),
+            Some(true)
+        );
+        // what a type does not own, it gives the direction its
+        // supertypes give
+        let (mut ws, sub) = about(
+            "port def P {\n\tin attribute a;\n}\npart def Q :> P;\n",
+            "Q",
+        );
+        assert_eq!(
+            ws.judge(
+                "feature->select(f | directionOf(f) = FeatureDirectionKind::_'in')->notEmpty()",
+                sub
+            ),
+            Some(true)
+        );
+        // and one it never heard of has none
+        assert_eq!(ws.judge("directionOf(self) = null", sub), Some(true));
+        // asked of something that is not a feature of a type, it cannot
+        // say either way
+        assert_eq!(ws.judge("directionOf(1) = null", sub), None);
+        assert_eq!(ws.judge("self.isAbstract.directionFor(self)", sub), None);
+
+        // a conjugated type turns what it takes in into what it puts
+        // out, and the other way about: `port p : ~P` is typed by the
+        // conjugate `P` owns
+        let source = "port def P {\n\tin attribute a;\n\tout attribute b;\n}\n\
+                      part def Q {\n\tport p : ~P;\n}\n";
+        let (mut ws, conjugate) = about(source, "~P");
+        for seen in ["out", "_'in'"] {
+            assert_eq!(
+                ws.judge(
+                    &format!(
+                        "feature->select(f | directionOf(f) = FeatureDirectionKind::{seen})\
+                         ->size() = 1"
+                    ),
+                    conjugate
+                ),
+                Some(true),
+                "one feature of the conjugate is {seen}"
+            );
+        }
+        // `Feature::directionFor(type) = type.directionOf(self)` is the
+        // same question asked from the feature's side
+        let (mut ws, taken) = about(source, "a");
+        assert_eq!(
+            ws.judge(
+                "directionFor(owningType) = FeatureDirectionKind::_'in'",
+                taken
+            ),
+            Some(true)
+        );
+    }
+
+    /// A parameter membership fixes the direction of what it owns, and
+    /// each membership names that one thing under a name of its own.
+    ///
+    /// `ParameterMembership::parameterDirection = FeatureDirectionKind::
+    /// _'in'`, so a `subject` is what a requirement takes in --
+    /// `input->first() = subjectParameter` asks for a subject that is an
+    /// input, and none of them was one. And
+    /// `SubjectMembership::ownedSubjectParameter` is that subject, under
+    /// the name the membership metaclass gives it.
+    #[test]
+    fn a_parameter_membership_directs_and_names_what_it_owns() {
+        let (mut ws, req) = about("requirement def R {\n\tsubject s;\n\tactor a;\n}\n", "R");
+        assert_eq!(ws.judge("input->notEmpty()", req), Some(true));
+        assert_eq!(
+            ws.judge("input->first() = subjectParameter", req),
+            Some(true)
+        );
+        // an actor is taken in the same way
+        let (mut ws, actor) = about("requirement def R {\n\tsubject s;\n\tactor a;\n}\n", "a");
+        assert_eq!(
+            ws.judge("direction = FeatureDirectionKind::_'in'", actor),
+            Some(true)
+        );
+        // and what is handed to something is not part of what it is
+        // made of
+        assert_eq!(ws.judge("isReference", actor), Some(true));
     }
 
     /// `direction` is written where it holds and nowhere else.

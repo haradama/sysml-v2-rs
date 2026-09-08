@@ -1643,8 +1643,13 @@ impl<'a> Generator<'a> {
         // what the transition waits for, and what that carries
         let payload = match model.get(usage, "triggerAction") {
             Some(Value::RefList(triggers)) => triggers.first().and_then(|&accept| {
-                let param = model.name(accept)?;
-                let ty = model.type_of(accept)?;
+                // `TriggerAction : AcceptActionUsage = AcceptParameterPart`
+                // -- what the transition waits for is the accept
+                // action's first parameter, and the action is written
+                // with no name of its own
+                let waits = sysml_model::payload_parameter(model, accept)?;
+                let param = model.name(waits)?;
+                let ty = model.type_of(waits)?;
                 let rust = if let Some(bound) = binding(model, ty) {
                     bound.get(binding::PATH)?.clone()
                 } else if self.written_as_a_type(ty) {

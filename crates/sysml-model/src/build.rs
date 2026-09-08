@@ -179,6 +179,14 @@ fn build_node(
     }
     if let Some(role) = member_role(node).or_else(|| enumerated.then_some(Role::Variant)) {
         model.set_member_role(id, role);
+        // A membership that is a parameter membership fixes the
+        // direction of what it owns, and the notation writes it
+        // nowhere: `subject s;` is what a requirement takes in.
+        if let Some(direction) = crate::parameter_direction(role) {
+            if kind.feature("direction").is_some() {
+                model.set(id, "direction", Value::EnumLit(direction));
+            }
+        }
     }
     if let Some(direction) = declared_direction(node) {
         if kind.feature("direction").is_some() {
@@ -259,10 +267,16 @@ fn build_node(
     // diamond -- filled for a composite feature membership, hollow for
     // a noncomposite one.
     if kind.feature("isComposite").is_some() {
+        // `validateUsageIsReferential` -- "a Usage that is directed, an
+        // end feature or has no featuringTypes must be referential".
+        // `is_composite` reads the direction the source wrote; a
+        // `subject` or a `return` is directed by the membership that
+        // owns it instead, and is a parameter for the same reason.
+        let directed = model.get(id, "direction").is_some();
         model.set(
             id,
             "isComposite",
-            Value::Bool(is_composite(node, kind, owner, model)),
+            Value::Bool(!directed && is_composite(node, kind, owner, model)),
         );
     }
     // `port def P` defines two things. The standard has a
@@ -357,8 +371,46 @@ fn build_node(
         }
     }
     if kind == ElementKind::TransitionUsage {
-        if let Some(trigger) = reify_accept_payload(model, node, id) {
+        // `TriggerActionMember : TransitionFeatureMembership = ... kind
+        // = 'trigger' ownedRelatedElement += TriggerAction` and
+        // `TriggerAction : AcceptActionUsage = AcceptParameterPart`:
+        // what a transition waits for is an accept action of its own,
+        // and the payload written after the keyword is that action's
+        // first parameter rather than the trigger itself.
+        //
+        // `validateTransitionUsageParameters` -- "a TransitionUsage must
+        // have at least one owned input parameter and, if it has a
+        // triggerAction, it must have at least two". The first is the
+        // occurrence it transitions from; the second is what the
+        // trigger accepted, which `checkTransitionUsagePayloadSpecialization`
+        // has subset the trigger's own payload parameter. The library
+        // names that one from the transition -- `bind payload =
+        // aState.aTransition.apayload;` -- and the standard says how:
+        // its naming feature is the trigger's payload parameter.
+        let occurrence = model.create(ElementKind::ReferenceUsage);
+        model.add_owned(id, occurrence);
+        model.set(occurrence, "direction", Value::EnumLit("in"));
+        if has_token(node, ACCEPT_KW) {
+            let accepted = model.create(ElementKind::ReferenceUsage);
+            model.add_owned(id, accepted);
+            model.set(accepted, "direction", Value::EnumLit("in"));
+            let trigger = model.create(ElementKind::AcceptActionUsage);
+            model.add_owned(id, trigger);
+            let payload = reify_accept_payload(model, node, trigger);
+            reify_action_arguments(
+                model,
+                node,
+                trigger,
+                ElementKind::AcceptActionUsage,
+                payload,
+            );
             model.set(id, "triggerAction", Value::RefList(vec![trigger]));
+            if let Some(payload) = payload {
+                let subsetting = model.create(ElementKind::Subsetting);
+                model.add_owned(accepted, subsetting);
+                model.set(subsetting, "subsettingFeature", Value::Ref(accepted));
+                model.set(subsetting, "subsettedFeature", Value::Ref(payload));
+            }
         }
         reify_guard(model, node, id);
         reify_effect(model, node, id);
@@ -369,10 +421,10 @@ fn build_node(
         let succession = model.create(ElementKind::SuccessionAsUsage);
         model.add_owned(id, succession);
     }
-    if kind == ElementKind::AcceptActionUsage {
-        reify_accept_payload(model, node, id);
-    }
-    reify_action_arguments(model, node, id, kind);
+    let payload = (kind == ElementKind::AcceptActionUsage)
+        .then(|| reify_accept_payload(model, node, id))
+        .flatten();
+    reify_action_arguments(model, node, id, kind, payload);
     // `IfNode : IfActionUsage = ... 'if' ownedRelationship +=
     // ExpressionParameterMember ...` and the two loops the same way: the
     // condition is what the node is about, and it was being read and
@@ -761,6 +813,11 @@ fn represent_textually(model: &mut Model, element: ElementId, text: &str) {
 /// for it. Its name is what the rest of the model refers to --
 /// `subscribing.sub`, `trigger1.ignitionCmd` -- and for a transition
 /// `sysml-semantics` attaches the typing written after it.
+///
+/// `PayloadParameter : ReferenceUsage` and
+/// `deriveAcceptActionUsagePayloadParameter` -- "the payloadParameter of
+/// an AcceptActionUsage is its first parameter" -- so what waits is a
+/// parameter of the node and not an action of its own.
 fn reify_accept_payload(
     model: &mut Model,
     node: &SyntaxNode,
@@ -786,7 +843,7 @@ fn reify_accept_payload(
     }
     // no `accept` clause, nothing to stand for
     let name = name?;
-    let payload = model.create(ElementKind::AcceptActionUsage);
+    let payload = model.create(ElementKind::ReferenceUsage);
     model.add_owned(owner, payload);
     model.set(payload, "declaredName", Value::String(name));
     Some(payload)
@@ -811,6 +868,7 @@ fn reify_action_arguments(
     node: &SyntaxNode,
     action: ElementId,
     kind: ElementKind,
+    payload: Option<ElementId>,
 ) {
     // in the order the standard declares the parameters, against the
     // keyword the notation writes each after. The payload is the first
@@ -821,9 +879,17 @@ fn reify_action_arguments(
         ElementKind::AcceptActionUsage => &[None, Some(SyntaxKind::VIA_KW)],
         _ => return,
     };
-    for slot in slots {
-        let parameter = model.create(ElementKind::ReferenceUsage);
-        model.add_owned(action, parameter);
+    for (at, slot) in slots.iter().enumerate() {
+        // the payload the `accept` clause named is that first parameter
+        // rather than one standing beside it
+        let parameter = match (at, payload) {
+            (0, Some(payload)) => payload,
+            _ => {
+                let made = model.create(ElementKind::ReferenceUsage);
+                model.add_owned(action, made);
+                made
+            }
+        };
         model.set(parameter, "direction", Value::EnumLit("in"));
         let Some(written) = slot.and_then(|keyword| operand_after(node, keyword)) else {
             continue;
@@ -1008,6 +1074,10 @@ fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
     model.add_owned(transition, effect);
     model.set(effect, "declaredName", Value::String("effect".to_string()));
     model.set(transition, "effectAction", Value::RefList(vec![effect]));
+    // `do send 1 to p` is a send action like any other, and
+    // `validateSendActionParameters` counts the three parameters it is
+    // handed whether the statement wrote a clause for each or not.
+    reify_action_arguments(model, node, effect, kind, None);
 }
 
 /// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
@@ -2342,6 +2412,84 @@ mod tests {
         );
     }
 
+    /// What a behaviour is handed, which the notation writes nowhere.
+    ///
+    /// `AcceptNode : AcceptActionUsage = ... 'accept'
+    /// PayloadParameterMember ( 'via' NodeParameterMember )?` and
+    /// `PayloadParameter : ReferenceUsage`, so what an accept node waits
+    /// for is its first parameter and not an action of its own.
+    /// `TriggerAction : AcceptActionUsage` gives a transition an accept
+    /// action to wait with, and the transition keeps two parameters of
+    /// its own: the occurrence it transitions from, and what the trigger
+    /// accepted -- which subsets the trigger's payload, and is how `bind
+    /// payload = aState.aTransition.apayload;` names it in the library.
+    ///
+    /// `validateAcceptActionUsageParameters`,
+    /// `validateSendActionParameters` and
+    /// `validateTransitionUsageParameters` count all of these, and none
+    /// of them was there.
+    #[test]
+    fn a_behaviour_keeps_the_parameters_it_is_handed() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "state def S {\n\
+             \tstate off;\n\
+             \taccept go via q do send m via p then off;\n\
+             }\n",
+        ));
+        let transition = model
+            .owned(roots[0])
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == ElementKind::TransitionUsage)
+            .expect("the accept before the then is a transition");
+        let directed = |of: ElementId| -> Vec<(ElementKind, Option<&str>)> {
+            model
+                .owned(of)
+                .iter()
+                .copied()
+                .filter(|&it| model.get(it, "direction").is_some())
+                .map(|it| (model.kind(it), model.name(it)))
+                .collect()
+        };
+        // the occurrence it transitions from, and what the trigger took
+        assert_eq!(
+            directed(transition),
+            [
+                (ElementKind::ReferenceUsage, None),
+                (ElementKind::ReferenceUsage, None),
+            ]
+        );
+        let trigger = reference_list(&model, transition, "triggerAction")[0];
+        // the payload it waits for, and the port it waits on
+        assert_eq!(
+            directed(trigger),
+            [
+                (ElementKind::ReferenceUsage, Some("go")),
+                (ElementKind::ReferenceUsage, None),
+            ]
+        );
+        // what the transition accepted subsets what the trigger did
+        let accepted = model
+            .owned(transition)
+            .iter()
+            .copied()
+            .filter(|&it| model.get(it, "direction").is_some())
+            .nth(1)
+            .expect("the second parameter");
+        let subsets = model.owned(accepted)[0];
+        assert_eq!(model.kind(subsets), ElementKind::Subsetting);
+        assert_eq!(
+            model
+                .get(subsets, "subsettedFeature")
+                .and_then(Value::as_id)
+                .and_then(|it| model.name(it)),
+            Some("go")
+        );
+        // and the effect is a send action, which is handed three
+        let effect = reference_list(&model, transition, "effectAction")[0];
+        assert_eq!(directed(effect).len(), 3);
+    }
+
     /// `then event x;` declares the occurrence the flow runs into.
     ///
     /// A sequence writes `event producer.publish_request[1]; then event
@@ -2836,8 +2984,12 @@ mod tests {
             .copied()
             .find(|&id| model.kind(id) == ElementKind::TransitionUsage)
             .unwrap();
-        let guard = model.owned(transition)[0];
-        assert_eq!(model.kind(guard), ElementKind::Expression);
+        let guard = model
+            .owned(transition)
+            .iter()
+            .copied()
+            .find(|&id| model.kind(id) == ElementKind::Expression)
+            .expect("the guard is kept");
 
         let written = model.owned(guard)[0];
         assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
@@ -2996,8 +3148,16 @@ mod tests {
         ));
         let transition = model.owned(roots[0])[2];
         assert_eq!(model.kind(transition), ElementKind::TransitionUsage);
+        // `TriggerAction : AcceptActionUsage = AcceptParameterPart` --
+        // the trigger is an accept action written with no name, and what
+        // it waits for is its first parameter
         let trigger = reference_list(&model, transition, "triggerAction")[0];
-        assert_eq!(model.name(trigger), Some("go"));
+        assert_eq!(model.kind(trigger), ElementKind::AcceptActionUsage);
+        assert_eq!(model.name(trigger), None);
+        assert_eq!(
+            crate::payload_parameter(&model, trigger).and_then(|it| model.name(it)),
+            Some("go")
+        );
         let guard = reference_list(&model, transition, "guardExpression")[0];
         let written = model.owned(guard)[0];
         assert_eq!(

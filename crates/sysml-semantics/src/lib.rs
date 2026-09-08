@@ -2119,7 +2119,24 @@ impl Workspace {
     /// reference-subsetting) target's last segment. An unnamed `return`
     /// parameter is implicitly named `result` (KerML function semantics).
     fn effective_name(&self, elem: ElementId) -> Option<String> {
-        let node = self.source.get(&elem)?;
+        let Some(node) = self.source.get(&elem) else {
+            // A parameter the standard implies has no syntax to read.
+            // `ReferenceUsage::namingFeature` -- "if this ReferenceUsage
+            // is the payload parameter of a TransitionUsage, then its
+            // naming Feature is the payloadParameter of the
+            // triggerAction of that TransitionUsage" -- and what it
+            // subsets is that parameter, which is how `bind payload =
+            // aState.aTransition.apayload;` names it from the
+            // transition.
+            return self
+                .model
+                .owned(elem)
+                .iter()
+                .find(|&&it| self.model.kind(it) == ElementKind::Subsetting)
+                .and_then(|&it| self.model.subsetted_feature(it))
+                .and_then(|named| self.model.name(named))
+                .map(String::from);
+        };
         if node.kind() != SyntaxKind::USAGE {
             return None;
         }
@@ -3513,15 +3530,16 @@ impl Workspace {
                 .kind(transition)
                 .is_a(ElementKind::AcceptActionUsage) =>
             {
-                self.model
-                    .owned(transition)
-                    .iter()
-                    .copied()
-                    .find(|&child| self.model.kind(child) == ElementKind::AcceptActionUsage)
+                Some(transition)
             }
             _ => None,
         };
-        let Some(trigger) = declared else {
+        // `deriveAcceptActionUsagePayloadParameter` -- "the
+        // payloadParameter of an AcceptActionUsage is its first
+        // parameter", and the type written after the payload's name
+        // belongs to it rather than to the node that waits for it.
+        let Some(trigger) = declared.and_then(|it| sysml_model::payload_parameter(&self.model, it))
+        else {
             return;
         };
         let file = self.elem_file.get(&transition).copied().unwrap_or(0);
