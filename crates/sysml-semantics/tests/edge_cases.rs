@@ -2325,6 +2325,7 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
          \tfeature b;\n\
          \tfeature c;\n\
          \tconnector ps : P (a, b, c);\n\
+         \tconnector counted : P ([1] a, [0..1] b, [1] c);\n\
          \tclassifier P;\n\
          }\n",
     );
@@ -2339,6 +2340,24 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
     assert_eq!(
         ws.model()
             .get(connector, "relatedFeature")
+            .and_then(sysml_model::Value::as_ids)
+            .unwrap_or_default()
+            .iter()
+            .map(|&it| ws.model().name(it))
+            .collect::<Vec<_>>(),
+        [Some("a"), Some("b"), Some("c")]
+    );
+    // and each end may count what it relates in front of its name,
+    // which the parser reads as a declaration of its own
+    let counted = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .find(|&id| ws.model().name(id) == Some("counted"))
+        .expect("the connector is declared");
+    assert_eq!(
+        ws.model()
+            .get(counted, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .iter()

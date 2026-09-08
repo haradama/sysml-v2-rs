@@ -3499,8 +3499,16 @@ impl Workspace {
         // `EndFeatureMembership` is how the standard owns one, and
         // saying so is also what tells such a feature from a member the
         // source wrote as a reference.
-        let end = self.reified(connector, ElementKind::Feature, &[]);
-        self.try_set(end, "isEnd", Value::Bool(true));
+        // An end, and only an end: a connector may own a feature the
+        // source wrote -- `connector ps : P ([1] myCart, ...)` counts
+        // what each end relates in front of its name -- and taking one
+        // of those for an end reified here would give it a second
+        // multiplicity and the connector a third thing to relate.
+        let end = self.reified(
+            connector,
+            ElementKind::Feature,
+            &[("isEnd", Value::Bool(true))],
+        );
         self.counts_one(end);
         match chain.as_slice() {
             // One name is not a chain: the standard gives a feature
@@ -3934,6 +3942,22 @@ struct Target {
     at: Vec<TextRange>,
     /// the segment depths a chained step ends at, in order
     chain: Vec<usize>,
+}
+
+/// Whether a member of a connector's parenthesised list is one of the
+/// ends it relates.
+///
+/// `connect ( causeA, causeB )` writes each as a plain name;
+/// `connector ps : P ([1] myCart, [0..1] products)` counts what each
+/// relates in front of it, which the parser reads as a declaration. An
+/// end that says what it refers to with `::>` is the declaration
+/// itself, and is read where the connector's members are.
+fn listed_end(child: &SyntaxNode) -> bool {
+    matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
+        || child.kind() == SyntaxKind::USAGE
+            && !child
+                .children()
+                .any(|it| it.kind() == SyntaxKind::REFERENCES)
 }
 
 /// Whether the name after `connector` is the end it runs from.
@@ -4404,9 +4428,15 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
                         .children()
                         .filter(|c| is_reference(c.kind()))
                         .collect(),
+                    // `connect ( causeA, causeB, effectC, effectD )`
+                    // relates the whole list, and each of them may
+                    // count what it relates in front of its name
+                    SyntaxKind::PAREN_EXPR | SyntaxKind::PARAM_LIST => {
+                        child.children().filter(listed_end).collect()
+                    }
                     _ => Vec::new(),
                 })
-                .collect()
+                .collect();
         }
         // `then message m of T from a to b;` is the flow and the
         // succession into it, and each has ends of its own: the flow
@@ -4557,7 +4587,7 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
                     // ConnectorEndMember ( ',' ConnectorEndMember )*
                     // ')'` -- so a connector's parentheses hold its ends
                     // wherever they stand.
-                    out.extend(child.children().filter(|c| is_reference(c.kind())));
+                    out.extend(child.children().filter(listed_end));
                 }
                 after_keyword = false;
             }
