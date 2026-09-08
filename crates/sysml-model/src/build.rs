@@ -1082,6 +1082,14 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
                 Some(ElementKind::WhileLoopActionUsage)
             }
             SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
+            // `then event server.publish_request[1];` declares the
+            // occurrence the flow runs into, and `then perform a;` and
+            // `then include u;` the same. Read as the succession alone,
+            // the step the source wrote is in the model nowhere and the
+            // succession runs into nothing.
+            SyntaxKind::EVENT_KW => Some(ElementKind::EventOccurrenceUsage),
+            SyntaxKind::PERFORM_KW => Some(ElementKind::PerformActionUsage),
+            SyntaxKind::INCLUDE_KW => Some(ElementKind::IncludeUseCaseUsage),
             _ => None,
         }) {
             return Some(declared);
@@ -2330,6 +2338,43 @@ mod tests {
                         ElementKind::ActionUsage
                     ]
                 ),
+            ]
+        );
+    }
+
+    /// `then event x;` declares the occurrence the flow runs into.
+    ///
+    /// A sequence writes `event producer.publish_request[1]; then event
+    /// server.publish_request[1];`, and the keyword after the `then` is
+    /// as much a declaration as the `send` of a `then send ...`. Read as
+    /// the succession alone, the step the source wrote was in the model
+    /// nowhere and the succession ran into nothing -- thirty-five of the
+    /// corpus related fewer than the two things a concrete connector
+    /// relates.
+    #[test]
+    fn a_then_before_a_declaring_keyword_still_declares() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def P {\n\
+             \tpart producer;\n\
+             \tflow f {\n\
+             \t\tevent producer.a[1];\n\
+             \t\tthen event producer.b[1];\n\
+             \t}\n\
+             }\n",
+        ));
+        let flow = model.owned(roots[0])[1];
+        assert_eq!(
+            model
+                .owned(flow)
+                .iter()
+                .map(|&it| model.kind(it))
+                .collect::<Vec<_>>(),
+            [
+                ElementKind::EventOccurrenceUsage,
+                // the succession the `then` writes stands ahead of what
+                // it declares, where the step above it is
+                ElementKind::SuccessionAsUsage,
+                ElementKind::EventOccurrenceUsage,
             ]
         );
     }
