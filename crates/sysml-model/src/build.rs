@@ -1053,7 +1053,11 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
 fn keep_condition(model: &mut Model, id: ElementId, asked: &str) {
     let condition = model.create(ElementKind::Expression);
     model.add_owned(id, condition);
-    model.set_member_role(condition, Role::Result);
+    // `ExpressionParameterMember : ParameterMembership` -- what the
+    // node asks is handed to it as a parameter, not held as a result.
+    // A `ResultExpressionMembership` is owned by a function or an
+    // expression, which a loop node is neither, and
+    // `validateResultExpressionMembershipOwningType` says so.
     model.set(condition, "direction", Value::EnumLit("in"));
     represent_textually(model, condition, asked);
 }
@@ -1715,6 +1719,17 @@ fn usage_kind(
             // individual, and it says so before it says `part`.
             SNAPSHOT_KW | TIMESLICE_KW | INDIVIDUAL_KW if kws.is_empty() => Some("OccurrenceUsage"),
             OBJECTIVE_KW => Some("RequirementUsage"),
+            // `RequirementConstraintUsage : ConstraintUsage`,
+            // `FramedConcernUsage : ConcernUsage` and
+            // `RequirementVerificationUsage : RequirementUsage` -- each
+            // may be written as a bare reference to what it names, and
+            // read as one it arrived as the plain reference a usage
+            // with no keyword would. A reference is not composite, and
+            // `validateRequirementConstraintMembershipIsComposite` says
+            // what a requirement frames or assumes must be.
+            ASSUME_KW | REQUIRE_KW => Some("ConstraintUsage"),
+            FRAME_KW => Some("ConcernUsage"),
+            VERIFY_KW => Some("RequirementUsage"),
             _ => None,
         };
         if let Some(name) = candidate {
@@ -2705,7 +2720,7 @@ mod tests {
             let condition = model
                 .owned(of)
                 .iter()
-                .find(|&&it| model.member_role(it) == Some(Role::Result))?;
+                .find(|&&it| model.kind(it) == ElementKind::Expression)?;
             let written = model.owned(*condition)[0];
             model
                 .get(written, "body")
@@ -3417,7 +3432,7 @@ mod tests {
         let asked = model
             .owned(loop_node)
             .iter()
-            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .find(|&&id| model.kind(id) == ElementKind::Expression)
             .copied()
             .expect("the loop says what it iterates over");
         let written = model.owned(asked)[0];
@@ -3441,7 +3456,7 @@ mod tests {
         let asked = model
             .owned(branch)
             .iter()
-            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .find(|&&id| model.kind(id) == ElementKind::Expression)
             .copied()
             .expect("the branch says what it asks");
         let written = model.owned(asked)[0];
@@ -3470,7 +3485,7 @@ mod tests {
         let asked = model
             .owned(repeats)
             .iter()
-            .find(|&&id| model.member_role(id) == Some(Role::Result))
+            .find(|&&id| model.kind(id) == ElementKind::Expression)
             .copied()
             .expect("the loop says what ends it");
         let written = model.owned(asked)[0];

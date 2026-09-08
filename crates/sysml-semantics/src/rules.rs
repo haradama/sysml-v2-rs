@@ -117,13 +117,16 @@ const TYPED_BY: [&str; 5] = [
 /// `verifiedRequirement` -- name something the membership does not own,
 /// and are left alone.
 /// `ParameterMembership::ownedMemberParameter` is left out. Answered,
-/// it reaches three constraints about what an expression comes to --
-/// the result of a feature reference, the type of a multiplicity bound
-/// -- and this model keeps an expression as the text it was written as
-/// rather than as the parameters the specification counts. Read as the
-/// member, `result` is a definite nothing rather than an unanswered
-/// question, and twenty-eight hundred of a sound corpus are reported as
-/// violations.
+/// it reaches four constraints -- three about what an expression comes
+/// to, the result of a feature reference and the type of a multiplicity
+/// bound among them -- and this model keeps an expression as the text
+/// it was written as rather than as the parameters the specification
+/// counts. Read as the member, `result` is a definite nothing rather
+/// than an unanswered question, and 2847 of a sound corpus are reported
+/// as violations: 1704 of `validateFeatureReferenceExpressionResult`,
+/// 1125 of `validateMultiplicityRangeBoundResultTypes` and 18 of
+/// `validateElementFilterMembershipConditionIsBoolean`. The fourth,
+/// `validateParameterMembershipParameterDirection`, holds.
 const OWNED_MEMBER: [&str; 13] = [
     "action",
     "condition",
@@ -493,12 +496,42 @@ impl Workspace {
         // in the order the model holds them, so a report reads down the
         // file rather than in the order the walk came upon them
         under.sort_unstable();
-        let mut by_kind: HashMap<ElementKind, Vec<ElementId>> = HashMap::new();
+        // Each paired with the element a violation of it names: a
+        // membership is not an element of this model, so what is
+        // reported is the member it holds, which is what the source
+        // wrote and what a reader would go and look at.
+        let mut by_kind: HashMap<ElementKind, Vec<(ElementId, Val)>> = HashMap::new();
         for elem in under {
             by_kind
                 .entry(self.model().kind(elem))
                 .or_default()
-                .push(elem);
+                .push((elem, Val::Elem(elem)));
+            // Every member of a namespace is held under a membership,
+            // and this model keeps the containment the membership
+            // stands for rather than the membership itself. Twenty-two
+            // constraints are about one -- what a `SubjectMembership`
+            // may own, which way a `ParameterMembership` passes it --
+            // and asked only of elements they were asked of nothing.
+            // Put back together, they are asked of what the model does
+            // hold, the way an interchange writer puts them back.
+            // A relationship is owned outright rather than through a
+            // membership, and the root is owned by nothing.
+            let held = self
+                .model()
+                .owner(elem)
+                .filter(|_| !is_bare_relationship(self.model().kind(elem)));
+            if let Some(owner) = held {
+                by_kind
+                    .entry(sysml_model::membership_kind(self.model(), elem))
+                    .or_default()
+                    .push((
+                        elem,
+                        Val::Membership {
+                            owner,
+                            member: elem,
+                        },
+                    ));
+            }
         }
 
         // Which metaclasses this model builds at all. A `selectByKind`
@@ -515,15 +548,15 @@ impl Workspace {
                     .push((rule.name, refused.clone().expect("refused, or it parsed")));
                 continue;
             };
-            let about: Vec<ElementId> = by_kind
+            let about: Vec<(ElementId, Val)> = by_kind
                 .iter()
                 .filter(|(kind, _)| kind.is_a(rule.metaclass))
-                .flat_map(|(_, them)| them.iter().copied())
+                .flat_map(|(_, them)| them.iter().cloned())
                 .collect();
             let mut asked = false;
             let mut unknown = None;
-            for elem in about {
-                match self.holds(expr, elem, &present) {
+            for (elem, it) in about {
+                match self.holds(expr, &it, &present) {
                     Ok(true) => asked = true,
                     Ok(false) => {
                         asked = true;
@@ -554,13 +587,13 @@ impl Workspace {
     fn holds(
         &mut self,
         expr: &Expr,
-        elem: ElementId,
+        about: &Val,
         present: &HashSet<ElementKind>,
     ) -> Result<bool, String> {
         let mut scope = Scope {
             ws: self,
             bound: HashMap::new(),
-            self_: elem,
+            self_: about.clone(),
             implicit: None,
             depth: 0,
             present,
@@ -626,7 +659,7 @@ struct Scope<'a> {
     ws: &'a mut Workspace,
     /// `let` and lambda variables.
     bound: HashMap<String, Val>,
-    self_: ElementId,
+    self_: Val,
     /// What an unqualified name is read of where a collection operation
     /// left its variable unwritten. `self` is not taken over by one --
     /// it still means the element the constraint is being asked of --
@@ -708,9 +741,9 @@ impl Scope<'_> {
             return value.clone();
         }
         if name == "self" {
-            return Val::Elem(self.self_);
+            return self.self_.clone();
         }
-        let target = self.implicit.clone().unwrap_or(Val::Elem(self.self_));
+        let target = self.implicit.clone().unwrap_or_else(|| self.self_.clone());
         self.navigate(&target, name)
     }
 
@@ -824,6 +857,32 @@ impl Scope<'_> {
             | "owningNamespace"
             | "owner"
             | "owningType" => Val::Elem(owner),
+            // `RequirementKind : RequirementConstraintMembership =
+            // 'assume' { kind = 'assumption' } | 'require' { kind =
+            // 'requirement' }`, and a `verify` and a `frame` are
+            // requirements too. A transition's is which of its three
+            // parts the member is, which the model works out from the
+            // property the transition holds it under.
+            "kind" => {
+                let model = self.ws.model();
+                match sysml_model::membership_kind(model, member) {
+                    ElementKind::TransitionFeatureMembership => Val::Str(
+                        sysml_model::transition_role(model, member)
+                            .expect("it is one of the three because the transition holds it")
+                            .to_string(),
+                    ),
+                    kind if kind.is_a(ElementKind::RequirementConstraintMembership) => {
+                        match model.member_role(member) {
+                            Some(Role::Assume) => Val::Str("assumption".to_string()),
+                            _ => Val::Str("requirement".to_string()),
+                        }
+                    }
+                    kind => Val::Unknown(format!(
+                        "`kind` of a `{}`, which the notation writes nowhere",
+                        kind.name()
+                    )),
+                }
+            }
             "memberName" => match self.ws.model().name(member) {
                 Some(named) => Val::Str(named.to_string()),
                 None => Val::Null,
@@ -1435,7 +1494,7 @@ impl Scope<'_> {
         let mut scope = Scope {
             ws: self.ws,
             bound: HashMap::new(),
-            self_: elem,
+            self_: Val::Elem(elem),
             implicit: None,
             depth: self.depth + 1,
             present: self.present,
@@ -1453,7 +1512,7 @@ impl Scope<'_> {
     ) -> Val {
         let target = match target {
             Some(expr) => self.eval(expr),
-            None => self.implicit.clone().unwrap_or(Val::Elem(self.self_)),
+            None => self.implicit.clone().unwrap_or_else(|| self.self_.clone()),
         };
         // A name read from the root namespace does not depend on where
         // it is read from, and the metamodel writes `resolveGlobal` of
@@ -1743,18 +1802,24 @@ impl Scope<'_> {
     /// An operation on one thing rather than on a collection of them.
     fn operation(&mut self, target: &Val, name: &str, args: &[Expr]) -> Val {
         match name {
-            // `oclIsType` is how the specification spells the exact-type
-            // question OCL calls `oclIsTypeOf`
+            // `oclIsType` is the metamodel's own spelling, used in three
+            // constraints and nowhere defined; `oclIsTypeOf`, the exact
+            // question, it never writes at all. What it means is the
+            // kind question: `validateObjectiveMembershipOwningType`
+            // asks that the owning type "be a CaseDefinition or
+            // CaseUsage", and every objective in the corpus is owned by
+            // an `AnalysisCaseDefinition`, a `UseCaseDefinition` or a
+            // `VerificationCaseDefinition` -- twenty-nine of them, none
+            // of which is exactly a `CaseDefinition`.
             "oclIsKindOf" | "oclIsTypeOf" | "oclIsType" => {
                 let (Some(kind), Some(actual)) =
                     (args.first().and_then(metaclass_named), self.kind_of(target))
                 else {
                     return Val::Unknown(format!("`{name}` of a kind this does not know"));
                 };
-                Val::Bool(if name == "oclIsKindOf" {
-                    actual.is_a(kind)
-                } else {
-                    actual == kind
+                Val::Bool(match name {
+                    "oclIsTypeOf" => actual == kind,
+                    _ => actual.is_a(kind),
                 })
             }
             // the metamodel casts to read a property, and reading a
@@ -1898,7 +1963,7 @@ impl Scope<'_> {
         let mut scope = Scope {
             ws: self.ws,
             bound,
-            self_: *elem,
+            self_: Val::Elem(*elem),
             implicit: None,
             depth: self.depth + 1,
             present: self.present,
@@ -2255,7 +2320,7 @@ impl Workspace {
         let expr = ocl::parse(ocl).expect("the test writes OCL this reads");
         let present: HashSet<ElementKind> =
             self.model().ids().map(|it| self.model().kind(it)).collect();
-        self.holds(&expr, elem, &present).ok()
+        self.holds(&expr, &Val::Elem(elem), &present).ok()
     }
 }
 
@@ -2284,6 +2349,86 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the element is declared");
         (ws, elem)
+    }
+
+    /// Twenty-two constraints are about a membership, and this model
+    /// keeps the containment one stands for rather than the membership
+    /// itself. Put back together, they are asked of what the model does
+    /// hold -- and what one of them reports is the member, which is
+    /// what the source wrote.
+    #[test]
+    fn a_constraint_about_a_membership_is_asked_of_what_stands_for_it() {
+        let mut ws = Workspace::new();
+        let file = ws.add_file(
+            "test.sysml",
+            "use case def U {\n\tobjective inside;\n}\n\
+             part def P {\n\tobjective outside;\n}\n",
+        );
+        ws.resolve_all();
+        let checked = ws.check_rules(&[file]);
+
+        // asked, and answered both ways: a use case definition is a
+        // kind of case definition and may own an objective, and a part
+        // definition may not
+        assert!(
+            checked
+                .held
+                .contains(&"validateObjectiveMembershipOwningType"),
+            "{checked:?}"
+        );
+        let named: Vec<Option<&str>> = checked
+            .violations
+            .iter()
+            .filter(|it| it.rule == "validateObjectiveMembershipOwningType")
+            .map(|it| ws.model().name(it.element))
+            .collect();
+        assert_eq!(named, vec![Some("outside")], "the member is what is named");
+    }
+
+    /// Which part of a transition a member is, and which kind of
+    /// constraint a requirement holds it as: both are written as a
+    /// keyword rather than kept on anything, so the membership the
+    /// model stands for is where they are worked out.
+    #[test]
+    fn a_membership_says_which_kind_of_one_it_is() {
+        let mut ws = Workspace::new();
+        ws.add_file(
+            "test.sysml",
+            "state def S {\n\tattribute def E;\n\
+             \ttransition first a accept e : E if true do action f then b;\n\
+             \tstate a;\n\tstate b;\n\taction f;\n}\n",
+        );
+        ws.resolve_all();
+        let transition = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().kind(id) == ElementKind::TransitionUsage)
+            .expect("the transition is built");
+        assert_eq!(
+            ws.judge(
+                "ownedMembership->selectByKind(TransitionFeatureMembership)\
+                 ->exists(kind = TransitionFeatureKind::guard)",
+                transition
+            ),
+            Some(true)
+        );
+
+        let (mut ws, requirement) = about(
+            "requirement def R {\n\tassume constraint c;\n\trequire constraint d;\n}\n",
+            "R",
+        );
+        assert_eq!(
+            ws.judge(
+                "ownedMembership->selectByKind(RequirementConstraintMembership)\
+                 ->collect(kind)->asSet() = Set{'assumption', 'requirement'}",
+                requirement
+            ),
+            Some(true)
+        );
+        // and a membership the notation says nothing of the sort about
+        // says so rather than guessing
+        let (mut ws, part) = about("part def P {\n\tpart w;\n}\n", "P");
+        assert_eq!(ws.judge("ownedMembership->exists(kind = 'x')", part), None);
     }
 
     /// `FlowDefinition::flowEnd` is declared derived and derived
@@ -2658,10 +2803,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             [&["target"]; 5]
         );
-        // the exact-type question, which the specification spells
-        // `oclIsType` and OCL spells `oclIsTypeOf`
-        assert_eq!(ws.judge("oclIsType(PartDefinition)", car), Some(true));
-        assert_eq!(ws.judge("oclIsType(Definition)", car), Some(false));
+        // the exact question, which the specification never writes,
+        // beside the kind question it spells `oclIsType`
+        assert_eq!(ws.judge("oclIsTypeOf(PartDefinition)", car), Some(true));
+        assert_eq!(ws.judge("oclIsTypeOf(Definition)", car), Some(false));
+        assert_eq!(ws.judge("oclIsType(Definition)", car), Some(true));
         // an iterator reads one body, and a collection operation
         // written with more than one is not OCL this reads
         assert_eq!(ws.judge("Set{1}->exists(1 = 1, 2 = 2)", car), None);

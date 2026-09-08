@@ -1053,6 +1053,51 @@ fn imported_members_walk_the_imports() {
     assert_eq!(ws.import_of(imports[1]), Some(x));
 }
 
+/// `RequirementConstraintUsage : ConstraintUsage`, `FramedConcernUsage
+/// : ConcernUsage` and `RequirementVerificationUsage : RequirementUsage`
+/// -- each may be written as a bare reference to what it names, and
+/// read as one it arrived as the plain reference a usage with no
+/// keyword would. A reference is not composite, and
+/// `validateRequirementConstraintMembershipIsComposite` says what a
+/// requirement assumes, frames or verifies must be.
+#[test]
+fn what_a_requirement_assumes_or_verifies_is_not_a_bare_reference() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "package P {\n\
+         \tconstraint def C;\n\
+         \tconcern def N;\n\
+         \trequirement def R2;\n\
+         \trequirement def R {\n\
+         \t\tassume constraint c : C;\n\
+         \t\tframe concern n : N;\n\
+         \t\tverify requirement v : R2;\n\t}\n}\n",
+    );
+    ws.resolve_all();
+    let model = ws.model();
+    let kind_of = |want: &str| {
+        let id = model
+            .ids()
+            .find(|&id| model.name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"));
+        (model.kind(id), model.get(id, "isComposite").cloned())
+    };
+    let composite = Some(sysml_model::Value::Bool(true));
+    assert_eq!(
+        kind_of("c"),
+        (sysml_model::ElementKind::ConstraintUsage, composite.clone())
+    );
+    assert_eq!(
+        kind_of("n"),
+        (sysml_model::ElementKind::ConcernUsage, composite.clone())
+    );
+    assert_eq!(
+        kind_of("v"),
+        (sysml_model::ElementKind::RequirementUsage, composite)
+    );
+}
+
 /// What an end declares is read from the type that owns it, with what
 /// that type inherits: `assoc HappensWhile specializes HappensDuring {
 /// end feature thisOccurrence redefines shorterOccurrence ... }`
