@@ -1999,14 +1999,24 @@ fn declared_name(node: &SyntaxNode) -> Option<String> {
     Some(unquote(name.text()))
 }
 
-/// Whether the name after `connector` is the end it runs from.
+/// Whether the name after `connector` or `binding` is an end rather
+/// than a name of the element's own.
 ///
-/// The n-ary form writes its ends in parentheses and may be named
-/// without a `from`, so the `to` is what tells the two apart.
+/// Both write their declaration only in front of the keyword that
+/// introduces the first end -- `from` for a connector, `bind` or `of`
+/// for a binding -- so `connector eng to tanks.main1;` and `binding a =
+/// b;` name nothing. The n-ary connector form writes its ends in
+/// parentheses and may be named without a `from`, and a binding may
+/// write a declaration and no ends at all (`binding bi { ... }`), so
+/// the `to` and the `=` are what tell those apart.
 fn names_an_end(node: &SyntaxNode) -> bool {
     has_token(node, SyntaxKind::CONNECTOR_KW)
         && has_token(node, SyntaxKind::TO_KW)
         && !has_token(node, SyntaxKind::FROM_KW)
+        || has_token(node, SyntaxKind::BINDING_KW)
+            && !has_token(node, SyntaxKind::BIND_KW)
+            && !has_token(node, SyntaxKind::OF_KW)
+            && node.children().any(|it| it.kind() == SyntaxKind::VALUE)
 }
 
 fn declared_short_name(node: &SyntaxNode) -> Option<String> {

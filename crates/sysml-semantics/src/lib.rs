@@ -1109,9 +1109,12 @@ impl Workspace {
             self.resolve_action_arguments(id, &node, &mut stats);
             // `attribute pin : PinNumber = ledPinNumber;` -- the value is
             // an expression like any other, and the name in it is a
-            // reference like any other
+            // reference like any other. `binding a = b;` writes the same
+            // `=` and means something else by it: what follows is the
+            // second end, which the ends are read from instead.
             for clause in node
                 .children()
+                .filter(|_| !binds_an_end(&node))
                 .filter(|child| child.kind() == SyntaxKind::VALUE)
             {
                 for written in clause
@@ -3771,6 +3774,62 @@ fn names_an_end(node: &SyntaxNode) -> bool {
             .any(|it| it.kind() == wanted)
     };
     has(SyntaxKind::CONNECTOR_KW) && has(SyntaxKind::TO_KW) && !has(SyntaxKind::FROM_KW)
+        || has(SyntaxKind::BINDING_KW)
+            && !has(SyntaxKind::BIND_KW)
+            && !has(SyntaxKind::OF_KW)
+            && node.children().any(|it| it.kind() == SyntaxKind::VALUE)
+}
+
+/// Whether the `=` in a statement writes a connector end rather than a
+/// value.
+fn binds_an_end(node: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter_map(|it| it.into_token())
+        .any(|it| matches!(it.kind(), SyntaxKind::BINDING_KW | SyntaxKind::BIND_KW))
+}
+
+/// The two ends a `binding` binds.
+///
+/// SysML writes `binding [1] bind [0..*] base.edges = [0..*] be;` and
+/// KerML `binding ab of a = b;` or `binding a = b;`, and in every one of
+/// them a declaration stands only in front of the keyword that
+/// introduces the first end. So without a `bind` or an `of` the
+/// reference after `binding` is that end. The `=` takes the other,
+/// which the parser keeps inside the value clause where nothing follows
+/// it and beside the clause where a multiplicity does.
+fn binding_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    let is_end = |kind| {
+        matches!(
+            kind,
+            SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR | SyntaxKind::NAME | SyntaxKind::TYPE_REF
+        )
+    };
+    let mut out = Vec::new();
+    let mut taking = names_an_end(node);
+    for element in node.children_with_tokens() {
+        match element {
+            sysml_syntax::SyntaxElement::Token(token) => {
+                if matches!(token.kind(), SyntaxKind::BIND_KW | SyntaxKind::OF_KW) {
+                    taking = true;
+                }
+            }
+            sysml_syntax::SyntaxElement::Node(child) => match child.kind() {
+                // `bind [0..*] base.edges` counts the end before naming
+                // it, and the count is not what the keyword introduced
+                SyntaxKind::MULTIPLICITY => {}
+                SyntaxKind::VALUE => {
+                    out.extend(child.children().filter(|it| is_end(it.kind())));
+                    taking = true;
+                }
+                kind if taking && is_end(kind) => {
+                    out.push(child);
+                    taking = false;
+                }
+                _ => {}
+            },
+        }
+    }
+    out
 }
 
 /// Whether a declaration was written as a member of its owner rather
@@ -4188,6 +4247,15 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
         }
         // `transition t first a ... then b` writes a name of its own first
         SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
+        // a binding writes its two ends around an `=` rather than after
+        // a keyword each
+        _ if node
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .any(|it| it.kind() == SyntaxKind::BINDING_KW) =>
+        {
+            return binding_operands(node)
+        }
         // `connection c : L connect a to b;` and `flow f of T from a to b;`
         // declare a name and a type before the ends arrive, and
         // `succession a then b;` writes its ends around the keyword.

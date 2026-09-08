@@ -2144,6 +2144,72 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A binding binds the two ends written around its `=`.
+///
+/// SysML writes `binding [1] bind [0..*] base.edges = [0..*] be;` and
+/// KerML `binding ab of a = b;` or `binding a = b;`. A declaration
+/// stands only in front of the keyword that introduces the first end,
+/// so without a `bind` or an `of` the name after `binding` is that end
+/// -- and a binding that writes no `=` at all declares a name and
+/// nothing else. Eighty-eight of the library's bindings were binding
+/// nothing, and the `=` was being read a second time as a value, which
+/// wrote two edits over the one name on a rename.
+#[test]
+fn a_binding_binds_what_was_written_around_its_equals() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "class C {\n\
+         \tfeature a;\n\
+         \tfeature b;\n\
+         \tbinding a = b;\n\
+         \tbinding named of a = b;\n\
+         \tbinding [1] a = [1] b;\n\
+         \tbinding empty { doc /* nothing bound */ }\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let bound: Vec<(Option<String>, Vec<Option<&str>>)> = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().kind(it).is_a(ElementKind::BindingConnector))
+        .map(|it| {
+            (
+                ws.model().name(it).map(str::to_string),
+                ws.model()
+                    .get(it, "relatedFeature")
+                    .and_then(sysml_model::Value::as_ids)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|&r| ws.model().name(r))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        bound,
+        [
+            (None, vec![Some("a"), Some("b")]),
+            (Some("named".to_string()), vec![Some("a"), Some("b")]),
+            // the count before an end is not the end
+            (None, vec![Some("a"), Some("b")]),
+            // and one that binds nothing keeps the name it declared
+            (Some("empty".to_string()), vec![]),
+        ]
+    );
+    // the `=` is an end and not a value, so what follows it is recorded
+    // once -- recorded twice, a rename writes two edits over one name
+    let mut ranges: Vec<_> = ws.references().iter().map(|it| it.name_range).collect();
+    ranges.sort_by_key(|it| (usize::from(it.start()), usize::from(it.end())));
+    let written = ranges.len();
+    ranges.dedup();
+    assert_eq!(ranges.len(), written, "a name recorded twice");
+}
+
 /// A KerML connector relates what it was written between, and names
 /// itself only where it wrote a `from`.
 ///
