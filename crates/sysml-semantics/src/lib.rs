@@ -180,6 +180,17 @@ pub struct Workspace {
     /// handful over and over -- once per element it is checked of --
     /// and working one out is a scan of every name in the workspace.
     pub(crate) globals: HashMap<String, Option<ElementId>>,
+    /// While reading what a redefinition written on an end names.
+    ///
+    /// `assoc HappensWhile specializes HappensDuring { end feature
+    /// thisOccurrence redefines shorterOccurrence ... }` redefines the
+    /// end its supertype declares, so the association is searched with
+    /// what it inherits before anything its ends reach. What an end
+    /// *refers to* is a different question -- `end feature
+    /// transferSource references source` names the source of the
+    /// enclosing transfer and not the one the connector's own type
+    /// inherits -- which is why this is only set for a redefinition.
+    redefining: bool,
     /// Relationships by the element they name at the end their
     /// association owns -- the way `Feature::typing` is read. Built in
     /// one pass over the model for every such property at once, and
@@ -270,6 +281,7 @@ impl Clone for Workspace {
             // a speculative walk may write elements, and a name that
             // resolved to nothing before one is not settled
             globals: HashMap::new(),
+            redefining: false,
             reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
@@ -312,6 +324,7 @@ impl Workspace {
             elem_file: HashMap::new(),
             supertypes: HashMap::new(),
             globals: HashMap::new(),
+            redefining: false,
             reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
@@ -1161,6 +1174,10 @@ impl Workspace {
                         SyntaxKind::FEATURED_KW => self.resolve_inside(id, &t.segments),
                         _ => None,
                     };
+                    let redefining = std::mem::replace(
+                        &mut self.redefining,
+                        part_kind == SyntaxKind::REDEFINITION,
+                    );
                     let found = found.or_else(|| {
                         self.resolve_written(
                             id,
@@ -1168,6 +1185,7 @@ impl Workspace {
                             may_name_itself(part_kind, is_definition),
                         )
                     });
+                    self.redefining = redefining;
                     match found {
                         Some(target) => {
                             stats.resolved += 1;
@@ -1809,7 +1827,9 @@ impl Workspace {
         // members inherited through the container's typing come last (so a
         // connector usage's ends prefer its featuring scope over its type).
         if let Some(container) = self.end_context(elem) {
-            if let Some(hit) = self.lookup(container, name, Access::Internal, false, exclude) {
+            if let Some(hit) =
+                self.lookup(container, name, Access::Internal, self.redefining, exclude)
+            {
                 return Some(hit);
             }
             for end in self.model.owned(container).to_vec() {

@@ -221,11 +221,13 @@ const MISSPELLED: [(&str, &str); 6] = [
 /// point in the text where inserting an `endif` makes it parse: the
 /// grammar leaves one position, not a choice of them.
 ///
-/// That is why this is not the same as reading `implied` as `implies`
-/// in `validateFeatureEndNoDirection`, which
-/// `every_constraint_the_specification_states_parses_but_its_own_one_defect`
-/// refuses. Choosing an operator is choosing among readings; closing
-/// what was left open is not.
+/// `validateFeatureEndNoDirection` is written `isEnd implied direction
+/// = null`, where `implied` is no OCL operator at all. Choosing one
+/// would be choosing among readings, which is not what closing an open
+/// bracket is -- so it was left unread until something other than this
+/// parser said which. The pilot implementation says: `checkFeature`
+/// writes `if (f.isEnd && f.direction !== null) error(...)`, which is
+/// `implies` and nothing else.
 ///
 /// Nor is it the same as [`MISWRITTEN`] below, where the OCL parses and
 /// says something other than the constraint's own words.
@@ -238,7 +240,12 @@ const MISSPELLED: [(&str, &str); 6] = [
 /// `hasBounds(1, 1)` it goes on to call answer nothing and an
 /// `exists` over nothing is a definite `false`. Unreadable is the
 /// better answer there.
-const UNCLOSED: [(&str, &str, &str); 4] = [
+const UNCLOSED: [(&str, &str, &str); 5] = [
+    (
+        "validateFeatureEndNoDirection",
+        "isEnd implied",
+        "isEnd implies",
+    ),
     (
         "deriveFeatureCrossFeature",
         "chainingFeatures->at(2)",
@@ -309,15 +316,15 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// ControlNode two hold of every succession in it.
 ///
 /// `validateSubsettingFeaturingTypes` is `subsettingFeature.canAccess(
-/// subsettedFeature)`, and `Feature::canAccess` holds the subsetted
-/// feature to being featured within one of the featuring types the
-/// subsetting feature reaches. The Kernel Semantic Library refutes it:
-/// `assoc HappensWhile` has `end feature thisOccurrence redefines
-/// timeEnclosedOccurrences::shorterOccurrence`, and `shorterOccurrence`
-/// is featured by the feature `timeEnclosedOccurrences`, which the
-/// association does not specialize. Eleven hundred subsettings in the
-/// corpus are of that shape, and the pilot implementation implements
-/// neither `canAccess` nor this constraint.
+/// subsettedFeature)`, which comes down to `Type::isCompatibleWith`,
+/// and the metamodel states that one as `specializes(otherType)` and
+/// nothing more. Read that way it rejects twelve hundred subsettings of
+/// the corpus. The pilot implementation does run this constraint, and
+/// answers a wider question than the metamodel states: `TypeUtil.
+/// isCompatible` also holds two features compatible where neither owns
+/// features of its own, they redefine something in common, and the one
+/// is featured where the other is. What the corpus is written against
+/// is that wider question, which the specification does not state.
 ///
 /// `validateRedefinitionFeaturingTypes` says in words that the
 /// redefining feature "must have at least one featuringType that is not
@@ -326,20 +333,15 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `FeatureChains.kerml`, where `redefinition b.f redefines b.a;`
 /// redefines one feature of `B` by another: both are featured by `B`
 /// alone, so the sets are equal and there is no featuring type the one
-/// has and the other has not.
+/// has and the other has not. The pilot implementation reads it the
+/// same way -- `checkRedefinition` errors where the two sets are equal
+/// -- and the one guard it adds beside that, for a redefinition owning
+/// the feature it redefines, is not this.
 ///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
 /// cannot even parse are pinned in `ocl.rs` alongside.
 const MISWRITTEN: [(&str, &str); 6] = [
-    (
-        "validateDefinitionVariationSpecialization",
-        "the specification's own OCL reads `specific` where the constraint says `general`",
-    ),
-    (
-        "validateUsageVariationSpecialization",
-        "the specification's own OCL reads `specific` where the constraint says `general`",
-    ),
     (
         "validateRedefinitionFeaturingTypes",
         "the OCL asks for two sets of featuring types to differ where the constraint asks for \
@@ -348,8 +350,17 @@ const MISWRITTEN: [(&str, &str); 6] = [
     ),
     (
         "validateSubsettingFeaturingTypes",
-        "`canAccess` holds a subsetted feature to being featured within what the subsetting \
-         one reaches, and the Kernel Semantic Library's own association ends do not",
+        "`canAccess` comes down to `isCompatibleWith`, which the metamodel states as \
+         `specializes` and the pilot implementation answers more widely; read as stated it \
+         rejects twelve hundred subsettings of the corpus",
+    ),
+    (
+        "validateDefinitionVariationSpecialization",
+        "the specification's own OCL reads `specific` where the constraint says `general`",
+    ),
+    (
+        "validateUsageVariationSpecialization",
+        "the specification's own OCL reads `specific` where the constraint says `general`",
     ),
     (
         "validateMergeNodeIncomingSuccessions",
@@ -443,14 +454,17 @@ impl Workspace {
     pub fn check_rules(&mut self, files: &[usize]) -> Checked {
         let mut parsed: Vec<(&sysml_model::Rule, Option<Expr>, Option<String>)> = Vec::new();
         for rule in sysml_model::RULES {
-            if let Some(defect) = MISWRITTEN.iter().find(|(name, _)| *name == rule.name) {
-                parsed.push((rule, None, Some(defect.1.to_string())));
-                continue;
-            }
-            match ocl::parse(rule.ocl) {
-                Ok(expr) => parsed.push((rule, Some(expr), None)),
-                Err(why) => parsed.push((rule, None, Some(why))),
-            }
+            let defect = MISWRITTEN.iter().find(|(name, _)| *name == rule.name);
+            // Every constraint the specification states can be read
+            // once `closed` has repaired the one it writes with a word
+            // that is no operator, and
+            // `every_constraint_the_specification_states_parses_but_its_own_one_defect`
+            // holds it so. What is left unread is what is left unrun,
+            // which is what `MISWRITTEN` names.
+            let expr = defect.is_none().then(|| {
+                ocl::parse(&closed(rule.name, rule.ocl)).expect("every constraint can be read")
+            });
+            parsed.push((rule, expr, defect.map(|(_, why)| why.to_string())));
         }
         // Grouped by metaclass once. Asked element by element, every
         // rule walks the whole model to find the few it is about, and
@@ -2970,6 +2984,12 @@ mod tests {
                         .filter(|it| it.name == name)
                         .map(|it| it.ocl),
                 )
+                .chain(
+                    sysml_model::RULES
+                        .iter()
+                        .filter(|it| it.name == name)
+                        .map(|it| it.ocl),
+                )
                 .collect();
             // a name may be stated of several metaclasses, and only
             // the text carrying the slip is the one this closes
@@ -3486,11 +3506,11 @@ mod tests {
         let checked = ws.check_rules(&[file]);
 
         assert!(checked.violations.is_empty(), "{checked:?}");
-        // the two the specification's own text defeats are among them,
-        // carrying the parser's reason rather than a model's
+        // the ones the specification's own text defeats are among them,
+        // carrying what they are rather than a model's answer
         let named: Vec<&str> = checked.unevaluated.iter().map(|(name, _)| *name).collect();
         assert!(
-            named.contains(&"validateFeatureEndNoDirection"),
+            named.contains(&"validateUsageVariationSpecialization"),
             "{named:?}"
         );
         // and every reason says what could not be answered

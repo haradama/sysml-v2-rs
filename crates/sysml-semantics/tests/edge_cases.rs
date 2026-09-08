@@ -1053,6 +1053,48 @@ fn imported_members_walk_the_imports() {
     assert_eq!(ws.import_of(imports[1]), Some(x));
 }
 
+/// What an end declares is read from the type that owns it, with what
+/// that type inherits: `assoc HappensWhile specializes HappensDuring {
+/// end feature thisOccurrence redefines shorterOccurrence ... }`
+/// redefines the end its supertype declares. Read past that, the name
+/// is found again inside something one of the ends reaches, and the
+/// redefinition then relates two features no one type features.
+#[test]
+fn an_end_redefines_the_one_its_own_type_inherits() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.kerml",
+        "package K {\n\
+         \tclassifier Occ {\n\t\tfeature shorter : Occ;\n\t}\n\
+         \tassoc Outer {\n\
+         \t\tend feature shorter : Occ;\n\
+         \t\tend feature longer : Occ;\n\t}\n\
+         \tassoc Inner specializes Outer {\n\
+         \t\tend feature here : Occ redefines shorter;\n\
+         \t\tend feature there : Occ redefines longer;\n\t}\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let model = ws.model();
+    let here = model
+        .ids()
+        .find(|&id| ws.qualified_name_of(id) == "K::Inner::here")
+        .expect("`here` is declared");
+    let redefines: Vec<String> = model
+        .owned(here)
+        .iter()
+        .copied()
+        .filter(|&it| model.kind(it) == sysml_model::ElementKind::Redefinition)
+        .filter_map(|it| model.get(it, "redefinedFeature").and_then(|v| v.as_id()))
+        .map(|to| ws.qualified_name_of(to))
+        .collect();
+    assert_eq!(
+        redefines,
+        vec!["K::Outer::shorter".to_string()],
+        "the end the supertype declares, not the member of the end's own type"
+    );
+}
+
 /// `FlowEnd = ( OwnedReferenceSubsetting '.' )? FlowFeatureMember` --
 /// what a flow end relates and what flows through it are two things,
 /// and the notation writes them as one name. Built as one, three

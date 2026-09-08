@@ -619,8 +619,9 @@ mod tests {
     /// defect in the specification's own text rather than a gap in this
     /// subset: `validateFeatureEndNoDirection` is written `isEnd
     /// implied direction = null`, and `implied` is not an OCL operator.
-    /// What was meant is plain, but reading it as `implies` would be
-    /// this parser deciding what the specification says.
+    /// `rules::UNCLOSED` repairs it before it is run, on the pilot
+    /// implementation's word rather than this parser's; what is pinned
+    /// here is the specification's own text, which still says `implied`.
     ///
     /// It is named here so that a second one cannot appear unnoticed:
     /// what this test holds is that the subset reads everything else.
