@@ -102,13 +102,6 @@ pub struct Finding {
     pub what: String,
 }
 
-/// Which side of a succession an unwritten end is on.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Beside {
-    Before,
-    After,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveStats {
     pub resolved: usize,
@@ -1025,22 +1018,7 @@ impl Workspace {
                 && self.model.kind(id).is_a(ElementKind::Membership)
             {
                 if let Some(operand) = operand_after(&node, SyntaxKind::FIRST_KW) {
-                    let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                    let segments = operand_segments(&operand);
-                    match self.resolve_written(id, &segments, false) {
-                        Some(target) => {
-                            stats.resolved += 1;
-                            self.record(
-                                file,
-                                operand.text_range(),
-                                last_name_range(&operand),
-                                &operand_ranges(&operand),
-                                target,
-                            );
-                            self.model.set(id, "memberElement", Value::Ref(target));
-                        }
-                        None => self.record_miss(file, operand.text_range(), &segments, &mut stats),
-                    }
+                    self.resolve_operand_into(id, &operand, "memberElement", &mut stats);
                 }
                 continue;
             }
@@ -2638,6 +2616,34 @@ impl Workspace {
     /// `Subsetting` is what was written, and it reaches the model with
     /// neither end until the name before the clause and the name inside
     /// it are read here.
+    /// Resolve one operand a statement wrote and keep what it landed on
+    /// under `property`, or record that it landed on nothing.
+    ///
+    /// `first x;` and `specialization s subtype A :> B;` both write a
+    /// name where the abstract syntax keeps a reference, and what has
+    /// to happen either way is the same: resolve it, record it so a
+    /// rename can find it, and set the property.
+    fn resolve_operand_into(
+        &mut self,
+        id: ElementId,
+        operand: &SyntaxNode,
+        property: &str,
+        stats: &mut ResolveStats,
+    ) {
+        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let segments = operand_segments(operand);
+        let range = operand.text_range();
+        match self.resolve_written(id, &segments, false) {
+            Some(target) => {
+                stats.resolved += 1;
+                let name_range = last_name_range(operand);
+                self.record(file, range, name_range, &operand_ranges(operand), target);
+                self.model.set(id, property, Value::Ref(target));
+            }
+            None => self.record_miss(file, range, &segments, stats),
+        }
+    }
+
     fn resolve_relation_ends(
         &mut self,
         id: ElementId,
@@ -2649,17 +2655,7 @@ impl Workspace {
         };
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         if let Some(operand) = operand_after(node, keyword) {
-            let segments = operand_segments(&operand);
-            let range = operand.text_range();
-            match self.resolve_written(id, &segments, false) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    let name_range = last_name_range(&operand);
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
-                    self.model.set(id, source_prop, Value::Ref(target));
-                }
-                None => self.record_miss(file, range, &segments, stats),
-            }
+            self.resolve_operand_into(id, &operand, source_prop, stats);
         }
         for (_, targets) in relationship_parts(node) {
             for t in targets {
@@ -2742,20 +2738,14 @@ impl Workspace {
                     &[SyntaxKind::THEN_KW, SyntaxKind::TO_KW][..],
                 ),
             };
-            let says_source = written(ends.0);
-            let says_target = written(ends.1);
-            match (says_source, says_target) {
-                (false, true) => {
-                    if let Some(source) = self.step_beside(id, Beside::Before) {
-                        related.insert(0, source);
-                    }
+            // Only the source can be the missing one. `first a;` says
+            // which step comes first and writes no flow at all --
+            // `InitialNodeMember` rather than a succession -- so a
+            // succession that names one end names the one it runs to.
+            if written(ends.1) && !written(ends.0) {
+                if let Some(source) = self.step_before(id) {
+                    related.insert(0, source);
                 }
-                (true, false) => {
-                    if let Some(target) = self.step_beside(id, Beside::After) {
-                        related.push(target);
-                    }
-                }
-                _ => {}
             }
         }
         // `accept Go then s2;` is a transition out of the state it is
@@ -2770,7 +2760,7 @@ impl Workspace {
         {
             // the state it follows, as a succession takes the step
             // before it; failing that the one it is written inside
-            let leaves = self.step_beside(id, Beside::Before).or_else(|| {
+            let leaves = self.step_before(id).or_else(|| {
                 self.model
                     .owner(id)
                     .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Step))
@@ -2795,35 +2785,25 @@ impl Workspace {
         }
     }
 
-    /// What a succession runs from or to, where the statement left it
-    /// unwritten: the nearest member of the same body on that side that
-    /// a succession can join.
+    /// What a succession runs from, where the statement left it
+    /// unwritten: the nearest member of the same body before it that a
+    /// succession can join.
     ///
     /// A step or an occurrence, since a sequence model writes `event
     /// occurrence e; then f;`. Where the nearest one is another
     /// succession the answer is the end of it facing this one: `then a;
     /// then b;` runs a to b, not the first succession to b.
-    fn step_beside(&self, succession: ElementId, side: Beside) -> Option<ElementId> {
+    fn step_before(&self, succession: ElementId) -> Option<ElementId> {
         let owner = self.model.owner(succession)?;
         let members = self.model.owned(owner);
         let at = members.iter().position(|&it| it == succession)?;
-        let beside: Vec<ElementId> = match side {
-            Beside::Before => members[..at].iter().rev().copied().collect(),
-            Beside::After => members[at + 1..].to_vec(),
-        };
-        for member in beside {
+        for &member in members[..at].iter().rev() {
             let kind = self.model.kind(member);
             if kind.is_a(ElementKind::ConnectorAsUsage) {
-                // Looking back, the one before this went somewhere and
-                // that is where this one starts. Looking forward there
-                // is nothing to read: what comes after has not been
-                // resolved yet and says where it goes to nobody, so it
-                // is walked past to whatever it was written around.
-                if side == Beside::Before {
-                    if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature")
-                    {
-                        return related.last().copied();
-                    }
+                // the one before this went somewhere, and that is where
+                // this one starts
+                if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature") {
+                    return related.last().copied();
                 }
                 continue;
             }
@@ -3516,8 +3496,6 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         // the library states no evaluation for an infinite literal, so
         // it is a literal evaluation and nothing narrower
         LiteralInfinity => &["Performances::literalEvaluations"],
-        NullExpression => &["Performances::nullEvaluations"],
-        MetadataAccessExpression => &["Performances::metadataAccessEvaluations"],
         FeatureReferenceExpression => &["Performances::evaluations"],
         Connector => &["Links::links"],
         BindingConnector => &["Links::selfLinks"],

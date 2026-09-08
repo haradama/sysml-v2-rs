@@ -43,10 +43,9 @@ fn derivations() -> &'static [(ElementKind, String, Expr)] {
                 Some((name, body)) => (name.to_string(), body),
                 None => (named_after(rule), ocl.as_ref()),
             };
-            let Ok(expr) = ocl::parse(body) else {
-                continue;
-            };
-            out.push((rule.metaclass, name, expr));
+            if let Ok(expr) = ocl::parse(body) {
+                out.push((rule.metaclass, name, expr));
+            }
         }
         out
     })
@@ -796,10 +795,7 @@ impl Scope<'_> {
         if name == "originalPortDefinition"
             && model.kind(elem).is_a(ElementKind::ConjugatedPortDefinition)
         {
-            return match model.owner(elem) {
-                Some(owner) => Val::Elem(owner),
-                None => Val::Null,
-            };
+            return model.owner(elem).map_or(Val::Null, Val::Elem);
         }
         // The other side of that: an annotation this model builds is
         // owned by the annotating element -- the comment, the metadata
@@ -1051,15 +1047,15 @@ impl Scope<'_> {
     /// Everything a feature redefines, directly or through what it
     /// redefines in turn.
     fn collect_redefined(&self, feature: ElementId, into: &mut HashSet<ElementId>) {
+        // `redefinedFeature` is Redefinition's alone, so what holds one
+        // is a redefinition and what does not is not
         for owned in self.ws.model().owned(feature) {
-            if !self.ws.model().kind(*owned).is_a(ElementKind::Redefinition) {
-                continue;
-            }
-            let Some(Value::Ref(target)) = self.ws.model().get(*owned, "redefinedFeature") else {
-                continue;
+            let target = match self.ws.model().get(*owned, "redefinedFeature") {
+                Some(Value::Ref(target)) => *target,
+                _ => continue,
             };
-            if into.insert(*target) {
-                self.collect_redefined(*target, into);
+            if into.insert(target) {
+                self.collect_redefined(target, into);
             }
         }
     }

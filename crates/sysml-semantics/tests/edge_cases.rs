@@ -1940,7 +1940,8 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
 /// parameters -- its own and the one it inherits -- and "a function has
 /// exactly one" is true of none of the five hundred in the corpus that
 /// declare one. The walk carries on past a general type that declares
-/// no result of its own, since one may be inherited in turn.
+/// no result of its own, since one may be inherited in turn, and past a
+/// general type it has already looked through.
 #[test]
 fn a_result_parameter_redefines_the_one_the_general_function_declares() {
     let mut ws = Workspace::new();
@@ -1949,7 +1950,11 @@ fn a_result_parameter_redefines_the_one_the_general_function_declares() {
         "classifier T;\n\
          function General { return : T; }\n\
          function Middle specializes General;\n\
-         function Special specializes Middle { return : T; }\n",
+         function Special specializes Middle { return : T; }\n\
+         function Base;\n\
+         function Left specializes Base;\n\
+         function Right specializes Base;\n\
+         function Diamond specializes Left, Right { return : T; }\n",
     );
     ws.resolve_all();
     assert!(ws.materialize_implied() > 0);
@@ -1996,6 +2001,15 @@ fn a_result_parameter_redefines_the_one_the_general_function_declares() {
     // nothing and says nothing about implied relationships
     assert!(model
         .owned(general)
+        .iter()
+        .all(|&it| model.kind(it) != ElementKind::Redefinition));
+    // Where two general types meet again above, the walk passes the
+    // one they share the second time rather than looking through it
+    // twice -- and nothing up there declares a result, so `Diamond`
+    // redefines nothing
+    let diamond = result_of(named("Diamond"));
+    assert!(model
+        .owned(diamond)
         .iter()
         .all(|&it| model.kind(it) != ElementKind::Redefinition));
 }

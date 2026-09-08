@@ -678,6 +678,11 @@ mod tests {
             // an escaped literal, and a nested collection type
             "direction = FeatureDirectionKind::_'in'",
             "let x : OrderedSet(Feature) = feature in x->isEmpty()",
+            // `Set(Element){}` names what its emptiness is empty of;
+            // the same words with no literal after them are a name
+            // like any other, and the reading steps back to read them
+            // that way
+            "Sequence(Feature)->isEmpty()",
         ] {
             assert!(
                 parse(source).is_ok(),
