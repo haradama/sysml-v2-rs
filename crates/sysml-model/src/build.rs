@@ -1982,11 +1982,31 @@ fn has_token(node: &SyntaxNode, kind: SyntaxKind) -> bool {
 }
 
 fn declared_name(node: &SyntaxNode) -> Option<String> {
+    // `connector eng to tanks.main1;` names no connector.
+    // `BinaryConnectorDeclaration : Connector = ( FeatureDeclaration?
+    // 'from' | isSufficient ?= 'all' 'from'? )? ConnectorEndMember 'to'
+    // ConnectorEndMember` writes a declaration only in front of a
+    // `from`, so what follows the keyword without one is the end the
+    // connector runs from. Read as a name, `Vehicle1` came to have two
+    // members called `eng`, and the connector related one thing.
+    if names_an_end(node) {
+        return None;
+    }
     let name = node
         .children()
         .find(|c| c.kind() == SyntaxKind::NAME)?
         .first_token()?;
     Some(unquote(name.text()))
+}
+
+/// Whether the name after `connector` is the end it runs from.
+///
+/// The n-ary form writes its ends in parentheses and may be named
+/// without a `from`, so the `to` is what tells the two apart.
+fn names_an_end(node: &SyntaxNode) -> bool {
+    has_token(node, SyntaxKind::CONNECTOR_KW)
+        && has_token(node, SyntaxKind::TO_KW)
+        && !has_token(node, SyntaxKind::FROM_KW)
 }
 
 fn declared_short_name(node: &SyntaxNode) -> Option<String> {

@@ -1213,8 +1213,10 @@ impl Workspace {
                 }
             }
             // `connection c : L connect a to b;` is written as a usage, so
-            // its ends arrive here rather than through a connector statement
-            if self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
+            // its ends arrive here rather than through a connector
+            // statement -- and so is KerML's `connector c from a to b;`,
+            // which is a `Connector` and not a usage at all.
+            if self.model.kind(id).is_a(ElementKind::Connector) {
                 self.resolve_connector_ends(id, &node, &mut stats);
             }
             if self
@@ -3756,6 +3758,21 @@ struct Target {
     chain: Vec<usize>,
 }
 
+/// Whether the name after `connector` is the end it runs from.
+///
+/// KerML writes a connector's declaration only in front of a `from`, so
+/// `connector eng to tanks.main1;` names no connector: it relates `eng`
+/// to `tanks.main1`. The n-ary form writes its ends in parentheses and
+/// may be named without one, so the `to` is what tells them apart.
+fn names_an_end(node: &SyntaxNode) -> bool {
+    let has = |wanted| {
+        node.children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .any(|it| it.kind() == wanted)
+    };
+    has(SyntaxKind::CONNECTOR_KW) && has(SyntaxKind::TO_KW) && !has(SyntaxKind::FROM_KW)
+}
+
 /// Whether a declaration was written as a member of its owner rather
 /// than as a feature of it -- `member feature inCart;`, or the cross
 /// feature standing between an `end` and the declaration after it.
@@ -3836,8 +3853,15 @@ fn metadata_target(node: &SyntaxNode) -> Option<Target> {
 }
 
 fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
+    // `connector a ::> a.x to b;` writes no `from`, so `a ::> a.x` is
+    // the end it runs from -- `ConnectorEnd : Feature = ...
+    // ( declaredName = NAME REFERENCES )? OwnedReferenceSubsetting` --
+    // and what the end refers to is not something the connector itself
+    // refers to.
+    let end_refers = names_an_end(node);
     node.children()
         .filter_map(|part| match part.kind() {
+            SyntaxKind::REFERENCES if end_refers => None,
             SyntaxKind::TYPING
             | SyntaxKind::SUBSETTING
             | SyntaxKind::REDEFINITION
@@ -4197,22 +4221,53 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
             .children_with_tokens()
             .filter_map(|e| e.into_token())
             .any(|t| says_where_first(t.kind()));
-    let mut front = node
-        .children_with_tokens()
-        .take_while(|element| {
-            element.as_token().is_none_or(|token| {
-                token.kind().is_trivia()
-                    || token.kind().is_modifier_kw()
-                    || token.kind().is_visibility_kw()
-                    || token.kind().is_def_kind_kw()
-                    || matches!(
-                        token.kind(),
-                        SyntaxKind::SUCCESSION_KW | SyntaxKind::TRANSITION_KW
-                    )
-            })
+    // `connector eng to tanks.main1;` and `connector a ::> a.x to b;`
+    // write no `from`, and `BinaryConnectorDeclaration : Connector = (
+    // FeatureDeclaration? 'from' | isSufficient ?= 'all' 'from'? )?
+    // ConnectorEndMember 'to' ConnectorEndMember` allows a declaration
+    // only in front of one. So what stands between the keyword and the
+    // `to` is the end the connector runs from, named or not, and the
+    // connector has no name of its own. What the end refers to wins
+    // over the name it was given, which is why the last one before the
+    // `to` is the answer.
+    let front_of_a_connector = names_an_end(node)
+        .then(|| {
+            let mut found = None;
+            for element in node.children_with_tokens() {
+                if element
+                    .as_token()
+                    .is_some_and(|token| token.kind() == SyntaxKind::TO_KW)
+                {
+                    break;
+                }
+                if let Some(child) = element.into_node() {
+                    if is_reference(child.kind())
+                        || matches!(child.kind(), SyntaxKind::NAME | SyntaxKind::REFERENCES)
+                    {
+                        found = Some(child);
+                    }
+                }
+            }
+            found
         })
-        .filter_map(|element| element.into_node())
-        .find(|child| is_reference(child.kind()));
+        .flatten();
+    let mut front = front_of_a_connector.or_else(|| {
+        node.children_with_tokens()
+            .take_while(|element| {
+                element.as_token().is_none_or(|token| {
+                    token.kind().is_trivia()
+                        || token.kind().is_modifier_kw()
+                        || token.kind().is_visibility_kw()
+                        || token.kind().is_def_kind_kw()
+                        || matches!(
+                            token.kind(),
+                            SyntaxKind::SUCCESSION_KW | SyntaxKind::TRANSITION_KW
+                        )
+                })
+            })
+            .filter_map(|element| element.into_node())
+            .find(|child| is_reference(child.kind()))
+    });
     let mut out = Vec::new();
     let mut after_keyword = false;
     for element in node.children_with_tokens() {

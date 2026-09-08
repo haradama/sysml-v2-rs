@@ -2144,6 +2144,66 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A KerML connector relates what it was written between, and names
+/// itself only where it wrote a `from`.
+///
+/// `BinaryConnectorDeclaration : Connector = ( FeatureDeclaration?
+/// 'from' | isSufficient ?= 'all' 'from'? )? ConnectorEndMember 'to'
+/// ConnectorEndMember` -- a declaration is written only in front of a
+/// `from`, so `connector eng to tank;` names no connector at all and
+/// relates `eng` to `tank`. Read as a name, the enclosing class came to
+/// have two members called `eng` and the connector related one thing;
+/// and a `connector` was never asked for its ends in the first place,
+/// because only a usage was.
+#[test]
+fn a_kerml_connector_relates_what_it_was_written_between() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "class C {\n\
+         \tfeature eng;\n\
+         \tfeature tank;\n\
+         \tfeature b;\n\
+         \tconnector eng to tank;\n\
+         \tconnector named from eng to tank;\n\
+         \tconnector eng ::> tank to b;\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let related: Vec<(Option<String>, Vec<Option<&str>>)> = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().kind(it).is_a(ElementKind::Connector))
+        .map(|it| {
+            (
+                ws.model().name(it).map(str::to_string),
+                ws.model()
+                    .get(it, "relatedFeature")
+                    .and_then(sysml_model::Value::as_ids)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|&r| ws.model().name(r))
+                    .collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        related,
+        [
+            // no `from`, so the name is the end it runs from
+            (None, vec![Some("eng"), Some("tank")]),
+            // with one, the name is the connector's own
+            (Some("named".to_string()), vec![Some("eng"), Some("tank")]),
+            // and what an end refers to wins over the name it was given
+            (None, vec![Some("tank"), Some("b")]),
+        ]
+    );
+}
+
 /// An owned cross feature belongs to the end written after it, and
 /// carries the relationships the standard implies for it.
 ///
