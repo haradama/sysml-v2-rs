@@ -282,10 +282,30 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// well-formed variation in the corpus. What it says in words -- "a
 /// variation may not specialize any variation" -- is about `general`.
 ///
+/// `validateMergeNodeIncomingSuccessions` and
+/// `validateDecisionNodeOutgoingSuccessions` hand a connector *end* to
+/// `multiplicityHasBounds`, whose parameter is a `Multiplicity`, and
+/// bind it as `sourceMult` and `targetMult`. Read as written both are
+/// false of every merge and decision node there is. Their two siblings
+/// in the same file -- `validateControlNodeIncomingSuccessions` and
+/// `validateControlNodeOutgoingSuccessions` -- are written the same way
+/// down to the line breaks and say `connectorEnd->at(2).multiplicity`,
+/// so what was left out is not in doubt.
+///
+/// Reading it in does not help, because the four cannot all hold. The
+/// specification is explicit that these multiplicities are enforced "in
+/// the abstract syntax, even if not shown explicitly in the concrete
+/// syntax notation", and `ActionTest.sysml` writes `then decide; if
+/// true then m;` with `m` a merge node. That one succession must have
+/// its target end 0..1 (out of a decision) and 1..1 (into a control
+/// node), and its source end 0..1 (into a merge) and 1..1 (out of a
+/// control node). The corpus is what says which pair to keep: the
+/// ControlNode two hold of every succession in it.
+///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
 /// cannot even parse are pinned in `ocl.rs` alongside.
-const MISWRITTEN: [(&str, &str); 2] = [
+const MISWRITTEN: [(&str, &str); 4] = [
     (
         "validateDefinitionVariationSpecialization",
         "the specification's own OCL reads `specific` where the constraint says `general`",
@@ -293,6 +313,20 @@ const MISWRITTEN: [(&str, &str); 2] = [
     (
         "validateUsageVariationSpecialization",
         "the specification's own OCL reads `specific` where the constraint says `general`",
+    ),
+    (
+        "validateMergeNodeIncomingSuccessions",
+        "the OCL hands a connector end to `multiplicityHasBounds`, which takes a multiplicity, \
+         and reading in the `.multiplicity` its siblings write contradicts \
+         `validateControlNodeIncomingSuccessions` on the corpus's own decision-to-merge \
+         succession",
+    ),
+    (
+        "validateDecisionNodeOutgoingSuccessions",
+        "the OCL hands a connector end to `multiplicityHasBounds`, which takes a multiplicity, \
+         and reading in the `.multiplicity` its siblings write contradicts \
+         `validateControlNodeOutgoingSuccessions` on the corpus's own decision-to-merge \
+         succession",
     ),
 ];
 
@@ -709,8 +743,13 @@ impl Scope<'_> {
     /// at, the way any property this model does not carry is.
     fn membership_property(&mut self, owner: ElementId, member: ElementId, name: &str) -> Val {
         match name {
-            // what it relates, from either side
+            // what it relates, from either side.
+            // `validateRedefinitionFeaturingTypes` reads `modelElement`
+            // off what `resolveGlobal` answers with; no metaclass
+            // declares such a property, and every other caller of
+            // `resolveGlobal` in the metamodel writes `memberElement`.
             "memberElement"
+            | "modelElement"
             | "ownedMemberElement"
             | "ownedMemberFeature"
             | "ownedRelatedElement"
@@ -1289,8 +1328,15 @@ impl Scope<'_> {
             Some(expr) => self.eval(expr),
             None => self.implicit.clone().unwrap_or(Val::Elem(self.self_)),
         };
-        if let Some(unknown) = target.unknown() {
-            return unknown;
+        // A name read from the root namespace does not depend on where
+        // it is read from, and the metamodel writes `resolveGlobal` of
+        // things that are not there to read it from: `Feature::canAccess`
+        // writes it of `subsettingFeature`, which is a property of a
+        // Subsetting and not of the Feature the operation is about.
+        if name != "resolveGlobal" {
+            if let Some(unknown) = target.unknown() {
+                return unknown;
+            }
         }
         // Read as meant before it is dispatched, so that both the
         // operations written here and those the metamodel defines are
@@ -2175,6 +2221,18 @@ mod tests {
         assert_eq!(
             ws.judge(
                 "resolveGlobal('KerML::Core::PartDefinition').memberElement = oclType()",
+                car
+            ),
+            Some(true)
+        );
+        // read from the root, so what it is written of does not matter
+        // -- `Feature::canAccess` writes it of a property a Feature
+        // does not have -- and `modelElement` is what one caller reads
+        // off what comes back
+        assert_eq!(
+            ws.judge(
+                "subsettingFeature.resolveGlobal('KerML::Core::PartDefinition').modelElement \
+                 = oclType()",
                 car
             ),
             Some(true)
