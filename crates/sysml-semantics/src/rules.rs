@@ -319,15 +319,21 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// ControlNode two hold of every succession in it.
 ///
 /// `validateSubsettingFeaturingTypes` is `subsettingFeature.canAccess(
-/// subsettedFeature)`, which comes down to `Type::isCompatibleWith`,
-/// and the metamodel states that one as `specializes(otherType)` and
-/// nothing more. Read that way it rejects twelve hundred subsettings of
-/// the corpus. The pilot implementation does run this constraint, and
-/// answers a wider question than the metamodel states: `TypeUtil.
+/// subsettedFeature)`, and `canAccess` holds the subsetted feature to
+/// being featured within one of the featuring types the subsetting one
+/// reaches -- walking *up* from it, never down. Read as the metamodel
+/// states it, 1234 subsettings of the corpus are rejected.
+///
+/// The pilot implementation does run this constraint, and answers one
+/// step of it more widely than the metamodel states: `TypeUtil.
 /// isCompatible` also holds two features compatible where neither owns
 /// features of its own, they redefine something in common, and the one
-/// is featured where the other is. What the corpus is written against
-/// is that wider question, which the specification does not state.
+/// is featured where the other is. Answered that way here, 1231 are
+/// still rejected -- so the wider step is not what the corpus turns on.
+/// What it turns on is the direction: `accept a : A` gives a transition
+/// an `accepted` featured by the transition and a payload featured by
+/// the trigger the transition owns, and no walk upwards from the one
+/// reaches the other.
 ///
 /// `validateRedefinitionFeaturingTypes` says in words that the
 /// redefining feature "must have at least one featuringType that is not
@@ -346,16 +352,16 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// cannot even parse are pinned in `ocl.rs` alongside.
 const MISWRITTEN: [(&str, &str); 6] = [
     (
+        "validateSubsettingFeaturingTypes",
+        "`canAccess` walks up from the subsetting feature and the corpus features what it \
+         subsets further down, so 1234 subsettings are rejected -- and 1231 still are with \
+         the wider compatibility the pilot implementation answers with",
+    ),
+    (
         "validateRedefinitionFeaturingTypes",
         "the OCL asks for two sets of featuring types to differ where the constraint asks for \
          one the redefining feature has and the redefined one has not, and neither holds of a \
          redefinition between two features of the same type",
-    ),
-    (
-        "validateSubsettingFeaturingTypes",
-        "`canAccess` comes down to `isCompatibleWith`, which the metamodel states as \
-         `specializes` and the pilot implementation answers more widely; read as stated it \
-         rejects twelve hundred subsettings of the corpus",
     ),
     (
         "validateDefinitionVariationSpecialization",
