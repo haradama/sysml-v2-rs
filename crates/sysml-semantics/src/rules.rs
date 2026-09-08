@@ -17,7 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-use sysml_model::{ElementId, ElementKind, Value};
+use sysml_model::{ElementId, ElementKind, Role, Value};
 
 use crate::ocl::{self, Expr, Op};
 use crate::Workspace;
@@ -792,6 +792,17 @@ impl Scope<'_> {
                     .any(|&child| model.kind(child).is_a(ElementKind::Conjugation)),
             );
         }
+        // The memberships a type inherits. The metamodel works this
+        // out through five operations that call one another over every
+        // supertype -- `removeRedefinedFeatures(inheritableMemberships(
+        // ...))` -- and no depth of evaluation completes them: two
+        // thirds of every operation the check invoked went on that
+        // chain, to arrive at "cannot say". The resolver walks the same
+        // specializations to find a name, so that walk is the answer,
+        // and what it finds is what the standard describes.
+        if name == "inheritedMembership" && model.kind(elem).is_a(ElementKind::Type) {
+            return Val::Set(self.inherited(elem));
+        }
         if name == "owner" {
             return match model.owner(elem) {
                 Some(owner) => Val::Elem(owner),
@@ -878,6 +889,99 @@ impl Scope<'_> {
                     "`{name}` is part of the abstract syntax that this model does not build here"
                 )),
             },
+        }
+    }
+
+    /// Every membership a type inherits: those of everything it
+    /// specializes, and of everything those specialize in turn, less
+    /// what is private to them and less what a redefinition has
+    /// replaced.
+    ///
+    /// A supertype's imports are inherited with its own memberships --
+    /// `membershipsOfVisibility` unions the two -- and the resolver
+    /// works out what an import brings in for name lookup already.
+    fn inherited(&mut self, elem: ElementId) -> Vec<Val> {
+        let mut queue = self.ws.supertypes(elem);
+        let mut seen = vec![elem];
+        let mut at = 0;
+        let mut memberships: Vec<(ElementId, ElementId)> = Vec::new();
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            for member in self.ws.model().owned(up).to_vec() {
+                // what a type keeps to itself is not inherited
+                if self.ws.model().member_visibility(member) == Some(sysml_model::Vis::Private) {
+                    continue;
+                }
+                memberships.push((up, member));
+            }
+            for member in self.ws.imported_members(up) {
+                memberships.push((up, member));
+            }
+            queue.extend(self.ws.supertypes(up));
+        }
+        // A feature that redefines another stands in its place, so what
+        // it replaced is not inherited beside it -- whether the
+        // redefining feature is one of these or one the type declares
+        // itself.
+        let mut replaced = HashSet::new();
+        let mine = self.ws.model().owned(elem).to_vec();
+        for &feature in memberships
+            .iter()
+            .map(|(_, member)| member)
+            .chain(mine.iter())
+        {
+            self.collect_redefined(feature, &mut replaced);
+        }
+        // A member declared with a role the standard allows one of
+        // stands in the place of the one that would be inherited: a
+        // requirement's own subject replaces the subject it inherits,
+        // as a function's own result parameter replaces the one of the
+        // function it specializes. The standard says so with an implied
+        // redefinition, which is written into a model only where the
+        // implied relationships are materialised.
+        let mut taken: Vec<Role> = mine
+            .iter()
+            .filter_map(|&it| role_of_one(self.ws, it))
+            .collect();
+        memberships.retain(|(_, member)| {
+            if replaced.contains(member) {
+                return false;
+            }
+            match role_of_one(self.ws, *member) {
+                // nearest first, so the first of a role is the one that
+                // stands and the rest are the ones it stands for
+                Some(role) if taken.contains(&role) => false,
+                Some(role) => {
+                    taken.push(role);
+                    true
+                }
+                None => true,
+            }
+        });
+        memberships
+            .into_iter()
+            .map(|(owner, member)| Val::Membership { owner, member })
+            .collect()
+    }
+
+    /// Everything a feature redefines, directly or through what it
+    /// redefines in turn.
+    fn collect_redefined(&self, feature: ElementId, into: &mut HashSet<ElementId>) {
+        for owned in self.ws.model().owned(feature) {
+            if !self.ws.model().kind(*owned).is_a(ElementKind::Redefinition) {
+                continue;
+            }
+            let Some(Value::Ref(target)) = self.ws.model().get(*owned, "redefinedFeature") else {
+                continue;
+            };
+            if into.insert(*target) {
+                self.collect_redefined(*target, into);
+            }
         }
     }
 
@@ -1424,6 +1528,21 @@ fn meant(written: &str) -> &str {
     match MISSPELLED.iter().find(|(slip, _)| *slip == written) {
         Some((_, meant)) => meant,
         None => written,
+    }
+}
+
+/// The role of a member the standard allows a type only one of.
+///
+/// A function has one result parameter, a requirement one subject, a
+/// case one objective, a view one rendering. A type may have any number
+/// of variants or state subactions, so those say nothing about what is
+/// replaced.
+fn role_of_one(ws: &Workspace, member: ElementId) -> Option<Role> {
+    match ws.model().member_role(member) {
+        Some(
+            role @ (Role::Return | Role::Result | Role::Subject | Role::Objective | Role::Render),
+        ) => Some(role),
+        _ => None,
     }
 }
 
@@ -2109,6 +2228,45 @@ mod tests {
                 "`{name}` reads once `{meant}` closes it"
             );
         }
+    }
+
+    /// What a type inherits is what it specializes, less what is
+    /// private to that and less what a redefinition has replaced.
+    ///
+    /// The metamodel works this out through five operations that call
+    /// one another over every supertype, and no depth of evaluation
+    /// completes them. The resolver walks the same specializations to
+    /// find a name, so that walk is the answer.
+    #[test]
+    fn what_a_type_inherits_is_what_it_specializes_declares() {
+        const MODEL: &str = "part def Sup {\n\tpart w;\n\tprivate part kept;\n}\n                             part def Sub :> Sup;\n";
+        let (mut ws, sub) = about(MODEL, "Sub");
+        // `w` and not `kept`: what a type keeps to itself is not
+        // inherited
+        assert_eq!(ws.judge("inheritedMembership->size() = 1", sub), Some(true));
+        let (mut ws, sup) = about(MODEL, "Sup");
+        assert_eq!(ws.judge("inheritedMembership->isEmpty()", sup), Some(true));
+
+        // A member declared with a role the standard allows one of
+        // stands in the place of the one that would be inherited.
+        const ROLES: &str = "requirement def R {\n\tsubject s;\n}\n                             requirement def R2 :> R {\n\tsubject t;\n}\n                             requirement def R3 :> R;\n";
+        let (mut ws, two) = about(ROLES, "R2");
+        assert_eq!(
+            ws.judge(
+                "inheritedMembership->selectByKind(SubjectMembership)->isEmpty()",
+                two
+            ),
+            Some(true)
+        );
+        // and one that declares none inherits the one that is there
+        let (mut ws, three) = about(ROLES, "R3");
+        assert_eq!(
+            ws.judge(
+                "inheritedMembership->selectByKind(SubjectMembership)->size() = 1",
+                three
+            ),
+            Some(true)
+        );
     }
 
     /// A flag the builder reads off the source for every metaclass that

@@ -146,3 +146,59 @@ fn a_literal_specializes_the_evaluation_the_library_states_for_it() {
         ]
     );
 }
+
+/// The implicit specializations a usage gets are the standard library's
+/// own names, and a model may declare a package of the same name: the
+/// corpus has a `SimpleVehicleModel::...::Requirements` beside the
+/// library's. Resolved through the local scope, a requirement there
+/// specialized nothing at all.
+///
+/// And an enumeration value is a variant of its enumeration, but it
+/// declares the value rather than naming one written elsewhere: `enum
+/// def E1 { a; }` has no `a` anywhere else to bring along, and looking
+/// for one reaches past the enumeration to whatever else is called `a`.
+#[test]
+fn what_the_standard_implies_is_named_from_the_root() {
+    let Some(root) = vendor() else { return };
+    let mut ws = Workspace::new();
+    ws.load_dir(&root.join("sysml.library")).unwrap();
+    let file = ws.add_file(
+        "m.sysml",
+        "package M {\n\
+         \tpackage Requirements {\n\
+         \t\trequirement r;\n\
+         \t}\n\
+         \tenum def E { a; }\n\
+         \tpackage Other { attribute a; }\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let named = |ws: &Workspace, want: &str| {
+        ws.model()
+            .descendants(ws.file_roots(file)[0])
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    // the library's `Requirements`, not the model's
+    let (r, value) = (named(&ws, "r"), named(&ws, "a"));
+    let ups: Vec<String> = ws
+        .supertypes(r)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert!(
+        ups.contains(&"Requirements::RequirementCheck".to_string()),
+        "a requirement specializes the library's check: {ups:?}"
+    );
+    // and the enumeration value brings nothing along
+    let ups: Vec<String> = ws
+        .supertypes(value)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert!(
+        !ups.iter().any(|it| it.ends_with("Other::a")),
+        "an enumeration value declares itself: {ups:?}"
+    );
+}

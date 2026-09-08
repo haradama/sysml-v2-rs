@@ -1970,7 +1970,17 @@ impl Workspace {
         // model already has; `variant part v;` declares a new one. The
         // difference is whether a kind keyword was written, and the
         // reference form has to bring what it names along with it.
-        if supers.is_empty() && self.model.member_role(elem) == Some(Role::Variant) {
+        // An enumeration value is a variant of its enumeration, and it
+        // *declares* the value rather than naming one written
+        // elsewhere: `enum def E1 { a; b; c; }` has no `a` anywhere
+        // else to bring along, and looking for one reaches past the
+        // enumeration to whatever else the workspace calls `a`.
+        let enumerated = self.model.owner(elem).is_some_and(|owner| {
+            self.model
+                .kind(owner)
+                .is_a(ElementKind::EnumerationDefinition)
+        });
+        if supers.is_empty() && !enumerated && self.model.member_role(elem) == Some(Role::Variant) {
             let bare = self.source.get(&elem).is_some_and(|node| {
                 !node
                     .children_with_tokens()
@@ -2002,7 +2012,14 @@ impl Workspace {
             }
         }
         for path in implied_bases(self.model.kind(elem)) {
-            let segments: Vec<String> = path.split("::").map(String::from).collect();
+            // From the root: these are the standard library's own
+            // names, and a model is free to declare a package called
+            // `Requirements` of its own -- `SimpleVehicleModel` does --
+            // which would otherwise stand in front of the library's and
+            // leave the usage specializing nothing.
+            let segments: Vec<String> = std::iter::once(String::new())
+                .chain(path.split("::").map(String::from))
+                .collect();
             if let Some(target) = self.resolve_from(elem, &segments) {
                 if target != elem && !supers.contains(&target) {
                     supers.push(target);
@@ -2171,7 +2188,9 @@ impl Workspace {
             }
             let mut bases = Vec::new();
             for path in implied_bases(kind) {
-                let segments: Vec<String> = path.split("::").map(String::from).collect();
+                let segments: Vec<String> = std::iter::once(String::new())
+                    .chain(path.split("::").map(String::from))
+                    .collect();
                 if let Some(target) = self.resolve_from(elem, &segments) {
                     if target != elem && !bases.contains(&target) {
                         bases.push(target);

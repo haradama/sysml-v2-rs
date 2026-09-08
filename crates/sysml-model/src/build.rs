@@ -1657,6 +1657,15 @@ fn is_composite(
     if !kind.is_a(ElementKind::Usage) {
         return has_token(node, SyntaxKind::COMPOSITE_KW);
     }
+    // `validateAttributeDefinitionFeatures` and its usage twin --
+    // "the features of an attribute are all referential". A data value
+    // has no parts, so nothing declared inside one is something it is
+    // made of, whatever kind that thing is: `attribute def
+    // SampledFunction { assert constraint { ... } }` asserts something
+    // about a sampled function rather than adding a part to it.
+    if owning.is_a(ElementKind::DataType) || owning.is_a(ElementKind::AttributeUsage) {
+        return false;
+    }
     if owning.is_a(ElementKind::PortDefinition) || owning.is_a(ElementKind::PortUsage) {
         return kind.is_a(ElementKind::PortUsage);
     }
@@ -2018,6 +2027,23 @@ mod tests {
         };
         assert_eq!(composed("wheel"), Some(Value::Bool(true)));
         assert_eq!(composed("borrowed"), Some(Value::Bool(false)));
+
+        // `validateAttributeDefinitionFeatures` -- "the features of an
+        // attribute are all referential". A data value has no parts, so
+        // nothing declared inside one is something it is made of,
+        // whatever kind that thing is.
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "attribute def A {\n\tpart inside;\n}\npart def P {\n\tpart inside;\n}\n",
+        ));
+        let composed: Vec<Option<Value>> = model
+            .ids()
+            .filter(|&id| model.name(id) == Some("inside"))
+            .map(|id| model.get(id, "isComposite").cloned())
+            .collect();
+        assert_eq!(
+            composed,
+            [Some(Value::Bool(false)), Some(Value::Bool(true))]
+        );
     }
 
     /// is in the model nowhere at all.
