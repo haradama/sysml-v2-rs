@@ -674,6 +674,12 @@ impl Parser<'_> {
                 | INTERACTION_KW
                 | METACLASS_KW
         );
+        // `MetadataUsageDeclaration = ( Identification ( ':' | 'typed'
+        // 'by' ) )? OwnedFeatureTyping` -- what follows the keyword is
+        // the metadata definition, not a name, unless a name is spelled
+        // out in front of it. `metadata Classified { ... }` says what
+        // `@Classified { ... }` says.
+        let is_metadata = self.at(METADATA_KW);
         self.def_kind_keywords();
         let node = if self.at(DEF_KW) || is_classifier {
             DEFINITION
@@ -687,6 +693,8 @@ impl Parser<'_> {
         self.opt_short_name();
         if node == DEFINITION {
             self.opt_name();
+        } else if is_metadata {
+            self.opt_typing_name();
         } else {
             // usages: only take a name the next token confirms, so that
             // `flow p1.torque to p2.torque;` keeps `p1.torque` an expression
@@ -1050,6 +1058,24 @@ impl Parser<'_> {
 
     /// A name is only consumed when the following token confirms this is a
     /// declaration (used for `return x;` vs `return x * 2;`).
+    /// The name of a metadata usage, which only a `:` or a `typed by`
+    /// after it makes one. Without one the name is the metadata
+    /// definition the usage is typed by, and the typing that says so is
+    /// built around it here -- `metadata Classified { ... }` reads as
+    /// `metadata : Classified { ... }`.
+    fn opt_typing_name(&mut self) {
+        if !self.at_name() {
+            return;
+        }
+        if matches!(self.nth(1), COLON | TYPED_KW) {
+            self.opt_name();
+            return;
+        }
+        self.start_node(TYPING);
+        self.type_ref();
+        self.finish_node();
+    }
+
     fn opt_decl_name(&mut self) {
         if self.at_name()
             && matches!(

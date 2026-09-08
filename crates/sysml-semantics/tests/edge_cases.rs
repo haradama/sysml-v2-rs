@@ -1053,6 +1053,56 @@ fn imported_members_walk_the_imports() {
     assert_eq!(ws.import_of(imports[1]), Some(x));
 }
 
+/// `MetadataUsageDeclaration = ( Identification ( ':' | 'typed' 'by' ) )?
+/// OwnedFeatureTyping` -- what follows `metadata` is the definition the
+/// usage is typed by, and is a name of its own only where one is spelled
+/// out in front of it. Read as a name, `metadata Classified { ... }`
+/// declared a metadata usage typed by nothing at all.
+#[test]
+fn a_metadata_usage_is_typed_by_the_name_after_the_keyword() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "package P {
+         	metadata def Classified;
+         	part x { metadata Classified; }
+         	part y { metadata m : Classified; }
+         	part z { @Classified; }
+}
+",
+    );
+    ws.resolve_all();
+    let named = |ws: &sysml_semantics::Workspace, want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let metadata_in = |ws: &sysml_semantics::Workspace, holder: &str| {
+        *ws.model()
+            .owned(named(ws, holder))
+            .iter()
+            .find(|&&child| {
+                ws.model()
+                    .kind(child)
+                    .is_a(sysml_model::ElementKind::MetadataUsage)
+            })
+            .expect("the part carries metadata")
+    };
+    let definition = named(&ws, "Classified");
+    for holder in ["x", "y", "z"] {
+        let usage = metadata_in(&ws, holder);
+        assert!(
+            ws.supertypes(usage).contains(&definition),
+            "the metadata of `{holder}` is typed by `Classified`"
+        );
+    }
+    // only the one written with a `:` in front of it is named
+    assert_eq!(ws.model().name(metadata_in(&ws, "x")), None);
+    assert_eq!(ws.model().name(metadata_in(&ws, "y")), Some("m"));
+    assert_eq!(ws.model().name(metadata_in(&ws, "z")), None);
+}
+
 #[test]
 fn implied_specializations_are_materialized_once() {
     let mut ws = sysml_semantics::Workspace::new();
