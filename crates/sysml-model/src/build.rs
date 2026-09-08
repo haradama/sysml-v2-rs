@@ -249,6 +249,23 @@ fn build_node(
             Value::Bool(is_composite(node, kind, owner, model)),
         );
     }
+    // `port def P` defines two things. The standard has a
+    // `PortDefinition` own exactly one `ConjugatedPortDefinition`,
+    // named after it and related to it by a `PortConjugation`; the
+    // notation writes `port p : ~P` to type a port by that one, so it
+    // has to be an element of its own with that name rather than a
+    // spelling of `P`.
+    if kind == ElementKind::PortDefinition {
+        if let Some(name) = model.name(id).map(str::to_string) {
+            let conjugate = model.create(ElementKind::ConjugatedPortDefinition);
+            model.add_owned(id, conjugate);
+            model.set(conjugate, "declaredName", Value::String(format!("~{name}")));
+            let conjugation = model.create(ElementKind::PortConjugation);
+            model.add_owned(conjugate, conjugation);
+            model.set(conjugation, "conjugatedType", Value::Ref(conjugate));
+            model.set(conjugation, "originalType", Value::Ref(id));
+        }
+    }
     if kind.is_a(ElementKind::Comment) {
         if let Some(body) = comment_body(node) {
             model.set(id, "body", Value::String(body));
@@ -1924,6 +1941,40 @@ mod tests {
     /// `then send new S() via p;` declares the action as much as `then
     /// merge continue;` declares the node. Read as the succession its
     /// leading keyword would otherwise make, the action the source wrote
+    /// `port def P` defines two things. The standard has a
+    /// `PortDefinition` own exactly one `ConjugatedPortDefinition`,
+    /// named after it and related to it by a `PortConjugation` -- and
+    /// the notation writes `port p : ~P` to type a port by that one,
+    /// so it has to be an element of its own with that name.
+    #[test]
+    fn a_port_definition_defines_its_conjugate_as_well() {
+        let (model, roots) = build_model(&sysml_syntax::parse("part def V {\n\tport def P;\n}\n"));
+        let port = model.owned(roots[0])[0];
+        assert_eq!(model.kind(port), ElementKind::PortDefinition);
+        let owned = model.owned(port);
+        assert_eq!(owned.len(), 1, "the conjugate and nothing else");
+        let conjugate = owned[0];
+        assert_eq!(model.kind(conjugate), ElementKind::ConjugatedPortDefinition);
+        assert_eq!(model.name(conjugate), Some("~P"));
+        // and the conjugation that says what it is the conjugate of
+        let conjugation = model.owned(conjugate)[0];
+        assert_eq!(model.kind(conjugation), ElementKind::PortConjugation);
+        assert_eq!(
+            model.get(conjugation, "conjugatedType"),
+            Some(&Value::Ref(conjugate))
+        );
+        assert_eq!(
+            model.get(conjugation, "originalType"),
+            Some(&Value::Ref(port))
+        );
+        // the conjugate has no conjugate of its own, which is what
+        // `validatePortDefinitionConjugatedPortDefinition` asks
+        assert!(model
+            .owned(conjugate)
+            .iter()
+            .all(|&it| model.kind(it) != ElementKind::ConjugatedPortDefinition));
+    }
+
     /// The two notations default composition the other way about.
     /// KerML writes `composite feature ...` where it means one and the
     /// metamodel declares `isComposite = false` for everything else;

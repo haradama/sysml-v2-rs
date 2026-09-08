@@ -1904,6 +1904,27 @@ impl Workspace {
                 }
             }
         }
+        // `port def P` defines its conjugate as well, and `~P` has
+        // what `P` has: conjugating a type reverses the direction of
+        // its features, not which features it has. The conjugate is
+        // reified and has no syntax to read, so what it is the
+        // conjugate of is read off the conjugation it owns -- and
+        // without it `apsc.subscr` names nothing where `apsc` is a
+        // port typed `~SubscriptionPort`.
+        let conjugated: Vec<ElementId> = self
+            .model
+            .owned(elem)
+            .iter()
+            .copied()
+            .filter(|&owned| self.model.kind(owned).is_a(ElementKind::Conjugation))
+            .filter_map(|owned| match self.model.get(owned, "originalType") {
+                Some(Value::Ref(target)) => Some(*target),
+                _ => None,
+            })
+            .collect();
+        for target in conjugated {
+            push_supertype(&mut supers, elem, target);
+        }
         // An element the builder reified has no syntax of its own. An
         // accept node's payload is one: `accept cl : Cmd` declares it on
         // the statement, and the typing written there is attached to the
@@ -3489,9 +3510,25 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                     let qname = type_ref
                         .children()
                         .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
+                    let mut segments = name_segments(&qname);
+                    // `port p : ~P` types the port by the conjugate of
+                    // `P`, which the port definition owns under that
+                    // name. Naming it is a step further down the same
+                    // path, so the walk that finds `P` finds it.
+                    let conjugated = type_ref
+                        .children_with_tokens()
+                        .filter_map(|it| it.into_token())
+                        .any(|it| it.kind() == SyntaxKind::TILDE);
+                    if conjugated {
+                        let last = segments.last()?.clone();
+                        segments.push(format!("~{last}"));
+                    }
                     Some(Target {
-                        segments: name_segments(&qname),
-                        range: qname.text_range(),
+                        segments,
+                        range: match conjugated {
+                            true => type_ref.text_range(),
+                            false => qname.text_range(),
+                        },
                         name_range: last_name_range(&qname),
                         at: segment_ranges(&qname),
                     })

@@ -1999,3 +1999,51 @@ fn a_result_parameter_redefines_the_one_the_general_function_declares() {
         .iter()
         .all(|&it| model.kind(it) != ElementKind::Redefinition));
 }
+
+/// `port p : ~P` types the port by the conjugate of `P`, which the port
+/// definition owns under that name -- so naming it is a step further
+/// down the same path, and the walk that finds `P` finds it.
+///
+/// And `~P` has what `P` has: conjugating a type reverses the direction
+/// of its features, not which features it has. Without that, a member
+/// reached through a conjugated port names nothing.
+#[test]
+fn a_conjugated_port_is_typed_by_the_conjugate_and_has_what_it_conjugates() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "p.sysml",
+        "part def V {\n\
+         \tport def P { attribute size; }\n\
+         \tport plain : P;\n\
+         \tport other : ~P;\n\
+         \tpart w { attribute a = other.size; }\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let named = |ws: &Workspace, want: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let (plain, other) = (named(&ws, "plain"), named(&ws, "other"));
+    let type_of = |ws: &Workspace, port| {
+        ws.model()
+            .type_of(port)
+            .map(|it| ws.qualified_name_of(it))
+            .unwrap_or_default()
+    };
+    assert_eq!(type_of(&ws, plain), "V::P");
+    assert_eq!(type_of(&ws, other), "V::P::~P");
+    // and the conjugate carries what the original declares
+    let conjugate = ws.model().type_of(other).expect("typed");
+    let inherited: Vec<String> = ws
+        .supertypes(conjugate)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert_eq!(inherited, ["V::P"]);
+}
