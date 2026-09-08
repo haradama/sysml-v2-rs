@@ -276,15 +276,31 @@ pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> 
 /// chaining features or more than one. Both are the same question, so
 /// both are answered here rather than at each place that asks.
 pub fn end_reaches(model: &Model, end: ElementId) -> Vec<ElementId> {
-    if let Some(Value::RefList(chain)) = model.get(end, "chainingFeature") {
-        return chain.clone();
+    let mut reached = match model.get(end, "chainingFeature") {
+        Some(Value::RefList(chain)) => chain.clone(),
+        _ => model
+            .owned(end)
+            .iter()
+            .filter(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
+            .filter_map(|&child| model.get(child, "referencedFeature")?.as_id())
+            .collect(),
+    };
+    // A flow end keeps the path to what it relates and the feature that
+    // flows through it apart -- `FlowEnd = ( OwnedReferenceSubsetting
+    // '.' )? FlowFeatureMember` -- and the notation wrote them as one
+    // name, which is what a reader of an end wants back.
+    if model.kind(end) == ElementKind::FlowEnd {
+        reached.extend(
+            model
+                .owned(end)
+                .iter()
+                .filter(|&&child| model.kind(child) == ElementKind::Feature)
+                .flat_map(|&child| model.owned(child))
+                .filter(|&&it| model.kind(it) == ElementKind::Redefinition)
+                .filter_map(|&it| model.get(it, "redefinedFeature")?.as_id()),
+        );
     }
-    model
-        .owned(end)
-        .iter()
-        .filter(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
-        .filter_map(|&child| model.get(child, "referencedFeature")?.as_id())
-        .collect()
+    reached
 }
 
 pub use build::BUILT_FLAGS;

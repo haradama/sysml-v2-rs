@@ -1053,6 +1053,113 @@ fn imported_members_walk_the_imports() {
     assert_eq!(ws.import_of(imports[1]), Some(x));
 }
 
+/// `FlowEnd = ( OwnedReferenceSubsetting '.' )? FlowFeatureMember` --
+/// what a flow end relates and what flows through it are two things,
+/// and the notation writes them as one name. Built as one, three
+/// constraints about a flow end were asked of nothing at all.
+#[test]
+fn a_flow_relates_flow_ends_that_own_what_flows() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.sysml",
+        "package P {\n\
+         \tattribute def Fuel;\n\
+         \tpart def Tank { out attribute fuelOut : Fuel; }\n\
+         \tpart def Engine { in attribute fuelIn : Fuel; }\n\
+         \tpart def Vehicle {\n\
+         \t\tpart tank : Tank;\n\
+         \t\tpart engine : Engine;\n\
+         \t\tflow from tank.fuelOut to engine.fuelIn;\n\t}\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let model = ws.model();
+    let named = |want: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let flow = model
+        .ids()
+        .find(|&id| model.kind(id).is_a(sysml_model::ElementKind::FlowUsage))
+        .expect("the flow is built");
+    let ends: Vec<sysml_model::ElementId> = model
+        .owned(flow)
+        .iter()
+        .copied()
+        .filter(|&it| model.kind(it) == sysml_model::ElementKind::FlowEnd)
+        .collect();
+    assert_eq!(ends.len(), 2, "a flow end apiece");
+
+    for (end, holder, flows, direction) in [
+        (ends[0], "tank", "fuelOut", "out"),
+        (ends[1], "engine", "fuelIn", "in"),
+    ] {
+        assert_eq!(
+            model.get(end, "isEnd"),
+            Some(&sysml_model::Value::Bool(true)),
+            "`validateFlowEndIsEnd`"
+        );
+        // exactly one owned feature: the one that flows. The
+        // multiplicity beside it is owned through an `OwningMembership`
+        // and is not one -- `validateFlowEndNestedFeature`
+        let owned: Vec<sysml_model::ElementId> = model
+            .owned(end)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it) == sysml_model::ElementKind::Feature)
+            .collect();
+        assert_eq!(owned.len(), 1, "one feature flows: {owned:?}");
+        let redefines = model
+            .owned(owned[0])
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == sysml_model::ElementKind::Redefinition)
+            .and_then(|it| model.get(it, "redefinedFeature").and_then(|v| v.as_id()))
+            .expect("the feature that flows redefines the one it names");
+        assert_eq!(redefines, named(flows));
+        // and is passed the way the one it redefines is, which is what
+        // `validateRedefinitionDirectionConformance` reads
+        assert_eq!(
+            model.get(owned[0], "direction"),
+            model.get(named(flows), "direction"),
+            "`{flows}` flows {direction}"
+        );
+        // read back, the two are the name the notation wrote
+        assert_eq!(
+            sysml_model::end_reaches(model, end),
+            vec![named(holder), named(flows)]
+        );
+    }
+
+    // an end that names one thing has nothing in front of what flows,
+    // and what flows is passed no particular way
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "plain.sysml",
+        "part def P {\n\tpart a;\n\tpart b;\n\tflow from a to b;\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let model = ws.model();
+    let ends: Vec<sysml_model::ElementId> = model
+        .ids()
+        .filter(|&it| model.kind(it) == sysml_model::ElementKind::FlowEnd)
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for end in ends {
+        let flows = model
+            .owned(end)
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == sysml_model::ElementKind::Feature)
+            .expect("one feature flows");
+        assert_eq!(model.get(flows, "direction"), None);
+        assert_eq!(sysml_model::end_reaches(model, end).len(), 1);
+    }
+}
+
 /// `featured by T` says what features a feature, and what it names may
 /// be declared inside that very feature -- `member step merge ...
 /// featured by TakePicture_snapshots { member feature

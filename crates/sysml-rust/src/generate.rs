@@ -2374,7 +2374,7 @@ impl<'a> Generator<'a> {
             .model
             .owned(usage)
             .iter()
-            .filter(|&&child| self.model.kind(child) == ElementKind::Feature)
+            .filter(|&&child| self.model.get(child, "isEnd") == Some(&Value::Bool(true)))
             .map(|&child| sysml_model::end_reaches(self.model, child))
             .filter(|chain| !chain.is_empty())
             .collect();

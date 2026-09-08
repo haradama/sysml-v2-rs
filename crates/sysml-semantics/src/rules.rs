@@ -1145,6 +1145,22 @@ impl Scope<'_> {
             self.collect_featuring_types(elem, &mut them);
             return Val::Set(them.into_iter().map(Val::Elem).collect());
         }
+        // `FlowDefinition::flowEnd` is declared derived and derived
+        // nowhere. KerML states the same property of a `Flow` --
+        // "the connectorEnds of this Flow that are FlowEnds" -- and a
+        // definition is an association rather than a connector, so
+        // what stands for its connector ends is the ends it owns.
+        if name == "flowEnd" && model.kind(elem).is_a(ElementKind::FlowDefinition) {
+            return Val::Set(
+                model
+                    .owned(elem)
+                    .iter()
+                    .copied()
+                    .filter(|&it| model.kind(it).is_a(ElementKind::FlowEnd))
+                    .map(Val::Elem)
+                    .collect(),
+            );
+        }
         // Every membership in a namespace: the containments it keeps
         // and what its imports bring in. The metamodel derives it as a
         // union of the two, and the resolver works out what an import
@@ -2254,6 +2270,18 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the element is declared");
         (ws, elem)
+    }
+
+    /// `FlowDefinition::flowEnd` is declared derived and derived
+    /// nowhere, so what a flow definition has of them is what it owns.
+    #[test]
+    fn a_flow_definition_has_the_flow_ends_it_owns() {
+        let (mut ws, f) = about(
+            "flow def F;\npart def P {\n\tpart a;\n\tflow from a to a;\n}\n",
+            "F",
+        );
+        assert_eq!(ws.judge("flowEnd->isEmpty()", f), Some(true));
+        assert_eq!(ws.judge("flowEnd->size() <= 2", f), Some(true));
     }
 
     /// "The Types that feature this Feature": the type that owns it as

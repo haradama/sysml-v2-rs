@@ -3551,12 +3551,32 @@ impl Workspace {
         // what each end relates in front of its name -- and taking one
         // of those for an end reified here would give it a second
         // multiplicity and the connector a third thing to relate.
+        // A flow relates its ends through `FlowEnd`s, and the last step
+        // of what one names is not part of the path to it but the thing
+        // that flows: `FlowEnd = ( OwnedReferenceSubsetting '.' )?
+        // FlowFeatureMember`, where the member is the one feature a
+        // flow end owns.
+        let flowing = self.model.kind(connector).is_a(ElementKind::Flow);
         let end = self.reified(
             connector,
-            ElementKind::Feature,
+            match flowing {
+                true => ElementKind::FlowEnd,
+                false => ElementKind::Feature,
+            },
             &[("isEnd", Value::Bool(true))],
         );
         self.counts_one(end);
+        let chain = match flowing {
+            // an end is reified only for an operand that resolved, so
+            // there is always a last step to be the thing that flows
+            true => {
+                let (&flows, path) = chain.split_last().expect("an end names something");
+                let path = path.to_vec();
+                self.flowing_feature(end, flows);
+                path
+            }
+            false => chain,
+        };
         match chain.as_slice() {
             // One name is not a chain: the standard gives a feature
             // either no chaining features or more than one, so an end
@@ -3573,6 +3593,36 @@ impl Workspace {
                 );
             }
             _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
+        }
+    }
+
+    /// Stand the last step of what a flow end names up as the feature
+    /// that flows through it.
+    ///
+    /// `flow from tank.fuelOut to engine.fuelIn` runs from `tank`, and
+    /// what flows is `fuelOut`. The standard keeps them apart -- the
+    /// path is what the end refers to, the feature is the one thing it
+    /// owns -- and three constraints about a flow end read that shape.
+    /// [`sysml_model::end_reaches`] puts the two back together.
+    fn flowing_feature(&mut self, end: ElementId, flows: ElementId) {
+        let feature = self.reified(end, ElementKind::Feature, &[]);
+        self.reified(
+            feature,
+            ElementKind::Redefinition,
+            &[
+                ("redefiningFeature", Value::Ref(feature)),
+                ("redefinedFeature", Value::Ref(flows)),
+            ],
+        );
+        // The standard says so in a note beside the grammar: "to ensure
+        // that a FlowFeature passes the
+        // validateRedefinitionDirectionConformance constraint, its
+        // direction must be set to the direction of its
+        // redefinedFeature". Written nowhere, `out fuelOut` flowed into
+        // a feature with no direction at all, and the two are then not
+        // the same way round.
+        if let Some(direction) = self.model.get(flows, "direction").cloned() {
+            self.try_set(feature, "direction", direction);
         }
     }
 
