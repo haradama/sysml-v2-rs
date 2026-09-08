@@ -360,21 +360,10 @@ enum Val {
 impl Val {
     /// The elements of a value, whether it is one thing or many.
     fn many(&self) -> Vec<Val> {
-        self.each().to_vec()
-    }
-
-    /// The values a collection holds, without copying them.
-    ///
-    /// Every collection operation reads its target this way, and a
-    /// membership set runs to hundreds, so handing back a copy of one
-    /// to ask its size was most of what the check spent on collections.
-    /// One value is a collection of one, which a slice of it says
-    /// without building anything.
-    fn each(&self) -> &[Val] {
         match self {
-            Val::Set(items) => items,
-            Val::Null => &[],
-            other => std::slice::from_ref(other),
+            Val::Set(items) => items.clone(),
+            Val::Null => Vec::new(),
+            other => vec![other.clone()],
         }
     }
 
@@ -849,7 +838,7 @@ impl Scope<'_> {
         args: &[Expr],
         lambda: Option<&(String, Box<Expr>)>,
     ) -> Val {
-        let items = target.each();
+        let items = target.many();
         // The operations that take one. Evaluated here so that an
         // argument nothing can answer stops the operation rather than
         // being compared against and found unequal, which would make an
@@ -894,7 +883,7 @@ impl Scope<'_> {
                 other => unknown_from(&other, "the index of `at`"),
             },
             "including" => {
-                let mut out = items.to_vec();
+                let mut out = items;
                 out.push(taken);
                 Val::Set(out)
             }
@@ -902,9 +891,8 @@ impl Scope<'_> {
                 let dropped = taken;
                 Val::Set(
                     items
-                        .iter()
+                        .into_iter()
                         .filter(|item| equal(item, &dropped) != Val::Bool(true))
-                        .cloned()
                         .collect(),
                 )
             }
@@ -916,7 +904,7 @@ impl Scope<'_> {
                 Val::Bool(if name == "includes" { found } else { !found })
             }
             "union" => {
-                let mut out = items.to_vec();
+                let mut out = items;
                 out.extend(taken.many());
                 Val::Set(once_each(out))
             }
@@ -924,9 +912,8 @@ impl Scope<'_> {
                 let other = taken.many();
                 Val::Set(
                     items
-                        .iter()
+                        .into_iter()
                         .filter(|item| other.iter().any(|it| equal(item, it) == Val::Bool(true)))
-                        .cloned()
                         .collect(),
                 )
             }
@@ -939,8 +926,8 @@ impl Scope<'_> {
                     // no two of the elements agree; anything written is
                     // read of each of them
                     let value = match (lambda, args) {
-                        (None, []) => item.clone(),
-                        _ => self.over(item, args, lambda),
+                        (None, []) => item,
+                        _ => self.over(&item, args, lambda),
                     };
                     if let Some(unknown) = value.unknown() {
                         return unknown;
@@ -957,9 +944,8 @@ impl Scope<'_> {
                     return Val::Unknown(format!("`{name}` of a kind this does not know"));
                 };
                 let kept: Vec<Val> = items
-                    .iter()
+                    .into_iter()
                     .filter(|item| self.kind_of(item).is_some_and(|it| it.is_a(kind)))
-                    .cloned()
                     .collect();
                 // Keeping none of them is the ambiguous answer where the
                 // model has no element of that kind anywhere: an
@@ -993,8 +979,8 @@ impl Scope<'_> {
                 // directly -- which is all that nearly every feature
                 // redefines, and the operation is then a no-op that
                 // takes `removeRedefinedFeatures` down with it.
-                let mut found: Vec<Val> = items.to_vec();
-                let mut queue = items.to_vec();
+                let mut found: Vec<Val> = items.clone();
+                let mut queue = items;
                 while let Some(item) = queue.pop() {
                     let value = self.over(&item, args, lambda);
                     if let Some(unknown) = value.unknown() {
@@ -1012,7 +998,7 @@ impl Scope<'_> {
             "forAll" | "exists" | "select" | "reject" | "collect" | "any" => {
                 let mut kept = Vec::new();
                 for item in items {
-                    let value = self.over(item, args, lambda);
+                    let value = self.over(&item, args, lambda);
                     if let Some(unknown) = value.unknown() {
                         return unknown;
                     }
@@ -1020,10 +1006,8 @@ impl Scope<'_> {
                         ("collect", _) => kept.push(value),
                         ("forAll", Val::Bool(false)) => return Val::Bool(false),
                         ("exists", Val::Bool(true)) => return Val::Bool(true),
-                        ("select", Val::Bool(true)) | ("any", Val::Bool(true)) => {
-                            kept.push(item.clone())
-                        }
-                        ("reject", Val::Bool(false)) => kept.push(item.clone()),
+                        ("select", Val::Bool(true)) | ("any", Val::Bool(true)) => kept.push(item),
+                        ("reject", Val::Bool(false)) => kept.push(item),
                         ("forAll" | "exists" | "select" | "reject" | "any", Val::Bool(_)) => {}
                         _ => return unknown_from(&value, &format!("the body of `{name}`")),
                     }
