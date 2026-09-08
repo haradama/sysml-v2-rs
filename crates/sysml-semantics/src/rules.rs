@@ -1372,8 +1372,9 @@ impl Scope<'_> {
                 })
             }
             // the metamodel casts to read a property, and reading a
-            // property does not need the cast
-            "oclAsType" => target.clone(),
+            // property does not need the cast -- it spells the cast
+            // both ways
+            "oclAsType" | "oclAsKindOf" => target.clone(),
             "specializes" => {
                 let (Val::Elem(elem), Val::Elem(up)) = (target, self.argument(args)) else {
                     return Val::Unknown(
@@ -1939,6 +1940,22 @@ mod tests {
         assert_eq!(
             ws.judge("Sequence{1}->subSequence(1)->isEmpty()", car),
             None
+        );
+        // a cast reads a property and the cast itself adds nothing;
+        // the metamodel spells it both ways
+        assert_eq!(ws.judge("oclAsType(Type).isAbstract", car), Some(false));
+        assert_eq!(ws.judge("oclAsKindOf(Type).isAbstract", car), Some(false));
+        // What an operation returns is not one of the arguments it is
+        // called with. Six name that parameter `result`, and each is
+        // called with one fewer than it declares -- so `evaluate` takes
+        // the one the specification passes it.
+        assert_eq!(
+            sysml_model::OPERATIONS
+                .iter()
+                .filter(|it| it.name == "evaluate")
+                .map(|it| it.parameters)
+                .collect::<Vec<_>>(),
+            [&["target"]; 5]
         );
         // the exact-type question, which the specification spells
         // `oclIsType` and OCL spells `oclIsTypeOf`

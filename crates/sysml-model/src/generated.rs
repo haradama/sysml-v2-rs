@@ -8339,7 +8339,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "evaluate",
         metaclass: ElementKind::MetadataAccessExpression,
-        parameters: &["target", "result"],
+        parameters: &["target"],
         ocl: "referencedElement.ownedElement->\n    select(oclIsKindOf(MetadataFeature) \n        and annotatedElement->includes(referencedElement))->\n    including(metaclassFeature())",
     },
     Operation {
@@ -8357,7 +8357,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "evaluate",
         metaclass: ElementKind::LiteralExpression,
-        parameters: &["target", "result"],
+        parameters: &["target"],
         ocl: "Sequence{self}",
     },
     Operation {
@@ -8381,7 +8381,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "evaluate",
         metaclass: ElementKind::NullExpression,
-        parameters: &["target", "result"],
+        parameters: &["target"],
         ocl: "Sequence{}",
     },
     Operation {
@@ -8393,7 +8393,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "evaluate",
         metaclass: ElementKind::FeatureReferenceExpression,
-        parameters: &["target", "result"],
+        parameters: &["target"],
         ocl: "if not target.oclIsKindOf(Type) then Sequence{}\nelse\n    let feature: Sequence(Feature) = \n        target.oclAsType(Type).feature->select(f |\n            f.ownedRedefinition.redefinedFeature->\n                includes(referent)) in\n        if feature->notEmpty() then \n            feature.valuation.value.evaluate(target)\n        else if referent.featuringType->isEmpty() \n            then referent\n        else Sequence{} \n        endif endif\nendif",
     },
     Operation {
@@ -8411,7 +8411,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "evaluate",
         metaclass: ElementKind::Expression,
-        parameters: &["target", "result"],
+        parameters: &["target"],
         ocl: "let resultExprs : Sequence(Expression) =\n    ownedFeatureMembership->\n        selectByKind(ResultExpressionMembership).\n        ownedResultExpression in\nif resultExpr->isEmpty() then Sequence{}\nelse resultExprs->first().evaluate(target)\nendif",
     },
     Operation {
@@ -8531,7 +8531,7 @@ pub const OPERATIONS: &[Operation] = &[
     Operation {
         name: "allSupertypes",
         metaclass: ElementKind::Type,
-        parameters: &["result"],
+        parameters: &[],
         ocl: "OrderedSet{self}->closure(supertypes(false))",
     },
     Operation {

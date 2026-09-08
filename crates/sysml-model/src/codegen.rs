@@ -141,12 +141,18 @@ fn collect_operations(doc: &roxmltree::Document, xml: &str, out: &mut Vec<Operat
             .find(|up| xmi_type(up) == Some("uml:Class"))
             .and_then(|up| up.attribute("name"))
             .expect("an operation is written inside the class it belongs to");
-        // the one with no name of its own is what the operation returns
+        // What an operation returns is not one of the arguments it is
+        // called with. Most say so by leaving the parameter unnamed;
+        // six name it `result` instead, and each of those is called
+        // with one argument fewer than it declares --
+        // `bound.evaluate(owningType)` and `multiplicities().
+        // allSuperTypes()` -- while none of their bodies reads a
+        // `result` at all.
         let parameters = node
             .children()
             .filter(|it| it.has_tag_name("ownedParameter"))
             .filter_map(|it| it.attribute("name"))
-            .filter(|it| !it.is_empty())
+            .filter(|it| !it.is_empty() && *it != "result")
             .map(str::to_string)
             .collect();
         out.push(Operation {
