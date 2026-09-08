@@ -3088,10 +3088,13 @@ impl Workspace {
             // `to` say where the flow it declares runs, and are not this
             // relationship's to read.
             let ends = match beside {
-                Some(_) => (&[SyntaxKind::FIRST_KW][..], &[SyntaxKind::THEN_KW][..]),
+                Some(_) => (
+                    &[SyntaxKind::FIRST_KW][..],
+                    &[SyntaxKind::THEN_KW, SyntaxKind::ELSE_KW][..],
+                ),
                 None => (
                     &[SyntaxKind::FIRST_KW, SyntaxKind::FROM_KW][..],
-                    &[SyntaxKind::THEN_KW, SyntaxKind::TO_KW][..],
+                    &[SyntaxKind::THEN_KW, SyntaxKind::TO_KW, SyntaxKind::ELSE_KW][..],
                 ),
             };
             // Only the source can be the missing one. `first a;` says
@@ -4417,8 +4420,15 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
         {
             &[SyntaxKind::FROM_KW, SyntaxKind::TO_KW][..]
         }
-        // `transition t first a ... then b` writes a name of its own first
-        SyntaxKind::CONTROL_STMT => &[SyntaxKind::FIRST_KW, SyntaxKind::THEN_KW][..],
+        // `transition t first a ... then b` writes a name of its own
+        // first, and `else A3;` writes where a guard that did not hold
+        // goes: `DefaultTargetSuccession : TransitionUsage = 'else'
+        // TransitionSuccessionMember`.
+        SyntaxKind::CONTROL_STMT => &[
+            SyntaxKind::FIRST_KW,
+            SyntaxKind::THEN_KW,
+            SyntaxKind::ELSE_KW,
+        ][..],
         // a binding writes its two ends around an `=` rather than after
         // a keyword each
         _ if node
@@ -4534,9 +4544,19 @@ fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
                 }
                 if after_keyword && is_reference(child.kind()) {
                     out.push(child);
-                } else if after_keyword && child.kind() == SyntaxKind::PAREN_EXPR {
+                } else if matches!(
+                    child.kind(),
+                    SyntaxKind::PAREN_EXPR | SyntaxKind::PARAM_LIST
+                ) && (after_keyword || of.is_a(ElementKind::Connector))
+                {
                     // `connect (d1, d2, d3)` relates the whole list, and
-                    // the parentheses hold it rather than the statement
+                    // the parentheses hold it rather than the statement.
+                    // KerML writes the list with no keyword at all --
+                    // `NaryConnectorDeclaration : Connector =
+                    // FeatureDeclaration? '(' ConnectorEndMember ','
+                    // ConnectorEndMember ( ',' ConnectorEndMember )*
+                    // ')'` -- so a connector's parentheses hold its ends
+                    // wherever they stand.
                     out.extend(child.children().filter(|c| is_reference(c.kind())));
                 }
                 after_keyword = false;

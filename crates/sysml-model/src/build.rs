@@ -991,6 +991,12 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     // it is, and never before: `then while c { ... }` writes the flow
     // it continues first, and `action aLoop while c { ... }` its own
     // name. A `for` asks for what follows `in`.
+    // `then if c { ... }` writes what it asks as the conditional
+    // expression a guard is written as, all of it in one node.
+    if let Some(written) = node.children().find(|it| it.kind() == COND_EXPR) {
+        let text = written.text().to_string();
+        return keep_condition(model, id, text.strip_prefix("if").unwrap_or(&text).trim());
+    }
     let mut started = false;
     for part in node.children_with_tokens() {
         if !started {
@@ -1028,12 +1034,19 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
         }
         return;
     }
+    keep_condition(model, id, asked);
+}
+
+/// Keep what a structured control node asks, as the text it was written
+/// as.
+///
+/// `IfNode = 'if' ExpressionParameterMember ...` and its loop kin: what
+/// the node asks is handed to it, and `inputParameters()` is what the
+/// constraints about a structured control node count.
+fn keep_condition(model: &mut Model, id: ElementId, asked: &str) {
     let condition = model.create(ElementKind::Expression);
     model.add_owned(id, condition);
     model.set_member_role(condition, Role::Result);
-    // `IfNode = 'if' ExpressionParameterMember ...` and its loop kin:
-    // what the node asks is handed to it, and `inputParameters()` is
-    // what the constraints about a structured control node count.
     model.set(condition, "direction", Value::EnumLit("in"));
     represent_textually(model, condition, asked);
 }
@@ -1147,6 +1160,19 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     // tells a branch of the flow from a structured node.
     if is_target_transition(node) {
         return Some(ElementKind::TransitionUsage);
+    }
+    // `then if monitor.charge < 100 { ... }` declares the branch as much
+    // as `then while c { ... }` declares the loop. The parser reads the
+    // `if c` after a leading keyword as the conditional expression a
+    // transition guard is written as, and what tells the two apart is
+    // the braces: an `IfNode` writes its branches in them, and a guard
+    // is followed by the `then` it guards.
+    if node.children().any(|it| it.kind() == SyntaxKind::COND_EXPR)
+        && node
+            .children()
+            .any(|it| it.kind() == SyntaxKind::BODY && has_token(&it, SyntaxKind::L_BRACE))
+    {
+        return Some(ElementKind::IfActionUsage);
     }
     // `then send new S() via p;` declares the action as much as `then
     // merge continue;` declares the node, and for the same reason the
@@ -2390,7 +2416,8 @@ mod tests {
     /// with the body it was handed. `action aLoop while c { ... }`
     /// introduces a name rather than a plain action, and what the loop
     /// asks begins after the keyword that says which loop it is. A
-    /// `for` is the same both ways round.
+    /// `for` is the same both ways round, and so is the branch of a
+    /// `then if c { ... }`.
     #[test]
     fn a_loop_after_a_then_or_under_a_name_is_still_a_loop() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -2400,6 +2427,7 @@ mod tests {
              \tthen action aLoop while i > 0 { action e; }\n\
              \tthen for t in 1..3 { action f; }\n\
              \taction aFor for u in 1..3 { action g; }\n\
+             \tthen if i > 0 { action h; }\n\
              }\n",
         ));
         let loops: Vec<(ElementKind, Vec<ElementKind>)> = model
@@ -2450,6 +2478,17 @@ mod tests {
                     ]
                 ),
             ]
+        );
+        // and a branch after a `then` is the branch it declares, asking
+        // its condition and handed its body
+        assert_eq!(
+            model
+                .owned(roots[0])
+                .iter()
+                .filter(|&&it| model.kind(it) == ElementKind::IfActionUsage)
+                .map(|&it| model.owned(it).iter().map(|&c| model.kind(c)).collect())
+                .collect::<Vec<Vec<ElementKind>>>(),
+            [vec![ElementKind::Expression, ElementKind::ActionUsage]]
         );
     }
 

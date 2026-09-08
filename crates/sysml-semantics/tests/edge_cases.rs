@@ -2307,6 +2307,89 @@ fn what_relates_more_than_two_things_is_not_binary() {
     );
 }
 
+/// An `else` writes where a guard that did not hold goes, and a
+/// connector's parentheses hold its ends wherever they stand.
+///
+/// `DefaultTargetSuccession : TransitionUsage = 'else'
+/// TransitionSuccessionMember`, and `NaryConnectorDeclaration :
+/// Connector = FeatureDeclaration? '(' ConnectorEndMember ','
+/// ConnectorEndMember ( ',' ConnectorEndMember )* ')'` -- KerML writes
+/// the list after the declaration with no keyword at all.
+#[test]
+fn an_else_and_a_list_of_ends_say_what_they_relate() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "class C {\n\
+         \tfeature a;\n\
+         \tfeature b;\n\
+         \tfeature c;\n\
+         \tconnector ps : P (a, b, c);\n\
+         \tclassifier P;\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let connector = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .find(|&id| ws.model().name(id) == Some("ps"))
+        .expect("the connector is declared");
+    assert_eq!(
+        ws.model()
+            .get(connector, "relatedFeature")
+            .and_then(sysml_model::Value::as_ids)
+            .unwrap_or_default()
+            .iter()
+            .map(|&it| ws.model().name(it))
+            .collect::<Vec<_>>(),
+        [Some("a"), Some("b"), Some("c")]
+    );
+
+    // `if x > 1 then A2; else A3;` writes two branches of one decision,
+    // and the second names where it goes after the `else`
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "b.sysml",
+        "action def A {\n\
+         \tattribute x;\n\
+         \tdecide;\n\
+         \tif x > 1 then A2;\n\
+         \telse A3;\n\
+         \taction A2;\n\
+         \taction A3;\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let branches: Vec<Vec<Option<&str>>> = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().kind(it) == ElementKind::TransitionUsage)
+        .map(|it| {
+            ws.model()
+                .owned(it)
+                .iter()
+                .copied()
+                .find(|&c| ws.model().kind(c).is_a(ElementKind::SuccessionAsUsage))
+                .and_then(|s| {
+                    ws.model()
+                        .get(s, "relatedFeature")
+                        .and_then(sysml_model::Value::as_ids)
+                })
+                .unwrap_or_default()
+                .iter()
+                .map(|&r| ws.model().name(r))
+                .collect()
+        })
+        .collect();
+    assert_eq!(branches.len(), 2);
+    assert_eq!(branches[1], [None, Some("A3")]);
+}
+
 /// A transition relates through the succession it owns, and an n-ary
 /// connect writes each of its ends in the list.
 ///
