@@ -483,7 +483,17 @@ fn build_node(
                         reify_condition(model, &member, repeats);
                         continue;
                     }
-                    build_node(model, &member, Some(under), built);
+                    let made = build_node(model, &member, Some(under), built);
+                    // `connect ( cause1 ::> causer1, cause2 ::> causer2 )`
+                    // writes each end in the list, named and referring
+                    if child.kind() == PARAM_LIST
+                        && kind.is_a(ElementKind::Connector)
+                        && member.children().any(|it| it.kind() == REFERENCES)
+                    {
+                        if let Some(end) = made {
+                            takes_the_end_role(model, end);
+                        }
+                    }
                 }
             }
             PAYLOAD | PREFIX_METADATA => {

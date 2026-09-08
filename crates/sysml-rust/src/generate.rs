@@ -1617,16 +1617,21 @@ impl<'a> Generator<'a> {
             return None;
         }
         let name = model.name(usage)?;
-        // the two unnamed chaining features are the ends, source first
-        let ends: Vec<ElementId> = model
+        // A transition is not a connector: what it relates it relates
+        // through the `Succession` it owns, and that is where its two
+        // ends are.
+        let relates = model
             .owned(usage)
             .iter()
-            .filter_map(|&child| {
-                if model.kind(child) != ElementKind::Feature {
-                    return None;
-                }
-                sysml_model::end_reaches(model, child).last().copied()
-            })
+            .copied()
+            .find(|&child| model.kind(child).is_a(ElementKind::SuccessionAsUsage))
+            .unwrap_or(usage);
+        // the two unnamed chaining features are the ends, source first
+        let ends: Vec<ElementId> = model
+            .owned(relates)
+            .iter()
+            .filter(|&&child| model.kind(child) == ElementKind::Feature)
+            .filter_map(|&child| sysml_model::end_reaches(model, child).last().copied())
             .collect();
         let state_name = |id: ElementId| {
             states

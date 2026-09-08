@@ -2307,6 +2307,88 @@ fn what_relates_more_than_two_things_is_not_binary() {
     );
 }
 
+/// A transition relates through the succession it owns, and an n-ary
+/// connect writes each of its ends in the list.
+///
+/// "A TransitionUsage is not a Connector: what it relates it relates
+/// through a Succession of its own", so that is where its two ends
+/// belong -- read as the transition's, the succession it owns related
+/// nothing and the constraints that count what a control node is joined
+/// by had no ends to read. And `connect ( cause1 ::> causer1, cause2
+/// ::> causer2 )` writes each end in the list, named and referring, the
+/// same way a binary one writes two.
+#[test]
+fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.sysml",
+        "part def P {\n\
+         \tpart a;\n\
+         \tpart b;\n\
+         \tconnect ( c1 ::> a, c2 ::> b );\n\
+         \tstate def S {\n\
+         \t\tstate off;\n\
+         \t\tstate on;\n\
+         \t\ttransition t first off then on;\n\
+         \t}\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let named = |ws: &Workspace, name: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    };
+    // the ends of a transition are the succession's, and so is what it
+    // relates
+    let transition = named(&ws, "t");
+    let succession = ws
+        .model()
+        .owned(transition)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().kind(it).is_a(ElementKind::SuccessionAsUsage))
+        .expect("a transition owns one");
+    assert!(ws.model().get(transition, "relatedFeature").is_none());
+    assert_eq!(
+        ws.model()
+            .get(succession, "relatedFeature")
+            .and_then(sysml_model::Value::as_ids)
+            .unwrap_or_default()
+            .len(),
+        2
+    );
+    assert_eq!(
+        ws.model()
+            .owned(succession)
+            .iter()
+            .filter(|&&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+            .count(),
+        2
+    );
+    // and each of a list's ends is one
+    let connector = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().kind(it).is_a(ElementKind::Connector))
+        .expect("the connect statement builds one");
+    let ends: Vec<Option<&str>> = ws
+        .model()
+        .owned(connector)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .map(|it| ws.model().name(it))
+        .collect();
+    assert_eq!(ends, [Some("c1"), Some("c2")]);
+}
+
 /// A named declaration with a reference is the end itself.
 ///
 /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to

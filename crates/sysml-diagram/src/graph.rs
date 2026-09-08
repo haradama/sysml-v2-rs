@@ -1226,12 +1226,21 @@ fn is_structure_box(kind: ElementKind) -> bool {
 /// picks the box and the last names the port on it. A bare `connect w to a`
 /// chains to `[w]`, where both are the same element.
 fn connector_ends(model: &Model, connector: ElementId) -> Vec<End> {
+    // A transition is not a connector: what it relates it relates
+    // through the `Succession` it owns, and that is where its two ends
+    // are.
+    let connector = model
+        .owned(connector)
+        .iter()
+        .copied()
+        .find(|&child| model.kind(child).is_a(ElementKind::SuccessionAsUsage))
+        .filter(|_| model.kind(connector).is_a(ElementKind::TransitionUsage))
+        .unwrap_or(connector);
     // `require Load;` inside a requirement owns a reference of its own,
     // and it is not an end. What makes a member one is the `end` keyword
     // -- or that the thing owning it relates things for a living, which
     // is how `connect w.hub to a.mount` writes its two without one.
-    let relates = model.kind(connector).is_a(ElementKind::Connector)
-        || model.kind(connector).is_a(ElementKind::TransitionUsage);
+    let relates = model.kind(connector).is_a(ElementKind::Connector);
     model
         .owned(connector)
         .iter()

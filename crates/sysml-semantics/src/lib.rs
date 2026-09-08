@@ -108,8 +108,6 @@ enum Reached {
     Written(Vec<String>),
     /// the neighbour standing in for an end the statement left unwritten
     Beside(ElementId),
-    /// nowhere: a transition keeps its ends on the succession it owns
-    Nowhere,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3126,29 +3124,27 @@ impl Workspace {
             });
             if let Some(state) = leaves {
                 related.insert(0, state);
-                // a transition keeps its ends on the succession it owns
-                reached.insert(0, Reached::Nowhere);
+                reached.insert(0, Reached::Beside(state));
             }
         }
+        // A transition relates its source and target through the
+        // `Succession` it owns rather than by being a connector itself,
+        // so that is where the two ends belong.
+        let holder = self
+            .model
+            .owned(id)
+            .iter()
+            .copied()
+            .find(|&child| self.model.kind(child).is_a(ElementKind::SuccessionAsUsage))
+            .filter(|_| self.model.kind(id).is_a(ElementKind::TransitionUsage))
+            .unwrap_or(id);
         for step in reached {
             match step {
-                Reached::Written(segments) => self.reify_end(id, &segments),
-                Reached::Beside(target) => self.end_reaching(id, vec![target]),
-                Reached::Nowhere => {}
+                Reached::Written(segments) => self.reify_end(holder, &segments),
+                Reached::Beside(target) => self.end_reaching(holder, vec![target]),
             }
         }
         if !related.is_empty() {
-            // A transition relates its source and target through the
-            // `Succession` it owns rather than by being a connector
-            // itself, so that is where the two ends belong.
-            let holder = self
-                .model
-                .owned(id)
-                .iter()
-                .copied()
-                .find(|&child| self.model.kind(child).is_a(ElementKind::SuccessionAsUsage))
-                .filter(|_| self.model.kind(id).is_a(ElementKind::TransitionUsage))
-                .unwrap_or(id);
             self.try_set(holder, "relatedFeature", Value::RefList(related));
         }
         // How many things it relates says which library type it
