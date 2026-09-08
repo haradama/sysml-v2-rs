@@ -517,6 +517,20 @@ fn build_node(
                     owner
                 };
                 let made = build_node(model, &child, parent, built);
+                // `connect [1] lugNutPort ::> wheel.lugNutPort to ...`
+                // writes the end itself: `ConnectorEnd : Feature = (
+                // OwnedCrossMultiplicityMember )? ( declaredName = NAME
+                // REFERENCES )? OwnedReferenceSubsetting`. The
+                // declaration is the end the connector relates through,
+                // and read as a member of it the connector related
+                // nothing at all.
+                if kind.is_a(ElementKind::Connector)
+                    && child.children().any(|it| it.kind() == REFERENCES)
+                {
+                    if let Some(end) = made {
+                        takes_the_end_role(model, end);
+                    }
+                }
                 if let Some(parameter) = made.filter(|_| handed) {
                     model.set(parameter, "direction", Value::EnumLit("in"));
                     model.set(parameter, "isComposite", Value::Bool(false));
@@ -1898,13 +1912,21 @@ fn is_composite(
 /// `end inCart[0..1] item cart : Cart;` would otherwise leave `cart`
 /// composite for having been written as a usage.
 fn takes_the_cross_feature(model: &mut Model, end: ElementId, cross: ElementId) {
+    takes_the_end_role(model, end);
+    model.add_owned(end, cross);
+}
+
+/// Say that a declaration is one of the ends its connector relates.
+///
+/// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` -- an end is
+/// what a link relates, not something its connector is made of.
+fn takes_the_end_role(model: &mut Model, end: ElementId) {
     if model.kind(end).feature("isEnd").is_some() {
         model.set(end, "isEnd", Value::Bool(true));
     }
     if model.kind(end).feature("isComposite").is_some() {
         model.set(end, "isComposite", Value::Bool(false));
     }
-    model.add_owned(end, cross);
 }
 
 /// The end declaration a cross feature was written in front of.

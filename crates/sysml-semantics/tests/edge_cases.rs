@@ -2307,6 +2307,60 @@ fn what_relates_more_than_two_things_is_not_binary() {
     );
 }
 
+/// A named declaration with a reference is the end itself.
+///
+/// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to
+/// [1] shankPort ::> hub.shankPort;` -- `ConnectorEnd : Feature = (
+/// OwnedCrossMultiplicityMember )? ( declaredName = NAME REFERENCES )?
+/// OwnedReferenceSubsetting`, so what stands after `connect` is the end
+/// and what it refers to is what the connector relates. Read as a
+/// member of the interface, twenty-one of the corpus related nothing at
+/// all.
+#[test]
+fn a_named_declaration_with_a_reference_is_the_end() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.sysml",
+        "part def P {\n\
+         \tport def LC;\n\
+         \tport def SC;\n\
+         \tinterface def WHI { end lc : LC; end sc : SC; }\n\
+         \tpart w { port lcp : LC; }\n\
+         \tpart h { port scp : SC; }\n\
+         \tinterface i : WHI connect [1] lcp ::> w.lcp to [1] scp ::> h.scp;\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let interface = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .find(|&id| ws.model().name(id) == Some("i"))
+        .expect("the interface is declared");
+    let ends: Vec<Option<&str>> = ws
+        .model()
+        .owned(interface)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .map(|it| ws.model().name(it))
+        .collect();
+    assert_eq!(ends, [Some("lcp"), Some("scp")]);
+    // and what they refer to is what the interface relates
+    assert_eq!(
+        ws.model()
+            .get(interface, "relatedFeature")
+            .and_then(sysml_model::Value::as_ids)
+            .unwrap_or_default()
+            .iter()
+            .map(|&it| ws.qualified_name_of(it))
+            .collect::<Vec<_>>(),
+        ["P::w::lcp", "P::h::scp"]
+    );
+}
+
 /// A connector end is one thing.
 ///
 /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true,

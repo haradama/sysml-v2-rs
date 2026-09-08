@@ -1244,10 +1244,48 @@ impl Workspace {
             }
         }
         self.carry_ends();
+        self.relate_named_ends();
         self.imply_end_redefinitions();
         self.imply_cross_subsettings();
         stats.lookups = self.lookups - began;
         stats
+    }
+
+    /// What a connector relates, where it wrote its ends as
+    /// declarations of their own.
+    ///
+    /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort
+    /// to [1] shankPort ::> hub.shankPort;` writes the ends and not the
+    /// things they stand for, and `relatedFeature =
+    /// connectorEnd.ownedReferenceSubsetting.subsettedFeature` says
+    /// which of them the connector relates. What an end refers to is
+    /// resolved with the end rather than with the connector, so this
+    /// waits until both are.
+    fn relate_named_ends(&mut self) {
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            if !self.model.kind(elem).is_a(ElementKind::Connector)
+                || self.model.get(elem, "relatedFeature").is_some()
+            {
+                continue;
+            }
+            let related: Vec<ElementId> = self
+                .model
+                .owned(elem)
+                .iter()
+                .filter(|&&it| self.model.get(it, "isEnd") == Some(&Value::Bool(true)))
+                .filter_map(|&end| {
+                    self.model
+                        .owned(end)
+                        .iter()
+                        .copied()
+                        .find(|&it| self.model.kind(it) == ElementKind::ReferenceSubsetting)
+                        .and_then(|it| self.model.referenced_feature(it))
+                })
+                .collect();
+            if !related.is_empty() {
+                self.try_set(elem, "relatedFeature", Value::RefList(related));
+            }
+        }
     }
 
     /// The redefinition an end declared beside a supertype's implies.
