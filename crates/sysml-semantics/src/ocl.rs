@@ -16,6 +16,10 @@ pub(crate) enum Expr {
     Int(i64),
     /// `'select'`, and the library names `specializesFromLibrary` takes.
     Str(String),
+    /// `*`, the unbounded end of a multiplicity. `MultiplicityRange::
+    /// valueOf` answers it for an infinite literal and
+    /// `hasBounds` compares against it.
+    Unlimited,
     /// A bare name: `self`, a `let` or lambda variable, or a property of
     /// the element the rule is about. Which it is, is settled when it is
     /// evaluated and not before.
@@ -495,6 +499,12 @@ impl Parser {
                     },
                 }
             }
+            // `*` is a value here and nothing else: this subset has no
+            // multiplication for it to be
+            Tok::Punct if token.text == "*" => {
+                self.at += 1;
+                Ok(Expr::Unlimited)
+            }
             Tok::Punct => Err(format!("expected a value, found `{}`", token.text)),
         }
     }
@@ -549,15 +559,16 @@ mod tests {
     /// `forAll(` it never closes, as `deriveFeatureCrossFeature` and
     /// `deriveTransitionUsageSource` each stop one `endif` short --
     /// those three are closed and read, since the grammar leaves one
-    /// place for the closing. The rest are this subset's:
-    /// `MultiplicityRange::valueOf` answers `*` for an unbounded
-    /// literal and nothing here reads that yet.
+    /// place for the closing, and `ControlNode::multiplicityHasBounds`
+    /// is a fourth. The rest are the specification's own too, or this
+    /// subset's: `OperatorExpression::instantiatedType` writes a string
+    /// in double quotes, which OCL spells with single ones.
     ///
     /// It is pinned so that the list cannot grow unnoticed, and so that
     /// closing one of the gaps shows up here as the gain it is.
     #[test]
     fn what_the_specification_writes_that_this_subset_cannot_read() {
-        const UNREADABLE: [&str; 19] = [
+        const UNREADABLE: [&str; 17] = [
             "ControlNode::multiplicityHasBounds",
             "Expression::modelLevelEvaluable",
             "Feature::isFeaturingType",
@@ -566,8 +577,6 @@ mod tests {
             "Membership::isDistinguishableFrom",
             "MetadataFeature::evaluateFeature",
             "MetadataFeature::syntaxElement",
-            "MultiplicityRange::hasBounds",
-            "MultiplicityRange::valueOf",
             "Namespace::qualificationOf",
             "Namespace::resolveGlobal",
             "Namespace::unqualifiedNameOf",

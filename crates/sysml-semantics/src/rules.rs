@@ -136,10 +136,14 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// it means is, so the `f` of `feature->select(f | ...)` -- which the
 /// metamodel writes a few lines away -- is the `f` that was bound and
 /// not this one.
-const MISSPELLED: [(&str, &str); 3] = [
+/// `ControlNode::multiplicityHasBounds` calls `oclisKindOf`, which is
+/// spelled `oclIsKindOf` everywhere else in the metamodel and twice in
+/// the very body that misspells it once.
+const MISSPELLED: [(&str, &str); 4] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("f", "feature"),
+    ("oclisKindOf", "oclIsKindOf"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -181,7 +185,7 @@ const MISSPELLED: [(&str, &str); 3] = [
 /// `hasBounds(1, 1)` it goes on to call answer nothing and an
 /// `exists` over nothing is a definite `false`. Unreadable is the
 /// better answer there.
-const UNCLOSED: [(&str, &str, &str); 3] = [
+const UNCLOSED: [(&str, &str, &str); 4] = [
     (
         "deriveFeatureCrossFeature",
         "chainingFeatures->at(2)",
@@ -193,6 +197,14 @@ const UNCLOSED: [(&str, &str, &str); 3] = [
         "deriveTransitionUsageSource",
         "oclAsType(ActionUsage)",
         "oclAsType(ActionUsage) endif",
+    ),
+    // `ControlNode::multiplicityHasBounds` opens an `exists(` and
+    // closes it nowhere; the `endif` that ends the `if` it sits in is
+    // the one place the `)` can go before.
+    (
+        "multiplicityHasBounds",
+        "hasBounds(lower, upper)\nendif",
+        "hasBounds(lower, upper))\nendif",
     ),
     // `Expression::modelLevelEvaluable` opens two `forAll(` and closes
     // one, and stops in the middle of the second.
@@ -438,6 +450,10 @@ enum Val {
     Bool(bool),
     Int(i64),
     Str(String),
+    /// `*`, the unbounded end of a multiplicity: equal to itself and to
+    /// no number, which is what the bounds of a multiplicity are
+    /// compared for.
+    Unlimited,
     Elem(ElementId),
     /// A membership the model keeps as containment rather than as an
     /// element: the standard owns every member through one, and this
@@ -496,6 +512,7 @@ impl Scope<'_> {
             Expr::Bool(it) => Val::Bool(*it),
             Expr::Int(it) => Val::Int(*it),
             Expr::Str(it) => Val::Str(it.clone()),
+            Expr::Unlimited => Val::Unlimited,
             // an enumeration literal is the word the model stores
             Expr::Enum(_, literal) => Val::Str(literal.clone()),
             // `Sequence{2..n}` is the whole numbers from two to n, not
@@ -1062,6 +1079,10 @@ impl Scope<'_> {
         if let Some(unknown) = target.unknown() {
             return unknown;
         }
+        // Read as meant before it is dispatched, so that both the
+        // operations written here and those the metamodel defines are
+        // found under the name the specification's own body calls them.
+        let name = meant(name);
         // a collection operation reads its target as many things; an
         // operation on an element reads it as one
         if arrow || COLLECTION.contains(&name) {
@@ -1423,10 +1444,9 @@ impl Scope<'_> {
             return None;
         };
         let kind = self.ws.model().kind(*elem);
-        let called = meant(name);
         let defined = operations()
             .iter()
-            .find(|it| it.called == called && it.parameters.len() == args.len() && kind.is_a(it.of))
+            .find(|it| it.called == name && it.parameters.len() == args.len() && kind.is_a(it.of))
             .filter(|_| self.depth < DEPTH)?;
         let bound: HashMap<String, Val> = defined
             .parameters
@@ -1885,6 +1905,11 @@ mod tests {
         // `Set(Element){}` names the type its emptiness is empty of,
         // which says nothing the values do not
         assert_eq!(ws.judge("Set(Element){}->isEmpty()", car), Some(true));
+        // `*` is the unbounded end of a multiplicity: equal to itself
+        // and to no number, which is what a bound is compared for
+        assert_eq!(ws.judge("* = *", car), Some(true));
+        assert_eq!(ws.judge("* = 1", car), Some(false));
+        assert_eq!(ws.judge("0 = *", car), Some(false));
         // `relatedFeature->subSequence(2, size)` is every end but the
         // first, counted from one and taking both ends
         assert_eq!(
