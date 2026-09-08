@@ -1244,12 +1244,15 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
     // The multiplicity written at an end is the cross multiplicity --
     // how many things at the far end go with one at this one -- and
     // `end [1] part bead : TireBead;` writes it on the cross feature,
-    // in front of the declaration. The end itself, as a participant of
-    // the association, is always one thing.
-    let written_on = sysml_model::owned_cross_feature(model, end).unwrap_or(end);
-    if let Some(range) = multiplicity_of(model, written_on) {
+    // in front of the declaration. The end itself is a participant of
+    // the association, and `validateFeatureEndMultiplicity` gives every
+    // one of those a multiplicity of 1..1: writing that beside each end
+    // would say nothing and clutter every line.
+    let crossing = sysml_model::owned_cross_feature(model, end);
+    if let Some(range) = crossing.and_then(|it| multiplicity_of(model, it)) {
         out.push_str(&format!(" {range}"));
     }
+    let written_on = crossing.unwrap_or(end);
     if let Some(direction) = direction_of(model, written_on) {
         out.push_str(&format!(" {direction}"));
     }

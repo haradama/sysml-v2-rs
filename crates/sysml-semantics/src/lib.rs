@@ -3372,6 +3372,7 @@ impl Workspace {
         // source wrote as a reference.
         let end = self.reified(connector, ElementKind::Feature, &[]);
         self.try_set(end, "isEnd", Value::Bool(true));
+        self.counts_one(end);
         match chain.as_slice() {
             // One name is not a chain: the standard gives a feature
             // either no chaining features or more than one, so an end
@@ -3389,6 +3390,32 @@ impl Workspace {
             }
             _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
         }
+    }
+
+    /// An end is one thing.
+    ///
+    /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd =
+    /// true, then it must have multiplicity 1..1" -- and the notation
+    /// writes it nowhere. What stands before an end in `first [0..1]
+    /// decide then [0..1] merge` is the cross multiplicity, how many
+    /// things at the far end go with one at this one; the end itself is
+    /// a participant, and there is one of it. Without the range, the
+    /// four constraints that count what a control node is joined by
+    /// have nothing to read.
+    fn counts_one(&mut self, end: ElementId) {
+        let range = self.reified(end, ElementKind::MultiplicityRange, &[]);
+        if self.model.get(range, "upperBound").is_none() {
+            let mut one = || {
+                let bound = self.model.create(ElementKind::LiteralInteger);
+                self.model.add_owned(range, bound);
+                self.model.set(bound, "value", Value::Int(1));
+                bound
+            };
+            let (lower, upper) = (one(), one());
+            self.model.set(range, "lowerBound", Value::Ref(lower));
+            self.model.set(range, "upperBound", Value::Ref(upper));
+        }
+        self.try_set(end, "multiplicity", Value::Ref(range));
     }
 
     /// A transition's `accept x : T` writes a typing that belongs to the

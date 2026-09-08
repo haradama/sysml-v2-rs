@@ -2144,6 +2144,64 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A connector end is one thing.
+///
+/// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true,
+/// then it must have multiplicity 1..1" -- and the notation writes it
+/// nowhere: what stands before an end in `first [0..1] decide then
+/// [0..1] merge` is the cross multiplicity, how many things at the far
+/// end go with one at this one. Without the range, the four constraints
+/// that count what a control node is joined by have nothing to read.
+#[test]
+fn a_connector_end_is_one_thing() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.sysml",
+        "part def P {\n\tpart a;\n\tpart b;\n\tconnect a to b;\n}\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let connector = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().kind(it).is_a(ElementKind::Connector))
+        .expect("the connection is declared");
+    for end in ws.model().owned(connector).to_vec() {
+        if ws.model().get(end, "isEnd") != Some(&sysml_model::Value::Bool(true)) {
+            continue;
+        }
+        let range = ws
+            .model()
+            .get(end, "multiplicity")
+            .and_then(sysml_model::Value::as_id)
+            .expect("an end counts one");
+        assert_eq!(ws.model().kind(range), ElementKind::MultiplicityRange);
+        // the bounds are its first owned members, in order, which is
+        // what `validateMultiplicityRangeBounds` asks for
+        let bounds: Vec<Option<&sysml_model::Value>> = ws
+            .model()
+            .owned(range)
+            .iter()
+            .map(|&it| ws.model().get(it, "value"))
+            .collect();
+        assert_eq!(
+            bounds,
+            [
+                Some(&sysml_model::Value::Int(1)),
+                Some(&sysml_model::Value::Int(1))
+            ]
+        );
+        assert_eq!(
+            ws.model()
+                .get(range, "lowerBound")
+                .and_then(sysml_model::Value::as_id),
+            ws.model().owned(range).first().copied()
+        );
+    }
+}
+
 /// A binding binds the two ends written around its `=`.
 ///
 /// SysML writes `binding [1] bind [0..*] base.edges = [0..*] be;` and

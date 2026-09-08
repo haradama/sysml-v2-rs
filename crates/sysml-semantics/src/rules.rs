@@ -2470,7 +2470,7 @@ mod tests {
         let mut ws = Workspace::new();
         let file = ws.add_file(
             "test.sysml",
-            "action def A {\n\tattribute v;\n\taction x;\n\tthen assign v := 1;\n}\n",
+            "action def A {\n\tattribute v;\n\taction x;\n\tassign v := 1;\n}\n",
         );
         ws.resolve_all();
         let checked = ws.check_rules(&[file]);
