@@ -2226,20 +2226,26 @@ fn a_succession_that_names_one_end_reifies_both() {
     );
 }
 
-/// A relationship between more than two things is not a binary one,
-/// and nothing specializes what specializes it.
+/// A relationship is binary where it relates exactly two things, and
+/// nothing specializes what specializes it.
 ///
 /// `validateConnectorBinarySpecialization` -- "if a Connector has more
 /// than two connectorEnds, then it must not specialize, directly or
 /// indirectly, the Association BinaryLink" -- and
 /// `validateAssociationBinarySpecialization` says the same of an
 /// association. What a type implicitly specializes is not read off its
-/// metaclass alone. And `Connections::Connection` is a connection
-/// definition like any other, so the base its metaclass names is
-/// `BinaryConnection` -- which specializes it: implied that way round,
-/// the library's own base for every connection was binary.
+/// metaclass alone: the pilot implementation writes `numEnds != 2 ?
+/// base : binary` for every one of them, counted over the ends the type
+/// owns. A definition that declares none -- `abstract connection def
+/// Multicausation` -- is not binary either, and everything built on it
+/// was.
+///
+/// And `Connections::Connection` is a connection definition like any
+/// other, so the base its metaclass names is `BinaryConnection` --
+/// which specializes it: implied that way round, the library's own base
+/// for every connection was binary.
 #[test]
-fn what_relates_more_than_two_things_is_not_binary() {
+fn what_relates_exactly_two_things_is_binary() {
     let mut ws = Workspace::new();
     ws.load_dir(std::path::Path::new(
         "../../vendor/sysml-v2-release/sysml.library",
@@ -2251,6 +2257,7 @@ fn what_relates_more_than_two_things_is_not_binary() {
          \tpart def A;\n\
          \tconnection def Two { end a : A; end b : A; }\n\
          \tconnection def Three { end a : A; end b : A; end c : A; }\n\
+         \tconnection def None;\n\
          \tpart def Holder {\n\
          \t\tconnection two : Two;\n\
          \t\tconnection three : Three;\n\
@@ -2289,6 +2296,9 @@ fn what_relates_more_than_two_things_is_not_binary() {
     }
     assert!(reaches(&mut ws, two, "Connections::BinaryConnection"));
     assert!(!reaches(&mut ws, three, "Connections::BinaryConnection"));
+    // and one that declares no ends at all relates no two things
+    let bare = of(&ws, "None");
+    assert!(!reaches(&mut ws, bare, "Connections::BinaryConnection"));
     // and a usage declares no ends of its own, so what it relates is
     // what it is typed by
     let (of_two, of_three) = (of(&ws, "two"), of(&ws, "three"));
