@@ -1775,7 +1775,31 @@ fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
                 .into_iter()
                 .flat_map(|ty| itself_and_supertypes(model, ty)),
         )
+        // What a structured control node writes in braces is one
+        // parameter handed to it -- `ActionBodyParameterMember` -- and
+        // the steps drawn inside the node are the ones that parameter
+        // holds, a level in from the node itself.
+        .chain(body_parameters(model, usage))
         .filter(|id| seen.insert(*id))
+        .collect()
+}
+
+/// The bodies a structured control node was handed, which is where the
+/// steps it runs are written.
+fn body_parameters(model: &Model, usage: ElementId) -> Vec<ElementId> {
+    if !matches!(
+        model.kind(usage),
+        ElementKind::IfActionUsage
+            | ElementKind::WhileLoopActionUsage
+            | ElementKind::ForLoopActionUsage
+    ) {
+        return Vec::new();
+    }
+    model
+        .owned(usage)
+        .iter()
+        .copied()
+        .filter(|&it| model.kind(it) == ElementKind::ActionUsage && model.name(it).is_none())
         .collect()
 }
 

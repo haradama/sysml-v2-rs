@@ -396,6 +396,15 @@ fn build_node(
     for child in node.children() {
         match child.kind() {
             BODY | PARAM_LIST => {
+                // `IfNode = 'if' ExpressionParameterMember
+                // ActionBodyParameterMember ( 'else' ... )?`, and
+                // `ActionBodyParameter : ActionUsage = ... '{'
+                // ActionBodyItem* '}'`. What a structured control node
+                // writes in braces is one parameter handed to it, not
+                // members of the node itself: `inputParameters()->size()
+                // = 2` counts a `for` loop's sequence and its body,
+                // however many statements the body is written with.
+                let under = body_parameter(model, id, &child).unwrap_or(id);
                 let mut loop_before = None;
                 for member in child.children() {
                     // `loop { ... } until c;` is one node written as two
@@ -408,7 +417,7 @@ fn build_node(
                         reify_condition(model, &member, repeats);
                         continue;
                     }
-                    loop_before = build_node(model, &member, Some(id), built)
+                    loop_before = build_node(model, &member, Some(under), built)
                         .filter(|&member| model.kind(member) == ElementKind::WhileLoopActionUsage);
                 }
             }
@@ -870,11 +879,25 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     }
     let asked = asked.trim();
     if asked.is_empty() {
+        // `WhileLoopNode = ... ( 'while' ExpressionParameterMember |
+        // 'loop' EmptyParameterMember ) ...`: a bare `loop` asks
+        // nothing and is handed an empty parameter all the same --
+        // `EmptyUsage : ReferenceUsage = {}` -- which is what keeps it
+        // the two the constraint counts.
+        if has_token(node, LOOP_KW) {
+            let empty = model.create(ElementKind::ReferenceUsage);
+            model.add_owned(id, empty);
+            model.set(empty, "direction", Value::EnumLit("in"));
+        }
         return;
     }
     let condition = model.create(ElementKind::Expression);
     model.add_owned(id, condition);
     model.set_member_role(condition, Role::Result);
+    // `IfNode = 'if' ExpressionParameterMember ...` and its loop kin:
+    // what the node asks is handed to it, and `inputParameters()` is
+    // what the constraints about a structured control node count.
+    model.set(condition, "direction", Value::EnumLit("in"));
     represent_textually(model, condition, asked);
 }
 
@@ -975,6 +998,12 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     // Read as the succession its `then` would otherwise make, the trigger
     // has nothing standing for it and the transition nothing to be found
     // by.
+    //
+    // `if x then a;` after a decision node is the same shape:
+    // `GuardedTargetSuccession : TransitionUsage = GuardExpressionMember
+    // 'then' TransitionSuccessionMember`. An `IfNode` writes its
+    // branches in braces and no `then` at all, so the keyword is what
+    // tells a branch of the flow from a structured node.
     if is_target_transition(node) {
         return Some(ElementKind::TransitionUsage);
     }
@@ -1697,6 +1726,32 @@ fn is_composite(
     true
 }
 
+/// The one parameter a structured control node's braces stand for.
+///
+/// `if c { a; b; }` hands the node a single body, not two members of
+/// its own, and the same of a loop's. A body written as `;` rather than
+/// in braces stands for nothing and is not one.
+fn body_parameter(model: &mut Model, id: ElementId, body: &SyntaxNode) -> Option<ElementId> {
+    let structured = matches!(
+        model.kind(id),
+        ElementKind::IfActionUsage
+            | ElementKind::WhileLoopActionUsage
+            | ElementKind::ForLoopActionUsage
+    );
+    if !structured || !has_token(body, SyntaxKind::L_BRACE) {
+        return None;
+    }
+    let parameter = model.create(ElementKind::ActionUsage);
+    model.add_owned(id, parameter);
+    // Handed to the node rather than part of it:
+    // `ActionBodyParameterMember : ParameterMembership`, and
+    // `validateUsageIsReferential` says what is handed to a behaviour is
+    // not something it is made of.
+    model.set(parameter, "direction", Value::EnumLit("in"));
+    model.set(parameter, "isComposite", Value::Bool(false));
+    Some(parameter)
+}
+
 /// The direction a feature was declared with (`in`, `out`, `inout`).
 fn declared_direction(node: &SyntaxNode) -> Option<&'static str> {
     use SyntaxKind::*;
@@ -2004,6 +2059,47 @@ mod tests {
             .owned(conjugate)
             .iter()
             .all(|&it| model.kind(it) != ElementKind::ConjugatedPortDefinition));
+    }
+
+    /// `IfNode = 'if' ExpressionParameterMember
+    /// ActionBodyParameterMember ( 'else' ... )?`, and
+    /// `ActionBodyParameter : ActionUsage = ... '{' ActionBodyItem* '}'`.
+    /// What a structured control node writes in braces is one parameter
+    /// handed to it, not members of the node itself:
+    /// `validateForLoopActionUsageParameters` counts a loop's sequence
+    /// and its body as two, however many statements the body holds.
+    ///
+    /// A bare `loop` asks nothing and is handed an empty parameter all
+    /// the same -- `'loop' EmptyParameterMember`, where `EmptyUsage :
+    /// ReferenceUsage = {}`.
+    #[test]
+    fn a_control_node_is_handed_one_body_however_much_it_holds() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tattribute i;\n\
+             \tif i > 0 { action b; action c; } else { action d; }\n\
+             \tloop { action e; }\n\
+             }\n",
+        ));
+        let shape = |of: ElementId| -> Vec<(ElementKind, usize)> {
+            model
+                .owned(of)
+                .iter()
+                .map(|&it| (model.kind(it), model.owned(it).len()))
+                .collect()
+        };
+        let members = model.owned(roots[0]);
+        // the two branches are one parameter each, whatever they hold
+        let branch = ElementKind::ActionUsage;
+        assert_eq!(
+            shape(members[1]),
+            [(ElementKind::Expression, 1), (branch, 2), (branch, 1),]
+        );
+        // and a bare loop is handed an empty parameter beside its body
+        assert_eq!(
+            shape(members[2]),
+            [(ElementKind::ReferenceUsage, 0), (branch, 1)]
+        );
     }
 
     /// The two notations default composition the other way about.
