@@ -785,13 +785,6 @@ impl Workspace {
             if let Some(name) = self.model.name(child) {
                 out.push((name.to_string(), kind));
             }
-            if self.is_end_member(child) {
-                for nested in self.model.owned(child).to_vec() {
-                    if let Some(name) = self.model.name(nested) {
-                        out.push((name.to_string(), self.model.kind(nested)));
-                    }
-                }
-            }
         }
         let sub_access = if access == Access::Internal {
             Access::Inherited
@@ -1155,6 +1148,32 @@ impl Workspace {
                                 }
                                 continue;
                             }
+                            // `crosses sameThing.self` names a chain,
+                            // not the feature at the end of it:
+                            // `deriveFeatureCrossFeature` reads
+                            // `crossedFeature.chainingFeature->at(2)`,
+                            // and `validateCrossSubsettingCrossedFeature`
+                            // holds the first step to being the other
+                            // end of the association. Read as the last
+                            // step alone, what answers for the chain is
+                            // whatever chaining that feature happens to
+                            // have of its own.
+                            if part_kind == SyntaxKind::CROSSES_KW && t.chain.len() > 1 {
+                                let chain: Vec<ElementId> = t
+                                    .chain
+                                    .iter()
+                                    .filter_map(|&depth| {
+                                        self.resolve_from(id, &t.segments[..depth])
+                                    })
+                                    .collect();
+                                let crossed = self.reified(
+                                    id,
+                                    ElementKind::Feature,
+                                    &[("chainingFeature", Value::RefList(chain))],
+                                );
+                                self.reify(id, is_definition, part_kind, crossed);
+                                continue;
+                            }
                             self.reify(id, is_definition, part_kind, target);
                         }
                         None => {
@@ -1210,8 +1229,207 @@ impl Workspace {
             }
         }
         self.carry_ends();
+        self.imply_end_redefinitions();
+        self.imply_cross_subsettings();
         stats.lookups = self.lookups - began;
         stats
+    }
+
+    /// The redefinition an end declared beside a supertype's implies.
+    ///
+    /// "If a Feature has isEnd = true and an owningType that is not
+    /// empty, then, for each direct supertype of its owningType, it
+    /// must redefine the endFeature at the same position, if any."
+    /// Almost nothing writes it: `connect a to b` names no end at all,
+    /// and the binary connection it specializes is reached implicitly.
+    /// Read without it every such connector has four ends -- the two it
+    /// was written with and the two it inherits -- and "a connector
+    /// specializing a binary one is binary" is true of none of the
+    /// eight hundred in the corpus.
+    fn imply_end_redefinitions(&mut self) {
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            let mine = self.own_ends(elem);
+            if mine.is_empty() {
+                continue;
+            }
+            let above: Vec<Vec<ElementId>> = self
+                .supertypes_of(elem)
+                .into_iter()
+                .map(|up| self.ends_of(up))
+                .collect();
+            for (at, &end) in mine.iter().enumerate() {
+                for other in above.iter().filter_map(|ends| ends.get(at).copied()) {
+                    // What it already redefines it does not redefine
+                    // again -- and only a redefinition counts, since
+                    // only a redefinition stands in the place of what
+                    // it names. `end feature transferSource references
+                    // source` subsets the end it refers to and leaves
+                    // it inherited beside itself.
+                    if other == end || self.redefines(end, other) {
+                        continue;
+                    }
+                    let redefinition = self.reified(
+                        end,
+                        ElementKind::Redefinition,
+                        &[
+                            ("redefiningFeature", Value::Ref(end)),
+                            ("redefinedFeature", Value::Ref(other)),
+                        ],
+                    );
+                    self.model.set(redefinition, "isImplied", Value::Bool(true));
+                    self.model.set(end, "isImpliedIncluded", Value::Bool(true));
+                    self.supertypes.clear();
+                }
+            }
+        }
+    }
+
+    /// Whether a feature redefines another, directly or through what it
+    /// redefines in turn.
+    fn redefines(&self, feature: ElementId, other: ElementId) -> bool {
+        let mut queue = vec![feature];
+        let mut seen = Vec::new();
+        while let Some(at) = queue.pop() {
+            if at == other {
+                return true;
+            }
+            if seen.contains(&at) {
+                continue;
+            }
+            seen.push(at);
+            queue.extend(self.model.owned(at).iter().filter_map(|&owned| {
+                match self.model.get(owned, "redefinedFeature") {
+                    Some(Value::Ref(target)) => Some(*target),
+                    _ => None,
+                }
+            }));
+        }
+        false
+    }
+
+    /// The end features a type declares itself, in the order it wrote
+    /// them -- `ownedEndFeature`.
+    fn own_ends(&self, elem: ElementId) -> Vec<ElementId> {
+        self.model
+            .owned(elem)
+            .iter()
+            .copied()
+            .filter(|&it| self.model.get(it, "isEnd") == Some(&Value::Bool(true)))
+            .collect()
+    }
+
+    /// The end features a type has, its own or the ones it inherits.
+    ///
+    /// A type that declares no ends of its own stands for the ends of
+    /// what it specializes -- `Connections::Connection` is reached
+    /// through `BinaryConnection`, which is where the two ends are --
+    /// so a position has to be looked for past a silent supertype
+    /// rather than given up on there.
+    fn ends_of(&mut self, elem: ElementId) -> Vec<ElementId> {
+        let mut queue = vec![elem];
+        let mut seen = Vec::new();
+        let mut at = 0;
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            let mine = self.own_ends(up);
+            if !mine.is_empty() {
+                return mine;
+            }
+            queue.extend(self.supertypes_of(up));
+        }
+        Vec::new()
+    }
+
+    /// The subsetting an owned cross feature implies.
+    ///
+    /// "If this Feature is the ownedCrossFeature of an end Feature,
+    /// then, for any end Feature that is redefined by the owning end
+    /// Feature of this Feature, this Feature must subset the
+    /// crossFeature of the redefined end Feature, if this exists."
+    /// Nothing writes it down: the association declares the cross
+    /// feature and the redefinition and leaves what holds between them
+    /// to the tool, and `validateFeatureCrossFeatureSpecialization` is
+    /// the specification asking for it back.
+    fn imply_cross_subsettings(&mut self) {
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            let Some(mine) = self.owned_cross_feature(elem) else {
+                continue;
+            };
+            let redefined: Vec<ElementId> = self
+                .model
+                .owned(elem)
+                .iter()
+                .filter_map(|&it| match self.model.get(it, "redefinedFeature") {
+                    Some(Value::Ref(target)) => Some(*target),
+                    _ => None,
+                })
+                .collect();
+            for up in redefined {
+                let Some(theirs) = self.cross_feature(up) else {
+                    continue;
+                };
+                if theirs == mine || reaches(&self.model, mine, theirs) {
+                    continue;
+                }
+                let subsetting = self.reified(
+                    mine,
+                    ElementKind::Subsetting,
+                    &[
+                        ("subsettingFeature", Value::Ref(mine)),
+                        ("subsettedFeature", Value::Ref(theirs)),
+                    ],
+                );
+                self.model.set(subsetting, "isImplied", Value::Bool(true));
+                self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
+                // what a feature specializes was worked out and
+                // remembered while this pass was still deciding
+                self.supertypes.clear();
+            }
+        }
+    }
+
+    /// The cross feature an end owns, where it wrote one.
+    ///
+    /// `ownedCrossFeature()` is "the first ownedMember of the Feature
+    /// that is a Feature, but not a Multiplicity or a MetadataFeature,
+    /// and whose owningMembership is not a FeatureMembership". The
+    /// notation writes that two ways, and both are read here from what
+    /// was written: `member feature inCart;` inside the end, and `end
+    /// inCart[0..1] feature cart : ShoppingCart;` in front of it.
+    fn owned_cross_feature(&self, elem: ElementId) -> Option<ElementId> {
+        if self.model.get(elem, "isEnd") != Some(&Value::Bool(true)) {
+            return None;
+        }
+        self.model.owned(elem).iter().copied().find(|&it| {
+            self.model.kind(it).is_a(ElementKind::Feature)
+                && !self.model.kind(it).is_a(ElementKind::Multiplicity)
+                && !self.model.kind(it).is_a(ElementKind::MetadataUsage)
+                && self.source.get(&it).is_some_and(written_as_member)
+        })
+    }
+
+    /// The cross feature of an end: the one it owns, or the second step
+    /// of the chain its cross subsetting names.
+    fn cross_feature(&self, elem: ElementId) -> Option<ElementId> {
+        if let Some(owned) = self.owned_cross_feature(elem) {
+            return Some(owned);
+        }
+        let crossed = self
+            .model
+            .owned(elem)
+            .iter()
+            .copied()
+            .find(|&it| self.model.kind(it).is_a(ElementKind::CrossSubsetting))
+            .and_then(|it| self.model.crossed_feature(it))?;
+        // `crosses a.b` names the chain; a single name names no chain
+        // at all, and the standard gives a cross feature nothing to be
+        // the second step of
+        self.model.chaining_feature(crossed).get(1).copied()
     }
 
     /// A feature that redefines an end is an end, and an end is not
@@ -1827,16 +2045,12 @@ impl Workspace {
         }
     }
 
-    /// Is this a connector-end member (`end e feature f : T;`) whose nested
-    /// features are visible from the enclosing type?
+    /// Is this an end of the connector or association that owns it?
+    ///
+    /// What an end relates is reached through the types of the other
+    /// ends, so an end is where a name lookup carries on from.
     fn is_end_member(&self, elem: ElementId) -> bool {
-        self.source.get(&elem).is_some_and(|node| {
-            node.kind() == SyntaxKind::USAGE
-                && node
-                    .children_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind() == SyntaxKind::END_KW)
-        })
+        self.model.get(elem, "isEnd") == Some(&Value::Bool(true))
     }
 
     fn member_name_matches(&self, elem: ElementId, name: &str) -> bool {
@@ -1968,6 +2182,29 @@ impl Workspace {
             })
             .collect();
         for target in conjugated {
+            push_supertype(&mut supers, elem, target);
+        }
+        // A relationship the standard implies is written into the model
+        // and nowhere else, so the source cannot answer for it -- an
+        // owned cross feature subsets the cross feature of the end its
+        // owner redefines, and nothing in the notation says so. See
+        // `imply_cross_subsettings`.
+        let implied: Vec<ElementId> = self
+            .model
+            .owned(elem)
+            .iter()
+            .copied()
+            .filter(|&owned| {
+                self.model.kind(owned).is_a(ElementKind::Subsetting)
+                    && self.model.get(owned, "isImplied") == Some(&Value::Bool(true))
+            })
+            .filter_map(|owned| {
+                self.model
+                    .redefined_feature(owned)
+                    .or_else(|| self.model.subsetted_feature(owned))
+            })
+            .collect();
+        for target in implied {
             push_supertype(&mut supers, elem, target);
         }
         // An element the builder reified has no syntax of its own. An
@@ -3515,6 +3752,49 @@ struct Target {
     /// range of each segment, in order -- the earlier ones name
     /// something too
     at: Vec<TextRange>,
+    /// the segment depths a chained step ends at, in order
+    chain: Vec<usize>,
+}
+
+/// Whether a declaration was written as a member of its owner rather
+/// than as a feature of it -- `member feature inCart;`, or the cross
+/// feature standing between an `end` and the declaration after it.
+fn written_as_member(node: &SyntaxNode) -> bool {
+    let tokens = || {
+        node.children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .map(|it| it.kind())
+    };
+    tokens().any(|kind| kind == SyntaxKind::MEMBER_KW)
+        || (tokens().any(|kind| kind == SyntaxKind::END_KW)
+            && node
+                .children()
+                .any(|it| matches!(it.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE)))
+}
+
+/// The segment depths at which a chained step ends.
+///
+/// `cart::product_account.inCart` names two features and not three:
+/// `::` qualifies one name, and `.` steps from one feature to the next.
+/// A name with no dot in it is one step, which is no chain at all --
+/// the standard gives a feature either no chaining features or more
+/// than one.
+fn chain_steps(qname: &SyntaxNode) -> Vec<usize> {
+    let mut steps = Vec::new();
+    let mut at = 0;
+    for token in qname.children_with_tokens().filter_map(|e| e.into_token()) {
+        match token.kind() {
+            SyntaxKind::IDENT
+            | SyntaxKind::UNRESTRICTED_NAME
+            | SyntaxKind::DOLLAR
+            | SyntaxKind::STAR
+            | SyntaxKind::STAR_STAR => at += 1,
+            SyntaxKind::DOT => steps.push(at),
+            _ => {}
+        }
+    }
+    steps.push(at);
+    steps
 }
 
 /// The range of the last identifier in a reference operand -- what a
@@ -3551,6 +3831,7 @@ fn metadata_target(node: &SyntaxNode) -> Option<Target> {
         range: qname.text_range(),
         name_range: last_name_range(&qname),
         at: segment_ranges(&qname),
+        chain: chain_steps(&qname),
     })
 }
 
@@ -3622,6 +3903,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                         segments.push(format!("~{last}"));
                     }
                     Some(Target {
+                        chain: chain_steps(&qname),
                         segments,
                         range: match conjugated {
                             true => type_ref.text_range(),

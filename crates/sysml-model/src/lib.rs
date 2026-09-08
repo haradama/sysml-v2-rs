@@ -183,6 +183,28 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     ElementKind::FeatureMembership
 }
 
+/// The cross feature an end feature owns, where the notation wrote one.
+///
+/// `ownedCrossFeature()` is "the first ownedMember of the Feature that
+/// is a Feature, but not a Multiplicity or a MetadataFeature, and whose
+/// owningMembership is not a FeatureMembership". This model keeps
+/// ownership and works the memberships out from shape, so the last of
+/// those three tests has nothing to read -- but it does not need to:
+/// `end [1] part bead : TireBead;` writes the cross feature between the
+/// `end` and the declaration, so where one was written it is always the
+/// first member owned. An end that owns a feature written in its body
+/// and no cross feature reads the first of those instead.
+pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
+    if model.get(end, "isEnd") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    model.owned(end).iter().copied().find(|&it| {
+        model.kind(it).is_a(ElementKind::Feature)
+            && !model.kind(it).is_a(ElementKind::Multiplicity)
+            && !model.kind(it).is_a(ElementKind::MetadataUsage)
+    })
+}
+
 /// What a transition feature is to its transition -- the `kind` its
 /// membership must state -- read off the references the transition stores.
 pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> {

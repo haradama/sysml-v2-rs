@@ -1241,10 +1241,16 @@ struct End {
 /// there is no way to write one and nothing to draw.)
 fn end_adornment(model: &Model, end: ElementId) -> String {
     let mut out = String::new();
-    if let Some(range) = multiplicity_of(model, end) {
+    // The multiplicity written at an end is the cross multiplicity --
+    // how many things at the far end go with one at this one -- and
+    // `end [1] part bead : TireBead;` writes it on the cross feature,
+    // in front of the declaration. The end itself, as a participant of
+    // the association, is always one thing.
+    let written_on = sysml_model::owned_cross_feature(model, end).unwrap_or(end);
+    if let Some(range) = multiplicity_of(model, written_on) {
         out.push_str(&format!(" {range}"));
     }
-    if let Some(direction) = direction_of(model, end) {
+    if let Some(direction) = direction_of(model, written_on) {
         out.push_str(&format!(" {direction}"));
     }
     for (flag, written) in [
@@ -1252,16 +1258,23 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
         ("isAbstract", "abstract"),
         ("isDerived", "derived"),
     ] {
-        if model.get(end, flag) == Some(&Value::Bool(true)) {
+        if model.get(written_on, flag) == Some(&Value::Bool(true)) {
             out.push_str(&format!(" {written}"));
         }
     }
-    if model.get(end, "isUnique") == Some(&Value::Bool(false)) {
+    if model.get(written_on, "isUnique") == Some(&Value::Bool(false)) {
         out.push_str(" nonunique");
     }
     // exact kinds, so the reference subsetting that gives the end its
-    // rolename (`end ::> w.hub`) is not written out a second time
+    // rolename (`end ::> w.hub`) is not written out a second time; and
+    // what the standard implies was not written at all -- an end
+    // redefines the end at its position in what its type specializes,
+    // and a drawing saying so would be putting words in the author's
+    // mouth
     let refinements = model.owned(end).iter().filter_map(|&rel| {
+        if model.get(rel, "isImplied") == Some(&Value::Bool(true)) {
+            return None;
+        }
         let (written, property) = match model.kind(rel) {
             ElementKind::Subsetting => ("subsets", "subsettedFeature"),
             ElementKind::Redefinition => ("redefines", "redefinedFeature"),

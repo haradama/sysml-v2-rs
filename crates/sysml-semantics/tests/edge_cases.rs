@@ -202,8 +202,11 @@ fn visible_names_through_imports_and_ends() {
     let mut ws = ws(&[("k.kerml", text)]);
     let names = ws.visible_names(0, offset_of(text, "feature marker"));
     let labels: Vec<&str> = names.iter().map(|(n, _)| n.as_str()).collect();
-    assert!(labels.contains(&"nested"), "{labels:?}");
+    assert!(labels.contains(&"s"), "{labels:?}");
     assert!(labels.contains(&"marker"), "{labels:?}");
+    // what an end declares is in the end's namespace and not the
+    // association's -- `nested` is written `s::nested`
+    assert!(!labels.contains(&"nested"), "{labels:?}");
     // `import all` exposes even private members
     assert!(labels.contains(&"Secret"), "{labels:?}");
 }
@@ -2114,15 +2117,171 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
         ws.model().get(crossing, "subsettingFeature"),
         Some(&sysml_model::Value::Ref(cart))
     );
+    // and what it crosses to is a chain and not a name: "the target of
+    // a cross subsetting relationship must be a feature chain in which
+    // the first feature is the other association end and the second
+    // feature is the cross feature for that end"
     let crossed = ws
         .model()
         .get(crossing, "crossedFeature")
         .and_then(sysml_model::Value::as_id)
         .expect("what it crosses to");
+    let chain: Vec<String> = ws
+        .model()
+        .get(crossed, "chainingFeature")
+        .and_then(sysml_model::Value::as_ids)
+        .expect("the chain it names")
+        .to_vec()
+        .into_iter()
+        .map(|step| ws.qualified_name_of(step))
+        .collect();
     assert_eq!(
-        ws.qualified_name_of(crossed),
-        "K::Selection::selectedProduct::inCart"
+        chain,
+        [
+            "K::Selection::selectedProduct",
+            "K::Selection::selectedProduct::inCart"
+        ]
     );
+}
+
+/// An owned cross feature belongs to the end written after it, and
+/// carries the relationships the standard implies for it.
+///
+/// `end owningEntities[1..*] feature owner : LegalEntity;` declares the
+/// end `owner`, not the end `owningEntities`: "owned cross features are
+/// in the namespace of the owning association ends, so their names are
+/// qualified by the name of the association ends, e.g.
+/// `LegalAssetOwnership::owner::owningEntities`". And where the end
+/// redefines another, its cross feature subsets that one's -- nothing
+/// writes that down, and `validateFeatureCrossFeatureSpecialization`
+/// asks for it back.
+#[test]
+fn a_cross_feature_is_the_ends_and_subsets_what_the_end_it_redefines_crosses_to() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "package K {\n\
+         \tclass Cart;\n\
+         \tclass Product;\n\
+         \tassoc Selection {\n\
+         \t\tend inCart[0..1] feature cart : Cart;\n\
+         \t\tend selectedProducts[0..*] feature selectedProduct : Product;\n\
+         \t}\n\
+         \tassoc One specializes Selection {\n\
+         \t\tend inCart1[0..1] feature cart redefines cart;\n\
+         \t\tend selectedProduct1[0..1] feature selectedProduct redefines selectedProduct;\n\
+         \t}\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let named = |name: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.qualified_name_of(id) == name)
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    };
+    // the ends of the association are what the declarations named, and
+    // the cross features are under them
+    let selection = named("K::Selection");
+    let ends: Vec<Option<&str>> = ws
+        .model()
+        .owned(selection)
+        .iter()
+        .filter(|&&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .map(|&it| ws.model().name(it))
+        .collect();
+    assert_eq!(ends, [Some("cart"), Some("selectedProduct")]);
+    let cross = named("K::Selection::cart::inCart");
+    assert_eq!(
+        ws.model().get(cross, "isEnd"),
+        None,
+        "a cross feature is not an end"
+    );
+    // and the redefining end's cross feature subsets the redefined
+    // end's, implied and marked as such
+    let mine = named("K::One::cart::inCart1");
+    let implied: Vec<(String, Option<&sysml_model::Value>)> = ws
+        .model()
+        .owned(mine)
+        .iter()
+        .filter(|&&it| ws.model().kind(it) == ElementKind::Subsetting)
+        .map(|&it| {
+            (
+                ws.qualified_name_of(
+                    ws.model()
+                        .get(it, "subsettedFeature")
+                        .and_then(sysml_model::Value::as_id)
+                        .expect("what it subsets"),
+                ),
+                ws.model().get(it, "isImplied"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        implied,
+        [(
+            "K::Selection::cart::inCart".to_string(),
+            Some(&sysml_model::Value::Bool(true))
+        )]
+    );
+}
+
+/// An end declared beside a supertype's redefines the one at the same
+/// position.
+///
+/// "If a Feature has isEnd = true and an owningType that is not empty,
+/// then, for each direct supertype of its owningType, it must redefine
+/// the endFeature at the same position, if any." Nothing writes it, and
+/// without it a connector inherits the ends of what types it beside its
+/// own.
+#[test]
+fn an_end_redefines_the_one_at_its_position_in_what_its_type_specializes() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "package K {\n\
+         \tclass Thing;\n\
+         \tassoc Pair {\n\
+         \t\tend feature one : Thing;\n\
+         \t\tend feature two : Thing;\n\
+         \t}\n\
+         \tassoc Narrower specializes Pair {\n\
+         \t\tend feature left : Thing;\n\
+         \t\tend feature right : Thing;\n\
+         \t}\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let named = |name: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.qualified_name_of(id) == name)
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    };
+    let redefined = |of: &str| -> Vec<String> {
+        ws.model()
+            .owned(named(of))
+            .iter()
+            .filter(|&&it| ws.model().kind(it) == ElementKind::Redefinition)
+            .filter(|&&it| ws.model().get(it, "isImplied") == Some(&sysml_model::Value::Bool(true)))
+            .filter_map(|&it| {
+                ws.model()
+                    .get(it, "redefinedFeature")
+                    .and_then(sysml_model::Value::as_id)
+            })
+            .map(|it| ws.qualified_name_of(it))
+            .collect()
+    };
+    assert_eq!(redefined("K::Narrower::left"), ["K::Pair::one"]);
+    assert_eq!(redefined("K::Narrower::right"), ["K::Pair::two"]);
+    // what declares the ends redefines nothing of its own
+    assert_eq!(redefined("K::Pair::one"), Vec::<String>::new());
 }
 
 /// `end` is written once. The corpus writes it on the outer feature and

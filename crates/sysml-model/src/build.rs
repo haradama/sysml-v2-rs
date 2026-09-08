@@ -147,11 +147,24 @@ fn build_node(
             built.source.push((flow, node.clone()));
         }
     }
+    // `end owningEntities[1..*] feature owner : LegalEntity;` declares
+    // the end `owner`, not the end `owningEntities`: `EndFeaturePrefix
+    // ( ownedRelationship += OwnedCrossFeatureMember )?
+    // FeatureDeclaration` puts the cross feature between the `end` and
+    // the declaration, and the standard says where it lands -- "owned
+    // cross features are in the namespace of the owning association
+    // ends, so their names are qualified by the name of the association
+    // ends, e.g. `LegalAssetOwnership::owner::owningEntities`". So this
+    // element is the cross feature, and where it goes is not known
+    // until the end it belongs to has been built.
+    let crossed = crossing_declaration(node);
     let id = model.create(kind);
     built.source.push((id, node.clone()));
-    match owner {
-        Some(owner) => model.add_owned(owner, id),
-        None => built.roots.push(id),
+    if crossed.is_none() {
+        match owner {
+            Some(owner) => model.add_owned(owner, id),
+            None => built.roots.push(id),
+        }
     }
 
     if let Some(name) = declared_name(node).or_else(|| statement_declared_name(node)) {
@@ -233,8 +246,10 @@ fn build_node(
         model.set(id, "isNegated", Value::Bool(true));
     }
     // `end #original r1 : Req1;` -- what a connector relates, as opposed to
-    // an ordinary feature it happens to own
-    if has_token(node, END_KW) && kind.feature("isEnd").is_some() {
+    // an ordinary feature it happens to own. A cross feature is written
+    // after the same keyword and is not itself an end: what the `end`
+    // says is an end is the declaration that follows it.
+    if has_token(node, END_KW) && crossed.is_none() && kind.feature("isEnd").is_some() {
         model.set(id, "isEnd", Value::Bool(true));
     }
     // `part driver : Driver;` is something the owner is made of and
@@ -428,6 +443,15 @@ fn build_node(
             // wrapper does the same and never gets this far: it is not
             // an element, so its children were hoisted on the way in.
             DEFINITION | USAGE => {
+                // The declaration after a cross feature is the end the
+                // source declared: it stands where this element would
+                // have, and owns the cross feature written before it.
+                if crossed.as_ref().is_some_and(|it| *it == child) {
+                    if let Some(end) = build_node(model, &child, owner, built) {
+                        takes_the_cross_feature(model, end, id);
+                    }
+                    continue;
+                }
                 // `loop action charging { ... }` gives the body a name:
                 // `ActionBodyParameter : ActionUsage = ( 'action'
                 // UsageDeclaration? )? '{' ActionBodyItem* '}'`, and
@@ -1779,6 +1803,40 @@ fn is_composite(
     true
 }
 
+/// Stand the declaration after a cross feature up as the end, and give
+/// it the cross feature written in front of it.
+///
+/// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` -- an end is
+/// what a link relates, not something its association is made of, and
+/// `end inCart[0..1] item cart : Cart;` would otherwise leave `cart`
+/// composite for having been written as a usage.
+fn takes_the_cross_feature(model: &mut Model, end: ElementId, cross: ElementId) {
+    if model.kind(end).feature("isEnd").is_some() {
+        model.set(end, "isEnd", Value::Bool(true));
+    }
+    if model.kind(end).feature("isComposite").is_some() {
+        model.set(end, "isComposite", Value::Bool(false));
+    }
+    model.add_owned(end, cross);
+}
+
+/// The end declaration a cross feature was written in front of.
+///
+/// `end owningEntities[1..*] feature owner : LegalEntity;` -- what
+/// stands between the `end` and the declaration after it is the cross
+/// feature (`EndFeaturePrefix ( ownedRelationship +=
+/// OwnedCrossFeatureMember )? FeatureDeclaration`), and the declaration
+/// is the end itself. Written without one, `end feature owner :
+/// LegalEntity;` puts the keyword in this node and declares no nested
+/// element at all.
+fn crossing_declaration(node: &SyntaxNode) -> Option<SyntaxNode> {
+    if node.kind() != SyntaxKind::USAGE || !has_token(node, SyntaxKind::END_KW) {
+        return None;
+    }
+    node.children()
+        .find(|it| matches!(it.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE))
+}
+
 /// Whether a node writes its flow in braces rather than in the
 /// statement itself.
 fn structured_node(kind: ElementKind) -> bool {
@@ -3128,24 +3186,47 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// A connector end is an anonymous wrapper too, but the feature it
-    /// nests really is its own member.
+    /// What stands between an `end` and the declaration after it is the
+    /// cross feature, and the declaration is the end.
+    ///
+    /// `end [1] feature src references source;` -- `EndUsagePrefix :
+    /// Usage = isEnd ?= 'end' ( ownedRelationship +=
+    /// OwnedCrossFeatureMember )?`, and the standard says where the
+    /// cross feature lands: "owned cross features are in the namespace
+    /// of the owning association ends, so their names are qualified by
+    /// the name of the association ends". Read the other way round, the
+    /// association's end is the `[1]` and the end the source declared
+    /// is nested inside it.
     #[test]
-    fn a_connector_end_keeps_the_feature_it_nests() {
+    fn a_cross_feature_belongs_to_the_end_written_after_it() {
         let (model, roots) = build_model(&sysml_syntax::parse(
             "connection def C {\n\tend [1] feature src references source;\n}\n",
         ));
-        assert!(model
+        let ends: Vec<Option<&str>> = model
             .owned(roots[0])
             .iter()
-            .all(|&id| model.name(id).is_none()));
+            .map(|&id| model.name(id))
+            .collect();
+        assert_eq!(ends, [Some("src")]);
         let end = model.owned(roots[0])[0];
-        let nested: Vec<&str> = model
+        assert_eq!(model.get(end, "isEnd"), Some(&Value::Bool(true)));
+        // the cross feature is nameless here and is not an end itself
+        let cross = model
             .owned(end)
             .iter()
-            .filter_map(|&id| model.name(id))
-            .collect();
-        assert_eq!(nested, ["src"]);
+            .copied()
+            .find(|&it| model.kind(it).is_a(ElementKind::Feature))
+            .expect("the `[1]` stands for a cross feature");
+        assert_eq!(model.name(cross), None);
+        assert_eq!(model.get(cross, "isEnd"), None);
+        assert_eq!(
+            model
+                .owned(cross)
+                .iter()
+                .map(|&it| model.kind(it))
+                .collect::<Vec<_>>(),
+            [ElementKind::MultiplicityRange]
+        );
     }
 
     #[test]
