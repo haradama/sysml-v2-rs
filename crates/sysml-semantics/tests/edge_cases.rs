@@ -2169,6 +2169,10 @@ fn what_relates_more_than_two_things_is_not_binary() {
          \tpart def A;\n\
          \tconnection def Two { end a : A; end b : A; }\n\
          \tconnection def Three { end a : A; end b : A; end c : A; }\n\
+         \tpart def Holder {\n\
+         \t\tconnection two : Two;\n\
+         \t\tconnection three : Three;\n\
+         \t}\n\
          }\n",
     );
     ws.resolve_all();
@@ -2203,6 +2207,11 @@ fn what_relates_more_than_two_things_is_not_binary() {
     }
     assert!(reaches(&mut ws, two, "Connections::BinaryConnection"));
     assert!(!reaches(&mut ws, three, "Connections::BinaryConnection"));
+    // and a usage declares no ends of its own, so what it relates is
+    // what it is typed by
+    let (of_two, of_three) = (of(&ws, "two"), of(&ws, "three"));
+    assert!(reaches(&mut ws, of_two, "Connections::BinaryConnection"));
+    assert!(!reaches(&mut ws, of_three, "Connections::BinaryConnection"));
     // and the library's own base for every connection is not a kind of
     // the binary one that specializes it
     let ups: Vec<String> = ws

@@ -1294,9 +1294,20 @@ impl Workspace {
     /// What it specializes is not read off its metaclass alone: a
     /// connector or an association that relates more than two things is
     /// not a binary one, whatever keyword declared it.
-    fn implied_bases_of(&mut self, elem: ElementId) -> Vec<&'static str> {
+    fn implied_bases_of(&mut self, elem: ElementId, above: &[ElementId]) -> Vec<&'static str> {
         let mut implied = implied_bases(self.model.kind(elem));
-        if self.own_ends(elem).len() > 2 {
+        if !implied.iter().any(|path| BINARY.contains(path)) {
+            return implied;
+        }
+        // A usage declares no ends of its own -- `interface i :
+        // WheelHubInterface;` -- and relates as many things as what it
+        // is typed by. Only what it says it specializes counts: the
+        // base being chosen here is not one of them yet.
+        let mut ends = self.own_ends(elem).len();
+        for &up in above {
+            ends = ends.max(self.ends_of(up).len());
+        }
+        if ends > 2 {
             implied.retain(|path| !BINARY.contains(path));
         }
         implied
@@ -2311,7 +2322,7 @@ impl Workspace {
                 }
             }
         }
-        for path in self.implied_bases_of(elem) {
+        for path in self.implied_bases_of(elem, &supers.clone()) {
             // From the root: these are the standard library's own
             // names, and a model is free to declare a package called
             // `Requirements` of its own -- `SimpleVehicleModel` does --
@@ -2490,7 +2501,8 @@ impl Workspace {
                 continue;
             }
             let mut bases = Vec::new();
-            for path in self.implied_bases_of(elem) {
+            let above = self.supertypes_of(elem);
+            for path in self.implied_bases_of(elem, &above) {
                 let segments: Vec<String> = std::iter::once(String::new())
                     .chain(path.split("::").map(String::from))
                     .collect();
