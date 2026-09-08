@@ -1206,8 +1206,50 @@ impl Workspace {
                 self.resolve_verification(id, &node, &mut stats);
             }
         }
+        self.carry_ends();
         stats.lookups = self.lookups - began;
         stats
+    }
+
+    /// A feature that redefines an end is an end, and an end is not
+    /// composite.
+    ///
+    /// `end` is written once: the corpus writes it on the outer feature
+    /// and nests redefinitions of it without repeating the keyword, and
+    /// the standard says as much --
+    /// `validateRedefinitionEndConformance` holds a feature redefining
+    /// an end to being one, and
+    /// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` holds
+    /// an end to not being composite. Redefinitions are resolved by
+    /// now, so this is where the two can be said.
+    fn carry_ends(&mut self) {
+        loop {
+            let mut carried = false;
+            for elem in self.model.ids().collect::<Vec<_>>() {
+                if self.model.get(elem, "isEnd") == Some(&Value::Bool(true)) {
+                    continue;
+                }
+                let redefines_an_end = self.model.owned(elem).iter().any(|&owned| {
+                    self.model.kind(owned).is_a(ElementKind::Redefinition)
+                        && matches!(
+                            self.model.get(owned, "redefinedFeature"),
+                            Some(Value::Ref(up))
+                                if self.model.get(*up, "isEnd") == Some(&Value::Bool(true))
+                        )
+                });
+                if redefines_an_end && self.model.kind(elem).feature("isEnd").is_some() {
+                    self.model.set(elem, "isEnd", Value::Bool(true));
+                    if self.model.kind(elem).feature("isComposite").is_some() {
+                        self.model.set(elem, "isComposite", Value::Bool(false));
+                    }
+                    carried = true;
+                }
+            }
+            // a redefinition of a redefinition of an end is one too
+            if !carried {
+                return;
+            }
+        }
     }
 
     /// Resolve the metadata definition an `@name { ... }` usage is typed

@@ -2110,3 +2110,51 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
         "K::Selection::selectedProduct::inCart"
     );
 }
+
+/// `end` is written once. The corpus writes it on the outer feature and
+/// nests redefinitions of it without repeating the keyword, and the
+/// standard says as much: a feature redefining an end is one, and an
+/// end is not composite.
+#[test]
+fn a_feature_that_redefines_an_end_is_an_end_and_is_not_composite() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "e.kerml",
+        "package K {\n\
+         \tclass C;\n\
+         \tassoc A {\n\
+         \t\tend feature outer : C;\n\
+         \t}\n\
+         \tassoc B specializes A {\n\
+         \t\tfeature middle redefines outer;\n\
+         \t}\n\
+         \tassoc D specializes B {\n\
+         \t\tfeature inner redefines middle;\n\
+         \t}\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let named = |want: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    // written, redefining, and redefining a redefinition
+    for want in ["outer", "middle", "inner"] {
+        let id = named(want);
+        assert_eq!(
+            ws.model().get(id, "isEnd"),
+            Some(&sysml_model::Value::Bool(true)),
+            "`{want}` is an end"
+        );
+        assert_eq!(
+            ws.model().get(id, "isComposite"),
+            Some(&sysml_model::Value::Bool(false)),
+            "`{want}` is not composite"
+        );
+    }
+}

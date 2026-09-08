@@ -1150,10 +1150,11 @@ const KEYWORD_FLAGS: [(SyntaxKind, &str); 12] = [
 /// so what the specification declares as the property's default is the
 /// answer. Any other property missing is this builder not building it,
 /// which says nothing about the model at all.
-pub const BUILT_FLAGS: [&str; 12] = [
+pub const BUILT_FLAGS: [&str; 13] = [
     "isAbstract",
     "isConstant",
     "isDerived",
+    "isEnd",
     "isIndividual",
     "isNegated",
     "isOrdered",
