@@ -137,10 +137,11 @@ fn build_node(
     // because that is what the rest of the flow refers to by name -- so
     // the succession is built here beside it, ahead of it in the body,
     // where what it continues from is the step written above.
+    //
+    // A leading `first` writes none: `first x;` names which step comes
+    // first and nothing flows into it.
     if let Some(owner) = owner {
-        if kind != ElementKind::SuccessionAsUsage
-            && matches!(tokens(node).next(), Some(THEN_KW | FIRST_KW))
-        {
+        if kind != ElementKind::SuccessionAsUsage && matches!(tokens(node).next(), Some(THEN_KW)) {
             let flow = model.create(ElementKind::SuccessionAsUsage);
             model.add_owned(owner, flow);
             built.source.push((flow, node.clone()));
@@ -1026,6 +1027,23 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
         SyntaxKind::SEND_KW => Some(ElementKind::SendActionUsage),
         SyntaxKind::ACCEPT_KW => Some(ElementKind::AcceptActionUsage),
         SyntaxKind::ASSIGN_KW => Some(ElementKind::AssignmentActionUsage),
+        // `first x;` on its own is `InitialNodeMember : FeatureMembership
+        // = MemberPrefix 'first' memberFeature = [QualifiedName]`: it
+        // names which step comes first and writes no flow at all. The
+        // flow is what a `then` writes -- `TargetSuccession :
+        // SuccessionAsUsage = SourceEndMember 'then' ConnectorEndMember`
+        // -- so `first a; then b;` is one succession and not two. Read
+        // as a succession as well, the `first` took the flow its `then`
+        // writes and left that one relating its own declaration to
+        // itself.
+        SyntaxKind::FIRST_KW if !has_token(node, SyntaxKind::THEN_KW) => {
+            // A `Membership` rather than the `FeatureMembership` the
+            // grammar names: this one refers to a member declared
+            // elsewhere, the way an alias does, and the metaclasses
+            // that fold into ownership are the ones an interchange
+            // synthesizes rather than writes.
+            Some(ElementKind::Membership)
+        }
         SyntaxKind::FIRST_KW | SyntaxKind::THEN_KW => Some(ElementKind::SuccessionAsUsage),
         _ => None,
     });

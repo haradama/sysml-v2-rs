@@ -2158,3 +2158,69 @@ fn a_feature_that_redefines_an_end_is_an_end_and_is_not_composite() {
         );
     }
 }
+
+/// `first x;` on its own is `InitialNodeMember : FeatureMembership =
+/// MemberPrefix 'first' memberFeature = [QualifiedName]`: it names
+/// which step comes first and writes no flow at all. The flow is what a
+/// `then` writes -- `TargetSuccession : SuccessionAsUsage =
+/// SourceEndMember 'then' ConnectorEndMember` -- so `first a; then b;`
+/// is one succession and not two.
+///
+/// Read as a succession as well, the `first` took the flow its `then`
+/// writes and left that one relating its own declaration to itself: the
+/// corpus had merge and fork nodes with a succession from themselves to
+/// themselves.
+#[test]
+fn a_first_names_the_step_that_comes_first_and_writes_no_flow() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "f.sysml",
+        "action def A {\n\
+         \taction p;\n\
+         \tfirst p;\n\
+         \tthen merge m;\n\
+         \tthen action q;\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let model = ws.model();
+    let flows: Vec<(String, String)> = model
+        .owned(root)
+        .iter()
+        .filter(|&&it| model.kind(it) == ElementKind::SuccessionAsUsage)
+        .map(|&it| {
+            let ends = model.related_feature(it);
+            (
+                ends.first()
+                    .map(|&f| ws.qualified_name_of(f))
+                    .unwrap_or_default(),
+                ends.get(1)
+                    .map(|&f| ws.qualified_name_of(f))
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        flows,
+        [
+            ("A::p".to_string(), "A::m".to_string()),
+            ("A::m".to_string(), "A::q".to_string()),
+        ]
+    );
+    // and the `first` names `p` without owning it
+    let named = model
+        .owned(root)
+        .iter()
+        .copied()
+        .find(|&it| model.kind(it) == ElementKind::Membership)
+        .expect("`first p;` is a membership");
+    assert_eq!(
+        model.get(named, "memberElement").and_then(|it| match it {
+            sysml_model::Value::Ref(to) => Some(ws.qualified_name_of(*to)),
+            _ => None,
+        }),
+        Some("A::p".to_string())
+    );
+}

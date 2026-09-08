@@ -1019,6 +1019,31 @@ impl Workspace {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
             };
+            // `first x;` names which step comes first: a membership
+            // whose member is written elsewhere, the way an alias's is.
+            if node.kind() == SyntaxKind::CONTROL_STMT
+                && self.model.kind(id).is_a(ElementKind::Membership)
+            {
+                if let Some(operand) = operand_after(&node, SyntaxKind::FIRST_KW) {
+                    let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                    let segments = operand_segments(&operand);
+                    match self.resolve_written(id, &segments, false) {
+                        Some(target) => {
+                            stats.resolved += 1;
+                            self.record(
+                                file,
+                                operand.text_range(),
+                                last_name_range(&operand),
+                                &operand_ranges(&operand),
+                                target,
+                            );
+                            self.model.set(id, "memberElement", Value::Ref(target));
+                        }
+                        None => self.record_miss(file, operand.text_range(), &segments, &mut stats),
+                    }
+                }
+                continue;
+            }
             if matches!(
                 node.kind(),
                 SyntaxKind::CONNECTOR_STMT | SyntaxKind::CONTROL_STMT
@@ -2799,6 +2824,14 @@ impl Workspace {
                     {
                         return related.last().copied();
                     }
+                }
+                continue;
+            }
+            // `first x;` says which step comes first without owning
+            // it, so what it names is what a `then` after it follows
+            if kind.is_a(ElementKind::Membership) {
+                if let Some(Value::Ref(named)) = self.model.get(member, "memberElement") {
+                    return Some(*named);
                 }
                 continue;
             }

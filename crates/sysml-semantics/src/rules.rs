@@ -821,6 +821,32 @@ impl Scope<'_> {
                     .any(|&child| model.kind(child).is_a(ElementKind::Conjugation)),
             );
         }
+        // The connectors that relate this feature, from either end.
+        // The metamodel writes both as ends owned by an association, so
+        // no metaclass declares them, and the model keeps a connector's
+        // related features rather than a feature's connectors -- so the
+        // answer is found by looking the other way about.
+        if matches!(name, "sourceConnector" | "targetConnector")
+            && model.kind(elem).is_a(ElementKind::Feature)
+        {
+            // the first related feature is what a connector goes from,
+            // and the rest are what it goes to
+            let from = name == "sourceConnector";
+            return Val::Set(
+                model
+                    .ids()
+                    .filter(|&it| model.kind(it).is_a(ElementKind::Connector))
+                    .filter(|&it| {
+                        let mut related = model.related_feature(it).iter();
+                        match from {
+                            true => related.next() == Some(&elem),
+                            false => related.skip(1).any(|&at| at == elem),
+                        }
+                    })
+                    .map(Val::Elem)
+                    .collect(),
+            );
+        }
         // Every membership in a namespace: the containments it keeps
         // and what its imports bring in. The metamodel derives it as a
         // union of the two, and the resolver works out what an import

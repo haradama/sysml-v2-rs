@@ -1549,6 +1549,9 @@ fn a_behaviour_made_of_itself_is_refused_by_name() {
 /// Two shapes a model reaches that a signature cannot: a succession with
 /// one end, and a repeated field of a type that lives in someone else's
 /// crate.
+///
+/// `then prep;` with nothing written before it says a step follows,
+/// and there is nothing for it to follow.
 #[test]
 fn a_one_ended_succession_and_an_array_of_a_bound_type() {
     let rust = generate(
@@ -1559,14 +1562,15 @@ fn a_one_ended_succession_and_an_array_of_a_bound_type() {
          \taction def Once {\n\
          \t\tin bean : Real;\n\t\tout dust : Real;\n\
          \t\taction prep : Prep {\n\t\t\tin whole = Once::bean;\n\t\t}\n\
-         \t\tfirst prep;\n\
+         \t\tthen prep;\n\
          \t\tflow from prep.ready to dust;\n\
          \t}\n\
          \tpart def Crate {\n\t\titem batch : Payload[3];\n\t}\n\
          }\n",
     )
     .unwrap();
-    // `first prep;` names one end, and an order cannot be read off it
+    // one end is written and the other is not there, so an order
+    // cannot be read off it
     assert!(
         rust.contains("/// Not performed here: a succession whose ends did not resolve."),
         "{rust}"
