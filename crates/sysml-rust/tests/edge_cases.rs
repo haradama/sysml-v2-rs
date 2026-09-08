@@ -1550,8 +1550,9 @@ fn a_behaviour_made_of_itself_is_refused_by_name() {
 /// one end, and a repeated field of a type that lives in someone else's
 /// crate.
 ///
-/// `then prep;` with nothing written before it says a step follows,
-/// and there is nothing for it to follow.
+/// `then prep;` written before anything a step could follow says a step
+/// follows, and there is nothing for it to follow: the succession names
+/// one end and the other is nowhere.
 #[test]
 fn a_one_ended_succession_and_an_array_of_a_bound_type() {
     let rust = generate(
@@ -1561,8 +1562,8 @@ fn a_one_ended_succession_and_an_array_of_a_bound_type() {
          \taction def Prep {\n\t\tin whole : Real;\n\t\tout ready : Real;\n\t}\n\
          \taction def Once {\n\
          \t\tin bean : Real;\n\t\tout dust : Real;\n\
-         \t\taction prep : Prep {\n\t\t\tin whole = Once::bean;\n\t\t}\n\
          \t\tthen prep;\n\
+         \t\taction prep : Prep {\n\t\t\tin whole = Once::bean;\n\t\t}\n\
          \t\tflow from prep.ready to dust;\n\
          \t}\n\
          \tpart def Crate {\n\t\titem batch : Payload[3];\n\t}\n\

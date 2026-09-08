@@ -763,8 +763,26 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         let Some((first, rest)) = ends.split_first() else {
             continue;
         };
-        let Some(&from) = index.get(&first.target) else {
-            continue;
+        let from = match index.get(&first.target) {
+            Some(&at) => at,
+            // `entry; then off;` runs from the empty action an `entry`
+            // on its own declares. That action is the filled circle a
+            // machine starts at rather than a box of its own.
+            None if model.member_role(first.target) == Some(Role::Entry) => {
+                nodes.push(Node {
+                    id: child,
+                    name: String::new(),
+                    keyword: String::new(),
+                    compartments: Vec::new(),
+                    is_abstract: false,
+                    rounded: false,
+                    shape: Shape::Initial,
+                    children: Vec::new(),
+                    links: Vec::new(),
+                });
+                nodes.len() - 1
+            }
+            None => continue,
         };
         for second in rest {
             let Some(&to) = index.get(&second.target) else {

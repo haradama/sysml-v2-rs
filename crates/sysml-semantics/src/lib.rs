@@ -102,6 +102,16 @@ pub struct Finding {
     pub what: String,
 }
 
+/// How a connector end reached what it relates.
+enum Reached {
+    /// the name the statement wrote
+    Written(Vec<String>),
+    /// the neighbour standing in for an end the statement left unwritten
+    Beside(ElementId),
+    /// nowhere: a transition keeps its ends on the succession it owns
+    Nowhere,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveStats {
     pub resolved: usize,
@@ -2955,7 +2965,13 @@ impl Workspace {
         stats: &mut ResolveStats,
     ) {
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        // What the connector relates, in the order it relates them, and
+        // how each of them was reached. The ends are reified once that
+        // order is settled: `connectorEnd->at(1)` is the one it runs
+        // from and `->at(2)` the one it runs to, and the notation lets
+        // the first go unwritten.
         let mut related = Vec::new();
+        let mut reached: Vec<Reached> = Vec::new();
         for operand in end_operands(node, self.model.kind(id)) {
             // an operand with no identifiers resolves to nothing, which the
             // `None` arm below reports like any other unresolved end
@@ -2967,7 +2983,7 @@ impl Workspace {
                     stats.resolved += 1;
                     self.record(file, range, name_range, &operand_ranges(&operand), target);
                     related.push(target);
-                    self.reify_end(id, &segments);
+                    reached.push(Reached::Written(segments));
                 }
                 None => {
                     self.record_miss(file, range, &segments, stats);
@@ -2983,8 +2999,8 @@ impl Workspace {
         if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
             beside = self.declared_beside(id, node);
             if let Some(target) = self.wrapped_declaration(id, node).or(beside) {
-                self.end_reaching(id, vec![target]);
                 related.push(target);
+                reached.push(Reached::Beside(target));
             }
         }
         // A succession relates two things and the notation lets one of
@@ -3019,6 +3035,7 @@ impl Workspace {
             if written(ends.1) && !written(ends.0) {
                 if let Some(source) = self.step_before(id) {
                     related.insert(0, source);
+                    reached.insert(0, Reached::Beside(source));
                 }
             }
         }
@@ -3041,6 +3058,15 @@ impl Workspace {
             });
             if let Some(state) = leaves {
                 related.insert(0, state);
+                // a transition keeps its ends on the succession it owns
+                reached.insert(0, Reached::Nowhere);
+            }
+        }
+        for step in reached {
+            match step {
+                Reached::Written(segments) => self.reify_end(id, &segments),
+                Reached::Beside(target) => self.end_reaching(id, vec![target]),
+                Reached::Nowhere => {}
             }
         }
         if !related.is_empty() {

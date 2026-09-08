@@ -2144,6 +2144,56 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A succession that names one end reifies both.
+///
+/// `then b;` says where the flow goes and not where it comes from, and
+/// the answer is its neighbour in the same body. That neighbour was
+/// kept as a related feature and not as an end, so
+/// `connectorEnd->at(1)` reached past it to the one that was written --
+/// and the four constraints that count what a control node is joined by
+/// read the ends in the order the connector relates them.
+#[test]
+fn a_succession_that_names_one_end_reifies_both() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.sysml",
+        "action def A {\n\taction one;\n\tthen two;\n\taction two;\n}\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let succession = ws
+        .model()
+        .owned(root)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().kind(it).is_a(ElementKind::SuccessionAsUsage))
+        .expect("the `then` writes one");
+    let reaches: Vec<Option<&str>> = ws
+        .model()
+        .owned(succession)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .map(|end| {
+            sysml_model::end_reaches(ws.model(), end)
+                .last()
+                .and_then(|&it| ws.model().name(it))
+        })
+        .collect();
+    // the one it runs from is the step above it, and it comes first
+    assert_eq!(reaches, [Some("one"), Some("two")]);
+    assert_eq!(
+        ws.model()
+            .get(succession, "relatedFeature")
+            .and_then(sysml_model::Value::as_ids)
+            .unwrap_or_default()
+            .iter()
+            .map(|&it| ws.model().name(it))
+            .collect::<Vec<_>>(),
+        [Some("one"), Some("two")]
+    );
+}
+
 /// A relationship between more than two things is not a binary one,
 /// and nothing specializes what specializes it.
 ///
