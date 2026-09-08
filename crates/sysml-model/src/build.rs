@@ -369,12 +369,7 @@ fn build_node(
     if kind == ElementKind::ForLoopActionUsage {
         reify_loop_variable(model, node, id);
     }
-    if matches!(
-        kind,
-        ElementKind::IfActionUsage
-            | ElementKind::WhileLoopActionUsage
-            | ElementKind::ForLoopActionUsage
-    ) {
+    if structured_node(kind) {
         reify_condition(model, node, id);
     }
     if kind.feature("multiplicity").is_some() {
@@ -405,20 +400,23 @@ fn build_node(
                 // = 2` counts a `for` loop's sequence and its body,
                 // however many statements the body is written with.
                 let under = body_parameter(model, id, &child).unwrap_or(id);
-                let mut loop_before = None;
                 for member in child.children() {
                     // `loop { ... } until c;` is one node written as two
                     // statements: `WhileLoopNode : WhileLoopActionUsage =
                     // ... ( 'until' ExpressionParameterMember ';' )?`.
                     // What it asks belongs to the loop before it, and a
                     // second loop standing for it says the flow repeats
-                    // twice over.
-                    if let Some(repeats) = loop_before.filter(|_| closes_a_loop(&member)) {
+                    // twice over. That loop is the last thing built
+                    // here: `then action aLoop while c { ... }` writes
+                    // the succession as the statement and leaves the
+                    // loop beside it.
+                    if let Some(repeats) =
+                        loop_before(model, under).filter(|_| closes_a_loop(&member))
+                    {
                         reify_condition(model, &member, repeats);
                         continue;
                     }
-                    loop_before = build_node(model, &member, Some(under), built)
-                        .filter(|&member| model.kind(member) == ElementKind::WhileLoopActionUsage);
+                    build_node(model, &member, Some(under), built);
                 }
             }
             PAYLOAD | PREFIX_METADATA => {
@@ -430,17 +428,38 @@ fn build_node(
             // wrapper does the same and never gets this far: it is not
             // an element, so its children were hoisted on the way in.
             DEFINITION | USAGE => {
-                let parent = if node.kind() == CONTROL_STMT {
-                    owner
-                } else {
+                // `loop action charging { ... }` gives the body a name:
+                // `ActionBodyParameter : ActionUsage = ( 'action'
+                // UsageDeclaration? )? '{' ActionBodyItem* '}'`, and
+                // `charging.monitor` is read through it. What a
+                // structured node is handed belongs to it however it
+                // was written; a step of the flow does not.
+                let handed = handed_body(model.kind(id), &child);
+                let parent = if handed || node.kind() != CONTROL_STMT {
                     Some(id)
+                } else {
+                    owner
                 };
-                build_node(model, &child, parent, built);
+                let made = build_node(model, &child, parent, built);
+                if let Some(parameter) = made.filter(|_| handed) {
+                    model.set(parameter, "direction", Value::EnumLit("in"));
+                    model.set(parameter, "isComposite", Value::Bool(false));
+                }
             }
             _ => {}
         }
     }
     Some(id)
+}
+
+/// The loop an `until` written next closes, where the statement before
+/// it left one.
+fn loop_before(model: &Model, under: ElementId) -> Option<ElementId> {
+    model
+        .owned(under)
+        .last()
+        .copied()
+        .filter(|&it| model.kind(it) == ElementKind::WhileLoopActionUsage)
 }
 
 /// Whether a statement is the `until` clause that closes the loop written
@@ -854,21 +873,21 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     // it binds, which `reify_loop_variable` declares. Kept whole, the
     // loop arrives asking for `i in xs`, which is a comparison.
     let mut asked = String::new();
-    // `then while c { ... }` writes the flow it continues before the
-    // loop it declares, and what the loop asks begins after the keyword
-    // that says which loop it is. A `for` asks for what follows `in`.
-    let mut started =
-        !has_token(node, FOR_KW) && !matches!(tokens(node).next(), Some(THEN_KW | FIRST_KW));
+    // What a node asks begins after the keyword that says which node
+    // it is, and never before: `then while c { ... }` writes the flow
+    // it continues first, and `action aLoop while c { ... }` its own
+    // name. A `for` asks for what follows `in`.
+    let mut started = false;
     for part in node.children_with_tokens() {
         if !started {
             started = matches!(part.kind(), IN_KW | WHILE_KW | UNTIL_KW | LOOP_KW | IF_KW);
             continue;
         }
         match part.kind() {
-            // the keyword that introduces the node is not part of what
-            // it asks, and what follows the condition is the body
-            IF_KW | WHILE_KW | UNTIL_KW | FOR_KW | LOOP_KW => continue,
-            THEN_KW | ELSE_KW | L_BRACE | SEMICOLON | BODY => break,
+            // what follows the condition is the body, and a declaration
+            // is the body it is handed rather than part of what it asks
+            // -- `loop action charging { ... }` asks nothing
+            THEN_KW | ELSE_KW | L_BRACE | SEMICOLON | BODY | DEFINITION | USAGE => break,
             kind if kind.is_trivia() => continue,
             _ => {}
         }
@@ -1760,19 +1779,38 @@ fn is_composite(
     true
 }
 
+/// Whether a node writes its flow in braces rather than in the
+/// statement itself.
+fn structured_node(kind: ElementKind) -> bool {
+    matches!(
+        kind,
+        ElementKind::IfActionUsage
+            | ElementKind::WhileLoopActionUsage
+            | ElementKind::ForLoopActionUsage
+    )
+}
+
+/// Whether a declaration written inside a control statement is the body
+/// the node is handed rather than a step beside it.
+///
+/// `ActionBodyParameter : ActionUsage = ( 'action' UsageDeclaration? )?
+/// '{' ActionBodyItem* '}'` -- the braces are what make it a body, so a
+/// declaration ending in `;` is a step of the flow whatever it is
+/// written after.
+fn handed_body(kind: ElementKind, child: &SyntaxNode) -> bool {
+    structured_node(kind)
+        && child
+            .children()
+            .any(|it| it.kind() == SyntaxKind::BODY && has_token(&it, SyntaxKind::L_BRACE))
+}
+
 /// The one parameter a structured control node's braces stand for.
 ///
 /// `if c { a; b; }` hands the node a single body, not two members of
 /// its own, and the same of a loop's. A body written as `;` rather than
 /// in braces stands for nothing and is not one.
 fn body_parameter(model: &mut Model, id: ElementId, body: &SyntaxNode) -> Option<ElementId> {
-    let structured = matches!(
-        model.kind(id),
-        ElementKind::IfActionUsage
-            | ElementKind::WhileLoopActionUsage
-            | ElementKind::ForLoopActionUsage
-    );
-    if !structured || !has_token(body, SyntaxKind::L_BRACE) {
+    if !structured_node(model.kind(id)) || !has_token(body, SyntaxKind::L_BRACE) {
         return None;
     }
     let parameter = model.create(ElementKind::ActionUsage);
@@ -2245,6 +2283,79 @@ mod tests {
                 ElementKind::IfActionUsage,
                 ElementKind::ActionUsage,
                 ElementKind::ActionUsage,
+            ]
+        );
+    }
+
+    /// A loop names the body it repeats, and the `until` after it is
+    /// its own.
+    ///
+    /// `loop action charging { ... } until c;` is one node:
+    /// `ActionBodyParameter : ActionUsage = ( 'action' UsageDeclaration?
+    /// )? '{' ActionBodyItem* '}'` gives the body a name, which
+    /// `charging.monitor` reads through, and `WhileLoopNode = ... ( 'until'
+    /// ExpressionParameterMember ';' )?` closes it. Read as it was
+    /// written -- a loop, an action beside it and a second loop -- the
+    /// node asked for the text of its own body and the flow repeated
+    /// twice over.
+    #[test]
+    fn a_loop_names_the_body_it_repeats_and_the_until_after_it_is_its_own() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tattribute c;\n\
+             \tloop action charging { action m; } until c >= 100;\n\
+             \tthen action aLoop while c > 0 { action d; } until c;\n\
+             }\n",
+        ));
+        let asked = |of: ElementId| -> Option<String> {
+            let condition = model
+                .owned(of)
+                .iter()
+                .find(|&&it| model.member_role(it) == Some(Role::Result))?;
+            let written = model.owned(*condition)[0];
+            model
+                .get(written, "body")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        let loops: Vec<ElementId> = model
+            .owned(roots[0])
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it) == ElementKind::WhileLoopActionUsage)
+            .collect();
+        assert_eq!(loops.len(), 2, "one loop each, not one per statement");
+
+        // `loop` asks nothing and is handed an empty parameter; the
+        // body it repeats keeps the name the source gave it; and what
+        // the `until` asks is the loop's third
+        assert_eq!(
+            model
+                .owned(loops[0])
+                .iter()
+                .map(|&it| (model.kind(it), model.name(it)))
+                .collect::<Vec<_>>(),
+            [
+                (ElementKind::ReferenceUsage, None),
+                (ElementKind::ActionUsage, Some("charging")),
+                (ElementKind::Expression, None),
+            ]
+        );
+        assert_eq!(asked(loops[0]).as_deref(), Some("c >= 100"));
+
+        // and a loop written under a name asks what follows the keyword
+        // that says which loop it is, not the name before it
+        assert_eq!(asked(loops[1]).as_deref(), Some("c > 0"));
+        assert_eq!(
+            model
+                .owned(loops[1])
+                .iter()
+                .map(|&it| model.kind(it))
+                .collect::<Vec<_>>(),
+            [
+                ElementKind::Expression,
+                ElementKind::ActionUsage,
+                ElementKind::Expression,
             ]
         );
     }

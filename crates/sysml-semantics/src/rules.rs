@@ -274,16 +274,20 @@ fn named_after(rule: &sysml_model::Rule) -> String {
 /// needs a guard no model can be shown to reach, which is a guard
 /// nothing checks.
 ///
-/// Four is what the corpus asks for: at three one constraint fewer is
-/// answered, and from four up to twelve the answer does not change at
-/// all. Two more than that is headroom, because the walk climbs a
-/// specialization chain as well as a chain of derivations, and a model
-/// may be built on deeper types than the library's.
+/// Six is what this can answer for. Past it the walk reaches
+/// `Type::directionOfExcluding`, which climbs the supertypes of every
+/// feature of every type, and the constraints it opens up are ones the
+/// model cannot yet meet: at eight one, at ten a hundred, at twelve
+/// four hundred and sixty of the corpus are reported as violations --
+/// an `accept` node's payload and receiver, a `send` node's three
+/// parameters, a requirement's subject. Those are the model missing
+/// what the specification counts, not the bound being too low, and
+/// raising it turns a truthful "cannot say" into a false finding.
 ///
-/// Past that the bound only buys work. The memberships a type inherits
-/// are worked out through five operations that call one another over
-/// every supertype, and no depth completes them: at twelve they were
-/// two thirds of every operation the check invoked, and a third of the
+/// The bound also only buys work. The memberships a type inherits are
+/// worked out through five operations that call one another over every
+/// supertype, and no depth completes them: at twelve they were two
+/// thirds of every operation the check invoked, and a third of the
 /// time it took, all of it spent arriving at the same "cannot say".
 const DEPTH: usize = 6;
 
@@ -936,6 +940,14 @@ impl Scope<'_> {
                         .expect("the arm this matched"),
                 )
             }
+            // `direction` is the one property of a feature the builder
+            // reads off every declaration that can carry one, and the
+            // notation writes it only where it holds: `in`, `out` and
+            // `inout` are all there is to write, and a feature written
+            // without one has none. The metamodel declares it optional
+            // and states no default, so nothing written is the model
+            // saying it is null rather than the model being silent.
+            None if name == "direction" && model.kind(elem).feature(name).is_some() => Val::Null,
             None => match self.derive(elem, name) {
                 Some(value) => value,
                 // A property the metaclass does not declare at all is
@@ -2406,6 +2418,29 @@ mod tests {
 
         // and a property the builder does not read is still unknown
         assert_eq!(ws.judge("operator = \'.\'", w), None);
+    }
+
+    /// `direction` is written where it holds and nowhere else.
+    ///
+    /// `in`, `out` and `inout` are all the notation has to write, so a
+    /// feature written without one has none -- the metamodel declares
+    /// the property optional and states no default. Read as a property
+    /// this model does not build, every constraint that counts a
+    /// behaviour's input parameters was answered "cannot say".
+    #[test]
+    fn a_direction_the_source_did_not_write_is_none() {
+        let (mut ws, w) = about("part def Car {\n\tin part w;\n}\n", "w");
+        assert_eq!(
+            ws.judge("direction = FeatureDirectionKind::_'in'", w),
+            Some(true)
+        );
+        assert_eq!(ws.judge("direction = null", w), Some(false));
+        let (mut ws, w) = about("part def Car {\n\tpart w;\n}\n", "w");
+        assert_eq!(ws.judge("direction = null", w), Some(true));
+        // and a metaclass that declares no direction at all still
+        // cannot say
+        let (mut ws, car) = about("part def Car;\n", "Car");
+        assert_eq!(ws.judge("direction = null", car), None);
     }
 
     /// A constraint calls an operation of the abstract syntax as readily
