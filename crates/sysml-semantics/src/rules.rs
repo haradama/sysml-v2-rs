@@ -125,9 +125,21 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// what the constraint says in words, and running them would report a
 /// violation of a model that is sound; the corpus is what says whether
 /// reading these as they are meant is right.
-const MISSPELLED: [(&str, &str); 2] = [
+/// `Type::directionOf` declares its one parameter `feature` and its
+/// body reads `directionOfExcluding(f, Set{})`. Its sibling
+/// `directionOfExcluding` writes `feature` throughout, and there is
+/// nothing else `f` can be: the operation takes one parameter and no
+/// metaclass declares a property of that name. Ten constraints reach a
+/// feature's direction through it.
+///
+/// A name is read this way only where it is bound to nothing and what
+/// it means is, so the `f` of `feature->select(f | ...)` -- which the
+/// metamodel writes a few lines away -- is the `f` that was bound and
+/// not this one.
+const MISSPELLED: [(&str, &str); 3] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
+    ("f", "feature"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
