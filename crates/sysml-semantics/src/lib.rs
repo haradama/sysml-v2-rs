@@ -1289,6 +1289,19 @@ impl Workspace {
         }
     }
 
+    /// The library types an element specializes without saying so.
+    ///
+    /// What it specializes is not read off its metaclass alone: a
+    /// connector or an association that relates more than two things is
+    /// not a binary one, whatever keyword declared it.
+    fn implied_bases_of(&mut self, elem: ElementId) -> Vec<&'static str> {
+        let mut implied = implied_bases(self.model.kind(elem));
+        if self.own_ends(elem).len() > 2 {
+            implied.retain(|path| !BINARY.contains(path));
+        }
+        implied
+    }
+
     /// Whether a feature redefines another, directly or through what it
     /// redefines in turn.
     fn redefines(&self, feature: ElementId, other: ElementId) -> bool {
@@ -2298,7 +2311,7 @@ impl Workspace {
                 }
             }
         }
-        for path in implied_bases(self.model.kind(elem)) {
+        for path in self.implied_bases_of(elem) {
             // From the root: these are the standard library's own
             // names, and a model is free to declare a package called
             // `Requirements` of its own -- `SimpleVehicleModel` does --
@@ -2308,7 +2321,10 @@ impl Workspace {
                 .chain(path.split("::").map(String::from))
                 .collect();
             if let Some(target) = self.resolve_from(elem, &segments) {
-                if target != elem && !supers.contains(&target) {
+                if target != elem
+                    && !supers.contains(&target)
+                    && !reaches(&self.model, target, elem)
+                {
                     supers.push(target);
                 }
             }
@@ -2474,7 +2490,7 @@ impl Workspace {
                 continue;
             }
             let mut bases = Vec::new();
-            for path in implied_bases(kind) {
+            for path in self.implied_bases_of(elem) {
                 let segments: Vec<String> = std::iter::once(String::new())
                     .chain(path.split("::").map(String::from))
                     .collect();
@@ -2499,8 +2515,12 @@ impl Workspace {
             for base in bases {
                 // implied only where nothing explicit -- or already
                 // implied -- reaches the base; what this loop writes
-                // counts for the bases after it
-                if reaches(&self.model, elem, base) {
+                // counts for the bases after it. Nor does anything
+                // specialize what specializes it: `Connections::
+                // Connection` is a connection definition like any
+                // other, and the base its metaclass names is
+                // `BinaryConnection`, which specializes it.
+                if reaches(&self.model, elem, base) || reaches(&self.model, base, elem) {
                     continue;
                 }
                 // a classifier subclassifies its base; a feature is
@@ -3025,6 +3045,10 @@ impl Workspace {
                 .unwrap_or(id);
             self.try_set(holder, "relatedFeature", Value::RefList(related));
         }
+        // How many things it relates says which library type it
+        // specializes, and the ends were not there to be counted when
+        // anything asked earlier.
+        self.supertypes.remove(&id);
     }
 
     /// What a succession runs from, where the statement left it
@@ -3688,6 +3712,22 @@ fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
     implied
 }
 
+/// The library types that relate exactly two things, and the ones an
+/// element reaches instead where it relates more.
+///
+/// `validateConnectorBinarySpecialization` -- "if a Connector has more
+/// than two connectorEnds, then it must not specialize, directly or
+/// indirectly, the Association BinaryLink" -- and
+/// `validateAssociationBinarySpecialization` says the same of an
+/// association. Each of these is listed in front of what it narrows, so
+/// dropping it leaves the one an n-ary relationship reaches.
+const BINARY: [&str; 4] = [
+    "Links::BinaryLink",
+    "Objects::BinaryLinkObject",
+    "Connections::BinaryConnection",
+    "Interfaces::BinaryInterface",
+];
+
 fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
     use ElementKind::*;
     match kind {
@@ -3700,7 +3740,9 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         ConnectionDefinition | ConnectionUsage => {
             &["Connections::BinaryConnection", "Connections::Connection"]
         }
-        InterfaceDefinition | InterfaceUsage => &["Interfaces::BinaryInterface"],
+        InterfaceDefinition | InterfaceUsage => {
+            &["Interfaces::BinaryInterface", "Interfaces::Interface"]
+        }
         AllocationDefinition | AllocationUsage => &["Allocations::Allocation"],
         ActionDefinition | ActionUsage | PerformActionUsage => &["Actions::Action"],
         SendActionUsage => &["Actions::SendAction"],

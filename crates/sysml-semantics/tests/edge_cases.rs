@@ -2144,6 +2144,78 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A relationship between more than two things is not a binary one,
+/// and nothing specializes what specializes it.
+///
+/// `validateConnectorBinarySpecialization` -- "if a Connector has more
+/// than two connectorEnds, then it must not specialize, directly or
+/// indirectly, the Association BinaryLink" -- and
+/// `validateAssociationBinarySpecialization` says the same of an
+/// association. What a type implicitly specializes is not read off its
+/// metaclass alone. And `Connections::Connection` is a connection
+/// definition like any other, so the base its metaclass names is
+/// `BinaryConnection` -- which specializes it: implied that way round,
+/// the library's own base for every connection was binary.
+#[test]
+fn what_relates_more_than_two_things_is_not_binary() {
+    let mut ws = Workspace::new();
+    ws.load_dir(std::path::Path::new(
+        "../../vendor/sysml-v2-release/sysml.library",
+    ))
+    .expect("the library is a submodule");
+    let file = ws.add_file(
+        "a.sysml",
+        "package K {\n\
+         \tpart def A;\n\
+         \tconnection def Two { end a : A; end b : A; }\n\
+         \tconnection def Three { end a : A; end b : A; end c : A; }\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let of = |ws: &Workspace, name: &str| {
+        ws.model()
+            .descendants(root)
+            .into_iter()
+            .find(|&id| ws.model().name(id) == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    };
+    let (two, three) = (of(&ws, "Two"), of(&ws, "Three"));
+    let connection = ws
+        .model()
+        .ids()
+        .find(|&id| ws.qualified_name_of(id) == "Connections::Connection")
+        .expect("the library declares it");
+    fn reaches(ws: &mut Workspace, from: sysml_model::ElementId, wanted: &str) -> bool {
+        let mut queue = vec![from];
+        let mut seen = Vec::new();
+        while let Some(at) = queue.pop() {
+            if ws.qualified_name_of(at) == wanted {
+                return true;
+            }
+            if seen.contains(&at) {
+                continue;
+            }
+            seen.push(at);
+            queue.extend(ws.supertypes(at));
+        }
+        false
+    }
+    assert!(reaches(&mut ws, two, "Connections::BinaryConnection"));
+    assert!(!reaches(&mut ws, three, "Connections::BinaryConnection"));
+    // and the library's own base for every connection is not a kind of
+    // the binary one that specializes it
+    let ups: Vec<String> = ws
+        .supertypes(connection)
+        .into_iter()
+        .map(|it| ws.qualified_name_of(it))
+        .collect();
+    assert!(
+        !ups.contains(&"Connections::BinaryConnection".to_string()),
+        "{ups:?}"
+    );
+}
+
 /// A connector end is one thing.
 ///
 /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true,
