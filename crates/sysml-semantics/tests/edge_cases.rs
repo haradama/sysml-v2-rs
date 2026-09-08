@@ -2144,6 +2144,38 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     );
 }
 
+/// A union says which things a type is one of, not which type it is.
+///
+/// `classifier U unions A, B;` narrows an extent; it does not
+/// specialize, and nothing is inherited through it. Read as a
+/// specialization, a connector typed by a union of two associations had
+/// the ends of both -- four where it relates two -- and
+/// `validateConnectorBinarySpecialization` says a connector with more
+/// than two ends does not specialize the binary link.
+#[test]
+fn a_union_is_not_a_specialization() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "package K {\n\
+         \tclassifier T;\n\
+         \tassoc One { end feature a : T; end feature b : T; }\n\
+         \tassoc Two { end feature c : T; end feature d : T; }\n\
+         \tclassifier Either unions One, Two;\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let root = ws.file_roots(file)[0];
+    let either = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .find(|&id| ws.model().name(id) == Some("Either"))
+        .expect("the union is declared");
+    // what it unions is not what it specializes
+    assert_eq!(ws.supertypes(either), Vec::new());
+}
+
 /// A succession that names one end reifies both.
 ///
 /// `then b;` says where the flow goes and not where it comes from, and

@@ -2178,7 +2178,20 @@ impl Workspace {
                     push_supertype(&mut supers, elem, def);
                 }
             }
-            for (_, targets) in relationship_parts(&node) {
+            for (part, targets) in relationship_parts(&node) {
+                // `classifier U unions A, B;` says which things a `U`
+                // is one of; it does not say a `U` is an `A`.
+                // `unions`, `intersects` and `differences` narrow an
+                // extent rather than specialize a type, and nothing is
+                // inherited through them: read as specializations, a
+                // connector typed by a union of two associations had
+                // the ends of both.
+                if matches!(
+                    part,
+                    SyntaxKind::UNIONS_KW | SyntaxKind::INTERSECTS_KW | SyntaxKind::DIFFERENCES_KW
+                ) {
+                    continue;
+                }
                 for t in targets {
                     if let Some(target) = self.resolve_from(elem, &t.segments) {
                         push_supertype(&mut supers, elem, target);
