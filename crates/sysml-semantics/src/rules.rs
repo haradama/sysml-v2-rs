@@ -647,6 +647,18 @@ impl Scope<'_> {
                     kind.name()
                 ));
             }
+            // What the metamodel declares single-valued answers with
+            // the value rather than with a collection of one:
+            // `ownedPortConjugator` is `[0..1]`, and
+            // `ownedPortConjugator.originalPortDefinition =
+            // originalPortDefinition` compares one against one.
+            if model
+                .kind(elem)
+                .feature(name)
+                .is_some_and(|meta| !meta.many)
+            {
+                return owned.into_iter().next().unwrap_or(Val::Null);
+            }
             return Val::Set(owned);
         }
         // An owning Y is the owner where the owner is a Y, and the
@@ -672,6 +684,21 @@ impl Scope<'_> {
             return match model.kind(owner).is_a(kind) {
                 true => Val::Elem(owner),
                 false => Val::Null,
+            };
+        }
+        // A conjugated port definition is declared inside the port it
+        // is the conjugate of, which is how the metamodel states its
+        // `originalPortDefinition`: "the `owningNamespace` of the
+        // `ConjugatedPortDefinition`". A port conjugation states a
+        // property of the same name meaning the other end of itself,
+        // and the model holds that one, so the two are told apart by
+        // what is being asked rather than by the name.
+        if name == "originalPortDefinition"
+            && model.kind(elem).is_a(ElementKind::ConjugatedPortDefinition)
+        {
+            return match model.owner(elem) {
+                Some(owner) => Val::Elem(owner),
+                None => Val::Null,
             };
         }
         // The other side of that: an annotation this model builds is
@@ -1358,6 +1385,10 @@ fn owned_kind(name: &str) -> Option<ElementKind> {
         // an annotation owns no annotating element in this model: what
         // annotates owns the annotation, never the other way about
         "ownedAnnotatingElement" => ElementKind::AnnotatingElement,
+        // `port def P` owns its conjugate, and the conjugate owns the
+        // conjugation that says what it is the conjugate of
+        "ownedPortConjugator" => ElementKind::PortConjugation,
+        "ownedConjugator" => ElementKind::Conjugation,
         _ => return None,
     };
     Some(kind)
@@ -1374,6 +1405,11 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
         // `import P::*;` is owned by the namespace it brings the names
         // into, which is the containment like any other
         "importOwningNamespace" => ElementKind::Namespace,
+        // The feature a cross subsetting crosses *from* is the one that
+        // owns it -- `crossingFeature` redefines `owningFeature`, and
+        // `end cart ... crosses selectedProduct.inCart` is written on
+        // the end it crosses from.
+        "crossingFeature" => ElementKind::Feature,
         // `comment about A` reifies the annotation under the comment,
         // so the annotating element is the one that owns it
         "owningAnnotatingElement" => ElementKind::AnnotatingElement,
@@ -1424,8 +1460,17 @@ mod tests {
 
     /// A workspace over one file, and the element declared under `name`.
     fn about(source: &str, name: &str) -> (Workspace, ElementId) {
+        named_in("test.sysml", source, name)
+    }
+
+    /// The same of a file the KerML notation is read from.
+    fn about_kerml(source: &str, name: &str) -> (Workspace, ElementId) {
+        named_in("test.kerml", source, name)
+    }
+
+    fn named_in(file: &str, source: &str, name: &str) -> (Workspace, ElementId) {
         let mut ws = Workspace::new();
-        ws.add_file("test.sysml", source);
+        ws.add_file(file, source);
         ws.resolve_all();
         let elem = ws
             .named_elements()
@@ -1921,6 +1966,31 @@ mod tests {
         // `u` redefines nothing, so the walk answers with nothing
         let (mut ws, u) = about(CHAIN, "u");
         assert_eq!(ws.judge(&format!("{WALK}->isEmpty()"), u), Some(true));
+    }
+
+    /// What the metamodel declares single-valued answers with the
+    /// value, not with a collection holding it.
+    ///
+    /// `Type::ownedConjugator` is `[0..1]` and
+    /// `ConjugatedPortDefinition::ownedPortConjugator` is `[1..1]`, and
+    /// `ownedPortConjugator.originalPortDefinition =
+    /// originalPortDefinition` compares one against one -- a collection
+    /// of one is equal to neither side of it.
+    #[test]
+    fn what_the_metamodel_declares_one_of_is_answered_as_one() {
+        let (mut ws, b) = about_kerml("package K {\n\tclass A;\n\tclass B conjugates A;\n}\n", "B");
+        assert_eq!(ws.judge("ownedConjugator <> null", b), Some(true));
+        assert_eq!(
+            ws.judge("ownedConjugator.originalType <> null", b),
+            Some(true)
+        );
+        // a class that conjugates nothing has no conjugator, which is
+        // null rather than an empty collection
+        let (mut ws, a) = about_kerml("package K {\n\tclass A;\n\tclass B conjugates A;\n}\n", "A");
+        assert_eq!(ws.judge("ownedConjugator = null", a), Some(true));
+        // and what it declares many of still answers with all of them
+        let (mut ws, car) = about("part def Car {\n\tpart v;\n\tpart w :> v;\n}\n", "w");
+        assert_eq!(ws.judge("ownedSubsetting->size() = 1", car), Some(true));
     }
 
     /// A flag the builder reads off the source for every metaclass that

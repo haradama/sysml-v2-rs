@@ -2047,3 +2047,66 @@ fn a_conjugated_port_is_typed_by_the_conjugate_and_has_what_it_conjugates() {
         .collect();
     assert_eq!(inherited, ["V::P"]);
 }
+
+/// `end cart : ShoppingCart crosses selectedProduct.inCart` says which
+/// feature of the other end this one is reached across, and the standard
+/// makes a `CrossSubsetting` of it. Written in the same shape as
+/// `subsets`, it was arriving as a plain subsetting -- so no model built
+/// here had a cross subsetting anywhere, and the constraint about
+/// owning at most one could not be asked.
+///
+/// What an end crosses to is reached through the ends of the
+/// association, this one included, so the path may start with the very
+/// name being declared.
+#[test]
+fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "a.kerml",
+        "package K {\n\
+         \tclass Cart;\n\
+         \tclass Product;\n\
+         \tassoc Selection {\n\
+         \t\tend cart : Cart crosses selectedProduct.inCart {\n\
+         \t\t\tmember feature inCart : Cart;\n\
+         \t\t}\n\
+         \t\tend selectedProduct : Product {\n\
+         \t\t\tmember feature inCart : Product;\n\
+         \t\t}\n\
+         \t}\n\
+         }\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    let root = ws.file_roots(file)[0];
+    let cart = ws
+        .model()
+        .descendants(root)
+        .into_iter()
+        .find(|&id| ws.model().name(id) == Some("cart"))
+        .expect("the end is declared");
+    let crossings: Vec<sysml_model::ElementId> = ws
+        .model()
+        .owned(cart)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().kind(it) == ElementKind::CrossSubsetting)
+        .collect();
+    assert_eq!(crossings.len(), 1, "one cross subsetting, and it is one");
+    let crossing = crossings[0];
+    // it is a subsetting, so the end that declares it is its
+    // subsettingFeature; what it crosses to is the narrower name
+    assert_eq!(
+        ws.model().get(crossing, "subsettingFeature"),
+        Some(&sysml_model::Value::Ref(cart))
+    );
+    let crossed = ws
+        .model()
+        .get(crossing, "crossedFeature")
+        .and_then(sysml_model::Value::as_id)
+        .expect("what it crosses to");
+    assert_eq!(
+        ws.qualified_name_of(crossed),
+        "K::Selection::selectedProduct::inCart"
+    );
+}

@@ -264,6 +264,9 @@ fn build_node(
             model.add_owned(conjugate, conjugation);
             model.set(conjugation, "conjugatedType", Value::Ref(conjugate));
             model.set(conjugation, "originalType", Value::Ref(id));
+            // the same pair under the names a port conjugation states
+            // them by, which is what the constraints about one read
+            model.set(conjugation, "originalPortDefinition", Value::Ref(id));
         }
     }
     if kind.is_a(ElementKind::Comment) {

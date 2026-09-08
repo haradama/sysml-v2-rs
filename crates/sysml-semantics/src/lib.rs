@@ -2514,6 +2514,16 @@ impl Workspace {
                 "featureChained",
                 "chainingFeature",
             ),
+            // A cross subsetting is a subsetting, so the end that
+            // declares it is its `subsettingFeature` like any other;
+            // what it crosses to is the narrower name. Its
+            // `crossingFeature` is derived from which feature owns it,
+            // so nothing is stored for that.
+            SyntaxKind::CROSSES_KW => (
+                ElementKind::CrossSubsetting,
+                "subsettingFeature",
+                "crossedFeature",
+            ),
             // `class B conjugates A;` -- the conjugation is owned by the
             // type that is conjugated, which is what tells it from
             // `conjugation c conjugate B conjugates A;`, where the
@@ -3478,7 +3488,23 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
             SyntaxKind::TYPING
             | SyntaxKind::SUBSETTING
             | SyntaxKind::REDEFINITION
-            | SyntaxKind::REFERENCES => Some((part.kind(), part)),
+            | SyntaxKind::REFERENCES => {
+                // `end cart : ShoppingCart crosses selectedProduct.inCart`
+                // is written in the same shape as `subsets`, and the
+                // standard makes a relationship of its own of it: a
+                // cross subsetting says which feature of the other end
+                // this one is reached across.
+                let crosses = part
+                    .children_with_tokens()
+                    .filter_map(|it| it.into_token())
+                    .map(|it| it.kind())
+                    .find(|it| !it.is_trivia())
+                    == Some(SyntaxKind::CROSSES_KW);
+                match crosses {
+                    true => Some((SyntaxKind::CROSSES_KW, part)),
+                    false => Some((part.kind(), part)),
+                }
+            }
             // KerML writes `unions T`, `chains a.b`, `disjoint from T`
             // and their kin as the one shape, told apart by the keyword
             // leading it. Five of them relate a type or a feature to
@@ -3669,7 +3695,11 @@ fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementI
 /// every reader of the model would have to know to stop at.
 fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
     match part {
-        SyntaxKind::SUBSETTING => !is_definition,
+        // `end cart : ShoppingCart crosses cart::product_account.inCart`
+        // -- what an end crosses to is reached through the ends of the
+        // association, this one included, so the path may start with
+        // the very name being declared
+        SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW => !is_definition,
         SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES => true,
         _ => false,
     }
