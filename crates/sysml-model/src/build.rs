@@ -2268,6 +2268,44 @@ mod tests {
         }
     }
 
+    /// `then action { ... }` names no action, but it is one: the flow
+    /// runs into it and its body is the action's, not the enclosing
+    /// statement's. After `do` the same shape means the opposite --
+    /// there the body belongs to the statement that performs it.
+    #[test]
+    fn a_nameless_action_a_flow_runs_into_is_an_action_of_its_own() {
+        let owner_of = |model: &Model, roots: &[ElementId], name: &str| {
+            let elem = model
+                .ids()
+                .find(|&id| model.name(id) == Some(name))
+                .unwrap_or_else(|| panic!("`{name}` is declared: {roots:?}"));
+            model
+                .ids()
+                .find(|&id| model.owned(id).contains(&elem))
+                .expect("something owns it")
+        };
+
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "attribute def E;\n\
+             action def A {\n\
+             \tloop {\n\
+             \t\taccept e : E;\n\
+             \t\tthen action {\n\t\t\taction g;\n\t\t}\n\
+             \t}\n}\n",
+        ));
+        let holder = owner_of(&model, &roots, "g");
+        assert_eq!(model.kind(holder), ElementKind::ActionUsage);
+        assert_eq!(model.name(holder), None);
+
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "attribute def E;\n\
+             action def A {\n\
+             \taccept e : E do action {\n\t\taction g;\n\t}\n}\n",
+        ));
+        let holder = owner_of(&model, &roots, "g");
+        assert_eq!(model.kind(holder), ElementKind::AcceptActionUsage);
+    }
+
     /// One statement, two elements: `then merge m;` writes the node the
     /// rest of the flow names *and* the succession into it, and the
     /// abstract syntax has both. Built as the node alone, the model says

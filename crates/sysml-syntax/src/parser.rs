@@ -554,8 +554,9 @@ impl Parser<'_> {
     /// `connect a to b;`, `first a then b;`, `specialization s subtype ...`
     fn lead_stmt(&mut self, cp: Checkpoint, node: SyntaxKind) {
         self.start_node_at(cp, node);
+        let led = self.current();
         self.bump();
-        self.element_tail();
+        self.element_tail_from(led);
         self.finish_node();
     }
 
@@ -704,8 +705,23 @@ impl Parser<'_> {
     /// specializations, multiplicities, values, statement continuation
     /// keywords and expressions may appear in any order.
     fn element_tail(&mut self) {
+        self.element_tail_from(EOF);
+    }
+
+    /// [`element_tail`], told which keyword the statement's lead-in
+    /// consumed. Only a flow keyword matters: a nameless declaration
+    /// written after `then` is the action the succession runs into,
+    /// where the same shape after `do` is the statement's own body.
+    fn element_tail_from(&mut self, led: SyntaxKind) {
+        // What the last turn of the loop dispatched on, starting from
+        // the lead-in, so `then action { ... }` reads alike whether the
+        // `then` opened the statement or came part-way through it.
+        let mut previous = led;
         loop {
-            match self.current() {
+            let here = self.current();
+            let after_flow = matches!(previous, THEN_KW | ELSE_KW | FIRST_KW);
+            previous = here;
+            match here {
                 SEMICOLON => {
                     self.start_node(BODY);
                     self.bump();
@@ -772,8 +788,12 @@ impl Parser<'_> {
                     self.finish_node();
                 }
                 // `end x [1..*] feature y : T redefines z;` — a nested
-                // feature declaration ends the enclosing element
-                k if k.is_def_kind_kw() && self.nth_is_name(1) => {
+                // feature declaration ends the enclosing element, and so
+                // does the nameless `then action { ... }`, which declares
+                // the action the succession runs into
+                k if k.is_def_kind_kw()
+                    && (self.nth_is_name(1) || (after_flow && self.nth(1) == L_BRACE)) =>
+                {
                     let nested = self.checkpoint();
                     self.definition_or_usage(nested);
                     return;
