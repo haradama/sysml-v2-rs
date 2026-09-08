@@ -1583,6 +1583,15 @@ fn definition_kind(node: &SyntaxNode) -> ElementKind {
         Some(PREDICATE_KW) => "Predicate",
         Some(INTERACTION_KW) => "Interaction",
         Some(METACLASS_KW) => "Metaclass",
+        // `IndividualDefinition : OccurrenceDefinition =
+        // BasicDefinitionPrefix? isIndividual ?= 'individual'
+        // DefinitionExtensionKeyword* 'def' Definition` -- `individual
+        // def IO1;` names no kind and is an occurrence definition all
+        // the same, which is what `isIndividual` is declared on. Read as
+        // a definition of unspecified kind it was not individual at
+        // all, and the usages typed by it had no individual definition
+        // to have.
+        _ if has_token(node, INDIVIDUAL_KW) => "OccurrenceDefinition",
         // What is left is `#service def X`, which takes its kind from the
         // user-defined keyword rather than naming one: a SysML definition
         // of unspecified kind, not a bare KerML classifier. Every other

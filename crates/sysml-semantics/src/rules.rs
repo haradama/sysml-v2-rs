@@ -93,6 +93,20 @@ struct Defined {
     body: Expr,
 }
 
+/// The names a usage gives to what it is typed by.
+///
+/// `Usage::definition` and the narrower names that stand beside it, one
+/// per kind of usage. `ItemUsage::itemDefinition` is left out: the
+/// metamodel states that one in OCL, and what it says is not quite this
+/// -- the structures among the occurrence definitions.
+const TYPED_BY: [&str; 5] = [
+    "actionDefinition",
+    "definition",
+    "occurrenceDefinition",
+    "partDefinition",
+    "portDefinition",
+];
+
 /// The names a membership metaclass gives to the one thing it owns.
 ///
 /// `SubjectMembership::ownedSubjectParameter`,
@@ -819,6 +833,21 @@ impl Scope<'_> {
                 true => Val::Elem(owner),
                 false => Val::Null,
             };
+        }
+        // `Usage::definition` -- "the Definitions that are types of this
+        // Usage" -- and the narrower names beside it: an occurrence
+        // usage's `occurrenceDefinition`, a part usage's
+        // `partDefinition`. The metamodel states each in prose and
+        // states none of them in OCL, so nothing the evaluation reads
+        // can work them out; each is the usage's types of the kind its
+        // own metaclass declares for it, whether the source wrote the
+        // type or the standard implied it.
+        let typed_by = TYPED_BY
+            .contains(&name)
+            .then(|| model.kind(elem).feature(name).map(|meta| meta.ty))
+            .flatten();
+        if let Some(sysml_model::FeatureType::Class(of)) = typed_by {
+            return self.typed_by(elem, of);
         }
         // A conjugated port definition is declared inside the port it
         // is the conjugate of, which is how the metamodel states its
@@ -1550,6 +1579,32 @@ impl Scope<'_> {
             present: self.present,
         };
         Some(scope.eval(&defined.body))
+    }
+
+    /// What a usage is typed by, of a kind.
+    ///
+    /// `individual timeslice t3 :> ind;` is typed by what `ind` is
+    /// typed by, so the walk carries on past a feature rather than
+    /// stopping at it.
+    fn typed_by(&mut self, elem: ElementId, of: ElementKind) -> Val {
+        let mut queue = self.ws.supertypes(elem);
+        let mut seen = vec![elem];
+        let mut types = Vec::new();
+        let mut at = 0;
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            if self.ws.model().kind(up).is_a(of) {
+                types.push(Val::Elem(up));
+                continue;
+            }
+            queue.extend(self.ws.supertypes(up));
+        }
+        Val::Set(types)
     }
 
     /// Which way a feature is passed, as seen from a type.
@@ -2518,6 +2573,41 @@ mod tests {
 
         // and a property the builder does not read is still unknown
         assert_eq!(ws.judge("operator = \'.\'", w), None);
+    }
+
+    /// What a usage is typed by, under the name its own metaclass
+    /// gives it.
+    ///
+    /// `Usage::definition` -- "the Definitions that are types of this
+    /// Usage" -- and `occurrenceDefinition`, `partDefinition` and their
+    /// kin beside it. The metamodel states each in prose and none of
+    /// them in OCL. `individual def IO1;` is an occurrence definition
+    /// that names no kind, which is what `isIndividual` is declared on.
+    #[test]
+    fn a_usage_is_typed_by_the_definitions_it_names() {
+        let source = "package K {\n\
+                      \tindividual def IO1;\n\
+                      \tpart def P;\n\
+                      \tpart p : P;\n\
+                      \tindividual occurrence io : IO1;\n\
+                      \tindividual timeslice t :> io;\n\
+                      }\n";
+        let (mut ws, part) = about(source, "p");
+        assert_eq!(ws.judge("partDefinition->notEmpty()", part), Some(true));
+        // `individual def` names no kind and is an occurrence
+        // definition all the same
+        let (mut ws, occurrence) = about(source, "io");
+        assert_eq!(
+            ws.judge(
+                "occurrenceDefinition->selectByKind(OccurrenceDefinition)\
+                 ->select(isIndividual)->size() = 1",
+                occurrence
+            ),
+            Some(true)
+        );
+        // and a usage is typed by what the usage it subsets is typed by
+        let (mut ws, slice) = about(source, "t");
+        assert_eq!(ws.judge("individualDefinition <> null", slice), Some(true));
     }
 
     /// Which way a feature is passed, as seen from a type.
