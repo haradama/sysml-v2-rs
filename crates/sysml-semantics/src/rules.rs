@@ -168,7 +168,19 @@ fn named_after(rule: &sysml_model::Rule) -> String {
 /// started. A bound stops it by construction; watching for the return
 /// needs a guard no model can be shown to reach, which is a guard
 /// nothing checks.
-const DEPTH: usize = 12;
+///
+/// Four is what the corpus asks for: at three one constraint fewer is
+/// answered, and from four up to twelve the answer does not change at
+/// all. Two more than that is headroom, because the walk climbs a
+/// specialization chain as well as a chain of derivations, and a model
+/// may be built on deeper types than the library's.
+///
+/// Past that the bound only buys work. The memberships a type inherits
+/// are worked out through five operations that call one another over
+/// every supertype, and no depth completes them: at twelve they were
+/// two thirds of every operation the check invoked, and a third of the
+/// time it took, all of it spent arriving at the same "cannot say".
+const DEPTH: usize = 6;
 
 /// One constraint that does not hold, and of what.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -587,12 +599,22 @@ impl Scope<'_> {
                     if is_bare_relationship(model.kind(child)) {
                         return model.kind(child).is_a(kind).then_some(Val::Elem(child));
                     }
+                    let member = Val::Membership {
+                        owner: elem,
+                        member: child,
+                    };
+                    // Every membership is a relationship, so asked for
+                    // relationships at large the answer is every child
+                    // and which membership each stands for need not be
+                    // worked out. It is the most asked-for property
+                    // there is, and working it out is the walk that
+                    // `membership_kind` does.
+                    if kind == ElementKind::Relationship {
+                        return Some(member);
+                    }
                     sysml_model::membership_kind(model, child)
                         .is_a(kind)
-                        .then_some(Val::Membership {
-                            owner: elem,
-                            member: child,
-                        })
+                        .then_some(member)
                 })
                 .collect();
             // Finding none of them is the ambiguous answer only where
