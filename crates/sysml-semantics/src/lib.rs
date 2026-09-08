@@ -180,6 +180,11 @@ pub struct Workspace {
     /// handful over and over -- once per element it is checked of --
     /// and working one out is a scan of every name in the workspace.
     pub(crate) globals: HashMap<String, Option<ElementId>>,
+    /// Relationships by the element they name at the end their
+    /// association owns -- the way `Feature::typing` is read. Built in
+    /// one pass over the model for every such property at once, and
+    /// again from scratch once the model has grown.
+    pub(crate) reverse: (usize, HashMap<(&'static str, ElementId), Vec<ElementId>>),
     in_progress: HashSet<ElementId>,
     /// The imports and aliases whose targets are being worked out, from
     /// the outermost in. An import naturally consults itself while
@@ -265,6 +270,7 @@ impl Clone for Workspace {
             // a speculative walk may write elements, and a name that
             // resolved to nothing before one is not settled
             globals: HashMap::new(),
+            reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
             blocked: 0,
@@ -306,6 +312,7 @@ impl Workspace {
             elem_file: HashMap::new(),
             supertypes: HashMap::new(),
             globals: HashMap::new(),
+            reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
             resolving: Vec::new(),
             blocked: 0,

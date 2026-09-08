@@ -177,10 +177,20 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 ///
 /// Each of these is read as meant where the body calls it, which is the
 /// only place a name that belongs to nothing can appear.
-const MISSPELLED: [(&str, &str); 3] = [
+/// `deriveFeatureType` calls `exist(`, and OCL spells the operation
+/// `exists`; the same body writes `reject` and `closure` correctly, and
+/// nothing anywhere declares an `exist`. It is the derivation every
+/// constraint about the types of a feature reads.
+///
+/// `deriveMetadataFeatureMetaclass` binds `metaclassTypes` and reads
+/// `metaClassTypes` back on the next line but one. Nothing binds the
+/// name it reads, and the name it bound is read nowhere.
+const MISSPELLED: [(&str, &str); 5] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
+    ("exist", "exists"),
+    ("metaClassTypes", "metaclassTypes"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -606,6 +616,12 @@ impl Scope<'_> {
         if let Some(value) = self.bound.get(name) {
             return value.clone();
         }
+        // A name the body binds under one spelling and reads back under
+        // another. Only where what it meant is bound: a property that
+        // happens to be spelled like a slip still answers as itself.
+        if let Some(value) = self.bound.get(meant(name)) {
+            return value.clone();
+        }
         if name == "self" {
             return Val::Elem(self.self_);
         }
@@ -736,6 +752,35 @@ impl Scope<'_> {
                 "`{name}` of a membership, which this model keeps as the containment it stands for"
             )),
         }
+    }
+
+    /// Fill in [`REVERSE_ENDS`] for the whole model, once.
+    ///
+    /// Read one at a time each of these is a scan of every element, and
+    /// the derivation of a feature's types walks them over every type
+    /// it reaches -- which is the difference between the check taking
+    /// seconds and taking a quarter of a minute.
+    fn index_reverse_ends(&mut self) {
+        if self.ws.reverse.0 == self.ws.model().len() {
+            return;
+        }
+        let model = self.ws.model();
+        let mut index: HashMap<(&'static str, ElementId), Vec<ElementId>> = HashMap::new();
+        for it in model.ids() {
+            let kind = model.kind(it);
+            for &(end, relationship, forward) in &REVERSE_ENDS {
+                if !kind.is_a(relationship) {
+                    continue;
+                }
+                let held = model
+                    .get(it, forward)
+                    .or_else(|| redefining(kind, forward).and_then(|under| model.get(it, under)));
+                if let Some(Value::Ref(of)) = held {
+                    index.entry((end, *of)).or_default().push(it);
+                }
+            }
+        }
+        self.ws.reverse = (model.len(), index);
     }
 
     /// The name an element answers to from the root namespace, or null
@@ -947,6 +992,21 @@ impl Scope<'_> {
                     })
                     .map(Val::Elem)
                     .collect(),
+            );
+        }
+        // A property no metaclass declares, because the association
+        // that has it owns the end: `Feature::typing` is "the
+        // FeatureTypings for which a certain Feature is the
+        // typedFeature". The model keeps the relationship, so the
+        // answer is found by looking the other way about, the way
+        // `sourceConnector` is above.
+        if let Some(&(end, ..)) = REVERSE_ENDS.iter().find(|(end, ..)| *end == name) {
+            self.index_reverse_ends();
+            let found = self.ws.reverse.1.get(&(end, elem));
+            return Val::Set(
+                found
+                    .map(|them| them.iter().copied().map(Val::Elem).collect())
+                    .unwrap_or_default(),
             );
         }
         // Every membership in a namespace: the containments it keeps
@@ -1814,6 +1874,23 @@ fn equal(left: &Val, right: &Val) -> Val {
     }
 }
 
+/// The ends of an association the metamodel declares on neither of the
+/// classes it relates: the association owns them, so a metaclass names
+/// only the way in and this is the way back out. Each pairs the name a
+/// constraint asks for with the relationship to look through and the
+/// property of it that names the element asked about.
+const REVERSE_ENDS: [(&str, ElementKind, &str); 5] = [
+    ("typing", ElementKind::FeatureTyping, "typedFeature"),
+    ("subsetting", ElementKind::Subsetting, "subsettingFeature"),
+    (
+        "redefinition",
+        ElementKind::Redefinition,
+        "redefiningFeature",
+    ),
+    ("specialization", ElementKind::Specialization, "specific"),
+    ("conjugator", ElementKind::Conjugation, "conjugatedType"),
+];
+
 /// Where the reflective libraries declare a metaclass, in the order the
 /// pilot implementation looks for one: `KerML.kerml` splits the KerML
 /// abstract syntax into three packages and `SysML.sysml` keeps the SysML
@@ -2034,6 +2111,29 @@ mod tests {
             .map(|(id, _)| id)
             .expect("the element is declared");
         (ws, elem)
+    }
+
+    /// The ends the metamodel gives to an association rather than to
+    /// either class it relates, which are read by looking the other way
+    /// about -- and read from what was worked out once.
+    #[test]
+    fn the_ends_an_association_owns_are_read_the_other_way_about() {
+        let (mut ws, w) = about("part def Car {\n\tpart v;\n\tpart w : Car :> v;\n}\n", "w");
+        assert_eq!(ws.judge("typing->size() = 1", w), Some(true));
+        assert_eq!(ws.judge("subsetting->size() = 1", w), Some(true));
+        // a subsetting and a typing are both specializations
+        assert_eq!(ws.judge("specialization->size() = 2", w), Some(true));
+        // asked twice, from the one pass over the model
+        assert_eq!(ws.judge("typing->size() = 1", w), Some(true));
+        // and nothing redefines it
+        assert_eq!(ws.judge("redefinition->isEmpty()", w), Some(true));
+
+        // and the conjugation of `class B conjugates A;` is read from
+        // the type it names rather than from the one it conjugates to
+        let (mut ws, b) = about_kerml("package K {\n\tclass A;\n\tclass B conjugates A;\n}\n", "B");
+        assert_eq!(ws.judge("conjugator->size() = 1", b), Some(true));
+        let (mut ws, a) = about_kerml("package K {\n\tclass A;\n\tclass B conjugates A;\n}\n", "A");
+        assert_eq!(ws.judge("conjugator->isEmpty()", a), Some(true));
     }
 
     /// The three the specification writes a metadata feature's
