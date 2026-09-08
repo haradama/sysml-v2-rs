@@ -38,9 +38,10 @@ fn derivations() -> &'static [(ElementKind, String, Expr)] {
             // metamodel wrote the expression alone, the rule's own name
             // does -- `deriveInvocationExpressionArgument` after the
             // metaclass is `argument`.
-            let (name, body) = match assignment(rule.ocl) {
+            let ocl = closed(rule.name, rule.ocl);
+            let (name, body) = match assignment(&ocl) {
                 Some((name, body)) => (name.to_string(), body),
-                None => (named_after(rule), rule.ocl),
+                None => (named_after(rule), ocl.as_ref()),
             };
             let Ok(expr) = ocl::parse(body) else {
                 continue;
@@ -78,7 +79,7 @@ fn operations() -> &'static [Defined] {
                     of: operation.metaclass,
                     called: operation.name,
                     parameters: operation.parameters,
-                    body: ocl::parse(operation.ocl).ok()?,
+                    body: ocl::parse(&closed(operation.name, operation.ocl)).ok()?,
                 })
             })
             .collect()
@@ -128,6 +129,76 @@ const MISSPELLED: [(&str, &str); 2] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
 ];
+
+/// Where the specification's own OCL does not close what it opens, and
+/// the one place the closing can go.
+///
+/// `deriveFeatureCrossFeature` writes two `if`s and one `endif`:
+///
+/// ```text
+/// crossFeature =
+///     if ownedCrossSubsetting = null then null
+///     else
+///         let chainingFeatures : Sequence(Feature) =
+///             ownedCrossSubsetting.crossedFeature.chainingFeature in
+///         if chainingFeatures->size() < 2 then null
+///         else chainingFeatures->at(2)
+///     endif
+/// ```
+///
+/// A `let` runs to the end of what follows it, so the inner `if` is the
+/// whole of the outer one's `else` and the single `endif` written can
+/// only close the inner. The outer is left open, and there is no other
+/// point in the text where inserting an `endif` makes it parse: the
+/// grammar leaves one position, not a choice of them.
+///
+/// That is why this is not the same as reading `implied` as `implies`
+/// in `validateFeatureEndNoDirection`, which
+/// `every_constraint_the_specification_states_parses_but_its_own_one_defect`
+/// refuses. Choosing an operator is choosing among readings; closing
+/// what was left open is not.
+///
+/// Nor is it the same as [`MISWRITTEN`] below, where the OCL parses and
+/// says something other than the constraint's own words.
+///
+/// Closing what is open only helps where what the body then goes on to
+/// evaluate can be answered. `Type::multiplicities` is left out for
+/// that reason: closed, it parses, and
+/// `validateFeatureEndMultiplicity` then reports twelve hundred
+/// violations of a sound corpus, because the `allSuperTypes()` and
+/// `hasBounds(1, 1)` it goes on to call answer nothing and an
+/// `exists` over nothing is a definite `false`. Unreadable is the
+/// better answer there.
+const UNCLOSED: [(&str, &str, &str); 3] = [
+    (
+        "deriveFeatureCrossFeature",
+        "chainingFeatures->at(2)",
+        "chainingFeatures->at(2) endif",
+    ),
+    // `deriveTransitionUsageSource` opens an `if` and closes none, and
+    // the text ends there.
+    (
+        "deriveTransitionUsageSource",
+        "oclAsType(ActionUsage)",
+        "oclAsType(ActionUsage) endif",
+    ),
+    // `Expression::modelLevelEvaluable` opens two `forAll(` and closes
+    // one, and stops in the middle of the second.
+    (
+        "modelLevelEvaluable",
+        "f.oclAsType(Expression).modelLevelEvaluable(visited)",
+        "f.oclAsType(Expression).modelLevelEvaluable(visited))",
+    ),
+];
+
+/// The specification's OCL for one of its rules, with what it leaves
+/// open closed.
+fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
+    match UNCLOSED.iter().find(|(rule, _, _)| *rule == name) {
+        Some((_, written, meant)) => ocl.replace(written, meant).into(),
+        None => ocl.into(),
+    }
+}
 
 /// Constraints whose OCL parses and says something other than what the
 /// constraint says in words.
@@ -1374,6 +1445,9 @@ fn owned_kind(name: &str) -> Option<ElementKind> {
         "ownedMembership" => ElementKind::Membership,
         "ownedSpecialization" => ElementKind::Specialization,
         "ownedSubsetting" => ElementKind::Subsetting,
+        // `[0..1]`, and a feature may own at most one -- which is what
+        // `validateFeatureOwnedCrossSubsetting` asks
+        "ownedCrossSubsetting" => ElementKind::CrossSubsetting,
         "ownedRedefinition" => ElementKind::Redefinition,
         // The metamodel writes `Feature::redefinition` as an end owned
         // by an association rather than as an attribute of the class,
@@ -1991,6 +2065,50 @@ mod tests {
         // and what it declares many of still answers with all of them
         let (mut ws, car) = about("part def Car {\n\tpart v;\n\tpart w :> v;\n}\n", "w");
         assert_eq!(ws.judge("ownedSubsetting->size() = 1", car), Some(true));
+    }
+
+    /// Every closing this supplies is one the specification's own text
+    /// leaves out, and supplying it is what lets the body be read.
+    ///
+    /// Held so that an entry cannot go stale: were the metamodel to
+    /// close one of these itself, the text it is written against would
+    /// no longer be there to close.
+    #[test]
+    fn what_is_closed_here_is_open_in_the_specification() {
+        for (name, written, meant) in UNCLOSED {
+            let bodies: Vec<&str> = sysml_model::DERIVATIONS
+                .iter()
+                .filter(|it| it.name == name)
+                .map(|it| it.ocl)
+                .chain(
+                    sysml_model::OPERATIONS
+                        .iter()
+                        .filter(|it| it.name == name)
+                        .map(|it| it.ocl),
+                )
+                .collect();
+            // a name may be stated of several metaclasses, and only
+            // the text carrying the slip is the one this closes
+            let open: Vec<&str> = bodies
+                .into_iter()
+                .filter(|it| it.contains(written))
+                .collect();
+            assert_eq!(open.len(), 1, "`{name}` is written `{written}` once");
+            let body = |ocl: &str| match ocl.split_once('=') {
+                Some((head, body)) if head.trim().chars().all(char::is_alphanumeric) => {
+                    body.to_string()
+                }
+                _ => ocl.to_string(),
+            };
+            assert!(
+                crate::ocl::parse(&body(open[0])).is_err(),
+                "`{name}` cannot be read as the specification writes it"
+            );
+            assert!(
+                crate::ocl::parse(&body(&closed(name, open[0]))).is_ok(),
+                "`{name}` reads once `{meant}` closes it"
+            );
+        }
     }
 
     /// A flag the builder reads off the source for every metaclass that

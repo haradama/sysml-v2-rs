@@ -534,19 +534,24 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
-    /// The derivations and operations this subset cannot read, which is
-    /// a different list from the constraints and a longer one.
+    /// The derivations and operations the specification writes so that
+    /// they cannot be read as they stand, which is a different list
+    /// from the constraints and a longer one. It is read here from the
+    /// metamodel's own text, before `rules::UNCLOSED` closes any of it.
     ///
     /// Two kinds sit in it. Some are the specification's own text:
     /// `Namespace::resolveGlobal` and three of its neighbours are
     /// written as prose about what they would do rather than as OCL,
     /// and `Expression::modelLevelEvaluable` stops in the middle of a
     /// `forAll(` it never closes, as `deriveFeatureCrossFeature` and
-    /// `deriveTransitionUsageSource` each stop one `endif` short. The
-    /// rest are this subset's: `MultiplicityRange::valueOf` answers `*`
-    /// for an unbounded literal and nothing here reads that yet.
+    /// `deriveTransitionUsageSource` each stop one `endif` short --
+    /// those three are closed and read, since the grammar leaves one
+    /// place for the closing. The rest are this subset's:
+    /// `MultiplicityRange::valueOf` answers `*` for an unbounded
+    /// literal and nothing here reads that yet.
     ///
     /// It is pinned so that the list cannot grow unnoticed, and so that
     /// closing one of the gaps shows up here as the gain it is.
