@@ -201,7 +201,20 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// it stands in is what keeps the rest of the body from being asked of
 /// something that is not a feature. The pilot implementation writes the
 /// same guard as `supertype instanceof Feature`, of the other type.
-const MISSPELLED: [(&str, &str); 8] = [
+///
+/// Five more were found by scanning every identifier the generated OCL
+/// writes and keeping the ones no metaclass declares, no operation
+/// answers to, and nothing in the body binds. Each is written correctly
+/// beside the slip, most of them in the very same body:
+/// `deriveRequirementConstraintMembershipReferencedConstraint` binds
+/// `referencedFeature`, tests it, and reads `refrencedFeature` back;
+/// `Namespace::resolveLocal` guards on `owningNamespace` and recurses
+/// through `owningNamspace`. `featureMembersip` and `featureMemberhsip`
+/// are two different manglings of `featureMembership`, in a result
+/// expression and a viewpoint stakeholder, and both say
+/// "featureMemberships" in words. `Feature::modelLevelEvaluable` calls
+/// `isOclKindOf`, which OCL spells the other way round.
+const MISSPELLED: [(&str, &str); 13] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
@@ -210,6 +223,11 @@ const MISSPELLED: [(&str, &str); 8] = [
     ("redefinedFeaturingType", "redefinedFeaturingTypes"),
     ("typeMembers", "members"),
     ("supertype", "otherType"),
+    ("refrencedFeature", "referencedFeature"),
+    ("featureMembersip", "featureMembership"),
+    ("featureMemberhsip", "featureMembership"),
+    ("owningNamspace", "owningNamespace"),
+    ("isOclKindOf", "oclIsKindOf"),
 ];
 
 /// Metaclasses the specification's OCL names and neither metamodel has.
@@ -221,8 +239,12 @@ const MISSPELLED: [(&str, &str); 8] = [
 /// was answered eighteen times over the corpus and could not have been
 /// false in any of them.
 ///
-/// All five read one way only, and each is written correctly in the
-/// words beside it. The subject membership's four owning types are "a
+/// All six read one way only, and each is written correctly in the
+/// words beside it. The last hid behind a misspelt operation:
+/// `Feature::modelLevelEvaluable` reads `MetaClass` where the metaclass
+/// is a `Metaclass`, spelt that way nineteen times elsewhere and this
+/// way once, and the call it stands in is spelt `isOclKindOf` so the
+/// name was never looked up at all. The subject membership's four owning types are "a
 /// RequirementDefinition, RequirementUsage, CaseDefinition, or
 /// CaseUsage", and the second is written
 /// `RequiremenCaseRequirementDefinition`. The stakeholder parameter is
@@ -238,12 +260,13 @@ const MISSPELLED: [(&str, &str); 8] = [
 /// somewhere else: `Action` is an ordinary enough word that repairing
 /// it wherever a body binds or calls one would be a different and much
 /// broader claim.
-const MISNAMED: [(&str, &str); 5] = [
+const MISNAMED: [(&str, &str); 6] = [
     ("RequiremenCaseRequirementDefinition", "RequirementUsage"),
     ("StakholderMembership", "StakeholderMembership"),
     ("AStakholderMembership", "StakeholderMembership"),
     ("Action", "ActionUsage"),
     ("FlowConnectionUsage", "FlowUsage"),
+    ("MetaClass", "Metaclass"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -2392,7 +2415,9 @@ fn written_as_meant(kind: ElementKind, name: &str) -> &str {
     }
     match name.strip_suffix('s').and_then(|one| kind.feature(one)) {
         Some(meta) => meta.name,
-        None => name,
+        // and a name that is not the plural of one either may still be
+        // one the specification wrote wrong
+        None => meant(name),
     }
 }
 
@@ -2682,6 +2707,11 @@ mod tests {
     /// `StakeholderMembership`. Read as written the select keeps
     /// nothing, and the property is empty of every model there is
     /// rather than of the ones it should be empty of.
+    ///
+    /// Two more manglings of one property name sit beside it --
+    /// `featureMembersip` in an analysis case's result expression and
+    /// `featureMemberhsip` in a viewpoint's stakeholders -- and both of
+    /// those bodies say "featureMemberships" in words.
     #[test]
     fn a_metaclass_named_by_a_name_nothing_has_is_read_as_meant() {
         let (mut ws, requirement) = about(
