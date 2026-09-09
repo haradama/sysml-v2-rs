@@ -341,15 +341,15 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// subsettedFeature)`, and `canAccess` holds the subsetted feature to
 /// being featured within one of the featuring types the subsetting one
 /// reaches -- walking *up* from it, never down. Read as the metamodel
-/// states it, 8651 subsettings of the corpus are rejected.
+/// states it, 8653 of the corpus's 20569 subsettings are rejected.
 ///
 /// The pilot implementation does run this constraint, and does two
 /// things the metamodel does not state. It only asks at all where the
 /// subsetted feature has a featuring type -- which exempts 956 of the
-/// 8651 outright -- and it answers one step more widely: `TypeUtil.
+/// 8653 outright -- and it answers one step more widely: `TypeUtil.
 /// isCompatible` also holds two features compatible where neither owns
 /// features of its own, they redefine something in common, and the one
-/// is featured where the other is. Neither is what the remaining 7695
+/// is featured where the other is. Neither is what the remaining 7697
 /// turn on. What they turn on is the direction: `accept a : A`
 /// gives a transition
 /// an `accepted` featured by the transition and a payload featured by
@@ -372,10 +372,10 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// anonymous `Feature` owned by the relationship, carrying the steps as
 /// `FeatureChaining` -- `Occurrences.kermlx` shows it for `subset
 /// laterOccurrence.successors subsets earlierOccurrence.successors;`.
-/// This model stands the chain up too, and owns it where the
-/// declaration is rather than under the relationship, so the pilot's
-/// guard has nothing to fire on here; either way the OCL as written
-/// reports a sound model.
+/// This model stands the chain up the same way, so both ends here are
+/// owned by the redefinition and featured by nothing, and the guard's
+/// condition is met exactly. The OCL as written has no such guard, and
+/// reports this one redefinition of the corpus's 12941.
 ///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
@@ -383,9 +383,10 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `validateMultiplicityRangeBoundResultTypes` holds every bound to
 /// coming to a `ScalarValues::Integer`, and `[nCauses]` counts with an
 /// attribute the notation gives no type -- `attribute nCauses =
-/// size(causes);`. Nineteen bounds of the corpus are written that way,
-/// the standard library's own `[` among them: `in elements:
-/// Number[1..n]` beside `private attribute n = mRef.flattenedSize;`.
+/// size(causes);`. Nineteen of the corpus's 6376 multiplicity ranges
+/// are written that way, the standard library's own `[` among them: `in
+/// elements: Number[1..n]` beside `private attribute n =
+/// mRef.flattenedSize;`.
 /// The pilot implementation does not run the OCL at
 /// all: `checkMultiplicityRange` carries "TODO: Correct
 /// validateMultiplicityBoundResults OCL from KERML-199" and asks
@@ -394,8 +395,8 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `validateElementFilterMembershipConditionIsBoolean` holds a filter's
 /// condition to coming to a boolean, and the specification's own
 /// operator table maps `|` to `DataFunctions::'|'`, which returns a
-/// `DataValue`. The corpus writes exactly one such filter, `filter
-/// @Safety | @Security;`, and reports it. The pilot implementation says
+/// `DataValue`. One of the corpus's eighteen filters is written that
+/// way -- `filter @Safety | @Security;` -- and is reported. The pilot implementation says
 /// so in as many words --
 /// "Non-conditional 'Boolean' operations in DataFunctions actually have
 /// result DataValue. This infers that they are actually BooleanFunctions
@@ -462,10 +463,10 @@ const MISWRITTEN: [(&str, &str); 8] = [
 /// specializing the abstract one -- but nothing selects it: the table
 /// names the base function alone, and the pilot implementation looks
 /// for an operator's function in `BaseFunctions`, `DataFunctions` and
-/// `ControlFunctions` and nowhere else. All three `after` arguments in
-/// the corpus come out the same way: an `OperatorExpression` with
-/// operator `[`, typed by `BaseFunctions::[`, whose result is typed by
-/// `Base::Anything`. Answering this would take working out the quantity
+/// `ControlFunctions` and nowhere else. Three of the corpus's
+/// twenty-one trigger invocations wait that way, and all three come out
+/// alike: an `OperatorExpression` with operator `[`, typed by
+/// `BaseFunctions::[`, whose result is typed by `Base::Anything`. Answering this would take working out the quantity
 /// from the unit, which no part of the specification states, and the
 /// pilot does not check the constraint at all.
 ///
