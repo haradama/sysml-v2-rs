@@ -201,7 +201,20 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// it stands in is what keeps the rest of the body from being asked of
 /// something that is not a feature. The pilot implementation writes the
 /// same guard as `supertype instanceof Feature`, of the other type.
-const MISSPELLED: [(&str, &str); 8] = [
+///
+/// The last is a metaclass rather than a name in a body:
+/// `validateSubjectMembershipOwningType` asks whether the owning type
+/// is one of four, and writes the second as
+/// `RequiremenCaseRequirementDefinition`. Nothing in either metamodel
+/// is called that -- the string occurs once in the whole of `SysML.xmi`
+/// -- and the constraint says in words that the four are "a
+/// RequirementDefinition, RequirementUsage, CaseDefinition, or
+/// CaseUsage". Read as written, a subject under anything else leaves
+/// the second question unanswerable and the whole disjunction unknown,
+/// so the constraint holds of every subject it is asked about and can
+/// report none: it is answered eighteen times over the corpus and could
+/// not have been false any of them.
+const MISSPELLED: [(&str, &str); 9] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
@@ -210,6 +223,7 @@ const MISSPELLED: [(&str, &str); 8] = [
     ("redefinedFeaturingType", "redefinedFeaturingTypes"),
     ("typeMembers", "members"),
     ("supertype", "otherType"),
+    ("RequiremenCaseRequirementDefinition", "RequirementUsage"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -2459,7 +2473,7 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
 /// The metaclass a type name in an OCL expression stands for.
 fn metaclass_named(expr: &Expr) -> Option<ElementKind> {
     match expr {
-        Expr::Name(name) => ElementKind::from_name(name),
+        Expr::Name(name) => ElementKind::from_name(meant(name)),
         _ => None,
     }
 }

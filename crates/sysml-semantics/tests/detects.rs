@@ -21,6 +21,14 @@
 //! ever being false. The first nine are worth aiming at by hand, and
 //! six of the models here came of doing that.
 //!
+//! A seventh came of asking why an aimed model did not work.
+//! `validateSubjectMembershipOwningType` was answered of eighteen
+//! subjects and could not have been false of any: it asks whether the
+//! owning type is one of four and writes the second as a metaclass that
+//! does not exist, so anything but the first left the question unknown.
+//! Read as the constraint's own words say -- `RequirementUsage` -- a
+//! subject under an action definition is reported.
+//!
 //! Skipped when the submodule is not checked out: the constraints are
 //! written against the standard library, and without it they report what
 //! is missing rather than what is wrong.
@@ -42,7 +50,10 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
     (
         "and so does a subject",
         "package P {\n\tpart def E {\n\t\tsubject s;\n\t}\n}\n",
-        &["validateParameterMembershipOwningType"],
+        &[
+            "validateParameterMembershipOwningType",
+            "validateSubjectMembershipOwningType",
+        ],
     ),
     (
         "a requirement has one subject or none",
@@ -112,6 +123,11 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
         "a rendering belongs to a view",
         "package P {\n\tpart def Q;\n\tpart q : Q {\n\t\trender asTree;\n\t}\n}\n",
         &["validateViewRenderingMembershipOwningType"],
+    ),
+    (
+        "a subject belongs to a requirement or a case, and this is an action",
+        "package P {\n\tpart def Q;\n\taction def A {\n\t\tsubject s : Q;\n\t}\n}\n",
+        &["validateSubjectMembershipOwningType"],
     ),
     (
         "a view renders one way",
