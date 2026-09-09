@@ -847,6 +847,18 @@ impl Scope<'_> {
         }
     }
 
+    /// The operator an expression was written with, where it was.
+    fn written_operator(&self, target: &Val) -> Option<String> {
+        let Val::Elem(elem) = target else {
+            return None;
+        };
+        self.ws
+            .model()
+            .get(*elem, "operator")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
     /// The metaclass a value stands for, where it stands for one.
     fn kind_of(&self, value: &Val) -> Option<ElementKind> {
         match value {
@@ -1933,6 +1945,19 @@ impl Scope<'_> {
                     "the direction seen from something that is not a type",
                 ),
             },
+            // `OperatorExpression::instantiatedType()` resolves the
+            // symbol against `BaseFunctions`, `DataFunctions` and
+            // `ControlFunctions`, and an operator expression writes no
+            // membership naming what it invokes. The metamodel states
+            // the body and writes its strings in double quotes, which
+            // OCL spells with single ones, so it cannot be read as it
+            // stands.
+            "instantiatedType" if self.written_operator(target).is_some() => {
+                let operator = self.written_operator(target).expect("checked by the guard");
+                crate::invoked_function(&operator)
+                    .and_then(|named| self.global(named))
+                    .map_or(Val::Null, Val::Elem)
+            }
             // What a type specializes. The specification writes
             // `Feature::supertypes` in terms of `Type::supertypes`
             // through an `oclAsType`, which an operation looked up by
@@ -2600,6 +2625,12 @@ mod tests {
         // and the name of something with none
         assert_eq!(ws.judge("oclType() = null", wheel), None);
         assert_eq!(ws.judge("declaredName.oclType() = null", car), None);
+        // an operation asked of something that is not an element says
+        // so, rather than saying it is not implemented
+        assert_eq!(
+            ws.judge("declaredName.instantiatedType() = null", car),
+            None
+        );
         assert_eq!(ws.judge("resolveGlobal(1) = null", car), None);
         let unnamed = ws
             .model()

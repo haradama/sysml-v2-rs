@@ -1372,7 +1372,10 @@ impl Workspace {
             // `x istype T` names the type it asks about through a
             // membership of its own, beside the one naming the function
             if self.model.kind(elem) == ElementKind::Membership {
-                self.names_what_it_asks_about(elem, &node);
+                match self.model.owner(elem).map(|it| self.model.kind(it)) {
+                    Some(ElementKind::FeatureChainExpression) => self.chains_to(elem, &node),
+                    _ => self.names_what_it_asks_about(elem, &node),
+                }
                 continue;
             }
             if self.model.kind(elem) == ElementKind::FeatureReferenceExpression {
@@ -1396,8 +1399,11 @@ impl Workspace {
                     invoked_function(operator).and_then(|it| self.named_globally(it))
                 }
                 (None, Some(named)) => self.named_globally(named),
-                (None, None) => invoked_by_name(&node)
-                    .and_then(|callee| self.resolve_operand(elem, &operand_segments(&callee))),
+                (None, None) => match invoked_through_arrow(&node) {
+                    Some(named) => self.resolve_operand(elem, &[named]),
+                    None => invoked_by_name(&node)
+                        .and_then(|callee| self.resolve_operand(elem, &operand_segments(&callee))),
+                },
             };
             let Some(target) = found else {
                 continue;
@@ -1430,6 +1436,65 @@ impl Workspace {
         let segments = operand_segments(node);
         if let Some(target) = self.resolve_operand(membership, &segments) {
             self.try_set(membership, "memberElement", Value::Ref(target));
+        }
+    }
+
+    /// The feature a chain expression chains to.
+    ///
+    /// "If the membershipOwningNamespace is a FeatureChainExpression,
+    /// then the local Namespace is the result parameter of the argument
+    /// Expression": `(that as SpatialItem).localClock` reads
+    /// `localClock` from what `that as SpatialItem` comes to, which for
+    /// a cast is the type it casts to and otherwise what its result
+    /// specializes.
+    fn chains_to(&mut self, membership: ElementId, node: &SyntaxNode) {
+        let owner = self
+            .model
+            .owner(membership)
+            .expect("the builder puts the membership on the expression it chains from");
+        let mut segments = operand_segments(node);
+        let Some(name) = segments.pop() else {
+            return;
+        };
+        let held: Vec<ElementId> = self
+            .takes(owner)
+            .into_iter()
+            .filter_map(|argument| {
+                self.model
+                    .owned(argument)
+                    .iter()
+                    .copied()
+                    .find(|&it| self.model.kind(it) == ElementKind::FeatureValue)
+                    .and_then(|it| self.model.get(it, "value").and_then(Value::as_id))
+            })
+            .collect();
+        let mut scopes = Vec::new();
+        for expression in held {
+            // a cast names the type it casts to outright
+            scopes.extend(
+                self.model
+                    .owned(expression)
+                    .iter()
+                    .copied()
+                    .filter(|&it| self.model.kind(it) == ElementKind::Membership)
+                    .filter_map(|it| self.model.get(it, "memberElement").and_then(Value::as_id))
+                    .collect::<Vec<_>>(),
+            );
+            if let Some(result) = self.hands_back(expression) {
+                scopes.extend(self.supertypes_of(result));
+            }
+        }
+        for scope in scopes {
+            // a chain chains to a feature: `targetFeature` is null where
+            // what the name reaches is not one, which is what the
+            // derivation's own `oclIsKindOf(Feature)` guard says
+            let found = self
+                .lookup(scope, &name, Access::External, true, None)
+                .filter(|&it| self.model.kind(it).is_a(ElementKind::Feature));
+            if let Some(target) = found {
+                self.try_set(membership, "memberElement", Value::Ref(target));
+                return;
+            }
         }
     }
 
@@ -4663,6 +4728,26 @@ fn invoked_function(operator: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(named)
+}
+
+/// The name an invocation writes after an arrow.
+///
+/// `xs->minimize{ ... }` invokes `minimize` and hands it what stands in
+/// front of the arrow, so the name is a token of the expression rather
+/// than a node under it.
+fn invoked_through_arrow(node: &SyntaxNode) -> Option<String> {
+    if node.kind() != SyntaxKind::ARROW_EXPR {
+        return None;
+    }
+    node.children_with_tokens()
+        .filter_map(|it| it.into_token())
+        .find(|token| {
+            matches!(
+                token.kind(),
+                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME
+            )
+        })
+        .map(|token| token.text().to_string())
 }
 
 /// The name an invocation writes in front of its arguments.

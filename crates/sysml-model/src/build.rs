@@ -790,14 +790,23 @@ fn value_expression(
         model.add_owned(membership, expression);
         built.source.push((expression, written.clone()));
         built.expressions.push(expression);
-        // First, because `instantiatedType()` is "the first ownedMembership
-        // that is not a FeatureMembership": the function this invokes,
-        // which name resolution looks up from the operator or the name
-        // written in front of the arguments.
-        let names_it = model.create(ElementKind::Membership);
-        model.add_owned(expression, names_it);
-        if let Some(operator) = operator {
-            model.set(expression, "operator", Value::String(operator));
+        // `InvocationExpression = InstatiatedTypeMember ArgumentList
+        // EmptyResultMember` -- what it invokes is a membership of its
+        // own, and first, because `instantiatedType()` is "the first
+        // ownedMembership that is not a FeatureMembership". An operator
+        // writes none: `OperatorExpression::instantiatedType()` resolves
+        // the symbol against the function library instead, and
+        // `FeatureChainExpression = NonFeatureChainPrimaryArgumentMember
+        // '.' FeatureChainMember` uses that one place for the name it
+        // chains to.
+        match &operator {
+            None => {
+                let names_it = model.create(ElementKind::Membership);
+                model.add_owned(expression, names_it);
+            }
+            Some(operator) => {
+                model.set(expression, "operator", Value::String(operator.clone()));
+            }
         }
         // `ConstructorExpression = 'new' InstantiatedTypeMember
         // ConstructorResultMember` and `ConstructorResult : Feature =
@@ -830,6 +839,15 @@ fn value_expression(
                     }
                 }
                 results_in(model, expression);
+                // `(that as SpatialItem).localClock` chains to a name,
+                // and the name is read from what the expression in
+                // front of the dot comes to
+                if kind == ElementKind::FeatureChainExpression {
+                    let chains_to = model.create(ElementKind::Membership);
+                    model.add_owned(expression, chains_to);
+                    built.source.push((chains_to, written.clone()));
+                    built.expressions.push(chains_to);
+                }
             }
         }
         represent_textually(model, expression, written.text().to_string().trim());
@@ -868,12 +886,15 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
                 .filter_map(sysml_syntax::SyntaxElement::into_token)
                 .find(|token| matches!(token.kind(), IDENT | UNRESTRICTED_NAME))
                 .map(|token| token.text().to_string());
-            let kind = match named.as_deref() {
-                Some("select") => ElementKind::SelectExpression,
-                Some("collect") => ElementKind::CollectExpression,
-                _ => ElementKind::OperatorExpression,
-            };
-            Some((kind, named))
+            // `FunctionOperationExpression : InvocationExpression =
+            // PrimaryArgumentMember '->' InstantiatedTypeMember ...` --
+            // `xs->minimize{ ... }` invokes what it names, and only
+            // `select` and `collect` are operators of their own.
+            match named.as_deref() {
+                Some("select") => Some((ElementKind::SelectExpression, named)),
+                Some("collect") => Some((ElementKind::CollectExpression, named)),
+                _ => Some((ElementKind::InvocationExpression, None)),
+            }
         }
         // `new Foo(1)` constructs one; anything else with an argument
         // list invokes what is named in front of it
@@ -3338,12 +3359,9 @@ mod tests {
             model.get(expression, "operator").and_then(Value::as_str),
             Some("+")
         );
-        // the membership that stands for the function it invokes comes
-        // first, since `instantiatedType()` reads the first one
-        assert_eq!(
-            model.kind(model.owned(expression)[0]),
-            ElementKind::Membership
-        );
+        // an operator names no membership for the function it invokes:
+        // `OperatorExpression::instantiatedType()` resolves the symbol
+        // against the function library instead
         let inside: Vec<ElementKind> = model
             .owned(expression)
             .iter()
@@ -3352,13 +3370,12 @@ mod tests {
         assert_eq!(
             inside,
             vec![
-                ElementKind::Membership,
                 ElementKind::Feature,
                 ElementKind::Feature,
                 ElementKind::Feature,
                 ElementKind::TextualRepresentation,
             ],
-            "the function, two arguments, the result, and the text"
+            "two arguments, the result, and the text"
         );
         // each argument holds its operand as the value of a parameter
         let operand = |at: usize| {
@@ -3367,8 +3384,8 @@ mod tests {
             assert_eq!(model.kind(value), ElementKind::FeatureValue);
             model.kind(reference(&model, value, "value").expect("the operand is held"))
         };
-        assert_eq!(operand(1), ElementKind::LiteralInteger);
-        assert_eq!(operand(2), ElementKind::FeatureReferenceExpression);
+        assert_eq!(operand(0), ElementKind::LiteralInteger);
+        assert_eq!(operand(1), ElementKind::FeatureReferenceExpression);
         let written = model
             .owned(expression)
             .iter()

@@ -273,13 +273,19 @@ fn an_operator_invokes_the_function_the_specification_names_for_it() {
     let plus = value_of(&ws, "P::c");
     assert_eq!(ws.model().kind(plus), ElementKind::OperatorExpression);
 
-    // the membership that stands for what it invokes is the first one,
-    // since `instantiatedType()` reads the first
-    let names_it = ws.model().owned(plus)[0];
-    assert_eq!(ws.model().kind(names_it), ElementKind::Membership);
+    // an operator names no membership for what it invokes:
+    // `OperatorExpression::instantiatedType()` resolves the symbol
+    // against the function library instead
+    assert!(
+        !ws.model()
+            .owned(plus)
+            .iter()
+            .any(|&it| ws.model().kind(it) == ElementKind::Membership),
+        "the function is named by the operator, not by a membership"
+    );
     assert_eq!(
-        ws.model().get(names_it, "memberElement"),
-        Some(&Value::Ref(named(&ws, "DataFunctions::+")))
+        ws.qualified_name_of(named(&ws, "DataFunctions::+")),
+        "DataFunctions::+"
     );
 
     // each argument redefines the parameter it is handed to, in order
