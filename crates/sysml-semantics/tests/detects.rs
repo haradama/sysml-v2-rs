@@ -157,11 +157,17 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
 /// and it reaches only the ones whose shape is already understood. The
 /// corpus is 403 files of rich, correct SysML: change one keyword in
 /// one of them and it is still a model, still parses, still resolves --
-/// and is now wrong in a way somebody's editor could be wrong. A sweep
-/// of fifty such swaps over every file tripped twenty-six constraints,
-/// eighteen of which no hand-written model here had reached, and found
-/// a panic: `connector ps : P ([0..*] myCart, ...)` counted the `*` of
-/// the bound as a step of the name beside it.
+/// and is now wrong in a way somebody's editor could be wrong.
+///
+/// A first sweep of fifty such swaps over every file left 1674 models
+/// that parse and resolve, tripped twenty-six constraints, and found a
+/// panic: `connector ps : P ([0..*] myCart, ...)` counted the `*` of
+/// the bound as a step of the name beside it. A second, widened past
+/// the definition keywords to expressions, multiplicity, visibility,
+/// time structure and the KerML relationship words, made 4257 and
+/// tripped thirty-nine with no panic left to find. With the five that
+/// only a hand-written model reaches, forty-four of the hundred and
+/// seventy answered constraints are demonstrated to fire.
 ///
 /// Each row is one swap, the file it is made in, and constraints that
 /// must notice. Other constraints may notice too -- one keyword can be
@@ -309,6 +315,88 @@ const MUTATED: &[(&str, &str, &str, &[&str])] = &[
         "view def ",
         "part def ",
         &["validateViewRenderingMembershipOwningType"],
+    ),
+    // A second sweep, widened past the definition keywords to
+    // expressions, multiplicity, visibility, time structure and the
+    // KerML relationship words: thirteen more constraints, and no panic
+    // left to find.
+    (
+        "CarWithShapeAndCSG.sysml",
+        "part def ",
+        "action def ",
+        &["validateBehaviorSpecialization"],
+    ),
+    (
+        "A-3-7-DecisionsAndMerges.kerml",
+        "behavior ",
+        "struct ",
+        &["validateStructureSpecialization"],
+    ),
+    (
+        "ProductSelection_N_ary.kerml",
+        "member ",
+        "",
+        &["validateFeatureCrossFeatureSpecialization"],
+    ),
+    (
+        "AnalysisIndividualExample.sysml",
+        " = ",
+        " := ",
+        &["validateFeatureIsVariable"],
+    ),
+    (
+        "AnalysisIndividualExample.sysml",
+        "part def ",
+        "attribute def ",
+        &["validateOccurrenceUsageIndividualUsage"],
+    ),
+    (
+        "JohnIndividualExample.sysml",
+        "individual ",
+        "",
+        &["validateOccurrenceUsagePortionKind"],
+    ),
+    (
+        "StructuredControlTest.sysml",
+        "in ",
+        "inout ",
+        &["validateForLoopActionUsageParameters"],
+    ),
+    (
+        "TradeStudyTest.sysml",
+        "in ",
+        "inout ",
+        &["validateParameterMembershipParameterDirection"],
+    ),
+    (
+        "ControlNodeTest.sysml",
+        "join",
+        "fork",
+        &["validateForkNodeIncomingSuccessions"],
+    ),
+    (
+        "ActionTest.sysml",
+        "if ",
+        "while ",
+        &["validateWhileLoopActionUsage"],
+    ),
+    (
+        "Metadata Example-1.sysml",
+        " : ",
+        " :> ",
+        &["validateMetadataFeatureAnnotatedElement"],
+    ),
+    (
+        "Classifiers.kerml",
+        "specializes ",
+        "conjugates ",
+        &["validateSpecificationSpecificNotConjugated"],
+    ),
+    (
+        "JohnIndividualExample.kerml",
+        "specializes ",
+        "conjugates ",
+        &["validateTypeAtMostOneConjugator"],
     ),
 ];
 
