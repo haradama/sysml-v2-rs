@@ -1246,6 +1246,7 @@ impl Workspace {
                                 SyntaxKind::CROSSES_KW
                                     | SyntaxKind::REDEFINITION
                                     | SyntaxKind::REFERENCES
+                                    | SyntaxKind::DISJOINT_KW
                             ) || part_kind == SyntaxKind::SUBSETTING
                                 && !is_definition;
                             let reached = match names_a_chain {
@@ -3508,6 +3509,12 @@ impl Workspace {
                 "featureChained",
                 "chainingFeature",
             ),
+            // `feature h2 ... disjoint from h1;` -- what a feature is
+            // declared not to overlap. Written this way there is no
+            // statement to hang it off, and until it was read the name
+            // after `from` was looked at by nothing: a typo in one was a
+            // model this toolchain called sound.
+            SyntaxKind::DISJOINT_KW => (ElementKind::Disjoining, "typeDisjoined", "disjoiningType"),
             // A cross subsetting is a subsetting, so the end that
             // declares it is its `subsettingFeature` like any other;
             // what it crosses to is the narrower name. Its
@@ -3636,12 +3643,23 @@ impl Workspace {
         // a chain feature under. A specialization or a typing relates
         // types, and the published abstract syntax carries no chain
         // beneath either.
-        let chains = self.model.kind(id).is_a(ElementKind::Subsetting);
+        let chains = self.model.kind(id).is_a(ElementKind::Subsetting)
+            || self.model.kind(id) == ElementKind::Disjoining;
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         if let Some(operand) = operand_after(node, keyword) {
             self.resolve_operand_into(id, &operand, source_prop, stats, chains);
         }
-        for (_, targets) in relationship_parts(node) {
+        for (part, targets) in relationship_parts(node) {
+            // What stands before `from` is what is disjoined, and what
+            // stands after it is what it is disjoined from. `disjoint A
+            // from B;` writes both bare; `disjoining d disjoint A from
+            // B;` names the relationship first, which leaves `disjoint
+            // A` a part of its own -- so the part is the end this one
+            // relationship reads as its source rather than its target.
+            let prop = match part == SyntaxKind::DISJOINT_KW {
+                true => source_prop,
+                false => target_prop,
+            };
             for t in targets {
                 match self.resolve_written(id, &t.segments, false) {
                     Some(target) => {
@@ -3651,10 +3669,17 @@ impl Workspace {
                             true => self.chained(id, &t.segments, &t.chain, target),
                             false => target,
                         };
-                        self.model.set(id, target_prop, Value::Ref(reached));
+                        self.model.set(id, prop, Value::Ref(reached));
                     }
                     None => self.record_miss(file, t.range, &t.segments, stats),
                 }
+            }
+        }
+        // and the end after `from` has no part of its own in either
+        // shape: only the keyword standing before it says where it is.
+        if self.model.kind(id) == ElementKind::Disjoining {
+            if let Some(operand) = operand_after(node, SyntaxKind::FROM_KW) {
+                self.resolve_operand_into(id, &operand, target_prop, stats, chains);
             }
         }
     }
@@ -5051,6 +5076,7 @@ fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
                         | SyntaxKind::CHAINS_KW
                         | SyntaxKind::CONJUGATES_KW
                         | SyntaxKind::FEATURED_KW
+                        | SyntaxKind::DISJOINT_KW
                 )
                 .then_some((lead, part))
             }
@@ -5260,6 +5286,7 @@ fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static str, &'stati
             "redefinedFeature",
         ),
         ElementKind::FeatureTyping => (SyntaxKind::TYPING_KW, "typedFeature", "type"),
+        ElementKind::Disjoining => (SyntaxKind::DISJOINT_KW, "typeDisjoined", "disjoiningType"),
         _ => return None,
     };
     Some(ends)
@@ -5667,8 +5694,10 @@ mod tests {
     /// to nothing.
     ///
     /// `disjoining d disjoint A from B;` writes its two types in a shape
-    /// of its own and is passed over here; the last two statements miss
-    /// on either side, which leaves that end unsaid rather than guessed.
+    /// of its own -- the name first, which leaves `disjoint A` a part
+    /// and `B` the bare operand after `from` -- and is read by position
+    /// either way. The last two statements miss on either side, which
+    /// leaves that end unsaid rather than guessed.
     #[test]
     fn a_relationship_written_as_a_statement_says_what_it_relates() {
         let (ws, stats) = resolved_workspace(&[(
@@ -5712,6 +5741,7 @@ mod tests {
                 (ElementKind::Subsetting, Some("g"), Some("f")),
                 (ElementKind::Redefinition, Some("g"), Some("f")),
                 (ElementKind::FeatureTyping, Some("g"), Some("A")),
+                (ElementKind::Disjoining, Some("A"), Some("B")),
                 (ElementKind::Subsetting, Some("g"), None),
                 (ElementKind::Subsetting, None, Some("f")),
             ]

@@ -3469,3 +3469,100 @@ fn a_dotted_operand_of_a_subsetting_is_the_chain_and_not_its_last_step() {
         .expect("what it subsets is resolved");
     assert_eq!(steps(reached), 2, "a declared chain is a chain too");
 }
+
+/// What a `disjoint` says is looked at.
+///
+/// KerML writes disjointness two ways -- beside a declaration, as
+/// `feature h2 ... disjoint from h1;`, and as a statement of its own,
+/// `disjoint b.f.a from b.a;` -- and neither end of either was resolved.
+/// A name that answers to nothing there was a model this toolchain
+/// called sound, which is the one thing the corpus cannot check for
+/// itself.
+///
+/// A dotted end is a chain, as it is for every other subsetting-shaped
+/// relationship: the abstract syntax the OMG publishes stands one under
+/// a `Disjoining` too.
+#[test]
+fn both_ends_of_a_disjointness_are_looked_at() {
+    use sysml_model::{ElementKind, Value};
+
+    let disjoinings = |ws: &Workspace| -> Vec<(Option<String>, Option<String>)> {
+        ws.model()
+            .ids()
+            .filter(|&id| ws.model().kind(id) == ElementKind::Disjoining)
+            .map(|id| {
+                let end = |prop| {
+                    ws.model()
+                        .get(id, prop)
+                        .and_then(Value::as_id)
+                        .map(|at| ws.qualified_name_of(at))
+                };
+                (end("typeDisjoined"), end("disjoiningType"))
+            })
+            .collect()
+    };
+
+    // beside a declaration
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "k.kerml",
+        "package K {\n\tclassifier A;\n\tfeature a : A;\n\tfeature b : A disjoint from a;\n}\n",
+    );
+    assert_eq!(ws.resolve_all().unresolved, 0);
+    assert_eq!(
+        disjoinings(&ws),
+        [(Some("K::b".into()), Some("K::a".into()))]
+    );
+
+    // as a statement, named or not
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "k.kerml",
+        "package K {\n\tclassifier A;\n\tclassifier B;\n\
+         \tfeature a : A;\n\tfeature b : A;\n\
+         \tdisjoint b from a;\n\tdisjoining d disjoint A from B;\n}\n",
+    );
+    assert_eq!(ws.resolve_all().unresolved, 0);
+    assert_eq!(
+        disjoinings(&ws),
+        [
+            (Some("K::b".into()), Some("K::a".into())),
+            (Some("K::A".into()), Some("K::B".into())),
+        ]
+    );
+
+    // a name that answers to nothing is reported, on either side
+    for source in [
+        "package K {\n\tclassifier A;\n\tfeature b : A disjoint from nope;\n}\n",
+        "package K {\n\tclassifier A;\n\tfeature a : A;\n\tdisjoint nope from a;\n}\n",
+        "package K {\n\tclassifier A;\n\tfeature b : A;\n\tdisjoint b from nope;\n}\n",
+    ] {
+        let mut ws = Workspace::new();
+        ws.add_file("k.kerml", source);
+        let stats = ws.resolve_all();
+        assert_eq!(stats.unresolved, 1, "{:?}", ws.unresolved());
+        assert_eq!(ws.unresolved()[0].name, "nope");
+    }
+
+    // and a dotted end is the chain, not the feature it ends at
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "k.kerml",
+        "package K {\n\tclassifier C {\n\t\tfeature deep;\n\t}\n\
+         \tfeature x : C;\n\tfeature y : C;\n\tdisjoint x.deep from y.deep;\n}\n",
+    );
+    assert_eq!(ws.resolve_all().unresolved, 0);
+    let steps: Vec<usize> = ws
+        .model()
+        .ids()
+        .filter(|&id| ws.model().kind(id) == ElementKind::Disjoining)
+        .flat_map(|id| {
+            ["typeDisjoined", "disjoiningType"]
+                .iter()
+                .filter_map(|prop| ws.model().get(id, prop).and_then(Value::as_id))
+                .map(|at| ws.model().chaining_feature(at).len())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(steps, [2, 2], "both ends are chains of two");
+}
