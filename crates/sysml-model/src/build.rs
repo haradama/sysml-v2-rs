@@ -15,6 +15,11 @@ use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 pub struct Built {
     pub roots: Vec<ElementId>,
     pub source: Vec<(ElementId, SyntaxNode)>,
+    /// The elements the expression builder stood up, in the order it
+    /// made them. A `RequirementUsage` is a kind of `BooleanExpression`
+    /// and a subject is a kind of parameter, so what an expression is
+    /// cannot be told from the metaclass afterwards.
+    pub expressions: Vec<ElementId>,
     /// Which notation the file was written in. The two share a syntax
     /// tree but not a set of metaclasses, so a node that names no kind
     /// becomes a different thing in each.
@@ -34,6 +39,7 @@ pub fn build_into(model: &mut Model, parse: &Parse) -> Built {
     let mut built = Built {
         roots: Vec::new(),
         source: Vec::new(),
+        expressions: Vec::new(),
         dialect: parse.dialect(),
     };
     for child in parse.syntax().children() {
@@ -362,12 +368,13 @@ fn build_node(
     }
     if kind == ElementKind::ElementFilterMembership {
         if let Some(written) = node.children().find(|child| child.kind() != BODY) {
-            let condition = model.create(ElementKind::Expression);
-            model.add_owned(id, condition);
-            represent_textually(model, condition, written.text().to_string().trim());
             // `filter @Safety;` filters by what the expression comes to,
             // and the membership names it outright: without that the
-            // model owns an expression and says nothing about what it is
+            // model owns an expression and says nothing about what it is.
+            // Built as the tree it is, `@Safety` invokes
+            // `BaseFunctions::'@'` and comes to a boolean, which is what
+            // `validateElementFilterMembershipConditionIsBoolean` reads.
+            let condition = value_expression(model, id, &written, built);
             model.set(id, "condition", Value::Ref(condition));
         }
     }
@@ -410,6 +417,7 @@ fn build_node(
                 trigger,
                 ElementKind::AcceptActionUsage,
                 payload,
+                built,
             );
             model.set(id, "triggerAction", Value::RefList(vec![trigger]));
             if let Some(payload) = payload {
@@ -420,7 +428,7 @@ fn build_node(
             }
         }
         reify_guard(model, node, id);
-        reify_effect(model, node, id);
+        reify_effect(model, node, id, built);
         // A transition is not a connector: what it relates it relates
         // through a `Succession` of its own, which is what
         // `validateTransitionUsageSuccession` asks for. Name resolution
@@ -431,7 +439,7 @@ fn build_node(
     let payload = (kind == ElementKind::AcceptActionUsage)
         .then(|| reify_accept_payload(model, node, id))
         .flatten();
-    reify_action_arguments(model, node, id, kind, payload);
+    reify_action_arguments(model, node, id, kind, payload, built);
     // `IfNode : IfActionUsage = ... 'if' ownedRelationship +=
     // ExpressionParameterMember ...` and the two loops the same way: the
     // condition is what the node is about, and it was being read and
@@ -457,7 +465,7 @@ fn build_node(
     // `x`, and reading it as the assignment's own value says the action
     // itself is one.
     if kind.is_a(ElementKind::Feature) && !kind.is_a(ElementKind::AssignmentActionUsage) {
-        reify_feature_value(model, node, id);
+        reify_feature_value(model, node, id, built);
     }
 
     // recurse into the element's body, parameter list and nested
@@ -701,7 +709,7 @@ fn bound_expression(
 /// Reify an `= 1200.0`, `default = x` or `:= "boot"` clause as the
 /// `FeatureValue` membership the standard stores: it owns the value
 /// expression and says whether the value is a default or an initial one.
-fn reify_feature_value(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
+fn reify_feature_value(model: &mut Model, node: &SyntaxNode, owner: ElementId, built: &mut Built) {
     use SyntaxKind::*;
     let Some(clause) = node.children().find(|child| child.kind() == VALUE) else {
         return;
@@ -729,35 +737,256 @@ fn reify_feature_value(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     else {
         return;
     };
-    let expression = value_expression(model, membership, &written);
+    let expression = value_expression(model, membership, &written, built);
     model.set(membership, "value", Value::Ref(expression));
 }
 
-/// The expression a feature value holds. A literal becomes the matching
-/// literal element; anything else is an `Expression` kept as the text the
-/// author wrote, the way a transition guard is.
-fn value_expression(model: &mut Model, membership: ElementId, written: &SyntaxNode) -> ElementId {
+/// The expression a feature value holds, as the tree of elements the
+/// abstract syntax has.
+///
+/// A literal becomes the matching literal element and a bare name a
+/// feature reference. Everything else the standard writes as an
+/// invocation: "OperatorExpressions provide a shorthand notation for
+/// InvocationExpressions that invoke a Function from the Kernel Function
+/// Library", so `a + b` invokes `DataFunctions::'+'` and hands it two
+/// arguments, each through a parameter of its own carrying the operand
+/// as its value. Kept as the text it was written as, an expression said
+/// nothing about what it comes to and every constraint about one was
+/// asked of nothing at all.
+fn value_expression(
+    model: &mut Model,
+    membership: ElementId,
+    written: &SyntaxNode,
+    built: &mut Built,
+) -> ElementId {
     if let Some((kind, value)) = literal_value(written) {
         let literal = model.create(kind);
         model.add_owned(membership, literal);
         model.set(literal, "value", value);
         return literal;
     }
+    // `( a + b )` is what is inside it and nothing more
+    if written.kind() == SyntaxKind::PAREN_EXPR {
+        if let Some(inner) = written.children().next() {
+            return value_expression(model, membership, &inner, built);
+        }
+    }
     // `= ledPinNumber` refers to a feature rather than computing
     // anything, and the standard has an expression kind for exactly
     // that. Name resolution fills in the `referent`, which is how a
     // reader of the model can follow the name to what it stands for
     // without resolving it again.
-    let kind = if sysml_syntax::is_name_chain(written) {
-        ElementKind::FeatureReferenceExpression
-    } else {
-        ElementKind::Expression
-    };
-    let expression = model.create(kind);
+    if sysml_syntax::is_name_chain(written) {
+        let expression = model.create(ElementKind::FeatureReferenceExpression);
+        model.add_owned(membership, expression);
+        built.source.push((expression, written.clone()));
+        built.expressions.push(expression);
+        refers_through(model, expression, ElementKind::FeatureReferenceExpression);
+        represent_textually(model, expression, written.text().to_string().trim());
+        return expression;
+    }
+    if let Some((kind, operator)) = invoked(written) {
+        let expression = model.create(kind);
+        model.add_owned(membership, expression);
+        built.source.push((expression, written.clone()));
+        built.expressions.push(expression);
+        // First, because `instantiatedType()` is "the first ownedMembership
+        // that is not a FeatureMembership": the function this invokes,
+        // which name resolution looks up from the operator or the name
+        // written in front of the arguments.
+        let names_it = model.create(ElementKind::Membership);
+        model.add_owned(expression, names_it);
+        if let Some(operator) = operator {
+            model.set(expression, "operator", Value::String(operator));
+        }
+        // `ConstructorExpression = 'new' InstantiatedTypeMember
+        // ConstructorResultMember` and `ConstructorResult : Feature =
+        // ArgumentList` -- a constructor hands its arguments to the
+        // thing it constructs, not to itself, and
+        // `validateConstructorExpressionOwnedFeatures` holds it to
+        // owning nothing else.
+        match kind {
+            ElementKind::ConstructorExpression => {
+                let result = results_in(model, expression);
+                for (named, operand) in operands(written) {
+                    hands_over(model, result, named, &operand, None, built);
+                }
+            }
+            _ => {
+                // `ClassificationExpression : OperatorExpression =
+                // PrimaryArgumentMember operator TypeReferenceMember` --
+                // `x as T` hands over `x` and names `T`; the type is not
+                // an argument, and `BaseFunctions::as` takes one.
+                let handed = hands_over_only(written);
+                for (at, (named, operand)) in operands(written).into_iter().enumerate() {
+                    match at < handed {
+                        true => hands_over(model, expression, named, &operand, Some("in"), built),
+                        false => {
+                            let reference = model.create(ElementKind::Membership);
+                            model.add_owned(expression, reference);
+                            built.source.push((reference, operand));
+                            built.expressions.push(reference);
+                        }
+                    }
+                }
+                results_in(model, expression);
+            }
+        }
+        represent_textually(model, expression, written.text().to_string().trim());
+        return expression;
+    }
+    let expression = model.create(ElementKind::Expression);
     model.add_owned(membership, expression);
-    refers_through(model, expression, kind);
     represent_textually(model, expression, written.text().to_string().trim());
     expression
+}
+
+/// Which kind of invocation an expression is written as, and the
+/// operator symbol that says which function it invokes.
+///
+/// A call writes the function's name instead of an operator, so it has
+/// none; everything else is one of the symbols the specification's
+/// operator table maps to a library function.
+fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
+    use SyntaxKind::*;
+    let symbol = |node: &SyntaxNode| {
+        node.children_with_tokens()
+            .filter_map(sysml_syntax::SyntaxElement::into_token)
+            .find(|token| !token.kind().is_trivia() && !matches!(token.kind(), L_PAREN | R_PAREN))
+            .map(|token| token.text().to_string())
+    };
+    match written.kind() {
+        BINARY_EXPR | UNARY_EXPR => Some((ElementKind::OperatorExpression, symbol(written))),
+        COND_EXPR => Some((ElementKind::OperatorExpression, Some("if".to_string()))),
+        INDEX_EXPR => Some((ElementKind::IndexExpression, Some("#".to_string()))),
+        // `a.b` where `a` is not a name is a chain through what the
+        // expression in front of it comes to
+        PATH_EXPR => Some((ElementKind::FeatureChainExpression, Some(".".to_string()))),
+        ARROW_EXPR => {
+            let named = written
+                .children_with_tokens()
+                .filter_map(sysml_syntax::SyntaxElement::into_token)
+                .find(|token| matches!(token.kind(), IDENT | UNRESTRICTED_NAME))
+                .map(|token| token.text().to_string());
+            let kind = match named.as_deref() {
+                Some("select") => ElementKind::SelectExpression,
+                Some("collect") => ElementKind::CollectExpression,
+                _ => ElementKind::OperatorExpression,
+            };
+            Some((kind, named))
+        }
+        // `new Foo(1)` constructs one; anything else with an argument
+        // list invokes what is named in front of it
+        CALL_EXPR => match written
+            .children()
+            .any(|child| child.kind() == UNARY_EXPR && has_token(&child, NEW_KW))
+        {
+            true => Some((ElementKind::ConstructorExpression, None)),
+            false => Some((ElementKind::InvocationExpression, None)),
+        },
+        _ => None,
+    }
+}
+
+/// How many of the operands are handed over; the rest are named.
+///
+/// The classification operators are written like any other binary one
+/// and mean something else by their second half: `x istype T` asks
+/// whether `x` is a `T`, and `T` is named rather than handed over. A
+/// feature chain names the feature it reaches the same way, and `all T`
+/// names a type and hands over nothing --
+/// `ClassificationExpression` writes a `TypeReferenceMember`,
+/// `FeatureChainExpression` a `FeatureChainMember`, and
+/// `BaseFunctions::'all'` takes no argument at all.
+fn hands_over_only(written: &SyntaxNode) -> usize {
+    if written.kind() == SyntaxKind::PATH_EXPR {
+        return 1;
+    }
+    let symbols: Vec<String> = written
+        .children_with_tokens()
+        .filter_map(sysml_syntax::SyntaxElement::into_token)
+        .map(|token| token.text().to_string())
+        .collect();
+    let wrote = |symbol: &str| symbols.iter().any(|it| it == symbol);
+    if wrote("all") {
+        return 0;
+    }
+    let classifies = ["as", "meta", "istype", "hastype", "@", "@@"]
+        .iter()
+        .any(|symbol| wrote(symbol));
+    match (classifies, written.kind() == SyntaxKind::UNARY_EXPR) {
+        // `filter @Safety;` names a type and hands over nothing; the
+        // thing being asked about is what the filter is applied to
+        (true, true) => 0,
+        (true, false) => 1,
+        _ => usize::MAX,
+    }
+}
+
+/// The operands an invocation hands over, in the order it hands them,
+/// each with the parameter it was written against where one was.
+///
+/// A call names the function in front of its arguments, and that name
+/// is what it invokes rather than something handed to it. `F(q = 1, p =
+/// a)` names the parameters instead of relying on their order --
+/// `NamedArgument : Feature = ParameterRedefinition '=' ArgumentValue`
+/// -- and the argument list arrives flat, a name and a value apiece.
+fn operands(written: &SyntaxNode) -> Vec<(Option<SyntaxNode>, SyntaxNode)> {
+    use SyntaxKind::*;
+    let mut out = Vec::new();
+    let mut children = written.children().peekable();
+    if written.kind() == CALL_EXPR {
+        children.next();
+    }
+    for child in children {
+        if child.kind() != ARG_LIST {
+            out.push((None, child));
+            continue;
+        }
+        match has_token(&child, EQ) {
+            true => {
+                let mut listed = child.children();
+                while let (Some(named), Some(value)) = (listed.next(), listed.next()) {
+                    out.push((Some(named), value));
+                }
+            }
+            false => out.extend(child.children().map(|it| (None, it))),
+        }
+    }
+    out
+}
+
+/// Hand one operand over as a parameter of the invocation.
+///
+/// `PrimaryArgumentMember : ParameterMembership = ownedMemberParameter =
+/// PrimaryArgument`, `PrimaryArgument : Feature = ownedRelationship +=
+/// PrimaryArgumentValue` and `PrimaryArgumentValue : FeatureValue = value
+/// = PrimaryExpression` -- three elements deep, and
+/// `deriveInvocationExpressionArgument` reads the operand back through
+/// all three.
+fn hands_over(
+    model: &mut Model,
+    expression: ElementId,
+    named: Option<SyntaxNode>,
+    operand: &SyntaxNode,
+    direction: Option<&'static str>,
+    built: &mut Built,
+) {
+    let parameter = model.create(ElementKind::Feature);
+    model.add_owned(expression, parameter);
+    // the parameter the argument was written against, where the
+    // notation named one instead of relying on the order
+    if let Some(named) = named {
+        built.source.push((parameter, named));
+    }
+    if let Some(direction) = direction {
+        model.set(parameter, "direction", Value::EnumLit(direction));
+    }
+    let value = model.create(ElementKind::FeatureValue);
+    model.add_owned(parameter, value);
+    model.set(value, "featureWithValue", Value::Ref(parameter));
+    let inner = value_expression(model, value, operand, built);
+    model.set(value, "value", Value::Ref(inner));
 }
 
 /// Stand a `Membership` on a feature reference expression for what it
@@ -773,7 +1002,24 @@ fn refers_through(model: &mut Model, expression: ElementId, kind: ElementKind) {
     if kind == ElementKind::FeatureReferenceExpression {
         let membership = model.create(ElementKind::Membership);
         model.add_owned(expression, membership);
+        results_in(model, expression);
     }
+}
+
+/// Give an expression the parameter it comes to.
+///
+/// `deriveExpressionResult` reads the first `ReturnParameterMembership`
+/// an expression owns, and `validateFeatureReferenceExpressionResult`
+/// holds that parameter to being owned by the expression itself. The
+/// notation writes it nowhere: `= ledPinNumber` says what the value is
+/// and says nothing about the parameter the expression hands it back
+/// through.
+fn results_in(model: &mut Model, expression: ElementId) -> ElementId {
+    let result = model.create(ElementKind::Feature);
+    model.add_owned(expression, result);
+    model.set_member_role(result, Role::Return);
+    model.set(result, "direction", Value::EnumLit("out"));
+    result
 }
 
 /// The literal a value clause holds, when it holds one this model reifies.
@@ -900,6 +1146,7 @@ fn reify_action_arguments(
     action: ElementId,
     kind: ElementKind,
     payload: Option<ElementId>,
+    built: &mut Built,
 ) {
     // in the order the standard declares the parameters, against the
     // keyword the notation writes each after. The payload is the first
@@ -928,7 +1175,7 @@ fn reify_action_arguments(
         let membership = model.create(ElementKind::FeatureValue);
         model.add_owned(parameter, membership);
         model.set(membership, "featureWithValue", Value::Ref(parameter));
-        let expression = value_expression(model, membership, &written);
+        let expression = value_expression(model, membership, &written, built);
         model.set(membership, "value", Value::Ref(expression));
     }
 }
@@ -1099,7 +1346,7 @@ fn reify_loop_variable(model: &mut Model, node: &SyntaxNode, id: ElementId) {
 /// stand for it. The library declares that action as `TransitionAction::
 /// effect`, which the inline one redefines, so it is reified under that
 /// name -- `t.effect` then refers to what the transition actually does.
-fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
+fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId, built: &mut Built) {
     let mut after_do = false;
     let mut sends = false;
     for token in tokens(node) {
@@ -1125,7 +1372,7 @@ fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
     // `do send 1 to p` is a send action like any other, and
     // `validateSendActionParameters` counts the three parameters it is
     // handed whether the statement wrote a clause for each or not.
-    reify_action_arguments(model, node, effect, kind, None);
+    reify_action_arguments(model, node, effect, kind, None, built);
 }
 
 /// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
@@ -2230,8 +2477,12 @@ mod tests {
         // standard takes the first one an expression owns; the text it
         // was written as follows
         assert_eq!(model.kind(model.owned(bound)[0]), ElementKind::Membership);
-        let written = model.owned(bound)[1];
-        assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
+        let written = model
+            .owned(bound)
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == ElementKind::TextualRepresentation)
+            .expect("the text it was written as is kept");
         assert_eq!(
             model.get(written, "body").and_then(Value::as_str),
             Some("count")
@@ -2998,8 +3249,12 @@ mod tests {
         assert_eq!(model.get(negated, "isNegated"), Some(&Value::Bool(true)));
     }
 
+    /// `2 + b` invokes `DataFunctions::'+'` and hands it two arguments,
+    /// each through a parameter of its own carrying the operand as its
+    /// value -- and the text it was written as is kept beside all of it,
+    /// for whoever reads the model rather than evaluates it.
     #[test]
-    fn a_value_that_is_not_a_literal_is_kept_as_text() {
+    fn a_value_that_is_not_a_literal_is_the_invocation_it_is_written_as() {
         let (model, roots) = build_model(&sysml_syntax::parse(
             "part def V {\n\tattribute a = 2 + b;\n\tattribute c = false;\n}\n",
         ));
@@ -3007,8 +3262,48 @@ mod tests {
         let membership = model.owned(a)[0];
         assert_eq!(model.kind(membership), ElementKind::FeatureValue);
         let expression = reference(&model, membership, "value").unwrap();
-        assert_eq!(model.kind(expression), ElementKind::Expression);
-        let written = model.owned(expression)[0];
+        assert_eq!(model.kind(expression), ElementKind::OperatorExpression);
+        assert_eq!(
+            model.get(expression, "operator").and_then(Value::as_str),
+            Some("+")
+        );
+        // the membership that stands for the function it invokes comes
+        // first, since `instantiatedType()` reads the first one
+        assert_eq!(
+            model.kind(model.owned(expression)[0]),
+            ElementKind::Membership
+        );
+        let inside: Vec<ElementKind> = model
+            .owned(expression)
+            .iter()
+            .map(|&it| model.kind(it))
+            .collect();
+        assert_eq!(
+            inside,
+            vec![
+                ElementKind::Membership,
+                ElementKind::Feature,
+                ElementKind::Feature,
+                ElementKind::Feature,
+                ElementKind::TextualRepresentation,
+            ],
+            "the function, two arguments, the result, and the text"
+        );
+        // each argument holds its operand as the value of a parameter
+        let operand = |at: usize| {
+            let argument = model.owned(expression)[at];
+            let value = model.owned(argument)[0];
+            assert_eq!(model.kind(value), ElementKind::FeatureValue);
+            model.kind(reference(&model, value, "value").expect("the operand is held"))
+        };
+        assert_eq!(operand(1), ElementKind::LiteralInteger);
+        assert_eq!(operand(2), ElementKind::FeatureReferenceExpression);
+        let written = model
+            .owned(expression)
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == ElementKind::TextualRepresentation)
+            .expect("the text is kept");
         assert_eq!(
             model.get(written, "body").and_then(Value::as_str),
             Some("2 + b")
@@ -3047,8 +3342,9 @@ mod tests {
             value_of(1),
             (ElementKind::LiteralRational, Some(Value::Real(-1.5)))
         );
-        // a minus on something that is not a number stays an expression
-        assert_eq!(value_of(2).0, ElementKind::Expression);
+        // a minus on something that is not a number is the invocation
+        // it is written as, and folds into no literal
+        assert_eq!(value_of(2).0, ElementKind::OperatorExpression);
     }
 
     /// The element a property points at, when it points at one.

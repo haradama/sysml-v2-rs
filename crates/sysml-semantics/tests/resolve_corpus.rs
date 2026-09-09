@@ -123,9 +123,12 @@ fn a_literal_specializes_the_evaluation_the_library_states_for_it() {
                 "LiteralBoolean".to_string(),
                 "Performances::literalBooleanEvaluations".to_string()
             ),
+            // the library names no evaluation after an infinite
+            // literal, and `checkLiteralInfinitySpecialization` says
+            // which one it is all the same
             (
                 "LiteralInfinity".to_string(),
-                "Performances::literalEvaluations".to_string()
+                "Performances::literalIntegerEvaluations".to_string()
             ),
             (
                 "LiteralInteger".to_string(),

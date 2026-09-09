@@ -145,9 +145,10 @@ fn a_value_that_is_only_a_name_says_what_it_names() {
         Some(&Value::Ref(named("pinNumber")))
     );
 
-    // anything more than a name is an expression, and names nothing
+    // anything more than a name is the invocation it is written as,
+    // and names nothing itself
     let computed = value_of(named("computed"));
-    assert_eq!(model.kind(computed), ElementKind::Expression);
+    assert_eq!(model.kind(computed), ElementKind::OperatorExpression);
     assert_eq!(model.get(computed, "referent"), None);
 }
 
@@ -226,4 +227,185 @@ fn a_name_written_from_the_root_starts_at_the_root() {
         )
         .expect("the name in the value is a reference");
     assert_eq!(ws.qualified_name_of(at.target), "P::x");
+}
+
+/// "OperatorExpressions provide a shorthand notation for
+/// InvocationExpressions that invoke a Function from the Kernel Function
+/// Library": `a + b` invokes `DataFunctions::'+'`, hands it two
+/// arguments through parameters that redefine the ones it takes, and
+/// comes to what that function hands back.
+#[test]
+fn an_operator_invokes_the_function_the_specification_names_for_it() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "functions.kerml",
+        "standard library package Vals {\n\tdatatype Num;\n}\n\
+         standard library package DataFunctions {\n\
+         \tprivate import Vals::Num;\n\
+         \tfunction '+' { in x : Num; in y : Num; return : Num; }\n}\n",
+    );
+    ws.add_file(
+        "m.sysml",
+        "package P {\n\
+         \tattribute a : Vals::Num;\n\
+         \tattribute b : Vals::Num;\n\
+         \tattribute c = a + b;\n}\n",
+    );
+    ws.resolve_all();
+    let named = |ws: &Workspace, want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.qualified_name_of(id) == want)
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let value_of = |ws: &Workspace, of: &str| {
+        let usage = named(ws, of);
+        ws.model()
+            .owned(usage)
+            .iter()
+            .copied()
+            .find(|&child| ws.model().kind(child) == ElementKind::FeatureValue)
+            .and_then(|membership| ws.model().get(membership, "value")?.as_id())
+            .expect("a declared value")
+    };
+    let plus = value_of(&ws, "P::c");
+    assert_eq!(ws.model().kind(plus), ElementKind::OperatorExpression);
+
+    // the membership that stands for what it invokes is the first one,
+    // since `instantiatedType()` reads the first
+    let names_it = ws.model().owned(plus)[0];
+    assert_eq!(ws.model().kind(names_it), ElementKind::Membership);
+    assert_eq!(
+        ws.model().get(names_it, "memberElement"),
+        Some(&Value::Ref(named(&ws, "DataFunctions::+")))
+    );
+
+    // each argument redefines the parameter it is handed to, in order
+    let redefines = |ws: &Workspace, feature: sysml_model::ElementId| {
+        ws.model()
+            .owned(feature)
+            .iter()
+            .copied()
+            .find(|&it| ws.model().kind(it) == ElementKind::Redefinition)
+            .and_then(|it| ws.model().get(it, "redefinedFeature")?.as_id())
+            .map(|to| ws.qualified_name_of(to))
+    };
+    let arguments: Vec<sysml_model::ElementId> = ws
+        .model()
+        .owned(plus)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+        .collect();
+    assert_eq!(
+        arguments
+            .iter()
+            .map(|&it| redefines(&ws, it))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("DataFunctions::+::x".to_string()),
+            Some("DataFunctions::+::y".to_string())
+        ]
+    );
+
+    // and what the expression comes to is what the function hands back
+    let result = ws
+        .model()
+        .owned(plus)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+        .expect("the expression hands its value back");
+    assert!(
+        redefines(&ws, result).is_some(),
+        "the result redefines the function's own"
+    );
+}
+
+/// `F(q = 1, p = a)` says which parameter each argument is for, so the
+/// order says nothing; `new A(...)` hands its arguments to the thing it
+/// constructs rather than to itself.
+#[test]
+fn an_argument_that_names_its_parameter_is_read_by_the_name() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "m.sysml",
+        "package P {\n\
+         \tattribute def A { attribute x; attribute y; }\n\
+         \tattribute a : A;\n\
+         \tcalc def F { in p : A; in q : A; return : A; }\n\
+         \tattribute g = F(q = a, p = a);\n\
+         \tattribute h = new A(y = a, x = a);\n}\n",
+    );
+    ws.resolve_all();
+    let named = |ws: &Workspace, want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.qualified_name_of(id) == want)
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let value_of = |ws: &Workspace, of: &str| {
+        ws.model()
+            .owned(named(ws, of))
+            .iter()
+            .copied()
+            .find(|&child| ws.model().kind(child) == ElementKind::FeatureValue)
+            .and_then(|membership| ws.model().get(membership, "value")?.as_id())
+            .expect("a declared value")
+    };
+    let redefines = |ws: &Workspace, feature: sysml_model::ElementId| {
+        ws.model()
+            .owned(feature)
+            .iter()
+            .copied()
+            .find(|&it| ws.model().kind(it) == ElementKind::Redefinition)
+            .and_then(|it| ws.model().get(it, "redefinedFeature")?.as_id())
+            .map(|to| ws.qualified_name_of(to))
+    };
+
+    // written `q` first, and `q` is what it redefines
+    let call = value_of(&ws, "P::g");
+    assert_eq!(ws.model().kind(call), ElementKind::InvocationExpression);
+    let arguments: Vec<sysml_model::ElementId> = ws
+        .model()
+        .owned(call)
+        .iter()
+        .copied()
+        .filter(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+        .collect();
+    assert_eq!(
+        arguments
+            .iter()
+            .map(|&it| redefines(&ws, it))
+            .collect::<Vec<_>>(),
+        vec![Some("P::F::q".to_string()), Some("P::F::p".to_string())]
+    );
+
+    // `ConstructorResult : Feature = ArgumentList` -- the arguments are
+    // the result's, and the constructor owns nothing else
+    let construction = value_of(&ws, "P::h");
+    assert_eq!(
+        ws.model().kind(construction),
+        ElementKind::ConstructorExpression
+    );
+    let result = ws
+        .model()
+        .owned(construction)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+        .expect("a constructor hands back what it constructs");
+    assert_eq!(
+        ws.model()
+            .owned(result)
+            .iter()
+            .filter(|&&it| ws.model().kind(it) == ElementKind::Feature)
+            .count(),
+        2,
+        "both arguments are the result's"
+    );
 }

@@ -180,6 +180,11 @@ pub struct Workspace {
     /// handful over and over -- once per element it is checked of --
     /// and working one out is a scan of every name in the workspace.
     pub(crate) globals: HashMap<String, Option<ElementId>>,
+    /// What the expression builder stood up, in the order it made them.
+    /// A `RequirementUsage` is a kind of `BooleanExpression` and a
+    /// subject is a kind of parameter, so what an expression is cannot
+    /// be told from the metaclass once the model is built.
+    expressions: Vec<ElementId>,
     /// While reading what a redefinition written on an end names.
     ///
     /// `assoc HappensWhile specializes HappensDuring { end feature
@@ -281,6 +286,7 @@ impl Clone for Workspace {
             // a speculative walk may write elements, and a name that
             // resolved to nothing before one is not settled
             globals: HashMap::new(),
+            expressions: Vec::new(),
             redefining: false,
             reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
@@ -324,6 +330,7 @@ impl Workspace {
             elem_file: HashMap::new(),
             supertypes: HashMap::new(),
             globals: HashMap::new(),
+            expressions: Vec::new(),
             redefining: false,
             reverse: (0, HashMap::new()),
             in_progress: HashSet::new(),
@@ -380,6 +387,7 @@ impl Workspace {
             self.model.add_owned(self.root, *root);
         }
         let mut elements = Vec::with_capacity(built.source.len());
+        self.expressions.extend(built.expressions);
         for (id, node) in built.source {
             elements.push(id);
             self.source.insert(id, node);
@@ -1289,6 +1297,8 @@ impl Workspace {
             }
         }
         self.carry_ends();
+        self.resolve_expression_tree(ids);
+        self.count_with_what_is_named();
         self.relate_named_ends();
         self.imply_end_redefinitions();
         self.imply_cross_subsettings();
@@ -1331,6 +1341,303 @@ impl Workspace {
                 self.try_set(elem, "relatedFeature", Value::RefList(related));
             }
         }
+    }
+
+    /// What each expression in the tree refers to, and what it invokes.
+    ///
+    /// A feature reference names a feature; an invocation names the
+    /// function it hands its arguments to, which an operator names by
+    /// the symbol the specification's operator table maps -- `a + b`
+    /// invokes `DataFunctions::'+'`. Both are held on a `Membership`
+    /// the builder stands there ahead of everything else, since
+    /// `instantiatedType()` and `referent` each read the first one.
+    fn resolve_expression_tree(&mut self, asked: &[ElementId]) {
+        // Only what was asked for. Walking a name before the file it is
+        // written in has been resolved settles what the walk found into
+        // the caches this workspace keeps, and the answer a later pass
+        // gets is then the one from before that file was there.
+        let asked: HashSet<ElementId> = asked.iter().copied().collect();
+        // What the expression builder made, and only that: a
+        // `RequirementUsage` is a kind of `BooleanExpression` in SysML,
+        // and reading one as an invocation hands its subject over as an
+        // argument of something it never invoked.
+        let expressions: Vec<(ElementId, SyntaxNode)> = self
+            .expressions
+            .clone()
+            .into_iter()
+            .filter(|elem| asked.contains(elem))
+            .filter_map(|elem| Some((elem, self.source.get(&elem)?.clone())))
+            .collect();
+        for (elem, node) in expressions {
+            // `x istype T` names the type it asks about through a
+            // membership of its own, beside the one naming the function
+            if self.model.kind(elem) == ElementKind::Membership {
+                self.names_what_it_asks_about(elem, &node);
+                continue;
+            }
+            if self.model.kind(elem) == ElementKind::FeatureReferenceExpression {
+                if self.model.get(elem, "referent").is_none() {
+                    let segments = operand_segments(&node);
+                    if let Some(target) = self.resolve_operand(elem, &segments) {
+                        self.refers_to(elem, target);
+                    }
+                }
+                continue;
+            }
+            let found = match self.model.get(elem, "operator").and_then(Value::as_str) {
+                Some(operator) => invoked_function(operator).and_then(|it| self.named_globally(it)),
+                None => invoked_by_name(&node)
+                    .and_then(|callee| self.resolve_operand(elem, &operand_segments(&callee))),
+            };
+            let Some(target) = found else {
+                continue;
+            };
+            let standing = self
+                .model
+                .owned(elem)
+                .iter()
+                .copied()
+                .find(|&child| self.model.kind(child) == ElementKind::Membership);
+            if let Some(membership) = standing {
+                self.try_set(membership, "memberElement", Value::Ref(target));
+            }
+            // `private calc getElapsedUtcTime { ... }` names no type,
+            // and `validateInvocationExpressionInstantiatedType` holds
+            // what invokes it to invoking something typed by a
+            // behaviour. The notation writes that type nowhere.
+            self.materialize_implied_for(target);
+            self.hands_over_what_it_takes(elem, target);
+            self.comes_to_what_it_invokes(elem, target);
+        }
+    }
+
+    /// The type a classification operator asks about.
+    ///
+    /// `x istype T` hands over `x` and names `T`, and the name is held
+    /// on a membership of the expression's own beside the one naming
+    /// the function it invokes.
+    fn names_what_it_asks_about(&mut self, membership: ElementId, node: &SyntaxNode) {
+        let segments = operand_segments(node);
+        if let Some(target) = self.resolve_operand(membership, &segments) {
+            self.try_set(membership, "memberElement", Value::Ref(target));
+        }
+    }
+
+    /// Each argument redefines the parameter it is handed to.
+    ///
+    /// `deriveInvocationExpressionArgument` reads an argument back as
+    /// "the owned feature that redefines this input, and the value it
+    /// holds", and `validateInvocationExpressionParameterRedefinition`
+    /// holds every argument to redefining exactly one of them. The
+    /// notation writes the arguments in order and names none of them,
+    /// so the order is what says which is which.
+    fn hands_over_what_it_takes(&mut self, invocation: ElementId, function: ElementId) {
+        let taken = self.taken_by(function, &mut Vec::new());
+        let handed = self.takes(invocation);
+        // An argument that names the parameter it is for says which one
+        // it redefines; where none of them do, the order says it.
+        let named: Vec<Option<ElementId>> = handed
+            .iter()
+            .map(|&argument| self.names_a_parameter(argument, function))
+            .collect();
+        let pairs: Vec<(ElementId, ElementId)> = match named.iter().all(Option::is_some) {
+            true => handed
+                .iter()
+                .copied()
+                .zip(named.into_iter().flatten())
+                .collect(),
+            false => handed.into_iter().zip(taken).collect(),
+        };
+        for (argument, input) in pairs {
+            self.reified(
+                argument,
+                ElementKind::Redefinition,
+                &[
+                    ("redefiningFeature", Value::Ref(argument)),
+                    ("redefinedFeature", Value::Ref(input)),
+                    ("isImplied", Value::Bool(true)),
+                ],
+            );
+            self.model
+                .set(argument, "isImpliedIncluded", Value::Bool(true));
+        }
+    }
+
+    /// An invocation comes to what the function it invokes hands back.
+    ///
+    /// The result an invocation owns redefines the function's own, which
+    /// is where an expression gets what it comes to: `@Safety` is a
+    /// boolean because `BaseFunctions::'@'` returns one, and nothing
+    /// else in the model says so.
+    ///
+    /// `checkInvocationExpressionSpecialization` has the invocation
+    /// specialize the function outright. Read that way it inherits the
+    /// function's parameters as well, and every constraint that counts
+    /// what an invocation is handed then counts the ones it inherits
+    /// beside the ones it was given -- which the standard removes as
+    /// redefined and this model does not.
+    fn comes_to_what_it_invokes(&mut self, invocation: ElementId, function: ElementId) {
+        let mine = self.hands_back(invocation).expect(
+            "the builder gives every invocation the parameter it hands its value back through",
+        );
+        let Some(theirs) = self.handed_back_by(function, &mut Vec::new()) else {
+            return;
+        };
+        self.reified(
+            mine,
+            ElementKind::Redefinition,
+            &[
+                ("redefiningFeature", Value::Ref(mine)),
+                ("redefinedFeature", Value::Ref(theirs)),
+                ("isImplied", Value::Bool(true)),
+            ],
+        );
+        self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
+    }
+
+    /// The parameter something hands its value back through.
+    fn hands_back(&self, of: ElementId) -> Option<ElementId> {
+        self.model
+            .owned(of)
+            .iter()
+            .copied()
+            .find(|&it| self.model.get(it, "direction") == Some(&Value::EnumLit("out")))
+    }
+
+    /// The one a function hands back, its own or the one it inherits.
+    fn handed_back_by(
+        &mut self,
+        function: ElementId,
+        seen: &mut Vec<ElementId>,
+    ) -> Option<ElementId> {
+        if seen.contains(&function) {
+            return None;
+        }
+        seen.push(function);
+        if let Some(own) = self.hands_back(function) {
+            return Some(own);
+        }
+        for up in self.supertypes_of(function) {
+            if let Some(found) = self.handed_back_by(up, seen) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// The parameter an argument names itself for, where it names one.
+    fn names_a_parameter(&mut self, argument: ElementId, function: ElementId) -> Option<ElementId> {
+        let node = self.source.get(&argument)?.clone();
+        let name = operand_segments(&node).pop()?;
+        self.lookup(function, &name, Access::Internal, true, None)
+    }
+
+    /// What something is handed, in the order it is handed them.
+    fn takes(&self, of: ElementId) -> Vec<ElementId> {
+        self.model
+            .owned(of)
+            .iter()
+            .copied()
+            .filter(|&it| {
+                matches!(
+                    self.model.get(it, "direction"),
+                    Some(Value::EnumLit("in") | Value::EnumLit("inout"))
+                )
+            })
+            .collect()
+    }
+
+    /// What a function takes, its own or the ones it inherits.
+    ///
+    /// `calc getOutput` is a usage, and the parameters it is invoked
+    /// with are declared on the calculation that defines it. Read off
+    /// the usage alone there are none, and every argument then redefines
+    /// nothing.
+    fn taken_by(&mut self, function: ElementId, seen: &mut Vec<ElementId>) -> Vec<ElementId> {
+        if seen.contains(&function) {
+            return Vec::new();
+        }
+        seen.push(function);
+        let own = self.takes(function);
+        if !own.is_empty() {
+            return own;
+        }
+        for up in self.supertypes_of(function) {
+            let taken = self.taken_by(up, seen);
+            if !taken.is_empty() {
+                return taken;
+            }
+        }
+        Vec::new()
+    }
+
+    /// The element a whole name answers to, read from the root.
+    ///
+    /// `Namespace::resolveGlobal` is one of the four the metamodel
+    /// writes as prose about what it would do rather than as OCL. The
+    /// index is over declared names, so the last segment finds the
+    /// candidates and the whole name picks one out -- a scan of every
+    /// name in the workspace, which is why the answers are kept.
+    pub(crate) fn named_globally(&mut self, qualified: &str) -> Option<ElementId> {
+        if let Some(&found) = self.globals.get(qualified) {
+            return found;
+        }
+        let declared = qualified.rsplit("::").next().unwrap_or(qualified);
+        let found = self
+            .search_names(declared, 500)
+            .into_iter()
+            .find(|&it| self.qualified_name_of(it) == qualified);
+        self.globals.insert(qualified.to_string(), found);
+        found
+    }
+
+    /// The names a multiplicity counts with.
+    ///
+    /// `succession causalOrdering first [nCauses] causes.startShot then
+    /// [nEffects] effects { attribute nCauses = size(causes); ... }`
+    /// counts with an attribute the succession declares, and
+    /// `validateMultiplicityRangeBoundResultTypes` reads what such a
+    /// bound comes to. The builder keeps a named bound as the text it
+    /// was written as; until the name is looked up the bound refers to
+    /// nothing, and says nothing about what it counts.
+    fn count_with_what_is_named(&mut self) {
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            if self.model.kind(elem) != ElementKind::FeatureReferenceExpression
+                || self.model.get(elem, "referent").is_some()
+            {
+                continue;
+            }
+            let Some(owner) = self
+                .model
+                .owner(elem)
+                .filter(|&it| self.model.kind(it) == ElementKind::MultiplicityRange)
+                .and_then(|range| self.model.owner(range))
+            else {
+                continue;
+            };
+            let written = self
+                .written_as(elem)
+                .expect("the builder keeps a named bound as the text it was written as");
+            let segments: Vec<String> = written.split("::").map(str::to_string).collect();
+            let found = self
+                .resolve_inside(owner, &segments)
+                .or_else(|| self.resolve_from(owner, &segments));
+            if let Some(target) = found {
+                self.refers_to(elem, target);
+            }
+        }
+    }
+
+    /// The text an element was written as, where the builder kept it.
+    fn written_as(&self, elem: ElementId) -> Option<String> {
+        self.model
+            .owned(elem)
+            .iter()
+            .copied()
+            .find(|&it| self.model.kind(it) == ElementKind::TextualRepresentation)
+            .and_then(|it| self.model.get(it, "body"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
     }
 
     /// The redefinition an end declared beside a supertype's implies.
@@ -2631,10 +2938,25 @@ impl Workspace {
     pub fn materialize_implied(&mut self) -> usize {
         let mut written = 0;
         for elem in self.model.ids().collect::<Vec<_>>() {
+            written += self.materialize_implied_for(elem);
+        }
+        written += self.imply_return_redefinitions();
+        written
+    }
+
+    /// What one element specializes without saying so.
+    ///
+    /// `private calc getElapsedUtcTime { ... }` names no type, and what
+    /// invokes it is held to invoking something typed by a behaviour --
+    /// so the constraint reads a type the notation never wrote and the
+    /// model has to hold.
+    fn materialize_implied_for(&mut self, elem: ElementId) -> usize {
+        let mut written = 0;
+        {
             let kind = self.model.kind(elem);
             // relationships do not specialize; only types inherit
             if kind.is_a(ElementKind::Relationship) || !kind.is_a(ElementKind::Type) {
-                continue;
+                return 0;
             }
             let mut bases = Vec::new();
             for path in self.implied_bases_of(elem) {
@@ -2697,7 +3019,6 @@ impl Workspace {
                 written += 1;
             }
         }
-        written += self.imply_return_redefinitions();
         written
     }
 
@@ -3518,7 +3839,37 @@ impl Workspace {
             standing.filter(|_| self.model.kind(target).is_a(ElementKind::Feature))
         {
             self.try_set(membership, "memberElement", Value::Ref(target));
+            self.results_in_what_it_names(reference, target);
         }
+    }
+
+    /// What a feature reference comes to is what it names.
+    ///
+    /// `checkFeatureReferenceExpressionResultSpecialization` --
+    /// "result.owningType() = self and result.specializes(referent)".
+    /// The builder gives the expression the parameter it hands its value
+    /// back through; what that parameter stands for is only known once
+    /// the name is looked up, and without it `[n]` says nothing about
+    /// what kind of thing `n` counts.
+    fn results_in_what_it_names(&mut self, reference: ElementId, referent: ElementId) {
+        let result = self
+            .model
+            .owned(reference)
+            .iter()
+            .copied()
+            .find(|&child| self.model.member_role(child) == Some(sysml_model::Role::Return))
+            .expect("the builder gives every feature reference the result it comes to");
+        self.reified(
+            result,
+            ElementKind::Subsetting,
+            &[
+                ("subsettingFeature", Value::Ref(result)),
+                ("subsettedFeature", Value::Ref(referent)),
+                ("isImplied", Value::Bool(true)),
+            ],
+        );
+        self.model
+            .set(result, "isImpliedIncluded", Value::Bool(true));
     }
 
     /// What the statement a succession was built from declares.
@@ -4046,9 +4397,15 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         LiteralInteger => &["Performances::literalIntegerEvaluations"],
         LiteralRational => &["Performances::literalRationalEvaluations"],
         LiteralString => &["Performances::literalStringEvaluations"],
-        // the library states no evaluation for an infinite literal, so
-        // it is a literal evaluation and nothing narrower
-        LiteralInfinity => &["Performances::literalEvaluations"],
+        // The library names no evaluation after an infinite literal,
+        // but the metamodel says which one it is all the same:
+        // `checkLiteralInfinitySpecialization` is
+        // `specializesFromLibrary('Performances::literalIntegerEvaluations')`,
+        // the same one an integer literal specializes. Its result is
+        // then an integer, which is what
+        // `validateMultiplicityRangeBoundResultTypes` asks of the `*`
+        // in `[0..*]`.
+        LiteralInfinity => &["Performances::literalIntegerEvaluations"],
         FeatureReferenceExpression => &["Performances::evaluations"],
         Connector => &["Links::links"],
         BindingConnector => &["Links::selfLinks"],
@@ -4228,6 +4585,71 @@ fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
     }
     steps.push(at);
     steps
+}
+
+/// The library function an operator symbol invokes.
+///
+/// The specification's own table: "OperatorExpressions provide a
+/// shorthand notation for InvocationExpressions that invoke a Function
+/// from the Kernel Function Library", and this is which one. The
+/// library writes the names in quotes, and the model holds what they
+/// answer to.
+fn invoked_function(operator: &str) -> Option<&'static str> {
+    let named = match operator {
+        "==" => "BaseFunctions::==",
+        "!=" => "BaseFunctions::!=",
+        "===" => "BaseFunctions::===",
+        "!==" => "BaseFunctions::!==",
+        "[" => "BaseFunctions::[",
+        "#" => "BaseFunctions::#",
+        "," => "BaseFunctions::,",
+        "all" => "BaseFunctions::all",
+        "istype" => "BaseFunctions::istype",
+        "hastype" => "BaseFunctions::hastype",
+        "@" => "BaseFunctions::@",
+        "@@" => "BaseFunctions::@@",
+        "as" => "BaseFunctions::as",
+        "meta" => "BaseFunctions::meta",
+        "." => "ControlFunctions::.",
+        "if" => "ControlFunctions::if",
+        "??" => "ControlFunctions::??",
+        "and" => "ControlFunctions::and",
+        "or" => "ControlFunctions::or",
+        "implies" => "ControlFunctions::implies",
+        "collect" => "ControlFunctions::collect",
+        "select" => "ControlFunctions::select",
+        "xor" => "DataFunctions::xor",
+        "not" => "DataFunctions::not",
+        "~" => "DataFunctions::~",
+        "|" => "DataFunctions::|",
+        "&" => "DataFunctions::&",
+        "<" => "DataFunctions::<",
+        ">" => "DataFunctions::>",
+        "<=" => "DataFunctions::<=",
+        ">=" => "DataFunctions::>=",
+        "+" => "DataFunctions::+",
+        "-" => "DataFunctions::-",
+        "*" => "DataFunctions::*",
+        "/" => "DataFunctions::/",
+        "%" => "DataFunctions::%",
+        // the table gives `^` and `**` the one function
+        "^" | "**" => "DataFunctions::^",
+        ".." => "DataFunctions::..",
+        _ => return None,
+    };
+    Some(named)
+}
+
+/// The name an invocation writes in front of its arguments.
+///
+/// `new Foo(1)` writes `new` in front of the name, and what it
+/// constructs is the name rather than the keyword.
+fn invoked_by_name(node: &SyntaxNode) -> Option<SyntaxNode> {
+    let callee = node.children().next()?;
+    match callee.kind() {
+        SyntaxKind::UNARY_EXPR => callee.children().next(),
+        _ => Some(callee),
+    }
 }
 
 /// The range of the last identifier in a reference operand -- what a
@@ -5168,6 +5590,38 @@ mod tests {
     fn the_root_namespace_is_in_no_library() {
         let ws = Workspace::new();
         assert!(!ws.in_library(ws.root()));
+    }
+
+    /// The specification's own operator table, in full: every symbol
+    /// the notation writes maps to a function in the Kernel Function
+    /// Library, and an invocation that finds none of them says what it
+    /// invokes nowhere.
+    #[test]
+    fn every_operator_the_specification_tabulates_names_its_function() {
+        let mapped: Vec<(&str, &str)> = [
+            "all", "istype", "hastype", "@", "@@", "as", "meta", "==", "!=", "===", "!==", "[",
+            "#", ",", ".", "if", "??", "and", "or", "implies", "collect", "select", "xor", "not",
+            "~", "|", "&", "<", ">", "<=", ">=", "+", "-", "*", "/", "%", "^", "**", "..",
+        ]
+        .into_iter()
+        .map(|operator| {
+            (
+                operator,
+                invoked_function(operator)
+                    .unwrap_or_else(|| panic!("the table names a function for `{operator}`")),
+            )
+        })
+        .collect();
+        // each is read from one of the three packages the table names
+        assert!(mapped.iter().all(|(_, named)| {
+            named.starts_with("BaseFunctions::")
+                || named.starts_with("ControlFunctions::")
+                || named.starts_with("DataFunctions::")
+        }));
+        // `^` and `**` are the one function, written two ways
+        assert_eq!(invoked_function("^"), invoked_function("**"));
+        // and a symbol the table does not name invokes nothing
+        assert_eq!(invoked_function("<=>"), None);
     }
 
     #[test]

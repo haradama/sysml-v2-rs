@@ -127,9 +127,10 @@ const TYPED_BY: [&str; 5] = [
 /// 1125 of `validateMultiplicityRangeBoundResultTypes` and 18 of
 /// `validateElementFilterMembershipConditionIsBoolean`. The fourth,
 /// `validateParameterMembershipParameterDirection`, holds.
-const OWNED_MEMBER: [&str; 13] = [
+const OWNED_MEMBER: [&str; 14] = [
     "action",
     "condition",
+    "ownedMemberParameter",
     "ownedActorParameter",
     "ownedConcern",
     "ownedConstraint",
@@ -192,14 +193,17 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// binds the name either of them reads, the name each bound is read
 /// nowhere, and both are written correctly beside the slip -- the
 /// second reads `redefiningFeaturingTypes` in the very comparison that
-/// misspells its other half.
-const MISSPELLED: [(&str, &str); 6] = [
+/// misspells its other half. `InstantiationExpression::instantiatedType`
+/// is a third of the same shape: it binds `members` and reads
+/// `typeMembers` two lines later, and nothing binds that.
+const MISSPELLED: [(&str, &str); 7] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
     ("exist", "exists"),
     ("metaClassTypes", "metaclassTypes"),
     ("redefinedFeaturingType", "redefinedFeaturingTypes"),
+    ("typeMembers", "members"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -350,7 +354,35 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
 /// cannot even parse are pinned in `ocl.rs` alongside.
-const MISWRITTEN: [(&str, &str); 6] = [
+/// `validateMultiplicityRangeBoundResultTypes` holds every bound to
+/// coming to a `ScalarValues::Integer`, and `[nCauses]` counts with an
+/// attribute the notation gives no type -- `attribute nCauses =
+/// size(causes);`. The pilot implementation does not run the OCL at
+/// all: `checkMultiplicityRange` carries "TODO: Correct
+/// validateMultiplicityBoundResults OCL from KERML-199" and asks
+/// instead whether the bound evaluates to an integer.
+///
+/// `validateElementFilterMembershipConditionIsBoolean` holds a filter's
+/// condition to coming to a boolean, and the specification's own
+/// operator table maps `|` to `DataFunctions::'|'`, which returns a
+/// `DataValue`. The pilot implementation says so in as many words --
+/// "Non-conditional 'Boolean' operations in DataFunctions actually have
+/// result DataValue. This infers that they are actually BooleanFunctions
+/// if their arguments are Boolean" -- and infers what the specification
+/// does not state.
+const MISWRITTEN: [(&str, &str); 8] = [
+    (
+        "validateMultiplicityRangeBoundResultTypes",
+        "a bound written as a name comes to whatever that name is typed by, and the notation \
+         types none of them; the pilot implementation does not run this OCL either, against \
+         KERML-199",
+    ),
+    (
+        "validateElementFilterMembershipConditionIsBoolean",
+        "the specification's own operator table maps `|` to `DataFunctions::'|'`, which returns \
+         a data value rather than a boolean; the pilot implementation infers the boolean the \
+         specification does not state",
+    ),
     (
         "validateSubsettingFeaturingTypes",
         "`canAccess` walks up from the subsetting feature and the corpus features what it \
@@ -1011,23 +1043,8 @@ impl Scope<'_> {
     }
 
     /// The element a qualified name names, read from the root.
-    ///
-    /// `Namespace::resolveGlobal` is one of the four the metamodel
-    /// writes as prose about what it would do rather than as OCL. The
-    /// index is over declared names, so the last segment finds the
-    /// candidates and the whole name picks one out.
     fn global(&mut self, qualified: &str) -> Option<ElementId> {
-        if let Some(&found) = self.ws.globals.get(qualified) {
-            return found;
-        }
-        let declared = qualified.rsplit("::").next().unwrap_or(qualified);
-        let found = self
-            .ws
-            .search_names(declared, 500)
-            .into_iter()
-            .find(|&it| self.ws.qualified_name_of(it) == qualified);
-        self.ws.globals.insert(qualified.to_string(), found);
-        found
+        self.ws.named_globally(qualified)
     }
 
     /// One property of one element, or [`Val::Unknown`] where this model
