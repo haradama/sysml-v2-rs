@@ -201,20 +201,7 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// it stands in is what keeps the rest of the body from being asked of
 /// something that is not a feature. The pilot implementation writes the
 /// same guard as `supertype instanceof Feature`, of the other type.
-///
-/// The last is a metaclass rather than a name in a body:
-/// `validateSubjectMembershipOwningType` asks whether the owning type
-/// is one of four, and writes the second as
-/// `RequiremenCaseRequirementDefinition`. Nothing in either metamodel
-/// is called that -- the string occurs once in the whole of `SysML.xmi`
-/// -- and the constraint says in words that the four are "a
-/// RequirementDefinition, RequirementUsage, CaseDefinition, or
-/// CaseUsage". Read as written, a subject under anything else leaves
-/// the second question unanswerable and the whole disjunction unknown,
-/// so the constraint holds of every subject it is asked about and can
-/// report none: it is answered eighteen times over the corpus and could
-/// not have been false any of them.
-const MISSPELLED: [(&str, &str); 9] = [
+const MISSPELLED: [(&str, &str); 8] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
@@ -223,7 +210,40 @@ const MISSPELLED: [(&str, &str); 9] = [
     ("redefinedFeaturingType", "redefinedFeaturingTypes"),
     ("typeMembers", "members"),
     ("supertype", "otherType"),
+];
+
+/// Metaclasses the specification's OCL names and neither metamodel has.
+///
+/// A name that stands for no metaclass cannot be answered, and a
+/// question that cannot be answered is not false: every one of these
+/// silently turns a constraint or a derivation into one that holds of
+/// whatever it is asked about. `validateSubjectMembershipOwningType`
+/// was answered eighteen times over the corpus and could not have been
+/// false in any of them.
+///
+/// All five read one way only, and each is written correctly in the
+/// words beside it. The subject membership's four owning types are "a
+/// RequirementDefinition, RequirementUsage, CaseDefinition, or
+/// CaseUsage", and the second is written
+/// `RequiremenCaseRequirementDefinition`. The stakeholder parameter is
+/// "the ownedStakeholderParameters of the StakeholderMemberships",
+/// spelt `StakholderMembership` where a definition owns it and
+/// `AStakholderMembership` where a usage does. `LoopActionUsage::
+/// bodyAction` is declared an `ActionUsage` and read as an `Action`,
+/// which is a metaclass of neither language. `Usage::nestedFlow` is
+/// declared a `FlowUsage` and read as a `FlowConnectionUsage`, which is
+/// what that metaclass was called before it was renamed.
+///
+/// These are kept apart from the names above because they are looked up
+/// somewhere else: `Action` is an ordinary enough word that repairing
+/// it wherever a body binds or calls one would be a different and much
+/// broader claim.
+const MISNAMED: [(&str, &str); 5] = [
     ("RequiremenCaseRequirementDefinition", "RequirementUsage"),
+    ("StakholderMembership", "StakeholderMembership"),
+    ("AStakholderMembership", "StakeholderMembership"),
+    ("Action", "ActionUsage"),
+    ("FlowConnectionUsage", "FlowUsage"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -2470,10 +2490,18 @@ fn owning_kind(name: &str) -> Option<ElementKind> {
     Some(kind)
 }
 
+/// What the specification's OCL meant by a metaclass nothing has.
+fn named_as_meant(written: &str) -> &str {
+    match MISNAMED.iter().find(|(slip, _)| *slip == written) {
+        Some((_, meant)) => meant,
+        None => written,
+    }
+}
+
 /// The metaclass a type name in an OCL expression stands for.
 fn metaclass_named(expr: &Expr) -> Option<ElementKind> {
     match expr {
-        Expr::Name(name) => ElementKind::from_name(meant(name)),
+        Expr::Name(name) => ElementKind::from_name(named_as_meant(name)),
         _ => None,
     }
 }
@@ -2644,6 +2672,27 @@ mod tests {
         // and a package owns nothing as a feature of itself
         let (mut ws, v) = about_kerml(source, "v");
         assert_eq!(ws.judge("featuringType->isEmpty()", v), Some(true));
+    }
+
+    /// A metaclass the specification names and neither metamodel has
+    /// answers nothing, and nothing is not false.
+    ///
+    /// `RequirementDefinition::stakeholderParameter` is read through
+    /// `selectByKind(StakholderMembership)`, and the metaclass is a
+    /// `StakeholderMembership`. Read as written the select keeps
+    /// nothing, and the property is empty of every model there is
+    /// rather than of the ones it should be empty of.
+    #[test]
+    fn a_metaclass_named_by_a_name_nothing_has_is_read_as_meant() {
+        let (mut ws, requirement) = about(
+            "package P {\n\tpart def Who;\n\
+             \trequirement def R {\n\t\tstakeholder s : Who;\n\t}\n}\n",
+            "R",
+        );
+        assert_eq!(
+            ws.judge("stakeholderParameter->notEmpty()", requirement),
+            Some(true)
+        );
     }
 
     /// `Expression::function` is the function an expression is typed
