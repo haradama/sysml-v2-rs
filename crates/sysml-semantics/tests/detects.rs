@@ -12,6 +12,15 @@
 //! `objective`, as `VerificationTest.sysml` writes it, and an `enum def`
 //! is a variation, so what it owns must be variants.
 //!
+//! Breaking the corpus, next door, reaches far more of them than
+//! writing models by hand does -- but not all. A constraint the corpus
+//! asks of three elements has nothing much to break, and counting how
+//! many elements each one answers says which those are: of the hundred
+//! and eight that no break had reached, nine were answered of fewer
+//! than ten elements and thirty-eight of more than a thousand without
+//! ever being false. The first nine are worth aiming at by hand, and
+//! six of the models here came of doing that.
+//!
 //! Skipped when the submodule is not checked out: the constraints are
 //! written against the standard library, and without it they report what
 //! is missing rather than what is wrong.
@@ -103,6 +112,37 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
         "a rendering belongs to a view",
         "package P {\n\tpart def Q;\n\tpart q : Q {\n\t\trender asTree;\n\t}\n}\n",
         &["validateViewRenderingMembershipOwningType"],
+    ),
+    (
+        "a view renders one way",
+        "package P {\n\trendering def R;\n\tview def V {\n\t\trender r1 : R;\n\t\trender r2 : R;\n\t}\n}\n",
+        &["validateViewDefinitionOnlyOneViewRendering"],
+    ),
+    (
+        "and so does a use of one",
+        "package P {\n\trendering def R;\n\tview def V;\n\tview v : V {\n\t\trender r1 : R;\n\t\trender r2 : R;\n\t}\n}\n",
+        &["validateViewUsageOnlyOneViewRendering"],
+    ),
+    (
+        "a decision is reached one way",
+        "package P {\n\taction def A {\n\t\taction a;\n\t\taction b;\n\t\tdecide d;\n\t\taction c;\n\
+         \t\tfirst a then d;\n\t\tfirst b then d;\n\t\tfirst d then c;\n\t}\n}\n",
+        &["validateDecisionNodeIncomingSuccessions"],
+    ),
+    (
+        "an expose is protected, whatever it says",
+        "package P {\n\tpart def Q;\n\tview def V;\n\tview v : V {\n\t\tpublic expose Q;\n\t}\n}\n",
+        &["validateExposeVisibility"],
+    ),
+    (
+        "what an `at` waits for is a time, not a part",
+        "package P {\n\tpart def Q;\n\tpart q : Q;\n\taction def A {\n\t\taccept at q;\n\t}\n}\n",
+        &["validateTriggerInvocationExpressionAtArgument"],
+    ),
+    (
+        "and what a `when` watches is a change",
+        "package P {\n\tpart def Q;\n\tpart q : Q;\n\taction def A {\n\t\taccept when q;\n\t}\n}\n",
+        &["validateTriggerInvocationExpressionWhenArgument"],
     ),
     (
         "a verification verifies inside its objective, not beside it",
