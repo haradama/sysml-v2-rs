@@ -341,15 +341,15 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// subsettedFeature)`, and `canAccess` holds the subsetted feature to
 /// being featured within one of the featuring types the subsetting one
 /// reaches -- walking *up* from it, never down. Read as the metamodel
-/// states it, 8631 subsettings of the corpus are rejected.
+/// states it, 8651 subsettings of the corpus are rejected.
 ///
 /// The pilot implementation does run this constraint, and does two
 /// things the metamodel does not state. It only asks at all where the
-/// subsetted feature has a featuring type -- which exempts 954 of the
-/// 8631 outright -- and it answers one step more widely: `TypeUtil.
+/// subsetted feature has a featuring type -- which exempts 956 of the
+/// 8651 outright -- and it answers one step more widely: `TypeUtil.
 /// isCompatible` also holds two features compatible where neither owns
 /// features of its own, they redefine something in common, and the one
-/// is featured where the other is. Neither is what the remaining 7677
+/// is featured where the other is. Neither is what the remaining 7695
 /// turn on. What they turn on is the direction: `accept a : A`
 /// gives a transition
 /// an `accepted` featured by the transition and a payload featured by
@@ -372,9 +372,10 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// anonymous `Feature` owned by the relationship, carrying the steps as
 /// `FeatureChaining` -- `Occurrences.kermlx` shows it for `subset
 /// laterOccurrence.successors subsets earlierOccurrence.successors;`.
-/// This model resolves such an operand to the feature the chain ends
-/// at, so the guard has nothing to fire on here; either way the OCL as
-/// written reports a sound model.
+/// This model stands the chain up too, and owns it where the
+/// declaration is rather than under the relationship, so the pilot's
+/// guard has nothing to fire on here; either way the OCL as written
+/// reports a sound model.
 ///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset

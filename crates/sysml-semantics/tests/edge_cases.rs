@@ -3370,3 +3370,79 @@ fn a_first_names_the_step_that_comes_first_and_writes_no_flow() {
         Some("A::p".to_string())
     );
 }
+
+/// A dotted operand of a subsetting names a chain, not the feature the
+/// last step names anywhere. `Occurrences.kermlx` -- the abstract syntax
+/// the OMG publishes for its own library -- stands a `Feature` of its own
+/// under `subset laterOccurrence.successors subsets
+/// earlierOccurrence.successors;`, carrying each step as a
+/// `FeatureChaining`. Read as the last step alone, both ends of that
+/// statement are the one `successors`, and what features them is read off
+/// a feature the path never reached.
+///
+/// A specialization relates types rather than features, and the published
+/// abstract syntax carries no chain beneath one.
+#[test]
+fn a_dotted_operand_of_a_subsetting_is_the_chain_and_not_its_last_step() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "model.kerml",
+        "package K {\n\
+         \tclassifier C {\n\t\tfeature deeper;\n\t}\n\
+         \tfeature outer : C;\n\
+         \tfeature other : C;\n\
+         \tsubset outer.deeper subsets other.deeper;\n\
+         \tfeature plain subsets outer.deeper;\n}\n",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+
+    let steps = |id| match ws.model().get(id, "chainingFeature") {
+        Some(Value::RefList(chain)) => chain.len(),
+        _ => 0,
+    };
+    // the statement: both ends are chains of two, and neither is the
+    // `deeper` that `C` declares
+    let statement = ws
+        .model()
+        .ids()
+        .find(|&id| {
+            ws.model().kind(id) == ElementKind::Subsetting
+                && ws
+                    .model()
+                    .owner(id)
+                    .is_none_or(|o| ws.model().name(o) == Some("K"))
+        })
+        .expect("the subsetting statement is built");
+    for end in ["subsettingFeature", "subsettedFeature"] {
+        let reached = ws
+            .model()
+            .get(statement, end)
+            .and_then(Value::as_id)
+            .unwrap_or_else(|| panic!("`{end}` is resolved"));
+        assert_eq!(steps(reached), 2, "{end} is a chain of two");
+        assert_eq!(ws.model().name(reached), None, "{end} is a chain, unnamed");
+    }
+
+    // and the same operand written as part of a declaration
+    let declared = ws
+        .model()
+        .ids()
+        .find(|&id| ws.model().name(id) == Some("plain"))
+        .expect("`plain` is declared");
+    let subsetting = ws
+        .model()
+        .owned(declared)
+        .iter()
+        .copied()
+        .find(|&it| ws.model().kind(it) == ElementKind::Subsetting)
+        .expect("its subsetting is reified");
+    let reached = ws
+        .model()
+        .get(subsetting, "subsettedFeature")
+        .and_then(Value::as_id)
+        .expect("what it subsets is resolved");
+    assert_eq!(steps(reached), 2, "a declared chain is a chain too");
+}

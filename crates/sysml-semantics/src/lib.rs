@@ -1056,7 +1056,7 @@ impl Workspace {
                 && self.model.kind(id).is_a(ElementKind::Membership)
             {
                 if let Some(operand) = operand_after(&node, SyntaxKind::FIRST_KW) {
-                    self.resolve_operand_into(id, &operand, "memberElement", &mut stats);
+                    self.resolve_operand_into(id, &operand, "memberElement", &mut stats, false);
                 }
                 continue;
             }
@@ -1214,33 +1214,37 @@ impl Workspace {
                                 }
                                 continue;
                             }
-                            // `crosses sameThing.self` names a chain,
-                            // not the feature at the end of it:
+                            // A dotted operand names a chain, not the
+                            // feature at the end of it. The abstract
+                            // syntax the OMG publishes makes a `Feature`
+                            // of its own of it, carrying the steps as
+                            // `FeatureChaining`: `Occurrences.kermlx`
+                            // does exactly that for `subset
+                            // laterOccurrence.successors subsets
+                            // earlierOccurrence.successors;`. Read as
+                            // the last step alone, the operand is the
+                            // feature that step names anywhere rather
+                            // than the one this path reaches, and what
+                            // features it is read off the wrong element
+                            // -- which is the whole of what
+                            // `validateSubsettingFeaturingTypes` and
+                            // `validateRedefinitionFeaturingTypes` ask.
+                            // For a cross subsetting there is more:
                             // `deriveFeatureCrossFeature` reads
                             // `crossedFeature.chainingFeature->at(2)`,
                             // and `validateCrossSubsettingCrossedFeature`
                             // holds the first step to being the other
-                            // end of the association. Read as the last
-                            // step alone, what answers for the chain is
-                            // whatever chaining that feature happens to
-                            // have of its own.
-                            if part_kind == SyntaxKind::CROSSES_KW && t.chain.len() > 1 {
-                                let chain: Vec<ElementId> = t
-                                    .chain
-                                    .iter()
-                                    .filter_map(|&depth| {
-                                        self.resolve_from(id, &t.segments[..depth])
-                                    })
-                                    .collect();
-                                let crossed = self.reified(
-                                    id,
-                                    ElementKind::Feature,
-                                    &[("chainingFeature", Value::RefList(chain))],
-                                );
-                                self.reify(id, is_definition, part_kind, crossed);
-                                continue;
-                            }
-                            self.reify(id, is_definition, part_kind, target);
+                            // end of the association.
+                            let names_a_chain = matches!(
+                                part_kind,
+                                SyntaxKind::CROSSES_KW | SyntaxKind::REDEFINITION
+                            ) || part_kind == SyntaxKind::SUBSETTING
+                                && !is_definition;
+                            let reached = match names_a_chain {
+                                true => self.chained(id, &t.segments, &t.chain, target),
+                                false => target,
+                            };
+                            self.reify(id, is_definition, part_kind, reached);
                         }
                         None => {
                             let file = self.elem_file.get(&id).copied().unwrap_or(0);
@@ -3522,6 +3526,41 @@ impl Workspace {
         );
     }
 
+    /// What a dotted operand names: the chain, and not the feature at
+    /// the end of it.
+    ///
+    /// The abstract syntax the OMG publishes stands a `Feature` of its
+    /// own for it, carrying each step as a `FeatureChaining` --
+    /// `Occurrences.kermlx` does exactly that for `subset
+    /// laterOccurrence.successors subsets earlierOccurrence.successors;`
+    /// -- because `b.f` is `f` of that `b` and not `f` wherever it is
+    /// found. What features it is read off the chain, which is what
+    /// makes the two ends of such a relationship differ at all.
+    ///
+    /// A single name is no chain: that is the feature the name reached,
+    /// and nothing stands between it and the relationship.
+    fn chained(
+        &mut self,
+        owner: ElementId,
+        segments: &[String],
+        steps: &[usize],
+        target: ElementId,
+    ) -> ElementId {
+        if steps.len() < 2 {
+            return target;
+        }
+        // the whole path already resolved, so every prefix of it does too
+        let chain: Vec<ElementId> = steps
+            .iter()
+            .filter_map(|&depth| self.resolve_from(owner, &segments[..depth]))
+            .collect();
+        self.reified(
+            owner,
+            ElementKind::Feature,
+            &[("chainingFeature", Value::RefList(chain))],
+        )
+    }
+
     /// The two types a relationship written as its own statement relates.
     ///
     /// `feature g :> f;` reifies a `Subsetting` under `g` and gives it
@@ -3543,6 +3582,7 @@ impl Workspace {
         operand: &SyntaxNode,
         property: &str,
         stats: &mut ResolveStats,
+        chains: bool,
     ) {
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         let segments = operand_segments(operand);
@@ -3552,7 +3592,11 @@ impl Workspace {
                 stats.resolved += 1;
                 let name_range = last_name_range(operand);
                 self.record(file, range, name_range, &operand_ranges(operand), target);
-                self.model.set(id, property, Value::Ref(target));
+                let reached = match chains {
+                    true => self.chained(id, &segments, &operand_chain_steps(operand), target),
+                    false => target,
+                };
+                self.model.set(id, property, Value::Ref(reached));
             }
             None => self.record_miss(file, range, &segments, stats),
         }
@@ -3567,9 +3611,15 @@ impl Workspace {
         let Some((keyword, source_prop, target_prop)) = relation_ends(self.model.kind(id)) else {
             return;
         };
+        // `subset a.b subsets c.d;` writes a chain on either side, and a
+        // subsetting is the one relationship the abstract syntax stands
+        // a chain feature under. A specialization or a typing relates
+        // types, and the published abstract syntax carries no chain
+        // beneath either.
+        let chains = self.model.kind(id).is_a(ElementKind::Subsetting);
         let file = self.elem_file.get(&id).copied().unwrap_or(0);
         if let Some(operand) = operand_after(node, keyword) {
-            self.resolve_operand_into(id, &operand, source_prop, stats);
+            self.resolve_operand_into(id, &operand, source_prop, stats, chains);
         }
         for (_, targets) in relationship_parts(node) {
             for t in targets {
@@ -3577,7 +3627,11 @@ impl Workspace {
                     Some(target) => {
                         stats.resolved += 1;
                         self.record(file, t.range, t.name_range, &t.at, target);
-                        self.model.set(id, target_prop, Value::Ref(target));
+                        let reached = match chains {
+                            true => self.chained(id, &t.segments, &t.chain, target),
+                            false => target,
+                        };
+                        self.model.set(id, target_prop, Value::Ref(reached));
                     }
                     None => self.record_miss(file, t.range, &t.segments, stats),
                 }
