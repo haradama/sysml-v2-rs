@@ -281,3 +281,58 @@ fn what_the_standard_implies_is_named_from_the_root() {
         "an enumeration value declares itself: {ups:?}"
     );
 }
+
+/// Every end of a connection participates in the link it makes.
+///
+/// "If a Feature has isEnd = true and an owningType that is an
+/// Association or a Connector, then it must directly or indirectly
+/// specialize `Links::Link::participant`", and the semantics section
+/// writes an N-ary association out "with implied relationships
+/// included" as one `end feature eN[1..1] subsets
+/// Links::Link::participant;` per end.
+///
+/// The first two reach it through the `source` and `target` they are
+/// made to redefine, which the library writes as `subsets participant`.
+/// A third redefines nothing, because nothing above it has a third, and
+/// without this it has no supertype at all and so no type -- which is
+/// what `validateAssociationEndTypes` asks for, and what it reported of
+/// `ConnectionTest.sysml`, a model of the corpus and therefore sound.
+#[test]
+fn every_end_of_a_connection_participates_in_the_link_it_makes() {
+    let Some(root) = vendor() else { return };
+    let mut ws = Workspace::new();
+    ws.load_dir(&root.join("sysml.library")).unwrap();
+    let file = ws.add_file(
+        "n-ary.sysml",
+        "package P {\n\tabstract connection def C {\n\
+         \t\tpart p;\n\t\tend end1;\n\t\tend end2;\n\t\tend end3;\n\t}\n}\n",
+    );
+    ws.resolve_all();
+
+    let named = |ws: &Workspace, want: &str| {
+        ws.file_elements(file)
+            .iter()
+            .copied()
+            .find(|&id| ws.model().name(id) == Some(want))
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    for end in ["end1", "end2", "end3"] {
+        let id = named(&ws, end);
+        let mut reached = vec![id];
+        let mut at = 0;
+        while at < reached.len() {
+            let up = reached[at];
+            at += 1;
+            for over in ws.supertypes(up) {
+                if !reached.contains(&over) {
+                    reached.push(over);
+                }
+            }
+        }
+        let names: Vec<String> = reached.iter().map(|&it| ws.qualified_name_of(it)).collect();
+        assert!(
+            names.contains(&"Links::Link::participant".to_string()),
+            "{end} participates: {names:?}"
+        );
+    }
+}

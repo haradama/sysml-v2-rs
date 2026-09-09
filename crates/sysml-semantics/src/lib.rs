@@ -1349,6 +1349,7 @@ impl Workspace {
         self.count_with_what_is_named();
         self.relate_named_ends();
         self.imply_end_redefinitions();
+        self.imply_end_participation();
         self.imply_cross_subsettings();
         stats.lookups = self.lookups - began;
         stats
@@ -1999,6 +2000,72 @@ impl Workspace {
             queue.extend(self.supertypes_of(up));
         }
         Vec::new()
+    }
+
+    /// Every end of an association or a connector subsets
+    /// `Links::Link::participant`.
+    ///
+    /// "If a Feature has isEnd = true and an owningType that is an
+    /// Association or a Connector, then it must directly or indirectly
+    /// specialize `Links::Link::participant` from the Kernel Semantic
+    /// Library", and the semantics section writes an N-ary association
+    /// out "with implied relationships included" as one `end feature
+    /// eN[1..1] subsets Links::Link::participant;` per end.
+    ///
+    /// The first two ends reach it already, through the `source` and
+    /// `target` they are made to redefine -- the library writes both as
+    /// `subsets participant`. A third end redefines nothing, because
+    /// nothing above it has a third, and without this it has no
+    /// supertype and so no type at all: `abstract connection def C {
+    /// end end1; end end2; end end3; }` of `ConnectionTest.sysml` was
+    /// the one model in the corpus that `validateAssociationEndTypes`
+    /// reported, and it is sound.
+    fn imply_end_participation(&mut self) {
+        let Some(participant) = self.named_globally("Links::Link::participant") else {
+            return;
+        };
+        for elem in self.model.ids().collect::<Vec<_>>() {
+            let kind = self.model.kind(elem);
+            if !kind.is_a(ElementKind::Association) && !kind.is_a(ElementKind::Connector) {
+                continue;
+            }
+            for end in self.own_ends(elem) {
+                if end == participant || self.reaches(end, participant) {
+                    continue;
+                }
+                let subsetting = self.reified(
+                    end,
+                    ElementKind::Subsetting,
+                    &[
+                        ("subsettingFeature", Value::Ref(end)),
+                        ("subsettedFeature", Value::Ref(participant)),
+                    ],
+                );
+                self.model.set(subsetting, "isImplied", Value::Bool(true));
+                self.model.set(end, "isImpliedIncluded", Value::Bool(true));
+                self.supertypes.clear();
+            }
+        }
+    }
+
+    /// Whether a feature specializes another, however far up.
+    fn reaches(&mut self, feature: ElementId, other: ElementId) -> bool {
+        let mut queue = vec![feature];
+        let mut seen = Vec::new();
+        let mut at = 0;
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if up == other {
+                return true;
+            }
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            queue.extend(self.supertypes_of(up));
+        }
+        false
     }
 
     /// The subsetting an owned cross feature implies.
