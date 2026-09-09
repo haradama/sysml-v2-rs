@@ -4778,57 +4778,78 @@ fn triggered_function(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// The library function an operator symbol invokes.
+/// The specification's own operator table, both columns of it: which
+/// function in the Kernel Function Library each symbol invokes, and
+/// whether that function can be evaluated at model level.
 ///
-/// The specification's own table: "OperatorExpressions provide a
-/// shorthand notation for InvocationExpressions that invoke a Function
-/// from the Kernel Function Library", and this is which one. The
-/// library writes the names in quotes, and the model holds what they
-/// answer to.
+/// The library carries the second nowhere.
+/// `Function::isModelLevelEvaluable` is derived, the metamodel states no
+/// derivation for it, and no function in the library writes it -- so
+/// read off the model alone it is false of every function there is, and
+/// every constraint asking whether an expression can be evaluated says
+/// no. Tables 5 and 7 say it plainly, and only three cannot: `all` is a
+/// type extent, and `~` and `[` are undefined -- "no default definition
+/// is provided in the Kernel Functions Library".
+///
+/// The library writes the names in quotes, and the model holds what they
+/// answer to. `^` and `**` are the one function, written two ways.
+const OPERATORS: [(&str, &str, bool); 39] = [
+    ("all", "BaseFunctions::all", false),
+    ("istype", "BaseFunctions::istype", true),
+    ("hastype", "BaseFunctions::hastype", true),
+    ("@", "BaseFunctions::@", true),
+    ("@@", "BaseFunctions::@@", true),
+    ("as", "BaseFunctions::as", true),
+    ("meta", "BaseFunctions::meta", true),
+    ("==", "BaseFunctions::==", true),
+    ("!=", "BaseFunctions::!=", true),
+    ("===", "BaseFunctions::===", true),
+    ("!==", "BaseFunctions::!==", true),
+    ("[", "BaseFunctions::[", false),
+    ("#", "BaseFunctions::#", true),
+    (",", "BaseFunctions::,", true),
+    (".", "ControlFunctions::.", true),
+    ("if", "ControlFunctions::if", true),
+    ("??", "ControlFunctions::??", true),
+    ("and", "ControlFunctions::and", true),
+    ("or", "ControlFunctions::or", true),
+    ("implies", "ControlFunctions::implies", true),
+    ("collect", "ControlFunctions::collect", true),
+    ("select", "ControlFunctions::select", true),
+    ("xor", "DataFunctions::xor", true),
+    ("not", "DataFunctions::not", true),
+    ("~", "DataFunctions::~", false),
+    ("|", "DataFunctions::|", true),
+    ("&", "DataFunctions::&", true),
+    ("<", "DataFunctions::<", true),
+    (">", "DataFunctions::>", true),
+    ("<=", "DataFunctions::<=", true),
+    (">=", "DataFunctions::>=", true),
+    ("+", "DataFunctions::+", true),
+    ("-", "DataFunctions::-", true),
+    ("*", "DataFunctions::*", true),
+    ("/", "DataFunctions::/", true),
+    ("%", "DataFunctions::%", true),
+    ("^", "DataFunctions::^", true),
+    ("**", "DataFunctions::^", true),
+    ("..", "DataFunctions::..", true),
+];
+
+/// The library function an operator symbol invokes.
 fn invoked_function(operator: &str) -> Option<&'static str> {
-    let named = match operator {
-        "==" => "BaseFunctions::==",
-        "!=" => "BaseFunctions::!=",
-        "===" => "BaseFunctions::===",
-        "!==" => "BaseFunctions::!==",
-        "[" => "BaseFunctions::[",
-        "#" => "BaseFunctions::#",
-        "," => "BaseFunctions::,",
-        "all" => "BaseFunctions::all",
-        "istype" => "BaseFunctions::istype",
-        "hastype" => "BaseFunctions::hastype",
-        "@" => "BaseFunctions::@",
-        "@@" => "BaseFunctions::@@",
-        "as" => "BaseFunctions::as",
-        "meta" => "BaseFunctions::meta",
-        "." => "ControlFunctions::.",
-        "if" => "ControlFunctions::if",
-        "??" => "ControlFunctions::??",
-        "and" => "ControlFunctions::and",
-        "or" => "ControlFunctions::or",
-        "implies" => "ControlFunctions::implies",
-        "collect" => "ControlFunctions::collect",
-        "select" => "ControlFunctions::select",
-        "xor" => "DataFunctions::xor",
-        "not" => "DataFunctions::not",
-        "~" => "DataFunctions::~",
-        "|" => "DataFunctions::|",
-        "&" => "DataFunctions::&",
-        "<" => "DataFunctions::<",
-        ">" => "DataFunctions::>",
-        "<=" => "DataFunctions::<=",
-        ">=" => "DataFunctions::>=",
-        "+" => "DataFunctions::+",
-        "-" => "DataFunctions::-",
-        "*" => "DataFunctions::*",
-        "/" => "DataFunctions::/",
-        "%" => "DataFunctions::%",
-        // the table gives `^` and `**` the one function
-        "^" | "**" => "DataFunctions::^",
-        ".." => "DataFunctions::..",
-        _ => return None,
-    };
-    Some(named)
+    OPERATORS
+        .iter()
+        .find(|(symbol, ..)| *symbol == operator)
+        .map(|(_, named, _)| *named)
+}
+
+/// Whether the library function of that name can be evaluated at model
+/// level, where the specification's table says so.
+pub(crate) fn evaluable_at_model_level(qualified: &str) -> Option<bool> {
+    OPERATORS
+        .iter()
+        .find(|(_, named, _)| *named == qualified)
+        .map(|(.., evaluable)| *evaluable)
 }
 
 /// The name an invocation writes after an arrow.
@@ -5834,6 +5855,21 @@ mod tests {
         assert_eq!(invoked_function("^"), invoked_function("**"));
         // and a symbol the table does not name invokes nothing
         assert_eq!(invoked_function("<=>"), None);
+
+        // the second column: only a type extent and the two the library
+        // leaves undefined cannot be evaluated at model level
+        let cannot: Vec<&str> = mapped
+            .iter()
+            .filter(|(_, named)| evaluable_at_model_level(named) == Some(false))
+            .map(|(operator, _)| *operator)
+            .collect();
+        assert_eq!(cannot, vec!["all", "[", "~"]);
+        assert_eq!(
+            evaluable_at_model_level("DataFunctions::+"),
+            Some(true),
+            "addition is evaluated at model level"
+        );
+        assert_eq!(evaluable_at_model_level("Nowhere::atAll"), None);
 
         // the three trigger kinds name the three trigger functions,
         // and nothing else names one

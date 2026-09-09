@@ -1111,6 +1111,20 @@ impl Scope<'_> {
             };
         }
         let model = self.ws.model();
+        // `Function::isModelLevelEvaluable` is derived, the metamodel
+        // states no derivation for it, and no function in the Kernel
+        // Function Library writes it -- so read off the model alone it
+        // is false of every function there is, and every constraint
+        // asking whether an expression can be evaluated says no. The
+        // specification's own operator table has the column.
+        if name == "isModelLevelEvaluable" && model.kind(elem).is_a(ElementKind::Function) {
+            if let Some(evaluable) =
+                crate::evaluable_at_model_level(&self.ws.qualified_name_of(elem))
+            {
+                return Val::Bool(evaluable);
+            }
+        }
+        let model = self.ws.model();
         let name = written_as_meant(model.kind(elem), name);
         // What the metamodel calls an owned X is an owned element that
         // is an X, and an owning Y the owner where the owner is a Y.
@@ -2602,6 +2616,29 @@ mod tests {
             .find(|&id| ws.model().kind(id) == ElementKind::ConstructorExpression)
             .expect("the construction is built");
         assert_eq!(ws.judge("function = null", made), Some(true));
+    }
+
+    /// `Function::isModelLevelEvaluable` is derived and the metamodel
+    /// gives no derivation for it, so it is read from the operator
+    /// table the specification tabulates it in -- by qualified name,
+    /// which is what the library declares each symbol under. A
+    /// function the table does not name leaves the flag unanswered
+    /// rather than saying no: the model holds nothing either way.
+    #[test]
+    fn only_the_functions_the_operator_table_names_answer_whether_they_evaluate() {
+        let (mut ws, plus) = about_kerml(
+            "package DataFunctions {\n\tfunction '+';\n\tfunction '~';\n}\n",
+            "+",
+        );
+        assert_eq!(ws.judge("isModelLevelEvaluable", plus), Some(true));
+        let (mut ws, complement) = about_kerml(
+            "package DataFunctions {\n\tfunction '+';\n\tfunction '~';\n}\n",
+            "~",
+        );
+        assert_eq!(ws.judge("isModelLevelEvaluable", complement), Some(false));
+
+        let (mut ws, own) = about_kerml("package K {\n\tfunction F;\n}\n", "F");
+        assert_eq!(ws.judge("isModelLevelEvaluable", own), None);
     }
 
     /// The ends the metamodel gives to an association rather than to
