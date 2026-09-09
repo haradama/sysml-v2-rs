@@ -363,7 +363,7 @@ fn a_metadata_annotation_takes_the_base_its_own_language_names() {
     );
     let kerml = ws.add_file(
         "m.kerml",
-        "package K {\n\tmetaclass A;\n\t#A classifier B;\n}\n",
+        "package K {\n\tmetaclass A;\n\t#A classifier B;\n\tmetadata m : A;\n}\n",
     );
     ws.resolve_all();
 
@@ -385,7 +385,8 @@ fn a_metadata_annotation_takes_the_base_its_own_language_names() {
         ups.contains(&"Metadata::metadataItems".to_string()),
         "a usage subsets the base feature: {ups:?}"
     );
-    // and the KerML one is a feature, which takes no SysML base at all
+    // and the KerML one is a feature, which takes no SysML base at all --
+    // `metadata C;` declares one the same way, so it is a feature too
     let feature = one(&ws, kerml, sysml_model::ElementKind::MetadataFeature);
     let ups: Vec<String> = ws
         .supertypes(feature)
@@ -396,4 +397,46 @@ fn a_metadata_annotation_takes_the_base_its_own_language_names() {
         !ups.iter().any(|it| it.starts_with("Metadata::")),
         "a KerML metadata feature is not a SysML usage: {ups:?}"
     );
+}
+
+/// What `export` writes down is a model the standard accepts.
+///
+/// Resolution works out the implied relationships without materializing
+/// them, so a defect in what they would be shows nowhere -- until
+/// `materialize_implied` writes them and something reads them back.
+/// Written down, the corpus drew seventy-three violations: a metadata
+/// usage given the base type where the base feature belongs, a KerML
+/// metadata annotation and declaration read as the SysML usage, and a
+/// conjugated type given a supertype the constraint about conjugation
+/// forbids it.
+///
+/// The corpus is sound, so this is the checker being wrong about what
+/// it wrote, and the number that says so is zero.
+#[test]
+fn the_implied_relationships_written_down_are_a_model_the_standard_accepts() {
+    let Some(root) = vendor() else { return };
+    for examples in ["sysml/src", "kerml/src"] {
+        let mut ws = Workspace::new();
+        let mut files = ws.load_dir(&root.join("sysml.library")).unwrap();
+        files += ws.load_dir(&root.join(examples)).unwrap();
+        ws.resolve_all();
+        assert!(
+            ws.materialize_implied() > 0,
+            "{examples}: something is written"
+        );
+
+        let checked = ws.check_rules(&(0..files).collect::<Vec<_>>());
+        let said: Vec<String> = checked
+            .violations
+            .iter()
+            .map(|violation| {
+                format!(
+                    "{} of `{}`",
+                    violation.rule,
+                    ws.qualified_name_of(violation.element)
+                )
+            })
+            .collect();
+        assert!(said.is_empty(), "{examples}:\n{}", said.join("\n"));
+    }
 }

@@ -2156,6 +2156,11 @@ fn usage_kind(
         Some(VIEW_KW) => "ViewUsage",
         Some(VIEWPOINT_KW) => "ViewpointUsage",
         Some(RENDERING_KW) => "RenderingUsage",
+        // `metadata Classified { ... }` declares one rather than
+        // annotating with one, and KerML calls what it declares a
+        // `MetadataFeature` -- the same distinction the prefix
+        // annotation makes above.
+        Some(METADATA_KW) if dialect == sysml_syntax::Dialect::KerML => "MetadataFeature",
         Some(METADATA_KW) => "MetadataUsage",
         Some(CONCERN_KW) => "ConcernUsage",
         Some(CASE_KW) => "CaseUsage",
