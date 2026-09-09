@@ -155,35 +155,52 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
 ///
 /// Writing a wrong model by hand reaches the constraints one at a time,
 /// and it reaches only the ones whose shape is already understood. The
-/// corpus is 403 files of rich, correct SysML: change one keyword in
-/// one of them and it is still a model, still parses, still resolves --
-/// and is now wrong in a way somebody's editor could be wrong.
+/// corpus is 403 files of rich, correct SysML: change one thing in one
+/// of them and it is still a model, still parses, still resolves -- and
+/// is now wrong in a way somebody's editor could be wrong.
 ///
-/// A first sweep of fifty such swaps over every file left 1674 models
-/// that parse and resolve, tripped twenty-six constraints, and found a
-/// panic: `connector ps : P ([0..*] myCart, ...)` counted the `*` of
-/// the bound as a step of the name beside it. A second, widened past
-/// the definition keywords to expressions, multiplicity, visibility,
-/// time structure and the KerML relationship words, made 4257 and
-/// tripped thirty-nine with no panic left to find. With the five that
-/// only a hand-written model reaches, forty-four of the hundred and
-/// seventy answered constraints are demonstrated to fire.
+/// Three sweeps got here. Fifty keyword swaps over every file left 1674
+/// such models and tripped twenty-six constraints, and found a panic:
+/// `connector ps : P ([0..*] myCart, ...)` counted the `*` of the bound
+/// as a step of the name beside it. A second widened the swaps past the
+/// definition keywords to expressions, multiplicity, visibility, time
+/// structure and the KerML relationship words -- 4257 models, and
+/// thirty-nine constraints. A third broke one place at a time rather
+/// than every place at once, and took whole lines out and put them in
+/// twice: 12040 models, and fourteen more. Neither of the last two
+/// found a panic.
 ///
-/// Each row is one swap, the file it is made in, and constraints that
+/// Fifty-eight of the hundred and seventy answered constraints are
+/// demonstrated to fire, counting the five that only a hand-written
+/// model reaches.
+///
+/// Each row is one break, the file it is made in, and constraints that
 /// must notice. Other constraints may notice too -- one keyword can be
 /// wrong in several ways at once -- so the named ones must be among
 /// what fires rather than all of it.
-const MUTATED: &[(&str, &str, &str, &[&str])] = &[
+#[derive(Clone, Copy)]
+enum Break {
+    /// every occurrence of the first, written as the second
+    Swap(&'static str, &'static str),
+    /// only the occurrence at that index, counted from zero
+    SwapNth(&'static str, &'static str, usize),
+    /// one line taken out, counted from one
+    Drop(usize),
+    /// one line written twice
+    Repeat(usize),
+}
+
+use Break::{Drop, Repeat, Swap, SwapNth};
+
+const MUTATED: &[(&str, Break, &[&str])] = &[
     (
         "UseCaseTest.sysml",
-        "use case def ",
-        "part def ",
+        Swap("use case def ", "part def "),
         &["validateActorMembershipOwningType"],
     ),
     (
         "CauseAndEffectExample.sysml",
-        "end ",
-        "",
+        Swap("end ", ""),
         &[
             "validateAssociationRelatedTypes",
             "validateConnectorRelatedFeatures",
@@ -191,8 +208,7 @@ const MUTATED: &[(&str, &str, &str, &[&str])] = &[
     ),
     (
         "EnumerationTest.sysml",
-        "attribute def ",
-        "part def ",
+        Swap("attribute def ", "part def "),
         &[
             "validateAttributeDefinitionFeatures",
             "validateDataTypeSpecialization",
@@ -200,56 +216,47 @@ const MUTATED: &[(&str, &str, &str, &[&str])] = &[
     ),
     (
         "Vehicle Analysis Demo.sysml",
-        "attribute def ",
-        "part def ",
+        Swap("attribute def ", "part def "),
         &["validateAttributeUsageFeatures"],
     ),
     (
         "Connectors.kerml",
-        "end ",
-        "",
+        Swap("end ", ""),
         &["validateBindingConnectorIsBinary"],
     ),
     (
         "Model Library Example.sysml",
-        "connection def ",
-        "part def ",
+        Swap("connection def ", "part def "),
         &["validateClassSpecialization"],
     ),
     (
         "ConnectionTest.sysml",
-        "then ",
-        "; //",
+        Swap("then ", "; //"),
         &["validateConnectorBinarySpecialization"],
     ),
     (
         "ControlNodeTest.sysml",
-        "action def ",
-        "part def ",
+        Swap("action def ", "part def "),
         &["validateControlNodeOwningType"],
     ),
     (
         "Features.kerml",
-        "composite ",
-        "portion ",
+        Swap("composite ", "portion "),
         &["validateFeaturePortionNotVariable"],
     ),
     (
         "Conditional Succession Example-2.sysml",
-        "then ",
-        "; //",
+        Swap("then ", "; //"),
         &["validateIfActionUsageParameters"],
     ),
     (
         "RootPackageTest.sysml",
-        "private ",
-        "public ",
+        Swap("private ", "public "),
         &["validateImportTopLevelVisibility"],
     ),
     (
         "Dynamics.sysml",
-        "calc def ",
-        "part def ",
+        Swap("calc def ", "part def "),
         &[
             "validateInvocationExpressionInstantiatedType",
             "validateParameterMembershipOwningType",
@@ -258,147 +265,227 @@ const MUTATED: &[(&str, &str, &str, &[&str])] = &[
     ),
     (
         "Dynamics.sysml",
-        "\n\t\tin ",
-        "\n\t\tout ",
+        Swap("\n\t\tin ", "\n\t\tout "),
         &["validateInvocationExpressionParameterRedefinition"],
     ),
     (
         "ActionTest.sysml",
-        "first ",
-        "",
+        Swap("first ", ""),
         &["validateMergeNodeOutgoingSuccessions"],
     ),
     (
         "Vehicle Analysis Demo.sysml",
-        "analysis def ",
-        "part def ",
+        Swap("analysis def ", "part def "),
         &["validateObjectiveMembershipOwningType"],
     ),
     (
         "A-3-8-ChangingFeatureValues.kerml",
-        "\n\t\tin ",
-        "\n\t\tout ",
+        Swap("\n\t\tin ", "\n\t\tout "),
         &["validateRedefinitionDirectionConformance"],
     ),
     (
         "Vehicle Analysis Demo.sysml",
-        "requirement def ",
-        "part def ",
+        Swap("requirement def ", "part def "),
         &["validateRequirementConstraintMembershipOwningType"],
     ),
     (
         "Turbojet Stage Analysis.sysml",
-        "calc def ",
-        "part def ",
+        Swap("calc def ", "part def "),
         &["validateResultExpressionMembershipOwningType"],
     ),
     (
         "ViewTest.sysml",
-        "concern def ",
-        "part def ",
+        Swap("concern def ", "part def "),
         &["validateStakeholderMembershipOwningType"],
     ),
     (
         "AssignmentTest.sysml",
-        "state def ",
-        "part def ",
+        Swap("state def ", "part def "),
         &["validateStateSubactionMembershipOwningType"],
     ),
     (
         "VariabilityTest.sysml",
-        "variation ",
-        "",
+        Swap("variation ", ""),
         &["validateVariantMembershipOwningNamespace"],
     ),
     (
         "ViewTest.sysml",
-        "view def ",
-        "part def ",
+        Swap("view def ", "part def "),
         &["validateViewRenderingMembershipOwningType"],
     ),
-    // A second sweep, widened past the definition keywords to
-    // expressions, multiplicity, visibility, time structure and the
-    // KerML relationship words: thirteen more constraints, and no panic
-    // left to find.
     (
         "CarWithShapeAndCSG.sysml",
-        "part def ",
-        "action def ",
+        Swap("part def ", "action def "),
         &["validateBehaviorSpecialization"],
     ),
     (
         "A-3-7-DecisionsAndMerges.kerml",
-        "behavior ",
-        "struct ",
+        Swap("behavior ", "struct "),
         &["validateStructureSpecialization"],
     ),
     (
         "ProductSelection_N_ary.kerml",
-        "member ",
-        "",
+        Swap("member ", ""),
         &["validateFeatureCrossFeatureSpecialization"],
     ),
     (
         "AnalysisIndividualExample.sysml",
-        " = ",
-        " := ",
+        Swap(" = ", " := "),
         &["validateFeatureIsVariable"],
     ),
     (
         "AnalysisIndividualExample.sysml",
-        "part def ",
-        "attribute def ",
+        Swap("part def ", "attribute def "),
         &["validateOccurrenceUsageIndividualUsage"],
     ),
     (
         "JohnIndividualExample.sysml",
-        "individual ",
-        "",
+        Swap("individual ", ""),
         &["validateOccurrenceUsagePortionKind"],
     ),
     (
         "StructuredControlTest.sysml",
-        "in ",
-        "inout ",
+        Swap("in ", "inout "),
         &["validateForLoopActionUsageParameters"],
     ),
     (
         "TradeStudyTest.sysml",
-        "in ",
-        "inout ",
+        Swap("in ", "inout "),
         &["validateParameterMembershipParameterDirection"],
     ),
     (
         "ControlNodeTest.sysml",
-        "join",
-        "fork",
+        Swap("join", "fork"),
         &["validateForkNodeIncomingSuccessions"],
     ),
     (
         "ActionTest.sysml",
-        "if ",
-        "while ",
+        Swap("if ", "while "),
         &["validateWhileLoopActionUsage"],
     ),
     (
         "Metadata Example-1.sysml",
-        " : ",
-        " :> ",
+        Swap(" : ", " :> "),
         &["validateMetadataFeatureAnnotatedElement"],
     ),
     (
         "Classifiers.kerml",
-        "specializes ",
-        "conjugates ",
+        Swap("specializes ", "conjugates "),
         &["validateSpecificationSpecificNotConjugated"],
     ),
     (
         "JohnIndividualExample.kerml",
-        "specializes ",
-        "conjugates ",
+        Swap("specializes ", "conjugates "),
         &["validateTypeAtMostOneConjugator"],
     ),
+    (
+        "ProductSelection_UnownedEnds.kerml",
+        SwapNth("end ", "", 0),
+        &["validateCrossSubsettingCrossingFeature"],
+    ),
+    (
+        "FeatureChains.kerml",
+        SwapNth("chains ", "subsets ", 1),
+        &["validateFeatureChainingFeatureNotOne"],
+    ),
+    (
+        "A-3-6-Sequences.kerml",
+        Repeat(37),
+        &["validateAssociationBinarySpecialization"],
+    ),
+    (
+        "VerificationTest.sysml",
+        Repeat(16),
+        &["validateCaseDefinitionOnlyOneSubject"],
+    ),
+    (
+        "10c-Fuel Economy Analysis.sysml",
+        Drop(79),
+        &["validateCaseDefinitionSubjectParameterPosition"],
+    ),
+    (
+        "Trade Study Analysis Example.sysml",
+        Repeat(25),
+        &["validateCaseUsageOnlyOneObjective"],
+    ),
+    (
+        "10c-Fuel Economy Analysis.sysml",
+        Repeat(148),
+        &["validateCaseUsageOnlyOneSubject"],
+    ),
+    (
+        "10c-Fuel Economy Analysis.sysml",
+        Drop(148),
+        &["validateCaseUsageSubjectParameterPosition"],
+    ),
+    (
+        "ExtendedOccurrences.kerml",
+        Repeat(19),
+        &["validateExpressionResultParameterMembership"],
+    ),
+    (
+        "SysML v2 Spec Annex A SimpleVehicleModel.sysml",
+        Drop(817),
+        &["validateFlowPayloadFeature"],
+    ),
+    (
+        "Fork Join Example.sysml",
+        Repeat(22),
+        &["validateJoinNodeOutgoingSuccessions"],
+    ),
+    (
+        "ViewTest.sysml",
+        Drop(10),
+        &["validateRequirementDefinitionSubjectParameterPosition"],
+    ),
+    (
+        "VehicleRequirementDerivation.sysml",
+        Repeat(31),
+        &["validateRequirementUsageOnlyOneSubject"],
+    ),
+    (
+        "Viewpoint Example.sysml",
+        Drop(22),
+        &["validateRequirementUsageSubjectParameterPosition"],
+    ),
 ];
+
+impl Break {
+    /// The model this break makes of that text, or nothing where the
+    /// text does not have what it breaks -- which is a corpus that has
+    /// moved under the test, and is reported as such.
+    fn made_of(self, text: &str) -> Option<String> {
+        match self {
+            Swap(from, to) => text.contains(from).then(|| text.replace(from, to)),
+            SwapNth(from, to, nth) => {
+                let mut at = 0;
+                for _ in 0..nth {
+                    at += text[at..].find(from)? + from.len();
+                }
+                let found = at + text[at..].find(from)?;
+                Some(format!(
+                    "{}{to}{}",
+                    &text[..found],
+                    &text[found + from.len()..]
+                ))
+            }
+            Drop(line) => {
+                let mut lines: Vec<&str> = text.lines().collect();
+                (line <= lines.len()).then(|| {
+                    lines.remove(line - 1);
+                    lines.join("\n")
+                })
+            }
+            Repeat(line) => {
+                let mut lines: Vec<&str> = text.lines().collect();
+                (line <= lines.len()).then(|| {
+                    lines.insert(line - 1, lines[line - 1]);
+                    lines.join("\n")
+                })
+            }
+        }
+    }
+}
 
 #[test]
 fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
@@ -411,39 +498,41 @@ fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
     ws.load_dir(&library).expect("the library loads");
     ws.resolve_all();
 
-    for (name, from, to, expected) in MUTATED {
+    for (name, broken, expected) in MUTATED {
         let path = corpus
             .iter()
             .find(|it| it.file_name().is_some_and(|it| it == *name))
             .unwrap_or_else(|| panic!("{name} is in the corpus"));
         let text = std::fs::read_to_string(path).expect("the corpus reads");
-        assert!(text.contains(from), "{name} writes {from:?}");
+        let mutated = broken
+            .made_of(&text)
+            .unwrap_or_else(|| panic!("{name} no longer has what this breaks"));
 
-        // one mutation at a time, each against a library that was
-        // resolved once: cloning it costs a tenth of what loading it does
-        let mut broken = ws.clone();
+        // one break at a time, each against a library that was resolved
+        // once: cloning it costs a tenth of what loading it does
+        let mut ws = ws.clone();
         let kerml = path.extension().is_some_and(|it| it == "kerml");
-        let file = broken.add_file(
+        let file = ws.add_file(
             if kerml {
                 "mutated.kerml"
             } else {
                 "mutated.sysml"
             },
-            &text.replace(from, to),
+            &mutated,
         );
-        broken.resolve_files(&[file]);
-        let found = broken.findings(&[file]);
-        assert!(found.syntax.is_empty(), "{name} {from:?}: does not parse");
-        assert!(found.names.is_empty(), "{name} {from:?}: does not resolve");
+        ws.resolve_files(&[file]);
+        let found = ws.findings(&[file]);
+        assert!(found.syntax.is_empty(), "{name}: does not parse");
+        assert!(found.names.is_empty(), "{name}: does not resolve {found:?}");
 
-        let fired: BTreeSet<&str> = broken
+        let fired: BTreeSet<&str> = ws
             .check_rules(&[file])
             .violations
             .iter()
             .map(|violation| violation.rule)
             .collect();
         for rule in *expected {
-            assert!(fired.contains(rule), "{name} {from:?} -> {to:?}: {fired:?}");
+            assert!(fired.contains(rule), "{name}: {fired:?}");
         }
     }
 }
