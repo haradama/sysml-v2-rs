@@ -2931,6 +2931,29 @@ fn a_named_declaration_with_a_reference_is_the_end() {
             .collect::<Vec<_>>(),
         ["P::w::lcp", "P::h::scp"]
     );
+    // and it relates them through a chain: `w.lcp` is `lcp` of that `w`,
+    // which is what the abstract syntax the OMG publishes stands under
+    // the reference. What the connector relates is the feature the
+    // chain ends at, the same as for an end written without a name.
+    let steps: Vec<usize> =
+        ws.model()
+            .owned(interface)
+            .iter()
+            .copied()
+            .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+            .filter_map(|end| {
+                ws.model().owned(end).iter().copied().find(|&it| {
+                    ws.model().kind(it) == sysml_model::ElementKind::ReferenceSubsetting
+                })
+            })
+            .filter_map(|it| {
+                ws.model()
+                    .get(it, "referencedFeature")
+                    .and_then(sysml_model::Value::as_id)
+            })
+            .map(|reached| ws.model().chaining_feature(reached).len())
+            .collect();
+    assert_eq!(steps, [2, 2], "each reference names a chain of two");
 }
 
 /// A connector end is one thing.

@@ -1229,6 +1229,12 @@ impl Workspace {
                             // -- which is the whole of what
                             // `validateSubsettingFeaturingTypes` and
                             // `validateRedefinitionFeaturingTypes` ask.
+                            // A reference subsetting is one too -- the
+                            // published abstract syntax stands 106 of
+                            // them under the standard library alone --
+                            // and a connector end written as `lcp ::>
+                            // w.lcp` reaches what it relates through the
+                            // chain rather than as it.
                             // For a cross subsetting there is more:
                             // `deriveFeatureCrossFeature` reads
                             // `crossedFeature.chainingFeature->at(2)`,
@@ -1237,7 +1243,9 @@ impl Workspace {
                             // end of the association.
                             let names_a_chain = matches!(
                                 part_kind,
-                                SyntaxKind::CROSSES_KW | SyntaxKind::REDEFINITION
+                                SyntaxKind::CROSSES_KW
+                                    | SyntaxKind::REDEFINITION
+                                    | SyntaxKind::REFERENCES
                             ) || part_kind == SyntaxKind::SUBSETTING
                                 && !is_definition;
                             let reached = match names_a_chain {
@@ -1320,6 +1328,11 @@ impl Workspace {
     /// which of them the connector relates. What an end refers to is
     /// resolved with the end rather than with the connector, so this
     /// waits until both are.
+    ///
+    /// A dotted reference is a chain, and what the connector relates is
+    /// the feature that chain ends at -- which is what an end written
+    /// without a name of its own already reports, and a consumer asking
+    /// what is connected to what wants the port and not the path to it.
     fn relate_named_ends(&mut self) {
         for elem in self.model.ids().collect::<Vec<_>>() {
             if !self.model.kind(elem).is_a(ElementKind::Connector)
@@ -1339,6 +1352,13 @@ impl Workspace {
                         .copied()
                         .find(|&it| self.model.kind(it) == ElementKind::ReferenceSubsetting)
                         .and_then(|it| self.model.referenced_feature(it))
+                        .map(|reached| {
+                            self.model
+                                .chaining_feature(reached)
+                                .last()
+                                .copied()
+                                .unwrap_or(reached)
+                        })
                 })
                 .collect();
             if !related.is_empty() {
