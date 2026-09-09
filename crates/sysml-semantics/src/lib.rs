@@ -1384,9 +1384,19 @@ impl Workspace {
                 }
                 continue;
             }
-            let found = match self.model.get(elem, "operator").and_then(Value::as_str) {
-                Some(operator) => invoked_function(operator).and_then(|it| self.named_globally(it)),
-                None => invoked_by_name(&node)
+            let triggered = match self.model.get(elem, "kind") {
+                Some(Value::EnumLit(kind)) => triggered_function(kind),
+                _ => None,
+            };
+            let found = match (
+                self.model.get(elem, "operator").and_then(Value::as_str),
+                triggered,
+            ) {
+                (Some(operator), _) => {
+                    invoked_function(operator).and_then(|it| self.named_globally(it))
+                }
+                (None, Some(named)) => self.named_globally(named),
+                (None, None) => invoked_by_name(&node)
                     .and_then(|callee| self.resolve_operand(elem, &operand_segments(&callee))),
             };
             let Some(target) = found else {
@@ -4587,6 +4597,21 @@ fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
     steps
 }
 
+/// The function a trigger invokes, which its kind alone says.
+///
+/// "Return one of the Functions TriggerWhen, TriggerAt or TriggerAfter,
+/// from the Kernel Semantic Library Triggers package, depending on
+/// whether the kind of this TriggerInvocationExpression is when, at or
+/// after, respectively."
+fn triggered_function(kind: &str) -> Option<&'static str> {
+    match kind {
+        "when" => Some("Triggers::TriggerWhen"),
+        "at" => Some("Triggers::TriggerAt"),
+        "after" => Some("Triggers::TriggerAfter"),
+        _ => None,
+    }
+}
+
 /// The library function an operator symbol invokes.
 ///
 /// The specification's own table: "OperatorExpressions provide a
@@ -5592,12 +5617,13 @@ mod tests {
         assert!(!ws.in_library(ws.root()));
     }
 
-    /// The specification's own operator table, in full: every symbol
+    /// The specification's own tables, in full: every operator symbol
     /// the notation writes maps to a function in the Kernel Function
-    /// Library, and an invocation that finds none of them says what it
+    /// Library, and every trigger keyword to one in the Kernel Semantic
+    /// Library. An invocation that finds none of them says what it
     /// invokes nowhere.
     #[test]
-    fn every_operator_the_specification_tabulates_names_its_function() {
+    fn every_symbol_the_specification_tabulates_names_its_function() {
         let mapped: Vec<(&str, &str)> = [
             "all", "istype", "hastype", "@", "@@", "as", "meta", "==", "!=", "===", "!==", "[",
             "#", ",", ".", "if", "??", "and", "or", "implies", "collect", "select", "xor", "not",
@@ -5622,6 +5648,13 @@ mod tests {
         assert_eq!(invoked_function("^"), invoked_function("**"));
         // and a symbol the table does not name invokes nothing
         assert_eq!(invoked_function("<=>"), None);
+
+        // the three trigger kinds name the three trigger functions,
+        // and nothing else names one
+        assert_eq!(triggered_function("when"), Some("Triggers::TriggerWhen"));
+        assert_eq!(triggered_function("at"), Some("Triggers::TriggerAt"));
+        assert_eq!(triggered_function("after"), Some("Triggers::TriggerAfter"));
+        assert_eq!(triggered_function("whenever"), None);
     }
 
     #[test]

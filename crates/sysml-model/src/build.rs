@@ -1157,6 +1157,7 @@ fn reify_action_arguments(
         ElementKind::AcceptActionUsage => &[None, Some(SyntaxKind::VIA_KW)],
         _ => return,
     };
+    let mut waits_through = None;
     for (at, slot) in slots.iter().enumerate() {
         // the payload the `accept` clause named is that first parameter
         // rather than one standing beside it
@@ -1169,6 +1170,9 @@ fn reify_action_arguments(
             }
         };
         model.set(parameter, "direction", Value::EnumLit("in"));
+        if at == 0 {
+            waits_through = Some(parameter);
+        }
         let Some(written) = slot.and_then(|keyword| operand_after(node, keyword)) else {
             continue;
         };
@@ -1178,6 +1182,73 @@ fn reify_action_arguments(
         let expression = value_expression(model, membership, &written, built);
         model.set(membership, "value", Value::Ref(expression));
     }
+    // `accept when ready;` names no payload, and the parameter it waits
+    // through stands there all the same
+    if let Some(payload) = waits_through {
+        reify_trigger(model, node, payload, built);
+    }
+}
+
+/// What an `accept` waits for, where it waits for a time or a change.
+///
+/// `TriggerExpression : TriggerInvocationExpression = kind = ( 'at' |
+/// 'after' ) ArgumentMember | kind = 'when' ArgumentExpressionMember`,
+/// and the payload of the accept takes it as its value -- which is what
+/// `deriveAcceptActionUsagePayloadArgument` reads back. Which of the
+/// three functions in the library's `Triggers` package it invokes is
+/// what the `kind` says, so the keyword is the whole of it.
+fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built: &mut Built) {
+    let Some((keyword, kind)) = [
+        (SyntaxKind::AFTER_KW, "after"),
+        (SyntaxKind::AT_KW, "at"),
+        (SyntaxKind::WHEN_KW, "when"),
+    ]
+    .into_iter()
+    .find(|&(keyword, _)| has_token(node, keyword)) else {
+        return;
+    };
+    let Some(written) = node_after(node, keyword) else {
+        return;
+    };
+    let membership = model.create(ElementKind::FeatureValue);
+    model.add_owned(payload, membership);
+    model.set(membership, "featureWithValue", Value::Ref(payload));
+    let trigger = model.create(ElementKind::TriggerInvocationExpression);
+    model.add_owned(membership, trigger);
+    built.source.push((trigger, written.clone()));
+    built.expressions.push(trigger);
+    // first, because `instantiatedType()` reads the first membership
+    // that is not a feature's; which function it names is worked out
+    // from the kind once the library is there to look in
+    let names_it = model.create(ElementKind::Membership);
+    model.add_owned(trigger, names_it);
+    model.set(trigger, "kind", Value::EnumLit(kind));
+    hands_over(model, trigger, None, &written, Some("in"), built);
+    results_in(model, trigger);
+    model.set(membership, "value", Value::Ref(trigger));
+}
+
+/// The first node written after `keyword`, whatever kind it is.
+///
+/// `operand_after` takes only a name, since `via p` names a port and an
+/// expression there would be something else; what a trigger waits for is
+/// an expression of any shape -- `after 10[SI::s]`, `at new
+/// Time::Iso8601DateTime(...)`, `when senseTemperature.temp > Tmax`.
+fn node_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
+    let mut after = false;
+    for element in node.children_with_tokens() {
+        match element.as_token() {
+            Some(token) if token.kind().is_trivia() => {}
+            Some(token) => after = token.kind() == keyword,
+            None => {
+                let child = element.into_node().expect("checked for a token above");
+                if after {
+                    return Some(child);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The reference a keyword introduces, where the statement writes one

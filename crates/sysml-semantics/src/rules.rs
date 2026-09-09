@@ -2140,7 +2140,7 @@ fn equal(left: &Val, right: &Val) -> Val {
 /// only the way in and this is the way back out. Each pairs the name a
 /// constraint asks for with the relationship to look through and the
 /// property of it that names the element asked about.
-const REVERSE_ENDS: [(&str, ElementKind, &str); 5] = [
+const REVERSE_ENDS: [(&str, ElementKind, &str); 6] = [
     ("typing", ElementKind::FeatureTyping, "typedFeature"),
     ("subsetting", ElementKind::Subsetting, "subsettingFeature"),
     (
@@ -2150,6 +2150,7 @@ const REVERSE_ENDS: [(&str, ElementKind, &str); 5] = [
     ),
     ("specialization", ElementKind::Specialization, "specific"),
     ("conjugator", ElementKind::Conjugation, "conjugatedType"),
+    ("valuation", ElementKind::FeatureValue, "featureWithValue"),
 ];
 
 /// Where the reflective libraries declare a metaclass, in the order the

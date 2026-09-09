@@ -409,3 +409,55 @@ fn an_argument_that_names_its_parameter_is_read_by_the_name() {
         "both arguments are the result's"
     );
 }
+
+/// `accept ... when c` waits for what a trigger function returns, and
+/// which of the three it invokes is what the keyword says: "Return one
+/// of the Functions TriggerWhen, TriggerAt or TriggerAfter ... depending
+/// on whether the kind ... is when, at or after, respectively."
+#[test]
+fn an_accept_that_waits_invokes_the_trigger_its_keyword_names() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "triggers.kerml",
+        "standard library package Triggers {\n\
+         \tfunction TriggerWhen { in changeExpression; return : Triggers; }\n\
+         \tfunction TriggerAt { in timeInstant; return : Triggers; }\n\
+         \tfunction TriggerAfter { in duration; return : Triggers; }\n}\n",
+    );
+    ws.add_file(
+        "m.sysml",
+        "action def A {\n\
+         \tattribute ready;\n\
+         \taction x;\n\
+         \tthen accept when ready;\n}\n",
+    );
+    ws.resolve_all();
+    let model = ws.model();
+    let trigger = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::TriggerInvocationExpression)
+        .expect("the accept waits for a trigger");
+    assert_eq!(
+        model.get(trigger, "kind"),
+        Some(&Value::EnumLit("when")),
+        "the keyword says which"
+    );
+    let names_it = model.owned(trigger)[0];
+    assert_eq!(model.kind(names_it), ElementKind::Membership);
+    let invoked = model
+        .get(names_it, "memberElement")
+        .and_then(Value::as_id)
+        .expect("the trigger names the function it invokes");
+    assert_eq!(ws.qualified_name_of(invoked), "Triggers::TriggerWhen");
+    // and it hands the change expression over as its argument
+    assert_eq!(
+        ws.model()
+            .owned(trigger)
+            .iter()
+            .filter(|&&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+            .count(),
+        1
+    );
+}
