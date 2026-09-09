@@ -442,18 +442,11 @@ const MISWRITTEN: [(&str, &str); 8] = [
 /// These are not the specification getting something wrong. They are
 /// this model not carrying what it would take to answer them, which is
 /// a different thing to say and is said separately.
-const UNANSWERED: [(&str, &str); 2] = [
-    (
-        "validateFeatureChainExpressionConformance",
-        "what a chain chains to must be featured within what the expression in front of the dot \
-         comes to, and this model does not work out what an expression comes to",
-    ),
-    (
-        "validateTriggerInvocationExpressionAfterArgument",
-        "what an `after` waits for must come to a scalar quantity measured in a duration unit, \
+const UNANSWERED: [(&str, &str); 1] = [(
+    "validateTriggerInvocationExpressionAfterArgument",
+    "what an `after` waits for must come to a scalar quantity measured in a duration unit, \
          and this model does not work out what an expression comes to",
-    ),
-];
+)];
 
 /// The property a derivation is about, read off its name where the body
 /// does not say: `derive` then the metaclass then the property.

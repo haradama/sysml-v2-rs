@@ -1434,9 +1434,57 @@ impl Workspace {
     /// the function it invokes.
     fn names_what_it_asks_about(&mut self, membership: ElementId, node: &SyntaxNode) {
         let segments = operand_segments(node);
-        if let Some(target) = self.resolve_operand(membership, &segments) {
-            self.try_set(membership, "memberElement", Value::Ref(target));
-        }
+        let Some(target) = self.resolve_operand(membership, &segments) else {
+            return;
+        };
+        self.try_set(membership, "memberElement", Value::Ref(target));
+        self.comes_to_what_it_casts_to(membership, target);
+    }
+
+    /// A cast comes to the type it casts to.
+    ///
+    /// `as` is "select instances of type (cast)" and `meta` the same of
+    /// a metaclass, and `BaseFunctions::'as'` returns `Anything`: the
+    /// type is named beside the operator rather than returned, so what
+    /// the expression comes to is nowhere in the model unless this puts
+    /// it there. `(that as SpatialItem).localClock` reads `localClock`
+    /// from a `SpatialItem` on the strength of it, which is what
+    /// `validateFeatureChainExpressionConformance` asks about.
+    fn comes_to_what_it_casts_to(&mut self, membership: ElementId, cast: ElementId) {
+        let casts = self
+            .model
+            .owner(membership)
+            .filter(|&it| {
+                matches!(
+                    self.model.get(it, "operator").and_then(Value::as_str),
+                    Some("as" | "meta")
+                )
+            })
+            .and_then(|expression| self.hands_back(expression));
+        let Some(result) = casts else {
+            return;
+        };
+        let (kind, from, to) = match self.model.kind(cast).is_a(ElementKind::Classifier) {
+            true => (ElementKind::FeatureTyping, "typedFeature", "type"),
+            false => (
+                ElementKind::Subsetting,
+                "subsettingFeature",
+                "subsettedFeature",
+            ),
+        };
+        self.reified(
+            result,
+            kind,
+            &[
+                (from, Value::Ref(result)),
+                (to, Value::Ref(cast)),
+                ("isImplied", Value::Bool(true)),
+            ],
+        );
+        self.model
+            .set(result, "isImpliedIncluded", Value::Bool(true));
+        // what it specializes was worked out before this was written
+        self.supertypes.remove(&result);
     }
 
     /// The feature a chain expression chains to.
@@ -1493,6 +1541,22 @@ impl Workspace {
                 .filter(|&it| self.model.kind(it).is_a(ElementKind::Feature));
             if let Some(target) = found {
                 self.try_set(membership, "memberElement", Value::Ref(target));
+                // `checkFeatureChainExpressionResultSpecialization` --
+                // what a chain comes to is what it chains to
+                if let Some(result) = self.hands_back(owner) {
+                    self.reified(
+                        result,
+                        ElementKind::Subsetting,
+                        &[
+                            ("subsettingFeature", Value::Ref(result)),
+                            ("subsettedFeature", Value::Ref(target)),
+                            ("isImplied", Value::Bool(true)),
+                        ],
+                    );
+                    self.model
+                        .set(result, "isImpliedIncluded", Value::Bool(true));
+                    self.supertypes.remove(&result);
+                }
                 return;
             }
         }
@@ -1535,6 +1599,8 @@ impl Workspace {
             );
             self.model
                 .set(argument, "isImpliedIncluded", Value::Bool(true));
+            // what it specializes was worked out before this was written
+            self.supertypes.remove(&argument);
         }
     }
 
@@ -1555,6 +1621,30 @@ impl Workspace {
         let mine = self.hands_back(invocation).expect(
             "the builder gives every invocation the parameter it hands its value back through",
         );
+        // `checkInvocationExpressionBehaviorResultSpecialization` --
+        // where what is invoked is no function, what the invocation
+        // comes to is the thing itself: `new A(...)` comes to an `A`,
+        // and a classifier hands nothing back for the result to
+        // redefine.
+        let a_function = self.model.kind(function).is_a(ElementKind::Function)
+            || self
+                .supertypes_of(function)
+                .into_iter()
+                .any(|up| self.model.kind(up).is_a(ElementKind::Function));
+        if !a_function {
+            self.reified(
+                mine,
+                ElementKind::FeatureTyping,
+                &[
+                    ("typedFeature", Value::Ref(mine)),
+                    ("type", Value::Ref(function)),
+                    ("isImplied", Value::Bool(true)),
+                ],
+            );
+            self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
+            self.supertypes.remove(&mine);
+            return;
+        }
         let Some(theirs) = self.handed_back_by(function, &mut Vec::new()) else {
             return;
         };
@@ -1568,6 +1658,8 @@ impl Workspace {
             ],
         );
         self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
+        // what it specializes was worked out before this was written
+        self.supertypes.remove(&mine);
     }
 
     /// The parameter something hands its value back through.
@@ -2742,13 +2834,22 @@ impl Workspace {
             .iter()
             .copied()
             .filter(|&owned| {
-                self.model.kind(owned).is_a(ElementKind::Subsetting)
+                self.model.kind(owned).is_a(ElementKind::Specialization)
                     && self.model.get(owned, "isImplied") == Some(&Value::Bool(true))
             })
             .filter_map(|owned| {
-                self.model
-                    .redefined_feature(owned)
-                    .or_else(|| self.model.subsetted_feature(owned))
+                // a specialization of any kind: a cast is typed by what
+                // it casts to, and a typing is a specialization like a
+                // subsetting is
+                [
+                    "redefinedFeature",
+                    "subsettedFeature",
+                    "type",
+                    "superclassifier",
+                    "general",
+                ]
+                .iter()
+                .find_map(|named| self.model.get(owned, named).and_then(Value::as_id))
             })
             .collect();
         for target in implied {

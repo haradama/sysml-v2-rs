@@ -467,3 +467,65 @@ fn an_accept_that_waits_invokes_the_trigger_its_keyword_names() {
         1
     );
 }
+
+/// What an expression comes to, where the notation says it without
+/// returning it: `x as T` selects the instances of `T`, `new A(...)`
+/// constructs an `A`, and `e.f` chains to `f`.
+#[test]
+fn an_expression_comes_to_what_it_names() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = Workspace::new();
+    ws.add_file(
+        "functions.kerml",
+        "standard library package Base {\n\tclassifier Anything;\n}\n\
+         standard library package BaseFunctions {\n\
+         \tprivate import Base::Anything;\n\
+         \tfunction 'as' { in seq : Anything; return : Anything; }\n}\n",
+    );
+    ws.add_file(
+        "m.sysml",
+        "package P {\n\
+         \tpart def A { part f; }\n\
+         \tpart a;\n\
+         \tattribute cast = a as A;\n\
+         \tattribute made = new A();\n}\n",
+    );
+    ws.resolve_all();
+    let named = |ws: &Workspace, want: &str| {
+        ws.model()
+            .ids()
+            .find(|&id| ws.qualified_name_of(id) == want)
+            .unwrap_or_else(|| panic!("`{want}` is declared"))
+    };
+    let comes_to = |ws: &mut Workspace, of: &str| {
+        let usage = named(ws, of);
+        let expression = ws
+            .model()
+            .owned(usage)
+            .iter()
+            .copied()
+            .find(|&it| ws.model().kind(it) == ElementKind::FeatureValue)
+            .and_then(|it| ws.model().get(it, "value")?.as_id())
+            .expect("a declared value");
+        let result = ws
+            .model()
+            .owned(expression)
+            .iter()
+            .copied()
+            .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+            .expect("the expression hands its value back");
+        ws.supertypes(result)
+            .into_iter()
+            .map(|up| ws.qualified_name_of(up))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        comes_to(&mut ws, "P::cast").contains(&"P::A".to_string()),
+        "a cast comes to the type it casts to"
+    );
+    assert!(
+        comes_to(&mut ws, "P::made").contains(&"P::A".to_string()),
+        "a construction comes to what it constructs"
+    );
+}
