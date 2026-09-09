@@ -3261,6 +3261,20 @@ impl Workspace {
             if kind.is_a(ElementKind::Relationship) || !kind.is_a(ElementKind::Type) {
                 return 0;
             }
+            // "The specific Type of a Specialization cannot be a
+            // conjugated Type" -- `validateSpecificationSpecificNot
+            // Conjugated`. `class B conjugates A;` takes what it has
+            // from the conjugation and specializes nothing, so writing
+            // it a base of its own reports the model that wrote it:
+            // `Conjugation.kerml` is one of the corpus's.
+            if self
+                .model
+                .owned(elem)
+                .iter()
+                .any(|&child| self.model.kind(child).is_a(ElementKind::Conjugation))
+            {
+                return 0;
+            }
             let mut bases = Vec::new();
             for path in self.implied_bases_of(elem) {
                 let segments: Vec<String> = std::iter::once(String::new())
