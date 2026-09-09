@@ -1979,8 +1979,16 @@ mod tests {
         assert_eq!(membership_of("driver"), "ActorMembership");
         assert_eq!(membership_of("owner1"), "StakeholderMembership");
         assert_eq!(membership_of("obj1"), "ObjectiveMembership");
-        assert_eq!(membership_of("x"), "ParameterMembership");
-        assert_eq!(membership_of("y"), "ParameterMembership");
+        // a declared parameter is written as a `TypeBodyElement` --
+        // `FunctionBodyPart : Type = ( TypeBodyElement |
+        // ReturnFeatureMember )*` -- so its membership is an ordinary
+        // feature membership. Only what an invocation hands over is a
+        // `ParameterMembership`, whose parameter
+        // `parameterDirection()` requires to be `in`; read the other way
+        // round, `out y` would be a parameter whose direction is not
+        // what its own membership requires.
+        assert_eq!(membership_of("x"), "FeatureMembership");
+        assert_eq!(membership_of("y"), "FeatureMembership");
         assert_eq!(membership_of("z"), "ReturnParameterMembership");
         assert_eq!(membership_of("optA"), "VariantMembership");
         assert_eq!(membership_of("a"), "EndFeatureMembership");

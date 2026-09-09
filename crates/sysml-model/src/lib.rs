@@ -195,14 +195,19 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     if transition_role(model, owned).is_some() {
         return ElementKind::TransitionFeatureMembership;
     }
-    let behavioral = [
-        ElementKind::Behavior,
-        ElementKind::Step,
-        ElementKind::Function,
-        ElementKind::Expression,
-    ];
+    // What an expression hands over. `ArgumentMember : ParameterMembership
+    // = ownedMemberParameter = Argument` and its kin are the only
+    // productions that write one, and none of them writes a name --
+    // `Argument : Feature = ownedRelationship += ArgumentValue`. A
+    // `function f { in x; inout y; out z; }` writes its parameters as
+    // `TypeBodyElement`s, which are ordinary feature memberships, and
+    // `parameterDirection()` says a parameter membership's parameter is
+    // always `in`: read the other way round, every `out` parameter in
+    // the corpus would be one whose direction is not what its own
+    // membership requires.
     if model.get(owned, "direction").is_some()
-        && behavioral.iter().any(|&kind| owner_kind.is_a(kind))
+        && owner_kind.is_a(ElementKind::Expression)
+        && model.name(owned).is_none()
     {
         return ElementKind::ParameterMembership;
     }

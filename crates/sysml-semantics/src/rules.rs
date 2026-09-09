@@ -1960,22 +1960,37 @@ impl Scope<'_> {
             // specification says it answers.
             _ => self
                 .invoke(target, name, args)
-                .unwrap_or_else(|| Val::Unknown(format!("`{name}()` is not implemented"))),
+                .unwrap_or_else(|| match self.kind_of(target) {
+                    // an operation the metamodel states of no metaclass
+                    // this target is
+                    Some(_) => Val::Unknown(format!("`{name}()` is not implemented")),
+                    // and one asked of a property this model leaves
+                    // empty, which is a different thing to say
+                    None => unknown_from(
+                        target,
+                        &format!("`{name}()` of something that is not an element"),
+                    ),
+                }),
         }
     }
 
     /// One of the abstract syntax's own operations, worked out the way
     /// the specification defines it.
     fn invoke(&mut self, target: &Val, name: &str, args: &[Expr]) -> Option<Val> {
-        let Val::Elem(elem) = target else {
-            // every operation the specification defines is of a
-            // metaclass, so one of a number or a string is none of them
-            return None;
-        };
-        let kind = self.ws.model().kind(*elem);
+        // Every operation the specification defines is of a metaclass,
+        // so one of a number or a string is none of them -- and one of a
+        // membership is of the metaclass this model keeps as the
+        // containment standing for it, which is what
+        // `ParameterMembership::parameterDirection()` is asked of.
+        let kind = self.kind_of(target)?;
+        // The most specific metaclass answers:
+        // `ReturnParameterMembership::parameterDirection()` returns
+        // `out` and redefines the `in` a `ParameterMembership` returns,
+        // and it is one -- so the general one would answer for both.
         let defined = operations()
             .iter()
-            .find(|it| it.called == name && it.parameters.len() == args.len() && kind.is_a(it.of))
+            .filter(|it| it.called == name && it.parameters.len() == args.len() && kind.is_a(it.of))
+            .max_by_key(|it| it.of.ancestors().len())
             .filter(|_| self.depth < DEPTH)?;
         let bound: HashMap<String, Val> = defined
             .parameters
@@ -1986,7 +2001,7 @@ impl Scope<'_> {
         let mut scope = Scope {
             ws: self.ws,
             bound,
-            self_: Val::Elem(*elem),
+            self_: target.clone(),
             implicit: None,
             depth: self.depth + 1,
             present: self.present,
