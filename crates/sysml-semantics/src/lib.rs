@@ -4791,6 +4791,12 @@ fn triggered_function(kind: &str) -> Option<&'static str> {
 /// type extent, and `~` and `[` are undefined -- "no default definition
 /// is provided in the Kernel Functions Library".
 ///
+/// The pilot implementation agrees symbol for symbol without stating
+/// the column at all: it asks whether a function's qualified name is in
+/// the registry of the ones it knows how to evaluate, and that registry
+/// holds exactly the thirty-six the tables mark "Yes" and none of the
+/// three they mark "No".
+///
 /// The library writes the names in quotes, and the model holds what they
 /// answer to. `^` and `**` are the one function, written two ways.
 const OPERATORS: [(&str, &str, bool); 39] = [

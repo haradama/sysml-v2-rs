@@ -305,16 +305,19 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// the element the constraint is being asked of. So
 /// `ownedSpecialization.specific->exists(isVariation)` asks whether a
 /// variation is a variation, which it is, and the rule reports every
-/// well-formed variation in the corpus. What it says in words -- "a
-/// variation may not specialize any variation" -- is about `general`.
+/// well-formed variation in the corpus: 17 usages and 16 definitions.
+/// What it says in words -- "a variation may not specialize any
+/// variation" -- is about `general`, and read that way all 33 hold.
+/// The pilot implementation does not run either of them.
 ///
 /// `validateMergeNodeIncomingSuccessions` and
 /// `validateDecisionNodeOutgoingSuccessions` hand a connector *end* to
 /// `multiplicityHasBounds`, whose parameter is a `Multiplicity`, and
-/// bind it as `sourceMult` and `targetMult`. Read as written neither
-/// can be answered of anything: an operation asked of the wrong kind of
-/// thing says nothing, so no merge or decision node in the corpus is
-/// answered either way. Their two siblings
+/// bind it as `sourceMult` and `targetMult`. A connector end is not a
+/// `MultiplicityRange`, so both fall to that operation's `else` branch,
+/// which reads `allSuperTypes()` -- an operation this model does not
+/// implement -- and neither is answered of anything. Their two
+/// siblings
 /// in the same file -- `validateControlNodeIncomingSuccessions` and
 /// `validateControlNodeOutgoingSuccessions` -- are written the same way
 /// down to the line breaks and say `connectorEnd->at(2).multiplicity`,
@@ -327,8 +330,12 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// true then m;` with `m` a merge node. That one succession must have
 /// its target end 0..1 (out of a decision) and 1..1 (into a control
 /// node), and its source end 0..1 (into a merge) and 1..1 (out of a
-/// control node). The corpus is what says which pair to keep: the
-/// ControlNode two hold of every succession in it.
+/// control node). The corpus is what says which pair to keep. Read with
+/// the `.multiplicity` its siblings write, the mended pair is false of
+/// all six decision nodes and all eight merge nodes there are, and the
+/// ControlNode two hold of every one of the fourteen. The pilot
+/// implementation runs none of the four, and records an issue of its
+/// own against the decision node's other constraint -- SYSML21-306.
 ///
 /// `validateSubsettingFeaturingTypes` is `subsettingFeature.canAccess(
 /// subsettedFeature)`, and `canAccess` holds the subsetted feature to
@@ -336,12 +343,14 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// reaches -- walking *up* from it, never down. Read as the metamodel
 /// states it, 8631 subsettings of the corpus are rejected.
 ///
-/// The pilot implementation does run this constraint, and answers one
-/// step of it more widely than the metamodel states: `TypeUtil.
+/// The pilot implementation does run this constraint, and does two
+/// things the metamodel does not state. It only asks at all where the
+/// subsetted feature has a featuring type -- which exempts 954 of the
+/// 8631 outright -- and it answers one step more widely: `TypeUtil.
 /// isCompatible` also holds two features compatible where neither owns
 /// features of its own, they redefine something in common, and the one
-/// is featured where the other is. That wider step is not what the
-/// corpus turns on. What it turns on is the direction: `accept a : A`
+/// is featured where the other is. Neither is what the remaining 7677
+/// turn on. What they turn on is the direction: `accept a : A`
 /// gives a transition
 /// an `accepted` featured by the transition and a payload featured by
 /// the trigger the transition owns, and no walk upwards from the one
@@ -354,10 +363,18 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `FeatureChains.kerml`, where `redefinition b.f redefines b.a;`
 /// redefines one feature of `B` by another: both are featured by `B`
 /// alone, so the sets are equal and there is no featuring type the one
-/// has and the other has not. The pilot implementation reads it the
-/// same way -- `checkRedefinition` errors where the two sets are equal
-/// -- and the one guard it adds beside that, for a redefinition owning
-/// the feature it redefines, is not this.
+/// has and the other has not. The pilot implementation reads the OCL
+/// the same way -- `checkRedefinition` errors where the two sets are
+/// equal -- and is saved from reporting this one by a guard the
+/// metamodel does not state: it skips a redefinition that owns the
+/// feature it redefines. That guard is exactly this case, because in
+/// the abstract syntax the OMG publishes a dotted operand is an
+/// anonymous `Feature` owned by the relationship, carrying the steps as
+/// `FeatureChaining` -- `Occurrences.kermlx` shows it for `subset
+/// laterOccurrence.successors subsets earlierOccurrence.successors;`.
+/// This model resolves such an operand to the feature the chain ends
+/// at, so the guard has nothing to fire on here; either way the OCL as
+/// written reports a sound model.
 ///
 /// Running one of these would report a violation of a model that is
 /// sound, so what they are is said instead. The two the OCL subset
@@ -444,10 +461,12 @@ const MISWRITTEN: [(&str, &str); 8] = [
 /// specializing the abstract one -- but nothing selects it: the table
 /// names the base function alone, and the pilot implementation looks
 /// for an operator's function in `BaseFunctions`, `DataFunctions` and
-/// `ControlFunctions` and nowhere else. Answering this would take
-/// working out the quantity from the unit, which no part of the
-/// specification states, and the pilot does not check the constraint at
-/// all.
+/// `ControlFunctions` and nowhere else. All three `after` arguments in
+/// the corpus come out the same way: an `OperatorExpression` with
+/// operator `[`, typed by `BaseFunctions::[`, whose result is typed by
+/// `Base::Anything`. Answering this would take working out the quantity
+/// from the unit, which no part of the specification states, and the
+/// pilot does not check the constraint at all.
 ///
 /// This is not the specification getting something wrong. It is this
 /// model not carrying what it would take to answer it, which is a
