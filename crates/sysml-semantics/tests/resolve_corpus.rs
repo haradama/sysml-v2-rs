@@ -336,3 +336,64 @@ fn every_end_of_a_connection_participates_in_the_link_it_makes() {
         );
     }
 }
+
+/// A metadata annotation is a feature in KerML and a usage in SysML,
+/// and each takes the base its own language names.
+///
+/// The library says which: "MetadataItem is the base type of all
+/// MetadataDefinitions", and "metadataItems is the base feature of all
+/// MetadataUsages". Given the type where the feature belongs, a usage
+/// carried a second metaclass among its types beside the one it names
+/// -- a `MetadataDefinition` is a `Metaclass` -- and given the SysML
+/// metaclass in a KerML file, `#atom classifier MyBike;` took the SysML
+/// base as well.
+///
+/// Neither shows while the implied relationships are only computed.
+/// Written down, as `export` writes them, `validateMetadataFeature
+/// Metaclass` reported seventy-two models of the corpus, which are
+/// sound.
+#[test]
+fn a_metadata_annotation_takes_the_base_its_own_language_names() {
+    let Some(root) = vendor() else { return };
+    let mut ws = Workspace::new();
+    ws.load_dir(&root.join("sysml.library")).unwrap();
+    let sysml = ws.add_file(
+        "m.sysml",
+        "package P {\n\tmetadata def C;\n\t#C part def Q;\n}\n",
+    );
+    let kerml = ws.add_file(
+        "m.kerml",
+        "package K {\n\tmetaclass A;\n\t#A classifier B;\n}\n",
+    );
+    ws.resolve_all();
+
+    let one = |ws: &Workspace, file: usize, want: sysml_model::ElementKind| {
+        ws.model()
+            .ids()
+            .filter(|&id| ws.element_file(id) == Some(file))
+            .find(|&id| ws.model().kind(id) == want)
+            .unwrap_or_else(|| panic!("{want:?} is built"))
+    };
+    // the SysML one is a usage, and subsets the base feature
+    let usage = one(&ws, sysml, sysml_model::ElementKind::MetadataUsage);
+    let ups: Vec<String> = ws
+        .supertypes(usage)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert!(
+        ups.contains(&"Metadata::metadataItems".to_string()),
+        "a usage subsets the base feature: {ups:?}"
+    );
+    // and the KerML one is a feature, which takes no SysML base at all
+    let feature = one(&ws, kerml, sysml_model::ElementKind::MetadataFeature);
+    let ups: Vec<String> = ws
+        .supertypes(feature)
+        .iter()
+        .map(|&up| ws.qualified_name_of(up))
+        .collect();
+    assert!(
+        !ups.iter().any(|it| it.starts_with("Metadata::")),
+        "a KerML metadata feature is not a SysML usage: {ups:?}"
+    );
+}

@@ -99,12 +99,22 @@ fn build_node(
         DOCUMENTATION => Some(ElementKind::Documentation),
         COMMENT_ELEM => Some(ElementKind::Comment),
         REP => Some(ElementKind::TextualRepresentation),
-        METADATA_ANNOTATION => Some(ElementKind::MetadataUsage),
         // `#Safety part def Boiler;` -- `PrefixMetadataUsage :
         // MetadataUsage = ownedRelationship += OwnedFeatureTyping`, so
         // the prefix is a usage of its own and not a spelling of the
-        // element it stands before
-        PREFIX_METADATA => Some(ElementKind::MetadataUsage),
+        // element it stands before.
+        //
+        // KerML writes the same thing and calls it a `MetadataFeature`,
+        // which is what `MetadataUsage` specializes. Read as the usage,
+        // `#atom classifier MyBike;` of `A-2-ModelingInstances.kerml`
+        // was given the base the library states for a usage --
+        // "metadataItems is the base feature of all MetadataUsages" --
+        // and so had a second metaclass among its types beside the one
+        // it names, since a `MetadataDefinition` is a `Metaclass`.
+        METADATA_ANNOTATION | PREFIX_METADATA => Some(match built.dialect {
+            sysml_syntax::Dialect::KerML => ElementKind::MetadataFeature,
+            sysml_syntax::Dialect::SysML => ElementKind::MetadataUsage,
+        }),
         // `mass * speed` ending a calculation body -- the result
         // expression, kept as the text the author wrote the way a guard
         // is. `if c { ... }` structured control is not a result.

@@ -4736,7 +4736,17 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         // so a viewpoint was specializing nothing at all.
         ViewpointDefinition | ViewpointUsage => &["Views::ViewpointCheck"],
         RenderingDefinition | RenderingUsage => &["Views::Rendering"],
-        MetadataDefinition | MetadataUsage => &["Metadata::MetadataItem"],
+        // The library says which is which in as many words:
+        // "MetadataItem is the base type of all MetadataDefinitions",
+        // and "metadataItems is the base feature of all
+        // MetadataUsages". Given the type, a usage was typed by a
+        // second metaclass beside the one it names -- a
+        // `MetadataDefinition` is a `Metaclass` -- and
+        // `validateMetadataFeatureMetaclass`, which asks for exactly
+        // one, reported seventy-two sound models of the corpus once the
+        // implied relationships were written down.
+        MetadataDefinition => &["Metadata::MetadataItem"],
+        MetadataUsage => &["Metadata::metadataItems"],
         OccurrenceDefinition | OccurrenceUsage | EventOccurrenceUsage => {
             &["Occurrences::Occurrence"]
         }
