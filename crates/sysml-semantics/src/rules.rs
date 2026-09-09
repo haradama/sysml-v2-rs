@@ -116,17 +116,16 @@ const TYPED_BY: [&str; 5] = [
 /// `referenced` counterparts -- `referencedConcern`,
 /// `verifiedRequirement` -- name something the membership does not own,
 /// and are left alone.
-/// `ParameterMembership::ownedMemberParameter` is left out. Answered,
-/// it reaches four constraints -- three about what an expression comes
-/// to, the result of a feature reference and the type of a multiplicity
-/// bound among them -- and this model keeps an expression as the text
-/// it was written as rather than as the parameters the specification
-/// counts. Read as the member, `result` is a definite nothing rather
-/// than an unanswered question, and 2847 of a sound corpus are reported
-/// as violations: 1704 of `validateFeatureReferenceExpressionResult`,
-/// 1125 of `validateMultiplicityRangeBoundResultTypes` and 18 of
-/// `validateElementFilterMembershipConditionIsBoolean`. The fourth,
-/// `validateParameterMembershipParameterDirection`, holds.
+/// `ParameterMembership::ownedMemberParameter` is among them, and was
+/// not always. While an expression was kept as the text it was written
+/// as rather than as the parameters the specification counts, reading
+/// it as the member made `result` a definite nothing rather than an
+/// unanswered question, and 2847 of a sound corpus were reported as
+/// violations. An expression is now built as the tree of parameters and
+/// results the abstract syntax states, and of the four constraints this
+/// name reaches, `validateFeatureReferenceExpressionResult` and
+/// `validateParameterMembershipParameterDirection` hold of the whole
+/// corpus. The other two are refused for reasons of their own.
 const OWNED_MEMBER: [&str; 14] = [
     "action",
     "condition",
@@ -312,8 +311,10 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `validateMergeNodeIncomingSuccessions` and
 /// `validateDecisionNodeOutgoingSuccessions` hand a connector *end* to
 /// `multiplicityHasBounds`, whose parameter is a `Multiplicity`, and
-/// bind it as `sourceMult` and `targetMult`. Read as written both are
-/// false of every merge and decision node there is. Their two siblings
+/// bind it as `sourceMult` and `targetMult`. Read as written neither
+/// can be answered of anything: an operation asked of the wrong kind of
+/// thing says nothing, so no merge or decision node in the corpus is
+/// answered either way. Their two siblings
 /// in the same file -- `validateControlNodeIncomingSuccessions` and
 /// `validateControlNodeOutgoingSuccessions` -- are written the same way
 /// down to the line breaks and say `connectorEnd->at(2).multiplicity`,
@@ -333,15 +334,15 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// subsettedFeature)`, and `canAccess` holds the subsetted feature to
 /// being featured within one of the featuring types the subsetting one
 /// reaches -- walking *up* from it, never down. Read as the metamodel
-/// states it, 1234 subsettings of the corpus are rejected.
+/// states it, 8631 subsettings of the corpus are rejected.
 ///
 /// The pilot implementation does run this constraint, and answers one
 /// step of it more widely than the metamodel states: `TypeUtil.
 /// isCompatible` also holds two features compatible where neither owns
 /// features of its own, they redefine something in common, and the one
-/// is featured where the other is. Answered that way here, 1231 are
-/// still rejected -- so the wider step is not what the corpus turns on.
-/// What it turns on is the direction: `accept a : A` gives a transition
+/// is featured where the other is. That wider step is not what the
+/// corpus turns on. What it turns on is the direction: `accept a : A`
+/// gives a transition
 /// an `accepted` featured by the transition and a payload featured by
 /// the trigger the transition owns, and no walk upwards from the one
 /// reaches the other.
@@ -364,7 +365,10 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `validateMultiplicityRangeBoundResultTypes` holds every bound to
 /// coming to a `ScalarValues::Integer`, and `[nCauses]` counts with an
 /// attribute the notation gives no type -- `attribute nCauses =
-/// size(causes);`. The pilot implementation does not run the OCL at
+/// size(causes);`. Nineteen bounds of the corpus are written that way,
+/// the standard library's own `[` among them: `in elements:
+/// Number[1..n]` beside `private attribute n = mRef.flattenedSize;`.
+/// The pilot implementation does not run the OCL at
 /// all: `checkMultiplicityRange` carries "TODO: Correct
 /// validateMultiplicityBoundResults OCL from KERML-199" and asks
 /// instead whether the bound evaluates to an integer.
@@ -372,7 +376,9 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `validateElementFilterMembershipConditionIsBoolean` holds a filter's
 /// condition to coming to a boolean, and the specification's own
 /// operator table maps `|` to `DataFunctions::'|'`, which returns a
-/// `DataValue`. The pilot implementation says so in as many words --
+/// `DataValue`. The corpus writes exactly one such filter, `filter
+/// @Safety | @Security;`, and reports it. The pilot implementation says
+/// so in as many words --
 /// "Non-conditional 'Boolean' operations in DataFunctions actually have
 /// result DataValue. This infers that they are actually BooleanFunctions
 /// if their arguments are Boolean" -- and infers what the specification
@@ -431,12 +437,17 @@ const MISWRITTEN: [(&str, &str); 8] = [
 ///
 /// `validateTriggerInvocationExpressionAfterArgument` holds `after
 /// 10[SI::s]` to coming to a scalar quantity measured in a duration
-/// unit. The specification gives no route to that answer:
-/// `BaseFunctions::'['` is abstract, its `return` is typed by
-/// `Anything`, and nothing in the standard library redefines it -- so
-/// what a quantity written that way comes to has to be inferred from
-/// the unit rather than read off the library. The pilot implementation
-/// does not check this one at all.
+/// unit. The specification's own operator table sends `[` to
+/// `BaseFunctions::'['`, which is abstract and whose `return` is typed
+/// by `Anything`. The library does declare a `[` that returns a
+/// `Quantities::ScalarQuantityValue` -- `QuantityCalculations::'['`,
+/// specializing the abstract one -- but nothing selects it: the table
+/// names the base function alone, and the pilot implementation looks
+/// for an operator's function in `BaseFunctions`, `DataFunctions` and
+/// `ControlFunctions` and nowhere else. Answering this would take
+/// working out the quantity from the unit, which no part of the
+/// specification states, and the pilot does not check the constraint at
+/// all.
 ///
 /// This is not the specification getting something wrong. It is this
 /// model not carrying what it would take to answer it, which is a
