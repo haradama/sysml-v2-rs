@@ -196,7 +196,13 @@ const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 /// misspells its other half. `InstantiationExpression::instantiatedType`
 /// is a third of the same shape: it binds `members` and reads
 /// `typeMembers` two lines later, and nothing binds that.
-const MISSPELLED: [(&str, &str); 7] = [
+///
+/// `Feature::isCompatibleWith(otherType)` reads `supertype`, which
+/// nothing binds either -- the parameter is `otherType`, and the guard
+/// it stands in is what keeps the rest of the body from being asked of
+/// something that is not a feature. The pilot implementation writes the
+/// same guard as `supertype instanceof Feature`, of the other type.
+const MISSPELLED: [(&str, &str); 8] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
     ("oclisKindOf", "oclIsKindOf"),
@@ -204,6 +210,7 @@ const MISSPELLED: [(&str, &str); 7] = [
     ("metaClassTypes", "metaclassTypes"),
     ("redefinedFeaturingType", "redefinedFeaturingTypes"),
     ("typeMembers", "members"),
+    ("supertype", "otherType"),
 ];
 
 /// Where the specification's own OCL does not close what it opens, and
@@ -419,6 +426,35 @@ const MISWRITTEN: [(&str, &str); 8] = [
     ),
 ];
 
+/// Constraints this model cannot answer, because answering them means
+/// working out what an expression comes to.
+///
+/// `validateFeatureChainExpressionConformance` holds `(that as
+/// SpatialItem).localClock` to `localClock` being featured within what
+/// `that as SpatialItem` comes to. Nothing in the specification says
+/// that a cast comes to the type it casts to: `BaseFunctions::as`
+/// returns whatever its own `return` is typed by, and the pilot
+/// implementation works the answer out rather than reading it.
+/// `validateTriggerInvocationExpressionAfterArgument` holds `after
+/// 10[SI::s]` to coming to a scalar quantity measured in a duration
+/// unit, which is the same question asked of a different expression.
+///
+/// These are not the specification getting something wrong. They are
+/// this model not carrying what it would take to answer them, which is
+/// a different thing to say and is said separately.
+const UNANSWERED: [(&str, &str); 2] = [
+    (
+        "validateFeatureChainExpressionConformance",
+        "what a chain chains to must be featured within what the expression in front of the dot \
+         comes to, and this model does not work out what an expression comes to",
+    ),
+    (
+        "validateTriggerInvocationExpressionAfterArgument",
+        "what an `after` waits for must come to a scalar quantity measured in a duration unit, \
+         and this model does not work out what an expression comes to",
+    ),
+];
+
 /// The property a derivation is about, read off its name where the body
 /// does not say: `derive` then the metaclass then the property.
 fn named_after(rule: &sysml_model::Rule) -> String {
@@ -495,7 +531,10 @@ impl Workspace {
     pub fn check_rules(&mut self, files: &[usize]) -> Checked {
         let mut parsed: Vec<(&sysml_model::Rule, Option<Expr>, Option<String>)> = Vec::new();
         for rule in sysml_model::RULES {
-            let defect = MISWRITTEN.iter().find(|(name, _)| *name == rule.name);
+            let defect = MISWRITTEN
+                .iter()
+                .chain(UNANSWERED.iter())
+                .find(|(name, _)| *name == rule.name);
             // Every constraint the specification states can be read
             // once `closed` has repaired the one it writes with a word
             // that is no operator, and
@@ -1789,6 +1828,10 @@ impl Scope<'_> {
                         return unknown;
                     }
                     match (name, &value) {
+                        // "the result is flattened": a `collect` whose
+                        // body comes to many things adds each of them,
+                        // not the collection they arrived in
+                        ("collect", Val::Set(more)) => kept.extend(more.clone()),
                         ("collect", _) => kept.push(value),
                         ("forAll", Val::Bool(false)) => return Val::Bool(false),
                         ("exists", Val::Bool(true)) => return Val::Bool(true),

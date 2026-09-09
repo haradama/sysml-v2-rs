@@ -1244,7 +1244,32 @@ fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built
     let names_it = model.create(ElementKind::Membership);
     model.add_owned(trigger, names_it);
     model.set(trigger, "kind", Value::EnumLit(kind));
-    hands_over(model, trigger, None, &written, Some("in"), built);
+    let argument = model.create(ElementKind::Feature);
+    model.add_owned(trigger, argument);
+    model.set(argument, "direction", Value::EnumLit("in"));
+    let value = model.create(ElementKind::FeatureValue);
+    model.add_owned(argument, value);
+    model.set(value, "featureWithValue", Value::Ref(argument));
+    // `kind = 'when' ownedRelationship += ArgumentExpressionMember`, and
+    // `ArgumentExpressionValue : FeatureValue = ownedRelatedElement +=
+    // OwnedExpressionReference` -- a change trigger waits on what an
+    // expression *is*, so what it is handed is a reference to one and
+    // not the expression itself, which is what
+    // `validateTriggerInvocationExpressionWhenArgument` reads. The
+    // expression it refers to is owned through a feature membership,
+    // and that is the first membership that is not a parameter's --
+    // where `deriveFeatureReferenceExpressionReferent` reads it off.
+    let held = match kind {
+        "when" => {
+            let reference = model.create(ElementKind::FeatureReferenceExpression);
+            model.add_owned(value, reference);
+            value_expression(model, reference, &written, built);
+            results_in(model, reference);
+            reference
+        }
+        _ => value_expression(model, value, &written, built),
+    };
+    model.set(value, "value", Value::Ref(held));
     results_in(model, trigger);
     model.set(membership, "value", Value::Ref(trigger));
 }
