@@ -167,10 +167,14 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
 /// structure and the KerML relationship words -- 4257 models, and
 /// thirty-nine constraints. A third broke one place at a time rather
 /// than every place at once, and took whole lines out and put them in
-/// twice: 12040 models, and fourteen more. Neither of the last two
-/// found a panic.
+/// twice: 12040 models, and fourteen more. A fourth put neighbouring
+/// lines in the other order and broke two places at once, and found
+/// nothing at all -- 3914 models, no constraint that was not already
+/// noticed. Only the first sweep found a panic.
 ///
-/// Fifty-eight of the hundred and seventy answered constraints are
+/// What the fourth sweep did find was elsewhere: breaking the standard
+/// library rather than a model reaches four more, and those are next
+/// door. Sixty-two of the hundred and seventy answered constraints are
 /// demonstrated to fire, counting the five that only a hand-written
 /// model reaches.
 ///
@@ -527,6 +531,87 @@ fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
 
         let fired: BTreeSet<&str> = ws
             .check_rules(&[file])
+            .violations
+            .iter()
+            .map(|violation| violation.rule)
+            .collect();
+        for rule in *expected {
+            assert!(fired.contains(rule), "{name}: {fired:?}");
+        }
+    }
+}
+
+/// And the same of the standard library, which is the only way to reach
+/// some of them.
+///
+/// `validatePartUsagePartDefinition` asks that at least one of a part's
+/// definitions be a `PartDefinition`, and no model of its own can fail
+/// it: `deriveFeatureType` says the types of a feature are those of its
+/// typings *and of its subsettings*, so the implicit `Parts::parts`
+/// always brings `Parts::Part` in. Make `Parts::Part` an item
+/// definition instead and the constraint fires at once -- which is what
+/// it is for.
+///
+/// A break here means loading the library again with one of its files
+/// changed, so these cost about a second each rather than a hundredth
+/// of one. There are four.
+const LIBRARY_BROKEN: &[(&str, Break, &[&str])] = &[
+    (
+        "Parts.sysml",
+        Swap("part def ", "item def "),
+        &["validatePartUsagePartDefinition"],
+    ),
+    (
+        "Occurrences.kerml",
+        Repeat(941),
+        &["validateFeatureCrossFeatureType"],
+    ),
+    (
+        "CollectionFunctions.kerml",
+        Repeat(66),
+        &["validateMultiplicityRangeBounds"],
+    ),
+    (
+        "FeatureReferencingPerformances.kerml",
+        Swap("nonunique ", ""),
+        &["validateSubsettingUniquenessConformance"],
+    ),
+];
+
+#[test]
+fn a_library_broken_on_purpose_is_reported_as_broken() {
+    let Some(library) = library() else { return };
+    let files = sysml_semantics::model_files(&library);
+
+    for (name, broken, expected) in LIBRARY_BROKEN {
+        let target = files
+            .iter()
+            .find(|it| it.file_name().is_some_and(|it| it == *name))
+            .unwrap_or_else(|| panic!("{name} is in the library"));
+        let mutated = broken
+            .made_of(&std::fs::read_to_string(target).expect("the library reads"))
+            .unwrap_or_else(|| panic!("{name} no longer has what this breaks"));
+
+        // the whole library, with that one file saying something else
+        let mut ws = Workspace::new();
+        let mut which = 0;
+        for path in &files {
+            let text = match path == target {
+                true => mutated.clone(),
+                false => std::fs::read_to_string(path).expect("the library reads"),
+            };
+            let file = ws.add_file(path.to_string_lossy(), &text);
+            if path == target {
+                which = file;
+            }
+        }
+        ws.resolve_all();
+        let found = ws.findings(&[which]);
+        assert!(found.syntax.is_empty(), "{name}: does not parse");
+        assert!(found.names.is_empty(), "{name}: does not resolve {found:?}");
+
+        let fired: BTreeSet<&str> = ws
+            .check_rules(&[which])
             .violations
             .iter()
             .map(|violation| violation.rule)
