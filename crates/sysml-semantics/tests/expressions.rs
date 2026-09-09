@@ -529,3 +529,35 @@ fn an_expression_comes_to_what_it_names() {
         "a construction comes to what it constructs"
     );
 }
+
+/// `MetadataAccessExpression = ElementReferenceMember '.' 'metadata'`
+/// reads the metadata of what it names. `metadata` is a keyword rather
+/// than a name, so `Foo.metadata` was a parse error and the construct
+/// had nothing standing for it.
+#[test]
+fn a_metadata_access_names_the_element_it_reads() {
+    use sysml_model::{ElementKind, Value};
+
+    let mut ws = Workspace::new();
+    let source = "package P {\n\tmetadata def Foo;\n\tattribute m = Foo.metadata;\n}\n";
+    assert!(
+        sysml_syntax::parse(source).ok(),
+        "`Foo.metadata` is SysML the parser reads"
+    );
+    ws.add_file("m.sysml", source);
+    ws.resolve_all();
+    let model = ws.model();
+    let access = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::MetadataAccessExpression)
+        .expect("the access is built");
+    // the one membership it owns names what it reads, which is what
+    // `validateMetadataAccessExpressionReferencedElement` asks for
+    let names_it = model.owned(access)[0];
+    assert_eq!(model.kind(names_it), ElementKind::Membership);
+    let read = model
+        .get(names_it, "memberElement")
+        .and_then(Value::as_id)
+        .expect("what it reads is named");
+    assert_eq!(ws.qualified_name_of(read), "P::Foo");
+}

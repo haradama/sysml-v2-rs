@@ -392,9 +392,9 @@ const MISWRITTEN: [(&str, &str); 8] = [
     ),
     (
         "validateSubsettingFeaturingTypes",
-        "`canAccess` walks up from the subsetting feature and the corpus features what it \
-         subsets further down, so 1234 subsettings are rejected -- and 1231 still are with \
-         the wider compatibility the pilot implementation answers with",
+        "`canAccess` holds a subsetted feature to being featured within what the subsetting one \
+         reaches, and the corpus features what it subsets further down; eight thousand \
+         subsettings are rejected, the library's own association ends among them",
     ),
     (
         "validateRedefinitionFeaturingTypes",
@@ -1094,6 +1094,22 @@ impl Scope<'_> {
     /// One property of one element, or [`Val::Unknown`] where this model
     /// does not carry it.
     fn property(&mut self, elem: ElementId, name: &str) -> Val {
+        // `Expression::function` is "the Function that types this
+        // Expression", and it redefines `Step::behavior`, which
+        // redefines `Feature::type`. An operator expression is typed by
+        // no membership -- its instantiated type is worked out from the
+        // symbol -- so reading it as a type finds nothing. It is the
+        // same question `instantiatedType()` answers, kept where the
+        // answer is a function.
+        if name == "function" && self.ws.model().kind(elem).is_a(ElementKind::Expression) {
+            let invoked = self.operation(&Val::Elem(elem), "instantiatedType", &[]);
+            return match invoked {
+                Val::Elem(it) if self.ws.model().kind(it).is_a(ElementKind::Function) => {
+                    Val::Elem(it)
+                }
+                _ => Val::Null,
+            };
+        }
         let model = self.ws.model();
         let name = written_as_meant(model.kind(elem), name);
         // What the metamodel calls an owned X is an owned element that
@@ -2569,6 +2585,23 @@ mod tests {
         // and a package owns nothing as a feature of itself
         let (mut ws, v) = about_kerml(source, "v");
         assert_eq!(ws.judge("featuringType->isEmpty()", v), Some(true));
+    }
+
+    /// `Expression::function` is the function an expression is typed
+    /// by, and a construction is typed by no function: `new A()`
+    /// constructs an `A`, which is a classifier and not one.
+    #[test]
+    fn what_an_expression_is_typed_by_is_a_function_or_nothing() {
+        let (mut ws, _) = about(
+            "part def A;\npart def V {\n\tattribute m = new A();\n}\n",
+            "m",
+        );
+        let made = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().kind(id) == ElementKind::ConstructorExpression)
+            .expect("the construction is built");
+        assert_eq!(ws.judge("function = null", made), Some(true));
     }
 
     /// The ends the metamodel gives to an association rather than to

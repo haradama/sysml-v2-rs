@@ -343,6 +343,8 @@ pub enum SyntaxKind {
     PATH_EXPR,
     /// `x#(i)` / `10 [SI::kg]`
     INDEX_EXPR,
+    /// `Foo.metadata`
+    METADATA_ACCESS_EXPR,
     /// `list->select {in x; ...}`
     ARROW_EXPR,
     /// `{ ... }` used as an expression body (after `->`)

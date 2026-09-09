@@ -815,6 +815,9 @@ fn value_expression(
         // `validateConstructorExpressionOwnedFeatures` holds it to
         // owning nothing else.
         match kind {
+            ElementKind::MetadataAccessExpression => {
+                results_in(model, expression);
+            }
             ElementKind::ConstructorExpression => {
                 let result = results_in(model, expression);
                 for (named, operand) in operands(written) {
@@ -876,7 +879,16 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
     match written.kind() {
         BINARY_EXPR | UNARY_EXPR => Some((ElementKind::OperatorExpression, symbol(written))),
         COND_EXPR => Some((ElementKind::OperatorExpression, Some("if".to_string()))),
-        INDEX_EXPR => Some((ElementKind::IndexExpression, Some("#".to_string()))),
+        // `IndexExpression = PrimaryArgumentMember '#' ...` and
+        // `BracketExpression : OperatorExpression = PrimaryArgumentMember
+        // '[' SequenceExpressionListMember ']'` -- the two are written
+        // alike and are not the same thing, and
+        // `validateIndexExpressionOperator` holds an index to the `#`
+        // it is written with.
+        INDEX_EXPR => match has_token(written, HASH) {
+            true => Some((ElementKind::IndexExpression, Some("#".to_string()))),
+            false => Some((ElementKind::OperatorExpression, Some("[".to_string()))),
+        },
         // `a.b` where `a` is not a name is a chain through what the
         // expression in front of it comes to
         PATH_EXPR => Some((ElementKind::FeatureChainExpression, Some(".".to_string()))),
@@ -898,6 +910,10 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
         }
         // `new Foo(1)` constructs one; anything else with an argument
         // list invokes what is named in front of it
+        // `MetadataAccessExpression = ElementReferenceMember '.'
+        // 'metadata'` -- what it reads the metadata of is named rather
+        // than handed over, so the one membership it owns is that name.
+        METADATA_ACCESS_EXPR => Some((ElementKind::MetadataAccessExpression, None)),
         CALL_EXPR => match written
             .children()
             .any(|child| child.kind() == UNARY_EXPR && has_token(&child, NEW_KW))

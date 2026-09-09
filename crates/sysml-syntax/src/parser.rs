@@ -1326,6 +1326,16 @@ impl Parser<'_> {
                     self.finish_node();
                     continue;
                 }
+                // `MetadataAccessExpression = ElementReferenceMember
+                // '.' 'metadata'` — what a metadata access is written
+                // as, and `metadata` is a keyword rather than a name
+                DOT if self.nth(1) == METADATA_KW => {
+                    self.start_node_at(cp, METADATA_ACCESS_EXPR);
+                    self.bump();
+                    self.bump();
+                    self.finish_node();
+                    continue;
+                }
                 // `list.?{in p; cond}` — filtering with a body expression
                 DOT | DOT_QUESTION if self.nth(1) == L_BRACE => {
                     self.start_node_at(cp, PATH_EXPR);
