@@ -29,8 +29,8 @@ use lsp_types::notification::Notification as _;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse, Diagnostic,
     DiagnosticSeverity, DocumentSymbol, GotoDefinitionResponse, Hover, HoverContents, Location,
-    MarkupContent, MarkupKind, OneOf, ParameterInformation, ParameterLabel, Position,
-    PublishDiagnosticsParams, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
+    MarkupContent, MarkupKind, NumberOrString, OneOf, ParameterInformation, ParameterLabel,
+    Position, PublishDiagnosticsParams, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
     SignatureInformation, SymbolInformation, SymbolKind, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextEdit, Url, WorkspaceEdit, WorkspaceSymbolResponse,
 };
@@ -493,13 +493,21 @@ impl Server {
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let docs = self.docs.clone();
         let analysis = self.analysis();
+        // Taken by value: what the constraints are asked of needs the
+        // workspace itself, and the map cannot be borrowed across that.
+        let open: Vec<(Url, usize)> = analysis
+            .doc_files
+            .iter()
+            .map(|(url, file)| (url.clone(), *file))
+            .collect();
         let mut fresh: Vec<(Url, Vec<Diagnostic>)> = Vec::new();
-        for (url, file) in &analysis.doc_files {
+        for (url, file) in open {
+            let url = &url;
             let text = &docs[url];
             let index = LineIndex::new(text);
             // an editor shows both halves: what does not parse yet is
             // not a reason to stop saying what does not resolve
-            let found = analysis.ws.findings(&[*file]);
+            let found = analysis.ws.findings(&[file]);
             let mut diagnostics = Vec::new();
             for (findings, severity, say) in [
                 (
@@ -530,6 +538,47 @@ impl Server {
                         ..Default::default()
                     });
                 }
+            }
+            // What the specification requires, over and above every name
+            // resolving. Asked of this one document it costs about a
+            // millisecond, so an editor can be told while it is typed.
+            //
+            // It is asked only once the document reads and resolves, as
+            // names are asked only once it parses: a constraint asked of
+            // a model with a dangling reference answers about the hole
+            // and not about the model. One undeclared type drew four
+            // complaints of its own, none of them a second thing to fix.
+            //
+            // A violation names an element, which may be one the
+            // notation never wrote; `element_place` walks out to the
+            // nearest thing that was, and one placed in another document
+            // belongs to that document's diagnostics rather than this
+            // one's.
+            let settled = found.syntax.is_empty()
+                && found.names.is_empty()
+                && analysis.ws.has_standard_library();
+            let checked = match settled {
+                true => analysis.ws.check_rules(&[file]),
+                false => sysml_semantics::rules::Checked::default(),
+            };
+            for violation in &checked.violations {
+                // Asked of this document, every violation is about an
+                // element under it, and the walk out to the nearest
+                // written thing stays inside it. The one element of a
+                // workspace under no file at all is its root, which no
+                // constraint is about.
+                let (_, range) = analysis
+                    .ws
+                    .element_place(violation.element)
+                    .unwrap_or_default();
+                diagnostics.push(Diagnostic {
+                    range: index.range(text, range),
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    source: Some("sysml".into()),
+                    code: Some(NumberOrString::String(violation.rule.into())),
+                    message: violation.says.into(),
+                    ..Default::default()
+                });
             }
             fresh.push((url.clone(), diagnostics));
         }

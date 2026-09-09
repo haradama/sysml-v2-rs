@@ -78,7 +78,9 @@ enum Command {
         check: bool,
     },
     /// Load files (or directories) into one workspace, resolve all names and
-    /// report unresolved references
+    /// report unresolved references, then check what the specification
+    /// requires of a model whose names all resolve (which needs the standard
+    /// library among the paths)
     Check {
         /// Files or directories to load
         #[arg(required = true)]
@@ -941,6 +943,71 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             )),
         }
     }
+    // What the specification itself requires, over and above every name
+    // resolving. A model whose names all resolve can still be one the
+    // standard rejects -- an objective on a part definition, a
+    // parameter passed the wrong way -- and until this was asked, only
+    // the MCP server ever asked it.
+    //
+    // `unevaluated` is not reported: it counts constraints this
+    // toolchain refuses to run, which says nothing about the model in
+    // front of the reader. What they act on is the violations.
+    //
+    // Constraints come after names, as names come after syntax. A
+    // constraint asked of a model with a dangling reference answers
+    // about the hole and not about the model: one undeclared type in a
+    // five-line file drew four complaints of its own, none of them a
+    // second thing to fix.
+    //
+    // They are written against the standard library too, so a workspace
+    // loaded without it is not asked them either.
+    let askable = stats.unresolved == 0 && ws.has_standard_library();
+    let checked = match askable {
+        true => ws.check_rules(&(0..ws.file_count()).collect::<Vec<_>>()),
+        false => sysml_semantics::rules::Checked::default(),
+    };
+    // Every element a constraint is asked of is under one of the files
+    // that were loaded, so it has somewhere to be shown. The one element
+    // of a workspace that is under no file is its root, which no
+    // constraint is about.
+    let placed: Vec<(
+        (usize, sysml_syntax::TextRange),
+        &sysml_semantics::rules::Violation,
+    )> = checked
+        .violations
+        .iter()
+        .map(|violation| {
+            (
+                ws.element_place(violation.element).unwrap_or_default(),
+                violation,
+            )
+        })
+        .collect();
+    let violated = texts_of(&ws, placed.iter().map(|((file, _), _)| *file));
+    let mut violations = Vec::new();
+    for ((file, range), violation) in &placed {
+        let named = ws.qualified_name_of(violation.element);
+        let path = ws.file_name(*file);
+        let text = &violated[file];
+        let offset = usize::from(range.start()).min(text.len());
+        match format {
+            Format::Text => {
+                let (line, col) = sysml_syntax::line_col(text, offset);
+                eprintln!("{path}:{line}:{col}: `{named}` {}", violation.says);
+            }
+            Format::Json => violations.push(sysml_cli::at(
+                text,
+                offset,
+                serde_json::json!({
+                    "path": path,
+                    "rule": violation.rule,
+                    "says": violation.says,
+                    "element": named,
+                }),
+            )),
+        }
+    }
+
     // A root package of one's own named after one of the standard
     // library's resolves -- each side reads its own -- so it is said
     // alongside the names rather than counted among them.
@@ -962,10 +1029,11 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             )),
         }
     }
+    let sound = stats.unresolved == 0 && checked.violations.is_empty();
     if format == Format::Json {
         report(serde_json::json!({
             "command": "check",
-            "ok": stats.unresolved == 0,
+            "ok": sound,
             "unreadable": [],
             "elements": ws.model().len(),
             "parseErrors": [],
@@ -973,8 +1041,13 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
             "references": total,
             "unresolved": unresolved,
             "collisions": collisions,
+            "violations": violations,
+            "rules": {
+                "held": checked.held.len(),
+                "unevaluated": checked.unevaluated.len(),
+            },
         }));
-        return if stats.unresolved == 0 {
+        return if sound {
             ExitCode::SUCCESS
         } else {
             ExitCode::FAILURE
@@ -983,12 +1056,20 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     if names.len() > limit {
         eprintln!("... and {} more", names.len() - limit);
     }
-    println!(
+    let resolution = format!(
         "{} element(s), {}/{total} reference(s) resolved ({rate:.1}%)",
         ws.model().len(),
         stats.resolved
     );
-    if stats.unresolved == 0 {
+    match askable {
+        true => println!(
+            "{resolution}, {} constraint(s) checked, {} violation(s)",
+            checked.held.len(),
+            checked.violations.len()
+        ),
+        false => println!("{resolution}"),
+    }
+    if sound {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
@@ -1005,9 +1086,15 @@ fn held_texts(
     ws: &sysml_semantics::Workspace,
     findings: &[sysml_semantics::Finding],
 ) -> std::collections::HashMap<usize, String> {
-    findings
-        .iter()
-        .map(|f| f.file)
+    texts_of(ws, findings.iter().map(|f| f.file))
+}
+
+/// The same, of files named directly rather than through findings.
+fn texts_of(
+    ws: &sysml_semantics::Workspace,
+    files: impl Iterator<Item = usize>,
+) -> std::collections::HashMap<usize, String> {
+    files
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .map(|file| (file, ws.file_parse(file).syntax().text().to_string()))

@@ -443,6 +443,105 @@ fn check_resolves_and_reports_unresolved() {
     assert!(stderr.contains("expected"), "{stderr}");
 }
 
+/// `check` answers for what the specification requires, and not only
+/// for what resolves.
+///
+/// A model whose every name resolves can still be one the standard
+/// rejects, and until this was asked only the MCP server ever asked it:
+/// running `check` -- which is most of the reason the command exists --
+/// called such a model sound.
+///
+/// Two things are asked first. Constraints come after names, as names
+/// come after syntax: asked of a model with a dangling reference they
+/// answer about the hole, and one undeclared type in a five-line file
+/// drew four complaints of its own, none of them a second thing to fix.
+/// And they are written against the standard library, so without it
+/// they report what is missing rather than what is wrong -- `case def
+/// Trip { objective placed; }` draws four on its own and none with the
+/// library beside it.
+#[test]
+fn check_answers_for_the_constraints_the_specification_states() {
+    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
+    if !library.is_dir() {
+        return; // the corpus submodule is not checked out
+    }
+    let library = library.to_str().unwrap();
+    let dir = temp_dir("check-rules");
+
+    // an objective belongs to a case, and this is a part
+    let wrong = write(
+        &dir,
+        "wrong.sysml",
+        "package P {\n\tpart def Engine {\n\t\tobjective misplaced;\n\t}\n}\n",
+    );
+    let out = sysml(&["check", wrong.to_str().unwrap(), library]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("wrong.sysml:3:13:"),
+        "placed where it is written: {stderr}"
+    );
+    assert!(stderr.contains("P::Engine::misplaced"), "{stderr}");
+    assert!(stderr.contains("must be a CaseDefinition"), "{stderr}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1 violation(s)"), "{stdout}");
+
+    // as JSON, with the rule that was broken and where it was broken
+    let out = sysml(&[
+        "--format",
+        "json",
+        "check",
+        wrong.to_str().unwrap(),
+        library,
+    ]);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["ok"], false);
+    assert_eq!(
+        json["violations"][0]["rule"],
+        "validateObjectiveMembershipOwningType"
+    );
+    assert_eq!(json["violations"][0]["line"], 3);
+    assert!(json["rules"]["held"].as_u64().unwrap() > 0, "{json}");
+
+    // the same model, put where it belongs, holds
+    let right = write(
+        &dir,
+        "right.sysml",
+        "package P {\n\tcase def Trip {\n\t\tobjective placed;\n\t}\n}\n",
+    );
+    let out = sysml(&["check", right.to_str().unwrap(), library]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains("0 violation(s)"), "{stdout}");
+
+    // without the library the constraints are not asked at all, rather
+    // than asked and answered about what is not there
+    let out = sysml(&["check", right.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("constraint(s)"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // and a model that does not resolve is not also told what the
+    // standard would have said about the hole
+    let dangling = write(
+        &dir,
+        "dangling.sysml",
+        "package P {\n\tpart engine : NoSuchThing;\n}\n",
+    );
+    let out = sysml(&["check", dangling.to_str().unwrap(), library]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unresolved `NoSuchThing`"), "{stderr}");
+    assert!(!stderr.contains("must be"), "no constraint noise: {stderr}");
+}
+
 #[test]
 fn diagram_renders_definitions_as_svg() {
     let dir = temp_dir("diagram");

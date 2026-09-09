@@ -912,6 +912,41 @@ impl Workspace {
         &self.files[file].parse
     }
 
+    /// Whether the standard library is part of this workspace.
+    ///
+    /// The specification's constraints are written against it: they name
+    /// `Base::Anything`, `Performances::Performance`,
+    /// `ScalarValues::Boolean`. Asked of a model loaded without the
+    /// library they answer about what is missing rather than about the
+    /// model -- `case def Trip { objective placed; }` draws four
+    /// complaints on its own and none at all with the library beside it,
+    /// which is a false alarm and not a finding. `Base::Anything` is
+    /// what everything else specializes, and it is there exactly when
+    /// the library is.
+    pub fn has_standard_library(&mut self) -> bool {
+        self.named_globally("Base::Anything").is_some()
+    }
+
+    /// Where an element is written, for a report that points at it.
+    ///
+    /// A constraint names the element it does not hold of, and not every
+    /// element of a model was written down: an implied specialization, a
+    /// reified connector end, a membership put back together from the
+    /// containment it stands for. None of those has syntax of its own,
+    /// and what a reader goes and looks at instead is the nearest thing
+    /// that does -- whatever owns it.
+    pub fn element_place(&self, elem: ElementId) -> Option<(usize, TextRange)> {
+        let mut at = Some(elem);
+        while let Some(id) = at {
+            if let (Some(file), Some((_, name))) = (self.element_file(id), self.element_ranges(id))
+            {
+                return Some((file, name));
+            }
+            at = self.model.owner(id);
+        }
+        None
+    }
+
     /// Full node range and declared-name range of an element.
     pub fn element_ranges(&self, elem: ElementId) -> Option<(TextRange, TextRange)> {
         let node = self.source.get(&elem)?;
@@ -5685,6 +5720,55 @@ mod tests {
         assert_eq!(count(ElementKind::Subclassification), 1);
         assert_eq!(count(ElementKind::FeatureTyping), 2);
         assert_eq!(count(ElementKind::Redefinition), 1);
+    }
+
+    /// A report points at what a reader can go and look at.
+    ///
+    /// Most of a model was never written down: of the official corpus's
+    /// 109616 elements only 30235 have syntax of their own, and the
+    /// other 79380 -- an implied specialization, a reified connector
+    /// end, a multiplicity standing for a bound -- are shown where
+    /// whatever owns them was written. The one element of a workspace
+    /// that is under no file is its root, and nothing a constraint is
+    /// asked of is that.
+    #[test]
+    fn what_was_never_written_is_shown_where_its_owner_was() {
+        let (ws, _) = resolved_workspace(&[(
+            "m.sysml",
+            "package P {\n\tpart def Wheel;\n\tpart w : Wheel[2];\n}\n",
+        )]);
+        let named = |ws: &Workspace, want: &str| {
+            ws.model()
+                .ids()
+                .find(|&id| ws.model().name(id) == Some(want))
+                .expect("declared")
+        };
+        let wheel = named(&ws, "w");
+        let (file, at) = ws.element_place(wheel).expect("`w` is written");
+        assert_eq!(
+            ws.file_parse(file).syntax().text().to_string()[at].to_string(),
+            "w"
+        );
+
+        // the typing of `w` is a relationship the notation implies and
+        // never writes, so it is shown at the `w` that carries it
+        let typing = ws
+            .model()
+            .owned(wheel)
+            .iter()
+            .copied()
+            .find(|&it| ws.model().kind(it) == ElementKind::FeatureTyping)
+            .expect("the typing is reified");
+        assert_eq!(ws.element_ranges(typing), None, "it was never written");
+        assert_eq!(ws.element_place(typing), Some((file, at)));
+
+        // and the root of the workspace is under no file
+        let root = ws
+            .model()
+            .ids()
+            .find(|&id| ws.model().owner(id).is_none())
+            .expect("everything is read from a root");
+        assert_eq!(ws.element_place(root), None);
     }
 
     /// `subset g subsets f;` relates the same two features as `feature

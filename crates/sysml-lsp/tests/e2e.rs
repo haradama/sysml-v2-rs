@@ -679,3 +679,73 @@ fn a_layout_command_that_never_answers_does_not_take_the_server_with_it() {
     shut(client, handle);
     std::fs::remove_file(&fake).ok();
 }
+
+/// An editor is told what the specification requires, and not only what
+/// resolves.
+///
+/// A model whose every name resolves can still be one the standard
+/// rejects. Asked of one open document the constraints cost about a
+/// millisecond, so they can be answered while it is typed -- but only
+/// once it parses and resolves, and only with the library that they are
+/// written against.
+#[test]
+fn diagnostics_say_what_the_specification_requires() {
+    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
+    if !library.is_dir() {
+        return; // the corpus submodule is not checked out
+    }
+    let (server_side, client_side) = Connection::memory();
+    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
+    let mut client = Client {
+        connection: client_side,
+        next_id: 1,
+    };
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({
+            "capabilities": {},
+            "initializationOptions": { "libraryPath": library.to_str().unwrap() },
+        }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+
+    // an objective belongs to a case, and this is a part: every name
+    // here resolves, and the model is still one the standard rejects
+    let uri = "file:///rules.sysml";
+    let text = "package P {\n    part def Engine {\n        objective misplaced;\n    }\n}\n";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1, "text": text } }),
+    );
+    let diags = client.wait_diagnostics();
+    let list = diags["diagnostics"].as_array().unwrap();
+    let broken: Vec<&Value> = list
+        .iter()
+        .filter(|d| d["code"] == "validateObjectiveMembershipOwningType")
+        .collect();
+    assert_eq!(broken.len(), 1, "{list:?}");
+    assert_eq!(broken[0]["range"]["start"]["line"], 2, "{broken:?}");
+    assert!(
+        broken[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("CaseDefinition"),
+        "{broken:?}"
+    );
+
+    // put where it belongs, nothing is said about it
+    let right = "package P {\n    case def Trip {\n        objective placed;\n    }\n}\n";
+    client.notify(
+        lsp_types::notification::DidChangeTextDocument::METHOD,
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": right }],
+        }),
+    );
+    let diags = client.wait_diagnostics();
+    assert_eq!(diags["diagnostics"].as_array().unwrap().len(), 0, "{diags}");
+
+    client.request(lsp_types::request::Shutdown::METHOD, json!(null));
+    client.notify(lsp_types::notification::Exit::METHOD, json!(null));
+    handle.join().unwrap();
+}
