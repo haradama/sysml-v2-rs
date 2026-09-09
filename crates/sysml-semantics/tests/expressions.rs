@@ -544,7 +544,7 @@ fn a_metadata_access_names_the_element_it_reads() {
         sysml_syntax::parse(source).ok(),
         "`Foo.metadata` is SysML the parser reads"
     );
-    ws.add_file("m.sysml", source);
+    let file = ws.add_file("m.sysml", source);
     ws.resolve_all();
     let model = ws.model();
     let access = model
@@ -560,4 +560,21 @@ fn a_metadata_access_names_the_element_it_reads() {
         .and_then(Value::as_id)
         .expect("what it reads is named");
     assert_eq!(ws.qualified_name_of(read), "P::Foo");
+
+    // The official corpus writes no metadata access at all, so the
+    // constraint about one is asked of nothing there and holding it is
+    // this test's job: it wants a membership that is not a feature
+    // membership, which is the one naming what is read.
+    let checked = ws.check_rules(&[file]);
+    assert!(
+        checked
+            .held
+            .contains(&"validateMetadataAccessExpressionReferencedElement"),
+        "{checked:?}"
+    );
+    assert!(
+        checked.violations.is_empty(),
+        "a metadata access reading a metadata definition is sound: {:?}",
+        checked.violations
+    );
 }

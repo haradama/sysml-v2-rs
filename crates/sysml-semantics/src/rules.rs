@@ -426,22 +426,21 @@ const MISWRITTEN: [(&str, &str); 8] = [
     ),
 ];
 
-/// Constraints this model cannot answer, because answering them means
-/// working out what an expression comes to.
+/// The one constraint this model cannot answer, because answering it
+/// means working out what an expression comes to.
 ///
-/// `validateFeatureChainExpressionConformance` holds `(that as
-/// SpatialItem).localClock` to `localClock` being featured within what
-/// `that as SpatialItem` comes to. Nothing in the specification says
-/// that a cast comes to the type it casts to: `BaseFunctions::as`
-/// returns whatever its own `return` is typed by, and the pilot
-/// implementation works the answer out rather than reading it.
 /// `validateTriggerInvocationExpressionAfterArgument` holds `after
 /// 10[SI::s]` to coming to a scalar quantity measured in a duration
-/// unit, which is the same question asked of a different expression.
+/// unit. The specification gives no route to that answer:
+/// `BaseFunctions::'['` is abstract, its `return` is typed by
+/// `Anything`, and nothing in the standard library redefines it -- so
+/// what a quantity written that way comes to has to be inferred from
+/// the unit rather than read off the library. The pilot implementation
+/// does not check this one at all.
 ///
-/// These are not the specification getting something wrong. They are
-/// this model not carrying what it would take to answer them, which is
-/// a different thing to say and is said separately.
+/// This is not the specification getting something wrong. It is this
+/// model not carrying what it would take to answer it, which is a
+/// different thing to say and is said separately.
 const UNANSWERED: [(&str, &str); 1] = [(
     "validateTriggerInvocationExpressionAfterArgument",
     "what an `after` waits for must come to a scalar quantity measured in a duration unit, \
