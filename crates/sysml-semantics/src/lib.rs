@@ -4879,22 +4879,33 @@ fn chain_steps(qname: &SyntaxNode) -> Vec<usize> {
 fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
     let mut steps = Vec::new();
     let mut at = 0;
-    for token in operand
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-    {
+    for token in operand_name_tokens(operand) {
         match token.kind() {
-            SyntaxKind::IDENT
-            | SyntaxKind::UNRESTRICTED_NAME
-            | SyntaxKind::DOLLAR
-            | SyntaxKind::STAR
-            | SyntaxKind::STAR_STAR => at += 1,
+            SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR => at += 1,
             SyntaxKind::DOT => steps.push(at),
             _ => {}
         }
     }
     steps.push(at);
     steps
+}
+
+/// The tokens of a connector operand that spell the name it writes.
+///
+/// An end may carry a multiplicity of its own -- `connector ps :
+/// ProductSelection ([0..*] myCart, ...)` -- and what is written inside
+/// the brackets is a bound and not a step of the name. Counted as one,
+/// the `*` of `[0..*]` made the steps say two where the name had one
+/// segment, and reading a prefix of that name went off the end of it.
+fn operand_name_tokens(operand: &SyntaxNode) -> impl Iterator<Item = sysml_syntax::SyntaxToken> {
+    operand
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|token| {
+            !token
+                .parent_ancestors()
+                .any(|up| up.kind() == SyntaxKind::MULTIPLICITY)
+        })
 }
 
 /// The function a trigger invokes, which its kind alone says.
@@ -5247,9 +5258,7 @@ fn followed_by_eq(parent: &SyntaxNode, child: &SyntaxNode) -> bool {
 }
 
 fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
-    operand
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
+    operand_name_tokens(operand)
         .filter(|t| {
             matches!(
                 t.kind(),

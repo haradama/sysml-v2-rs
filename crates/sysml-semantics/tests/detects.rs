@@ -150,3 +150,212 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
         assert_eq!(fired, wanted, "{says}");
     }
 }
+
+/// The same question asked of the corpus, by breaking it on purpose.
+///
+/// Writing a wrong model by hand reaches the constraints one at a time,
+/// and it reaches only the ones whose shape is already understood. The
+/// corpus is 403 files of rich, correct SysML: change one keyword in
+/// one of them and it is still a model, still parses, still resolves --
+/// and is now wrong in a way somebody's editor could be wrong. A sweep
+/// of fifty such swaps over every file tripped twenty-six constraints,
+/// eighteen of which no hand-written model here had reached, and found
+/// a panic: `connector ps : P ([0..*] myCart, ...)` counted the `*` of
+/// the bound as a step of the name beside it.
+///
+/// Each row is one swap, the file it is made in, and constraints that
+/// must notice. Other constraints may notice too -- one keyword can be
+/// wrong in several ways at once -- so the named ones must be among
+/// what fires rather than all of it.
+const MUTATED: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "UseCaseTest.sysml",
+        "use case def ",
+        "part def ",
+        &["validateActorMembershipOwningType"],
+    ),
+    (
+        "CauseAndEffectExample.sysml",
+        "end ",
+        "",
+        &[
+            "validateAssociationRelatedTypes",
+            "validateConnectorRelatedFeatures",
+        ],
+    ),
+    (
+        "EnumerationTest.sysml",
+        "attribute def ",
+        "part def ",
+        &[
+            "validateAttributeDefinitionFeatures",
+            "validateDataTypeSpecialization",
+        ],
+    ),
+    (
+        "Vehicle Analysis Demo.sysml",
+        "attribute def ",
+        "part def ",
+        &["validateAttributeUsageFeatures"],
+    ),
+    (
+        "Connectors.kerml",
+        "end ",
+        "",
+        &["validateBindingConnectorIsBinary"],
+    ),
+    (
+        "Model Library Example.sysml",
+        "connection def ",
+        "part def ",
+        &["validateClassSpecialization"],
+    ),
+    (
+        "ConnectionTest.sysml",
+        "then ",
+        "; //",
+        &["validateConnectorBinarySpecialization"],
+    ),
+    (
+        "ControlNodeTest.sysml",
+        "action def ",
+        "part def ",
+        &["validateControlNodeOwningType"],
+    ),
+    (
+        "Features.kerml",
+        "composite ",
+        "portion ",
+        &["validateFeaturePortionNotVariable"],
+    ),
+    (
+        "Conditional Succession Example-2.sysml",
+        "then ",
+        "; //",
+        &["validateIfActionUsageParameters"],
+    ),
+    (
+        "RootPackageTest.sysml",
+        "private ",
+        "public ",
+        &["validateImportTopLevelVisibility"],
+    ),
+    (
+        "Dynamics.sysml",
+        "calc def ",
+        "part def ",
+        &[
+            "validateInvocationExpressionInstantiatedType",
+            "validateParameterMembershipOwningType",
+            "validateReturnParameterMembershipOwningType",
+        ],
+    ),
+    (
+        "Dynamics.sysml",
+        "\n\t\tin ",
+        "\n\t\tout ",
+        &["validateInvocationExpressionParameterRedefinition"],
+    ),
+    (
+        "ActionTest.sysml",
+        "first ",
+        "",
+        &["validateMergeNodeOutgoingSuccessions"],
+    ),
+    (
+        "Vehicle Analysis Demo.sysml",
+        "analysis def ",
+        "part def ",
+        &["validateObjectiveMembershipOwningType"],
+    ),
+    (
+        "A-3-8-ChangingFeatureValues.kerml",
+        "\n\t\tin ",
+        "\n\t\tout ",
+        &["validateRedefinitionDirectionConformance"],
+    ),
+    (
+        "Vehicle Analysis Demo.sysml",
+        "requirement def ",
+        "part def ",
+        &["validateRequirementConstraintMembershipOwningType"],
+    ),
+    (
+        "Turbojet Stage Analysis.sysml",
+        "calc def ",
+        "part def ",
+        &["validateResultExpressionMembershipOwningType"],
+    ),
+    (
+        "ViewTest.sysml",
+        "concern def ",
+        "part def ",
+        &["validateStakeholderMembershipOwningType"],
+    ),
+    (
+        "AssignmentTest.sysml",
+        "state def ",
+        "part def ",
+        &["validateStateSubactionMembershipOwningType"],
+    ),
+    (
+        "VariabilityTest.sysml",
+        "variation ",
+        "",
+        &["validateVariantMembershipOwningNamespace"],
+    ),
+    (
+        "ViewTest.sysml",
+        "view def ",
+        "part def ",
+        &["validateViewRenderingMembershipOwningType"],
+    ),
+];
+
+#[test]
+fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
+    let Some(library) = library() else { return };
+    let root = library.parent().expect("the library sits in the release");
+    let mut corpus = sysml_semantics::model_files(&root.join("sysml/src"));
+    corpus.extend(sysml_semantics::model_files(&root.join("kerml/src")));
+
+    let mut ws = Workspace::new();
+    ws.load_dir(&library).expect("the library loads");
+    ws.resolve_all();
+
+    for (name, from, to, expected) in MUTATED {
+        let path = corpus
+            .iter()
+            .find(|it| it.file_name().is_some_and(|it| it == *name))
+            .unwrap_or_else(|| panic!("{name} is in the corpus"));
+        let text = std::fs::read_to_string(path).expect("the corpus reads");
+        assert!(text.contains(from), "{name} writes {from:?}");
+
+        // one mutation at a time, each against a library that was
+        // resolved once: cloning it costs a tenth of what loading it does
+        let mut broken = ws.clone();
+        let kerml = path.extension().is_some_and(|it| it == "kerml");
+        let file = broken.add_file(
+            if kerml {
+                "mutated.kerml"
+            } else {
+                "mutated.sysml"
+            },
+            &text.replace(from, to),
+        );
+        broken.resolve_files(&[file]);
+        let found = broken.findings(&[file]);
+        assert!(found.syntax.is_empty(), "{name} {from:?}: does not parse");
+        assert!(found.names.is_empty(), "{name} {from:?}: does not resolve");
+
+        let fired: BTreeSet<&str> = broken
+            .check_rules(&[file])
+            .violations
+            .iter()
+            .map(|violation| violation.rule)
+            .collect();
+        for rule in *expected {
+            assert!(fired.contains(rule), "{name} {from:?} -> {to:?}: {fired:?}");
+        }
+    }
+}

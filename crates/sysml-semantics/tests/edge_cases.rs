@@ -2964,6 +2964,47 @@ fn a_named_declaration_with_a_reference_is_the_end() {
 /// [0..1] merge` is the cross multiplicity, how many things at the far
 /// end go with one at this one. Without the range, the four constraints
 /// that count what a control node is joined by have nothing to read.
+/// An end may carry a multiplicity, and what is inside the brackets is
+/// not part of the name beside it.
+///
+/// `connector ps : P ([0..*] myCart, ...)` writes a bound and then a
+/// name. The `*` of the bound was counted as a step of that name, so
+/// the steps said two where the segments said one, and reading a prefix
+/// of the name ran off the end of it -- a panic, on a model that parses
+/// and resolves. `ProductSelection_N_ary.kerml` writes exactly this
+/// with `[1]`, where a bound of one token happened to agree.
+#[test]
+fn a_bound_written_before_an_end_is_not_part_of_its_name() {
+    let mut ws = Workspace::new();
+    let source = "package P {\n\
+         \tclassifier Cart;\n\
+         \tassoc A {\n\t\tend feature c : Cart[1];\n\t\tend feature d : Cart[1];\n\t}\n\
+         \tclassifier Holder {\n\
+         \t\tfeature myCart : Cart[1];\n\
+         \t\tfeature other : Cart[1];\n\
+         \t\tconnector a : A ([0..*] myCart, [0..1] other);\n\
+         \t}\n}\n";
+    let file = ws.add_file("m.kerml", source);
+    let stats = ws.resolve_files(&[file]);
+    assert_eq!(stats.unresolved, 0, "{:?}", ws.unresolved());
+
+    // and the ends reach what they name, one step each
+    let connector = ws
+        .model()
+        .ids()
+        .find(|&id| ws.model().name(id) == Some("a"))
+        .expect("the connector is declared");
+    let related: Vec<String> = ws
+        .model()
+        .get(connector, "relatedFeature")
+        .and_then(sysml_model::Value::as_ids)
+        .unwrap_or_default()
+        .iter()
+        .map(|&it| ws.qualified_name_of(it))
+        .collect();
+    assert_eq!(related, ["P::Holder::myCart", "P::Holder::other"]);
+}
+
 #[test]
 fn a_connector_end_is_one_thing() {
     let mut ws = Workspace::new();
