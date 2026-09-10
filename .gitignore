@@ -64,6 +64,7 @@ Cargo.lock
 /editors/vscode/*.vsix
 /editors/vscode/server/
 /editors/vscode/library/
+/editors/vscode/LICENSE.txt
 
 # the importer fixture is a standalone crate; only its source is tracked
 /crates/sysml-rust/tests/fixtures/*/target/
@@ -73,8 +74,10 @@ Cargo.lock
 /examples/arduino-uno/target/
 /examples/arduino-uno/Cargo.lock
 
-# the project's own Claude Code configuration is shared with the team,
-# even where a global ignore excludes `.claude` (a directory has to be
-# un-ignored before anything in it can be)
-!.claude/
-!.claude/**
+# Claude Code's own configuration and the notes written for it are local
+# to whoever is working here, not part of the repository. CI runs the
+# gates itself -- `.github/workflows/ci.yml` names every command -- so
+# nothing here is needed to build, test or release this.
+/CLAUDE.md
+/.claude/
+docs/*.pdf
