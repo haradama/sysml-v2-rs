@@ -24,6 +24,12 @@ const AWKWARD: &str = concat!(
     "\t}\n",
     "\tpart def '\"quoted\"' :> 'A<B';\n",
     "\tpart def 'tab\there';\n",
+    // a quoted name and a comment body are whatever the file put between
+    // the delimiters, and XML carries no control character but tab,
+    // newline and return -- not even written as a character reference
+    "\tpart def 'bell\x07here' {\n",
+    "\t\tdoc /* a form feed \x0c and an escape \x1b */\n",
+    "\t}\n",
     "\tpart a : 'A<B';\n",
     "\tconnect a to a;\n",
     "}\n",
@@ -363,6 +369,15 @@ fn compiles(rust: &str, name: &str) -> Result<(), String> {
 }
 
 fn well_formed(svg: &str) -> Result<(), String> {
+    // `Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] |
+    // [#x10000-#x10FFFF]`. A parser stops at anything else, so balanced
+    // tags are only half of being well-formed.
+    if let Some(stray) = svg
+        .chars()
+        .find(|&ch| !matches!(ch, '\t' | '\n' | '\r' | ' '..='\u{fffd}' | '\u{10000}'..))
+    {
+        return Err(format!("carries U+{:04X}, which XML cannot", stray as u32));
+    }
     let mut stack: Vec<String> = Vec::new();
     let mut at = 0;
     while let Some(open) = svg[at..].find('<') {

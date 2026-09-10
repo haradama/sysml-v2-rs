@@ -8,125 +8,29 @@
 //! often as on a name. It also applies a run of incremental edits and
 //! then sends the same text whole, so that the two must agree -- an
 //! off-by-one in UTF-16 offsets shows up as nothing else.
-use lsp_server::{Connection, Message, Notification, Request, RequestId};
+
+mod common;
+
+use common::serving;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
-
-struct Client {
-    connection: Connection,
-    next_id: i32,
-}
-
-impl Client {
-    fn ask(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = RequestId::from(self.next_id);
-        self.next_id += 1;
-        self.connection
-            .sender
-            .send(Message::Request(Request {
-                id: id.clone(),
-                method: method.into(),
-                params,
-            }))
-            .map_err(|e| e.to_string())?;
-        loop {
-            let got = self
-                .connection
-                .receiver
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .map_err(|_| format!("no answer to {method}"))?;
-            match got {
-                Message::Response(resp) if resp.id == id => {
-                    return match resp.error {
-                        Some(e) => Err(format!("{method}: {}", e.message)),
-                        None => Ok(resp.result.unwrap_or(Value::Null)),
-                    }
-                }
-                _ => continue,
-            }
-        }
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.connection
-            .sender
-            .send(Message::Notification(Notification {
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-    }
-
-    fn diagnostics(&mut self, uri: &str) -> Value {
-        loop {
-            let got = self
-                .connection
-                .receiver
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .expect("no diagnostics");
-            if let Message::Notification(n) = got {
-                if n.method == lsp_types::notification::PublishDiagnostics::METHOD
-                    && n.params["uri"] == uri
-                {
-                    return n.params;
-                }
-            }
-        }
-    }
-}
-
-fn vendor() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release")
-        .canonicalize()
-        .ok()?;
-    root.join("sysml.library").is_dir().then_some(root)
-}
-
-fn files(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join("sysml/src"), root.join("kerml/src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
+use sysml_corpus::{models, vendor};
 
 #[test]
 fn every_position_in_the_corpus() {
     let Some(root) = vendor() else { return };
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     client
         .ask(
             lsp_types::request::Initialize::METHOD,
-            json!({ "capabilities": {} }),
+            json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
         )
         .unwrap();
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
 
     let mut found: Vec<String> = Vec::new();
-    let all = files(&root);
+    let all = models(&root);
     eprintln!("{} files", all.len());
 
     for (n, path) in all.iter().enumerate() {
@@ -138,7 +42,7 @@ fn every_position_in_the_corpus() {
             lsp_types::notification::DidOpenTextDocument::METHOD,
             json!({"textDocument":{"uri":&uri,"languageId":"sysml","version":1,"text":text}}),
         );
-        client.diagnostics(&uri);
+        client.diagnostics_for(&uri);
 
         // whole-document requests
         for (method, params) in [
@@ -196,13 +100,21 @@ fn every_position_in_the_corpus() {
                     json!({"textDocument":{"uri":&uri},"position":{"line":row,"character":col},
                            "newName":"Renamed"}),
                 ) {
-                    // a rename it declines -- off a name, of an alias
-                    // whose uses it could not follow, or of a feature
-                    // that declares no name and borrows none either --
-                    // is the answer, not a fault
+                    // A rename it declines -- off a name, of an alias
+                    // whose uses it could not follow, of a feature that
+                    // declares no name and borrows none either, or of
+                    // something the standard library declares -- is the
+                    // answer, not a fault.
+                    //
+                    // That last one only began to happen when the server
+                    // gained a copy of the library to resolve against:
+                    // before, a cursor on `Anything` landed on nothing,
+                    // and the refusal that says an editor must not write
+                    // into the library was never reached.
                     if !e.contains("nothing to rename here")
                         && !e.contains("alias")
                         && !e.contains("declares no name")
+                        && !e.contains("declared outside the project")
                     {
                         found.push(format!("rename\t{}:{row}:{col}\t{e}", path.display()));
                     }
@@ -237,7 +149,7 @@ fn every_position_in_the_corpus() {
                     json!({"textDocument":{"uri":&uri,"version":2+round},
                            "contentChanges":[{"range":{"start":before,"end":before},"text":insert}]}),
                 );
-                client.diagnostics(&uri);
+                client.diagnostics_for(&uri);
             }
             let incremental = client
                 .ask(
@@ -251,7 +163,7 @@ fn every_position_in_the_corpus() {
                 json!({"textDocument":{"uri":&uri,"version":99},
                        "contentChanges":[{"text":mine}]}),
             );
-            client.diagnostics(&uri);
+            client.diagnostics_for(&uri);
             let whole = client
                 .ask(
                     lsp_types::request::DocumentSymbolRequest::METHOD,

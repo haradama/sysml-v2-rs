@@ -22,6 +22,8 @@
 //! assert_eq!(model.owner(part), Some(pkg));
 //! ```
 
+// Nothing here needs `unsafe`, and saying so is what keeps it that way.
+#![forbid(unsafe_code)]
 mod build;
 /// What writes [`generated`] from the vendored metamodel. Behind the
 /// `codegen` feature: it is a development tool, not part of the model.
@@ -189,7 +191,7 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     {
         return ElementKind::OwningMembership;
     }
-    if model.get(owned, "isEnd") == Some(&Value::Bool(true)) {
+    if model.flag(owned, "isEnd") {
         return ElementKind::EndFeatureMembership;
     }
     if transition_role(model, owned).is_some() {
@@ -205,7 +207,7 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     // always `in`: read the other way round, every `out` parameter in
     // the corpus would be one whose direction is not what its own
     // membership requires.
-    if model.get(owned, "direction").is_some()
+    if model.maybe(owned, "direction").is_some()
         && owner_kind.is_a(ElementKind::Expression)
         && model.name(owned).is_none()
     {
@@ -226,7 +228,7 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
 /// first member owned. An end that owns a feature written in its body
 /// and no cross feature reads the first of those instead.
 pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
-    if model.get(end, "isEnd") != Some(&Value::Bool(true)) {
+    if !model.flag(end, "isEnd") {
         return None;
     }
     model.owned(end).iter().copied().find(|&it| {
@@ -246,7 +248,7 @@ pub fn payload_parameter(model: &Model, accept: ElementId) -> Option<ElementId> 
         .owned(accept)
         .iter()
         .copied()
-        .find(|&child| model.get(child, "direction").is_some())
+        .find(|&child| model.maybe(child, "direction").is_some())
 }
 
 /// What a transition feature is to its transition -- the `kind` its
@@ -256,7 +258,7 @@ pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> 
     if model.kind(transition) != ElementKind::TransitionUsage {
         return None;
     }
-    let holds = |name: &str| match model.get(transition, name) {
+    let holds = |name: &str| match model.maybe(transition, name) {
         Some(Value::Ref(target)) => *target == owned,
         Some(Value::RefList(targets)) => targets.contains(&owned),
         _ => false,
@@ -281,7 +283,7 @@ pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> 
 /// chaining features or more than one. Both are the same question, so
 /// both are answered here rather than at each place that asks.
 pub fn end_reaches(model: &Model, end: ElementId) -> Vec<ElementId> {
-    let mut reached = match model.get(end, "chainingFeature") {
+    let mut reached = match model.maybe(end, "chainingFeature") {
         Some(Value::RefList(chain)) => chain.clone(),
         _ => model
             .owned(end)
@@ -302,7 +304,7 @@ pub fn end_reaches(model: &Model, end: ElementId) -> Vec<ElementId> {
                 .filter(|&&child| model.kind(child) == ElementKind::Feature)
                 .flat_map(|&child| model.owned(child))
                 .filter(|&&it| model.kind(it) == ElementKind::Redefinition)
-                .filter_map(|&it| model.get(it, "redefinedFeature")?.as_id()),
+                .filter_map(|&it| model.maybe(it, "redefinedFeature")?.as_id()),
         );
     }
     reached
@@ -532,12 +534,86 @@ impl Model {
         self
     }
 
+    /// Read a property the metaclass declares.
+    ///
+    /// The name is checked against the metamodel, as [`Model::set`]
+    /// checks it -- and for the same reason. `set` has always refused a
+    /// property the metaclass does not have, so every writer guards
+    /// itself with `kind.feature(..).is_some()`; `get` answered `None`
+    /// and no reader ever did, which made a misspelled name an element
+    /// that quietly has no such property. `None` here means the model
+    /// does not say, and nothing else.
+    ///
+    /// A flag that may not apply to this metaclass at all is
+    /// [`Model::flag`]'s question, not this one's.
     pub fn get(&self, id: ElementId, prop: &str) -> Option<&Value> {
+        let kind = self.kind(id);
+        debug_assert!(
+            kind.feature(prop).is_some(),
+            "{kind:?} has no property `{prop}`"
+        );
         self.elements[id.index()]
             .props
             .iter()
             .find(|(n, _)| *n == prop)
             .map(|(_, v)| v)
+    }
+
+    /// A property this metaclass may not have at all.
+    ///
+    /// `None` both when the model does not say and when there is nothing
+    /// for it to say -- which is a fair question wherever one walk meets
+    /// several metaclasses. What a transition triggers on, asked of
+    /// every element that might be a transition, is not a misspelling
+    /// when the element turns out to be an accept node; what kind of
+    /// trigger an expression is, asked of every expression, is not one
+    /// when the expression turns out to be an operator.
+    ///
+    /// [`get`] refuses that question, because there it cannot be told
+    /// from a name that is simply wrong. Here it is the question.
+    ///
+    /// [`get`]: Model::get
+    pub fn maybe(&self, id: ElementId, prop: &str) -> Option<&Value> {
+        self.kind(id).feature(prop)?;
+        self.get(id, prop)
+    }
+
+    /// A declared flag, where the model says so.
+    ///
+    /// False both when the flag is not set and when the metaclass has no
+    /// such flag at all: `isEnd` of a package is not a lie, since a
+    /// package is not an end.
+    pub fn flag(&self, id: ElementId, prop: &str) -> bool {
+        self.maybe(id, prop) == Some(&Value::Bool(true))
+    }
+
+    /// The same, with the answer the specification gives where the
+    /// source said nothing.
+    ///
+    /// [`flag`] reads what the model holds, and holding nothing is not
+    /// the same as being false: this builder writes every flag in
+    /// [`BUILT_FLAGS`] wherever a declaration carries it, so one of
+    /// those missing is a declaration that said nothing -- and what the
+    /// metamodel declares beside the property is then the answer.
+    /// `attribute label : String;` is unique, and nothing in the text of
+    /// it says so.
+    ///
+    /// Any other property missing is this builder not building it, which
+    /// says nothing about the model, so those answer false as before.
+    ///
+    /// [`flag`]: Model::flag
+    pub fn declared_flag(&self, id: ElementId, prop: &str) -> bool {
+        match self.maybe(id, prop) {
+            Some(Value::Bool(flag)) => *flag,
+            _ => {
+                BUILT_FLAGS.contains(&prop)
+                    && self
+                        .kind(id)
+                        .feature(prop)
+                        .and_then(|meta| meta.default)
+                        .unwrap_or(false)
+            }
+        }
     }
 
     pub fn props(&self, id: ElementId) -> impl Iterator<Item = (&'static str, &Value)> {
@@ -616,7 +692,7 @@ impl Model {
             // one that declared either name is named, and borrows nothing
             let declares = ["declaredName", "declaredShortName"]
                 .iter()
-                .any(|declared| self.get(at, declared).is_some());
+                .any(|declared| self.maybe(at, declared).is_some());
             if declares {
                 return Some(at);
             }
@@ -629,14 +705,14 @@ impl Model {
                     ElementKind::ReferenceSubsetting => "referencedFeature",
                     _ => return None,
                 };
-                self.get(rel, target).and_then(Value::as_id)
+                self.maybe(rel, target).and_then(Value::as_id)
             })?;
         }
     }
 
     fn named_after(&self, id: ElementId, prop: &str) -> Option<&str> {
         let names = self.naming_element(id)?;
-        self.get(names, prop).and_then(Value::as_str)
+        self.maybe(names, prop).and_then(Value::as_str)
     }
 
     /// Depth-first traversal of the ownership tree from `root`.

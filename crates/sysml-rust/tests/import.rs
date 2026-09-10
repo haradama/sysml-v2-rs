@@ -1,5 +1,5 @@
 //! The fixture crate's rustdoc JSON, all the way through: generated SysML
-//! that parses, resolves against a scalar library, and hands its `@rust`
+//! that parses, resolves against a scalar library, and hands its `@code`
 //! bindings back out of the resolved model -- what a code generator will
 //! do with it.
 
@@ -71,8 +71,8 @@ fn the_generated_package_is_deterministic_and_names_the_api() {
     // that what comes back out of the generator is the type the crate
     // takes; the five that do round trip are left as they are
     assert!(first.contains(
-        "attribute def RustU32 :> Natural { @rust { :>> path = \"u32\"; \
-         :>> derives = \"Debug, Clone, PartialEq, Default\"; } }"
+        "attribute def RustU32 :> Natural { @code { :>> writtenIn = \"rust\"; :>> path = \"u32\"; \
+         :>> capabilities = \"Debug, Clone, PartialEq, Default\"; } }"
     ));
     assert!(first.contains("attribute def RustStr :> String"));
     assert!(
@@ -136,7 +136,7 @@ fn the_generated_package_parses_resolves_and_binds() {
         .owned(get_stock)
         .iter()
         .filter_map(|&child| {
-            let direction = model.get(child, "direction")?.as_str()?;
+            let direction = model.maybe(child, "direction")?.as_str()?;
             Some((model.name(child)?.to_string(), direction.to_string()))
         })
         .collect();
@@ -155,7 +155,7 @@ fn the_generated_package_parses_resolves_and_binds() {
     ));
 }
 
-/// The `@rust { :>> name = value; ... }` pairs of one element, read the
+/// The `@code { :>> writtenIn = \"rust\"; :>> name = value; ... }` pairs of one element, read the
 /// way a code generator reads them: each value names the metadata
 /// attribute its reified redefinition points at.
 fn bindings_of(model: &Model, element: ElementId) -> std::collections::HashMap<String, String> {
@@ -169,7 +169,7 @@ fn bindings_of(model: &Model, element: ElementId) -> std::collections::HashMap<S
                 if model.kind(rel) != ElementKind::Redefinition {
                     return None;
                 }
-                match model.get(rel, "redefinedFeature") {
+                match model.maybe(rel, "redefinedFeature") {
                     Some(Value::Ref(target)) => Some(*target),
                     _ => None,
                 }
@@ -183,14 +183,14 @@ fn bindings_of(model: &Model, element: ElementId) -> std::collections::HashMap<S
                 if model.kind(part) != ElementKind::FeatureValue {
                     return None;
                 }
-                match model.get(part, "value") {
+                match model.maybe(part, "value") {
                     Some(Value::Ref(literal)) => Some(*literal),
                     _ => None,
                 }
             }) else {
                 continue;
             };
-            let rendered = match model.get(value, "value") {
+            let rendered = match model.maybe(value, "value") {
                 Some(Value::String(text)) => text.clone(),
                 Some(Value::Bool(flag)) => flag.to_string(),
                 Some(Value::Int(int)) => int.to_string(),

@@ -2,88 +2,19 @@
 //! connection: initialize, open a document, receive diagnostics, jump to a
 //! definition, hover, and format.
 
-use lsp_server::{Connection, Message, Notification, Request, RequestId};
+mod common;
+
+use common::{serving, Client};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use serde_json::{json, Value};
 
-struct Client {
-    connection: Connection,
-    next_id: i32,
-}
-
-impl Client {
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        let resp = self.send_request(method, params);
-        assert!(resp.error.is_none(), "error response: {:?}", resp.error);
-        resp.result.unwrap_or(Value::Null)
-    }
-
-    fn send_request(&mut self, method: &str, params: Value) -> lsp_server::Response {
-        let id = RequestId::from(self.next_id);
-        self.next_id += 1;
-        self.connection
-            .sender
-            .send(Message::Request(Request {
-                id: id.clone(),
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-        loop {
-            match self.recv() {
-                Message::Response(resp) if resp.id == id => return resp,
-                _ => continue,
-            }
-        }
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.connection
-            .sender
-            .send(Message::Notification(Notification {
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-    }
-
-    fn recv(&mut self) -> Message {
-        self.connection
-            .receiver
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("server did not answer")
-    }
-
-    fn wait_diagnostics(&mut self) -> Value {
-        loop {
-            match self.recv() {
-                Message::Notification(n)
-                    if n.method == lsp_types::notification::PublishDiagnostics::METHOD =>
-                {
-                    return n.params;
-                }
-                _ => continue,
-            }
-        }
-    }
-}
-
 #[test]
 fn serves_diagnostics_definition_hover_and_formatting() {
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
 
     // handshake
-    client.request(
-        lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {} }),
-    );
-    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    client.initialize();
 
     // open a document: one good reference, one unresolved, one parse error
     let uri = "file:///demo.sysml";
@@ -251,17 +182,8 @@ fn serves_diagnostics_definition_hover_and_formatting() {
 
 #[test]
 fn serves_diagrams_for_a_preview() {
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
-    client.request(
-        lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {} }),
-    );
-    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    let (mut client, handle) = serving();
+    client.initialize();
 
     let uri = "file:///preview.sysml";
     let text = "part def PowerSource;\npart def Engine :> PowerSource {\n\tpart p : Piston;\n}\npart def Piston;\n";
@@ -289,6 +211,27 @@ fn serves_diagrams_for_a_preview() {
     let result = client.request("sysml/diagram", json!({ "uri": uri, "view": "browser" }));
     assert!(result["svg"].as_str().unwrap().contains("Engine"));
 
+    // A file of usages declares no definition of its own: read alone it
+    // has nothing to draw, and read with the folder it was written in it
+    // has the definitions that folder declares.
+    let usages = "file:///usages.sysml";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": usages, "languageId": "sysml", "version": 1,
+                                  "text": "package U {\n\tpart e : Engine;\n}\n" } }),
+    );
+    client.wait_diagnostics();
+    let alone = client.request("sysml/diagram", json!({ "uri": usages }));
+    let svg = alone["svg"].as_str().unwrap();
+    assert!(!svg.contains("<rect class=\"box\""), "{svg}");
+    let folder = client.request(
+        "sysml/diagram",
+        json!({ "uri": usages, "scope": "directory" }),
+    );
+    let svg = folder["svg"].as_str().unwrap();
+    assert!(svg.contains("<rect class=\"box\""), "{svg}");
+    assert!(svg.contains("Engine"), "{svg}");
+
     // a document with no definitions falls back to the tree
     let empty = "package P {\n\tpart car;\n}\n";
     client.notify(
@@ -304,23 +247,8 @@ fn serves_diagrams_for_a_preview() {
     assert!(result.is_null());
 
     // malformed parameters are a proper error response, not a crash
-    let id = client.next_id;
-    client.next_id += 1;
-    client
-        .connection
-        .sender
-        .send(Message::Request(lsp_server::Request {
-            id: id.into(),
-            method: "sysml/diagram".into(),
-            params: json!({ "uri": 42 }),
-        }))
-        .unwrap();
-    loop {
-        if let Message::Response(response) = client.recv() {
-            assert!(response.error.is_some());
-            break;
-        }
-    }
+    let response = client.send_request("sysml/diagram", json!({ "uri": 42 }));
+    assert!(response.error.is_some());
 
     client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
     client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
@@ -349,17 +277,8 @@ fn lays_diagrams_out_with_elk_when_asked() {
         // no such command: the built-in layout draws instead
         ("/nonexistent/elk/elkrs", None),
     ] {
-        let (server_side, client_side) = Connection::memory();
-        let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-        let mut client = Client {
-            connection: client_side,
-            next_id: 1,
-        };
-        client.request(
-            lsp_types::request::Initialize::METHOD,
-            json!({ "capabilities": {}, "initializationOptions": { "elkCommand": command } }),
-        );
-        client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+        let (mut client, handle) = serving();
+        client.initialize_with(json!({ "elkCommand": command, "noLibrary": true }));
 
         let uri = "file:///layout.sysml";
         client.notify(
@@ -398,17 +317,8 @@ fn opened_as(
     language: &str,
     text: &str,
 ) -> (Client, std::thread::JoinHandle<()>, Value) {
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
-    client.request(
-        lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {} }),
-    );
-    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    let (mut client, handle) = serving();
+    client.initialize();
     client.notify(
         lsp_types::notification::DidOpenTextDocument::METHOD,
         json!({ "textDocument": {
@@ -417,12 +327,6 @@ fn opened_as(
     );
     let diagnostics = client.wait_diagnostics();
     (client, handle, diagnostics)
-}
-
-fn shut(mut client: Client, handle: std::thread::JoinHandle<()>) {
-    client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
-    client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
-    handle.join().unwrap();
 }
 
 #[test]
@@ -461,7 +365,48 @@ fn a_new_name_is_whatever_this_file_reads_as_one_name() {
             .is_some_and(|err| err.message.contains("is not a name")),
         "a name outside the lexer's alphabet was accepted"
     );
-    shut(client, handle);
+    client.stop(handle);
+}
+
+/// A feature that redefines two things answers to the name of the first
+/// of them alone, so renaming the second leaves every mention of it
+/// standing -- those are spelled with the first name and follow it.
+#[test]
+fn renaming_the_second_name_a_redefinition_borrows_leaves_the_first_alone() {
+    let uri = "file:///two.sysml";
+    let (mut client, handle) = opened(
+        uri,
+        "package Demo {\n\
+         \x20   part driver;\n\
+         \x20   part driver_b;\n\
+         \x20   part outer {\n\
+         \x20       part :>> driver :>> driver_b;\n\
+         \x20       part also subsets driver;\n\
+         \x20   }\n\
+         }\n",
+    );
+    let renamed = client.send_request(
+        lsp_types::request::Rename::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 2, "character": 11 },
+            "newName": "operator",
+        }),
+    );
+    assert!(renamed.error.is_none(), "{:?}", renamed.error);
+
+    // the declaration and the `:>> driver_b` that names it, and nothing
+    // on the line that says `subsets driver`
+    let edits = renamed.result.unwrap()["changes"][uri]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(edits.len(), 2, "{edits:?}");
+    assert!(
+        edits.iter().all(|edit| edit["range"]["start"]["line"] != 5),
+        "{edits:?}"
+    );
+    client.stop(handle);
 }
 
 #[test]
@@ -478,7 +423,7 @@ fn a_document_that_does_not_parse_is_left_alone() {
         }),
     );
     assert!(edits.is_null(), "{edits}");
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -502,7 +447,7 @@ fn a_notification_this_server_cannot_read_is_dropped_rather_than_fatal() {
         json!({ "textDocument": { "uri": uri } }),
     );
     assert_eq!(symbols[0]["name"], "Demo");
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -547,7 +492,7 @@ fn a_rename_that_would_capture_a_name_where_it_is_used_is_refused() {
         .unwrap()
         .len();
     assert_eq!(edits, 3); // the declaration and both mentions
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -570,7 +515,7 @@ fn a_mention_spelled_some_other_way_is_not_rewritten_as_this_name() {
     );
     let edits = edit["changes"][uri].as_array().unwrap();
     assert_eq!(edits.len(), 1, "{edits:?}"); // the declaration, alone
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -599,7 +544,7 @@ fn a_rename_no_alias_can_follow_is_refused_rather_than_half_done() {
             .is_some_and(|err| err.message.contains("no rename can follow")),
         "a rename that leaves an alias pointing at nothing was offered"
     );
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -630,7 +575,7 @@ fn a_buffer_with_no_file_behind_it_is_read_as_the_language_its_client_declared()
         }),
     );
     assert!(renamed.error.is_none(), "{:?}", renamed.error);
-    shut(client, handle);
+    client.stop(handle);
 }
 
 #[test]
@@ -643,16 +588,11 @@ fn a_layout_command_that_never_answers_does_not_take_the_server_with_it() {
     std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     client.request(
         lsp_types::request::Initialize::METHOD,
         json!({ "capabilities": {}, "initializationOptions": {
-            "elkCommand": fake.to_str().unwrap(), "elkTimeoutMs": 200
+            "elkCommand": fake.to_str().unwrap(), "elkTimeoutMs": 200, "noLibrary": true
         }}),
     );
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
@@ -676,7 +616,7 @@ fn a_layout_command_that_never_answers_does_not_take_the_server_with_it() {
         json!({ "textDocument": { "uri": uri } }),
     );
     assert_eq!(symbols[0]["name"], "A");
-    shut(client, handle);
+    client.stop(handle);
     std::fs::remove_file(&fake).ok();
 }
 
@@ -690,16 +630,11 @@ fn a_layout_command_that_never_answers_does_not_take_the_server_with_it() {
 /// written against.
 #[test]
 fn diagnostics_say_what_the_specification_requires() {
-    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
+    let library = std::path::Path::new("../sysml-stdlib/library");
     if !library.is_dir() {
         return; // the corpus submodule is not checked out
     }
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     client.request(
         lsp_types::request::Initialize::METHOD,
         json!({

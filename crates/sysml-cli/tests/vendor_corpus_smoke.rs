@@ -43,29 +43,10 @@ fn vendor_root() -> Option<PathBuf> {
     }
 }
 
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
-            out.push(path);
-        }
-    }
-}
-
 /// Every `.sysml`/`.kerml` file the vendored release ships, whatever the
 /// release's directory layout happens to be.
 fn corpus_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    collect_files(root, &mut files);
-    files.sort();
+    let files = sysml_semantics::model_files(root);
     assert!(
         files.len() >= MIN_FILES,
         "only {} corpus file(s) under {}: the submodule looks truncated \

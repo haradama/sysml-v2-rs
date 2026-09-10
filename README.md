@@ -12,13 +12,13 @@ and a CLI. Both are validated against the official
 corpus — all 403 `.sysml`/`.kerml` files: the complete standard libraries
 (`sysml.library`) and every official example, training and validation
 model. **All 403 files parse cleanly and every reference in any of them
-resolves**: the standard library on its own (16547/16547), the library
-together with all official SysML examples (23551/23551), and the KerML
-examples alongside it (17860/17860), counting the operands of `connect`,
+resolves**: the standard library on its own (17411/17411), the library
+together with all official SysML examples (25057/25057), and the KerML
+examples alongside it (19146/19146), counting the operands of `connect`,
 `bind`, `allocate`, `first ... then ...` and `satisfy ... by ...`, the
-name an `alias` is `for`, and the names written inside expressions -- a
-constraint body, the result of a `calc`, the value after `=` --
-alongside every typing and specialization.
+name an `alias` is `for`, the path each `import` writes, and the names
+written inside expressions -- a constraint body, the result of a `calc`,
+the value after `=` -- alongside every typing and specialization.
 
 Eleven of those used to resolve to themselves. A feature that declares
 no name of its own answers to the name of what it redefines -- which is
@@ -37,8 +37,14 @@ To run the corpus tests, fetch the submodule first:
 
 ```sh
 git submodule update --init --depth 1
-cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
+cargo run -p sysml-cli -- corpus crates/sysml-stdlib/library
 ```
+
+The standard library itself needs no submodule: it is checked in under
+[`crates/sysml-stdlib`](crates/sysml-stdlib) and built into every binary
+that resolves names, so `cargo install sysml-cli` gives a tool that
+resolves rather than one that asks for a path first. The submodule is
+for the example models the corpus tests read.
 
 ## Crates
 
@@ -49,9 +55,9 @@ cargo run -p sysml-cli -- corpus vendor/sysml-v2-release/sysml.library
 | [`sysml-semantics`](crates/sysml-semantics) | Name resolution (imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions), relationship reification and implied-relationship materialization — the whole standard library resolves. Also the 180 well-formedness constraints the specification states in OCL, read from the metamodel and evaluated -- with the 235 derivations beside them answering for the properties the metamodel declares are never stored. Three answers rather than two, so a constraint reaching for part of the abstract syntax this model does not build is reported as *not evaluated* instead of as a violation -- and a flag the builder reads off the source for every metaclass that has it answers with the default the metamodel declares, which is what tells a model that said nothing from one this does not build |
 | [`sysml-interchange`](crates/sysml-interchange) | Standard JSON interchange: the complete property set of every metaclass, derived ownership/naming/inheritance-closure/import properties, reified memberships down to `ParameterMembership`/`SubjectMembership`/`StateSubactionMembership`/... with visibility and kind, deterministic UUIDs; resolved whole-library round-trip tested |
 | [`sysml-diagram`](crates/sysml-diagram) | Definition/interconnection diagrams in the standard's own notation — labelled compartment stacks, ports on the border, composite and reference memberships told apart by the diamond the specification draws — laid out here or by the Eclipse Layout Kernel (`elkrs` for the arrangement and the routes) |
-| [`sysml-rust`](crates/sysml-rust) | The Rust side of a model, both ways. `import` reads an existing crate's rustdoc JSON as a SysML package whose definitions carry `@rust` binding metadata; `generate` writes Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
+| [`sysml-rust`](crates/sysml-rust) | The Rust side of a model, both ways. `import` reads an existing crate's rustdoc JSON as a SysML package whose definitions carry `@code` binding metadata -- which says which language it is about rather than being one language's own notation, so a model bound to a Python API is written the same way; `generate` writes Rust from a resolved model: definitions become structs/enums (multiplicities as containers, declared values as `Default`, inheritance flattened, cycles boxed), calculations become functions and methods with simple result expressions translated, `abstract` calculations and action definitions become traits, an action whose dataflow the model wired completely becomes the body that performs it, state definitions become state machines (guards translated where they read the event payload), API-bound ports become generics and `perform`ed actions delegating methods |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, go-to-definition, find-references, rename, completion, hover, symbols, formatting — with a [VSCode extension](editors/vscode) as its client |
-| [`sysml-cli`](crates/sysml-cli) | `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`, `diagram`, `import-rust`, `rustgen`, `api`, `mcp`, `corpus`); `mcp` speaks the Model Context Protocol over stdio, so an AI agent can ask whether a model parses and resolves, what names are legal at a point, what shape a definition has once it is resolved, and what the standard library actually declares -- and can have the two directions between code and model derived rather than guessed: an existing Rust crate's API stated as SysML, and the Rust a model implies together with the list of what the model left for a person to write. `--project` holds the model being worked on, so a call names no files and cannot leave one out; `api` is the client for the SysML v2 API & Services REST standard, and `api push` sends what `export` writes |
+| [`sysml-cli`](crates/sysml-cli) | `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`, `diagram`, `import-rust`, `rustgen`, `api`, `mcp`, `corpus`). A finding is drawn to a person the way rustc draws one -- the line quoted, the span underlined, and what is known about it underneath -- and handed to a program with the same span and, for a name that resolved to nothing, the import it wants or the name it was nearly spelt as; `mcp` speaks the Model Context Protocol over stdio, so an AI agent can ask whether a model parses and resolves, what names are legal at a point, what shape a definition has once it is resolved, what the standard library actually declares -- and, where the name is the thing it is missing, what the library *says* it means, since the words a specification uses are rarely the words the library uses -- and how each kind of thing is written at all, with a worked example this toolchain has checked -- and can have the two directions between code and model derived rather than guessed: an existing Rust crate's API stated as SysML, and the Rust a model implies together with the list of what the model left for a person to write. `--project` holds the model being worked on, so a call names no files and cannot leave one out; `plan` says what a model implies for code in no language in particular -- shapes, multiplicities, what a type bottoms out in, a state machine's transitions, a requirement's own constraint -- so that an agent with a language this toolchain has never heard of can write it without guessing; `api` is the client for the SysML v2 API & Services REST standard, and `api push` sends what `export` writes |
 
 ## Usage
 
@@ -257,8 +263,7 @@ model gets its library types labelled while staying a diagram of its own
 definitions:
 
 ```console
-$ cargo run -p sysml-cli -- diagram vehicle.sysml \
-    --library vendor/sysml-v2-release/sysml.library -o vehicle.svg
+$ cargo run -p sysml-cli -- diagram vehicle.sysml -o vehicle.svg
 wrote 5 box(es), 1 specialization(s), 2 composition(s), 0 reference(s), 0 subsetting(s), 0 connection(s), 0 flow(s), 0 allocation(s), 0 transition(s), 0 dependency(ies) and 0 satisfaction(s) to vehicle.svg
 ```
 
@@ -304,7 +309,7 @@ let file = sysml_syntax::ast::SourceFile::cast(parse.syntax()).unwrap();
 `import-rust` turns a crate's public API into a SysML package, so a system
 model can type its ports with the crate's traits and `perform` its
 functions -- and so name resolution catches the model drifting from the
-API. Every definition carries a `@rust { ... }` metadata usage naming the
+API. Every definition carries a `@code { ... }` metadata usage naming the
 Rust item it binds to, which is what a code generator calls instead of
 inventing parallel types:
 
@@ -355,9 +360,9 @@ so a file that imports a sibling is not reported as broken for having been
 opened alone. `sysml.workspace.exclude` leaves out directories that are not
 yours to edit -- a vendored corpus, someone else's model.
 
-The packaged extension carries the server and `sysml.library` inside it, so
-nothing needs configuring; `sysml.server.path` / `sysml.library.path`
-override the bundled copies when set. For extension development,
+The packaged extension carries the server and the standard library inside
+it, so nothing needs configuring; `sysml.server.path` /
+`sysml.library.path` override the bundled copies when set. For extension development,
 `cd editors/vscode && npm install && npm run compile` and press F5.
 
 ## Development

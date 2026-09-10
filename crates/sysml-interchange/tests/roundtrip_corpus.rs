@@ -5,34 +5,14 @@
 
 use std::path::Path;
 
-fn collect_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
-            out.push(path);
-        }
-    }
-}
-
 #[test]
 fn library_round_trips_through_json() {
-    let root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release/sysml.library");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sysml-stdlib/library");
     if !root.exists() {
         eprintln!("skipping: {} not checked out", root.display());
         return;
     }
-    let mut files = Vec::new();
-    collect_files(&root, &mut files);
-    files.sort();
+    let files = sysml_semantics::model_files(&root);
 
     let mut ws = sysml_semantics::Workspace::new();
     for path in &files {

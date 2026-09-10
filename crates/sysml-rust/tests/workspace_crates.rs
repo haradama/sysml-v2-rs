@@ -94,8 +94,7 @@ fn every_crate_imports_into_a_model_that_resolves() {
 
         // and every name in it must resolve against the standard library
         let mut ws = sysml_semantics::Workspace::new();
-        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../vendor/sysml-v2-release/sysml.library");
+        let lib = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../sysml-stdlib/library");
         if lib.is_dir() {
             ws.load_dir(&lib).unwrap();
         }

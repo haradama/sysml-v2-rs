@@ -8,6 +8,8 @@
 //! - `check` -- does this model parse, and does every name in it resolve?
 //! - `visible_names` -- what may legally be written at this point?
 //! - `library_search` -- what does the standard library actually offer?
+//! - `notation` -- how is this kind of thing written at all?
+//! - `generation_plan` -- what does this model imply for code?
 //!
 //! What they do is tell the truth about a model, which is the part a
 //! language model cannot supply for itself. Where something can be
@@ -80,6 +82,23 @@ impl Server {
     /// A server that also holds the model being worked on, so a call
     /// that names no source of its own is about that model.
     pub fn with_project(library: Option<&Path>, project: Option<&Path>) -> Server {
+        Server::holding(library, project, true)
+    }
+
+    /// A server with no standard library at all, which `sysml
+    /// --no-library mcp` starts.
+    ///
+    /// Every reference into the library then reads as unresolved and the
+    /// constraints are not put at all -- which is what a model looks
+    /// like to a tool that cannot find a library, and is worth being
+    /// able to ask for on purpose rather than only by accident.
+    pub fn without_library(project: Option<&Path>) -> Server {
+        Server::holding(None, project, false)
+    }
+
+    /// Both of those: `fallback` is whether the copy built into this
+    /// binary stands in for a library nobody named.
+    fn holding(library: Option<&Path>, project: Option<&Path>, fallback: bool) -> Server {
         let mut base = Workspace::new();
         let mut loaded = None;
         if let Some(dir) = library {
@@ -104,6 +123,18 @@ impl Server {
                     dir.display()
                 ),
             }
+        }
+        // Nothing said where one is, so the copy built into this binary.
+        // An agent's launcher often has nowhere to put a flag, and a
+        // server that answers `library_search` with nothing at all is
+        // worse than useless: it reads as "the library does not declare
+        // that", which is a wrong answer rather than a missing one.
+        if loaded.is_none() && fallback {
+            for (name, text) in sysml_stdlib::FILES {
+                base.add_file(*name, text);
+            }
+            base.resolve_all();
+            loaded = Some(format!("built in ({})", sysml_stdlib::RELEASE));
         }
         let mut server = Server {
             base,
@@ -209,6 +240,8 @@ impl Server {
             "generate_rust" => self.generate_rust(&arguments),
             "outline" => self.outline(&arguments),
             "import_rust" => self.import_rust(&arguments),
+            "notation" => notation(&arguments),
+            "generation_plan" => self.generation_plan(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
         Ok(match answered {
@@ -289,7 +322,7 @@ impl Server {
                 .expect("a finding in a file that was opened");
             let (name, text) = &texts[which];
             extra["path"] = json!(name);
-            crate::at(text, usize::from(finding.range.start()), extra)
+            crate::at(text, finding.range, extra)
         };
 
         // syntax first: a file that does not parse has no names worth
@@ -310,18 +343,62 @@ impl Server {
         }
 
         let stats = ws.resolve_files(&open);
-        let unresolved: Vec<Value> = ws
-            .findings(&open)
+        // The names, the root packages that collide with the library's,
+        // and -- if the model is in any state to be asked -- what the
+        // specification itself requires of it. The order and the stop
+        // are `diagnose`'s: this used to put every constraint to
+        // whatever it was handed, so one dangling reference came back
+        // as a list of complaints about the hole, and a project opened
+        // without the library was told it broke rules that are written
+        // against the library.
+        let diagnosed = ws.diagnose(&open);
+        // A name that found nothing is reported with what it might have
+        // meant. Resolution says only that both of these missed:
+        //
+        //     attribute capacity : VolumeValue;   -- `ISQ::VolumeValue`, un-imported
+        //     attribute temp : Temperature;       -- `TemperatureValue`, misremembered
+        //
+        // and they are not the same mistake. An agent told only that
+        // each resolved to nothing has to search for them one at a
+        // time; told which is which, it has the answer already.
+        let missed: Vec<String> = diagnosed
+            .found
             .names
             .iter()
-            .map(|f| place(f, json!({ "name": f.what })))
+            .map(|f| f.what.clone())
             .collect();
-        // What the specification itself requires, over and above every
-        // name resolving. `unevaluated` is a count and not a list: it
-        // says nothing about this model -- it says which parts of the
-        // abstract syntax this toolchain does not build -- and what a
-        // client acts on is the violations.
-        let checked = ws.check_rules(&open);
+        let might = ws.suggestions(&missed);
+        let unresolved: Vec<Value> = diagnosed
+            .found
+            .names
+            .iter()
+            .zip(&might)
+            .map(|(f, might)| {
+                let mut said = json!({ "name": f.what });
+                if !might.elsewhere.is_empty() {
+                    said["declared_as"] = json!(might.elsewhere);
+                }
+                if !might.near.is_empty() {
+                    said["did_you_mean"] = json!(might.near);
+                }
+                place(f, said)
+            })
+            .collect();
+        // A root package of one's own named after one of the library's
+        // resolves -- each side reads its own -- so it is said alongside
+        // the names rather than counted among them. An agent writing a
+        // model is exactly who needs telling.
+        let collisions: Vec<Value> = diagnosed
+            .found
+            .collisions
+            .iter()
+            .map(|f| place(f, json!({ "message": f.what })))
+            .collect();
+        // `unevaluated` is a count and not a list: it says nothing about
+        // this model -- it says which parts of the abstract syntax this
+        // toolchain does not build -- and what a client acts on is the
+        // violations.
+        let checked = &diagnosed.rules;
         let violations: Vec<Value> = checked
             .violations
             .iter()
@@ -334,14 +411,21 @@ impl Server {
             })
             .collect();
         Ok(json!({
-            "ok": unresolved.is_empty() && checked.violations.is_empty(),
+            "ok": unresolved.is_empty() && violations.is_empty(),
             "library": self.library,
             "project": self.project.as_ref().map(|it| it.root.clone()),
             "parseErrors": [],
             "resolved": stats.resolved,
             "references": stats.resolved + stats.unresolved,
             "unresolved": unresolved,
+            "collisions": collisions,
             "rules": {
+                // whether they were put at all: a model with a name that
+                // resolves to nothing is not asked, and neither is one
+                // opened without the library the constraints are written
+                // against, so an empty list is not a clean bill until
+                // this says it is
+                "asked": diagnosed.asked,
                 "violations": violations,
                 "held": checked.held.len(),
                 "unevaluated": checked.unevaluated.len(),
@@ -407,17 +491,9 @@ impl Server {
         };
         ws.resolve_files(&open);
         let roots = match arguments.get("within").and_then(Value::as_str) {
-            Some(within) => {
-                // by the name it answers to, then by the whole of it:
-                // the index is over declared names, and two packages can
-                // declare the same one
-                let declared = within.rsplit("::").next().unwrap_or(within);
-                vec![ws
-                    .search_names(declared, 500)
-                    .into_iter()
-                    .find(|&elem| ws.qualified_name_of(elem) == within)
-                    .ok_or_else(|| format!("nothing is named `{within}`"))?]
-            }
+            Some(within) => vec![ws
+                .named_globally(within)
+                .ok_or_else(|| format!("nothing is named `{within}`"))?],
             // what the call named, or everything it opened
             None => focus
                 .map_or(open, |file| vec![file])
@@ -530,8 +606,40 @@ impl Server {
         }))
     }
 
-    /// What the standard library has under that name. A model asked to
-    /// use a quantity or a port will otherwise invent one.
+    /// What the model implies for code, in no language in particular.
+    ///
+    /// `generate_rust` answers the same question in Rust and hands back
+    /// Rust. This hands back what the Rust was written from, so that a
+    /// caller with a language of its own -- which is most callers -- can
+    /// write it without guessing at the things a model does not wear on
+    /// its face: whether four wheels are an array or a list, whether a
+    /// part is owned or referred to, what `ISQ::MassValue` bottoms out
+    /// in.
+    fn generation_plan(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let Opened {
+            mut ws,
+            open,
+            focus,
+        } = self.opened(arguments)?.about_something()?;
+        ws.resolve_files(&open);
+        let roots: Vec<ElementId> = match arguments.get("within").and_then(Value::as_str) {
+            Some(within) => vec![ws
+                .named_globally(within)
+                .ok_or_else(|| format!("nothing is named `{within}`"))?],
+            None => focus
+                .map_or(open, |file| vec![file])
+                .iter()
+                .flat_map(|&file| ws.file_roots(file).to_vec())
+                .collect(),
+        };
+        let planned = crate::plan::of(&mut ws, &roots);
+        serde_json::to_value(&planned).map_err(|why| why.to_string())
+    }
+
+    /// What the standard library has under that name -- or, where
+    /// nothing is named that, what it has that is *about* it. A model
+    /// asked to use a quantity or a port will otherwise invent one.
     fn library_search(&mut self, arguments: &Value) -> Result<Value, String> {
         let query = arguments
             .get("query")
@@ -546,26 +654,108 @@ impl Server {
             .get("scope")
             .and_then(Value::as_str)
             .unwrap_or("library");
+        let asked = arguments
+            .get("in")
+            .and_then(Value::as_str)
+            .unwrap_or("names");
         // The library is already resolved and the model is not, so the
         // two are searched in different workspaces rather than one: a
-        // question about the library costs nothing it need not.
-        let mut found: Vec<Value> = Vec::new();
-        if scope != "model" {
-            found.extend(entries(&self.base, &self.base.search_names(query, limit)));
+        // question about the library costs nothing it need not. The
+        // model is opened once here rather than inside the search,
+        // which may run twice.
+        let mine = match scope == "library" {
+            true => None,
+            false => {
+                self.refresh();
+                let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+                // Resolved, because what a match *is* is not written in
+                // the text of it: an `alias Rueda for Wheel;` read
+                // unresolved is a `Membership` with no documentation and
+                // nothing to say what it names, which is the answer a
+                // caller least wants and the one it used to get.
+                ws.resolve_files(&open);
+                Some((ws, open))
+            }
+        };
+        let hunt = |how: &str| -> Vec<Value> {
+            let mut found: Vec<Value> = Vec::new();
+            if scope != "model" {
+                found.extend(entries(&self.base, &matches(&self.base, how, query, limit)));
+            }
+            if let Some((ws, open)) = &mine {
+                let ids: Vec<ElementId> = matches(ws, how, query, limit)
+                    .into_iter()
+                    // the library was searched already, or was not asked for
+                    .filter(|&elem| ws.element_file(elem).is_some_and(|f| open.contains(&f)))
+                    .collect();
+                found.extend(entries(ws, &ids));
+            }
+            found
+        };
+
+        let mut how = asked;
+        let mut found = hunt(how);
+        // Nothing is named that. The words a specification used are not
+        // the words the library used -- "how much fluid it holds" is
+        // `ISQ::VolumeValue` -- and an empty answer reads as "the
+        // library does not have one", which is what sends a model off to
+        // invent its own. So look where the library says what it means,
+        // rather than only at what it calls it.
+        if found.is_empty() && how == "names" {
+            how = "documentation";
+            found = hunt(how);
         }
-        if scope != "library" {
-            self.refresh();
-            let Opened { ws, open, .. } = self.opened(arguments)?.about_something()?;
-            let mine: Vec<ElementId> = ws
-                .search_names(query, limit)
-                .into_iter()
-                // the library was searched already, or was not asked for
-                .filter(|&elem| ws.element_file(elem).is_some_and(|f| open.contains(&f)))
-                .collect();
-            found.extend(entries(&ws, &mine));
-        }
-        Ok(json!({ "found": found }))
+        Ok(json!({ "found": found, "searched": how }))
     }
+}
+
+/// What one workspace answers to a search of the kind asked for.
+fn matches(ws: &Workspace, how: &str, query: &str, limit: usize) -> Vec<ElementId> {
+    match how {
+        "documentation" => ws.search_documentation(query, limit),
+        "both" => {
+            let mut found = ws.search_names(query, limit);
+            let named = found.clone();
+            found.extend(
+                ws.search_documentation(query, limit)
+                    .into_iter()
+                    .filter(|id| !named.contains(id)),
+            );
+            found
+        }
+        // a client that asked for something else meant the default,
+        // which is the search that answers most questions
+        _ => ws.search_names(query, limit),
+    }
+}
+
+/// How a construct is written, with an example that has been checked.
+///
+/// Asked for nothing in particular it answers the list, which is the
+/// question a caller with a paragraph of prose in front of it actually
+/// has: not "what is the grammar of a requirement" but "which of these
+/// is the sentence I am looking at".
+fn notation(arguments: &Value) -> Result<Value, String> {
+    let Some(of) = arguments.get("of").and_then(Value::as_str) else {
+        let every: Vec<Value> = crate::notation::NOTATION
+            .iter()
+            .map(|it| json!({ "of": it.of, "when": it.when }))
+            .collect();
+        return Ok(json!({ "constructs": every }));
+    };
+    let Some(found) = crate::notation::notation(of) else {
+        let names: Vec<&str> = crate::notation::NOTATION.iter().map(|it| it.of).collect();
+        return Err(format!(
+            "nothing here is written as `{of}`; ask about one of: {}",
+            names.join(", ")
+        ));
+    };
+    Ok(json!({
+        "of": found.of,
+        "when": found.when,
+        "sysml": found.sysml,
+        "see_also": found.see_also,
+    }))
 }
 
 /// The other files the model is spread over. A model of any size is,
@@ -611,11 +801,22 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
     found
         .iter()
         .map(|&elem| {
+            // An alias is a membership that carries a name, and the
+            // standard library offers its friendliest names that way:
+            // `alias TemperatureValue for ThermodynamicTemperatureValue;`.
+            // Read off the alias itself, the metaclass is `Membership`
+            // and there is no documentation -- so the answer a caller
+            // most wants was the one labelled uselessly. What it names
+            // is what it is.
+            let names = ws.alias_target(elem).unwrap_or(elem);
             let mut entry = json!({
                 "name": ws.qualified_name_of(elem),
-                "kind": ws.model().kind(elem).name(),
+                "kind": ws.model().kind(names).name(),
             });
-            if let Some(doc) = ws.documentation_of(elem) {
+            if names != elem {
+                entry["alias_for"] = json!(ws.qualified_name_of(names));
+            }
+            if let Some(doc) = ws.documentation_of(names) {
                 entry["documentation"] = json!(doc);
             }
             entry
@@ -647,7 +848,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
     if let Some((file, (range, _))) = ws.element_file(elem).zip(ws.element_ranges(elem)) {
         let name = ws.file_name(file).to_string();
         let text = ws.file_parse(file).syntax().text().to_string();
-        entry = crate::at(&text, usize::from(range.start()), entry);
+        entry = crate::at(&text, range, entry);
         entry["path"] = json!(name);
     }
     let supertypes = ws.supertypes(elem);
@@ -775,7 +976,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "check",
-            "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path -- and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. `rules.unevaluated` counts the constraints that could not be asked at all, which says what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
+            "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path, each with what it might have meant: `declared_as` names the elements that answer to it somewhere, so the name is right and wants an import, while `did_you_mean` names what is near it, so the name itself is wrong -- which root packages of your own take a name the standard library has already taken (`collisions`: both sides still resolve, but the name means one thing in your model and another in the library), and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. The constraints are put only to a model that parses, resolves and has the library to be asked against -- one asked with a name still dangling answers about the hole and not about the model -- so read `rules.asked` before reading an empty `rules.violations` as a clean bill. `rules.unevaluated` counts the constraints that could not be asked at all, which says what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
             "inputSchema": {
                 "type": "object",
                 "properties": source_properties,
@@ -823,7 +1024,7 @@ fn tools() -> Value {
         },
         {
             "name": "import_rust",
-            "description": "State an existing Rust crate's public API as a SysML package, every definition carrying the `@rust { ... }` metadata that names the item it binds to -- so a model can type its ports and `perform` its actions against the real API, and `generate_rust` can later call it instead of inventing a parallel one. The input is what `cargo +nightly rustdoc -- -Zunstable-options --output-format json` writes; this server does not run cargo. `skipped` names every item that has no monomorphic SysML shape, so what is left to model by hand is stated rather than missing, and `checked` says whether every name in the package resolves.",
+            "description": "State an existing Rust crate's public API as a SysML package, every definition carrying the `@code { ... }` metadata that names the language and the item it binds to -- so a model can type its ports and `perform` its actions against the real API, and `generate_rust` can later call it instead of inventing a parallel one. The input is what `cargo +nightly rustdoc -- -Zunstable-options --output-format json` writes; this server does not run cargo. `skipped` names every item that has no monomorphic SysML shape, so what is left to model by hand is stated rather than missing, and `checked` says whether every name in the package resolves.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -834,14 +1035,39 @@ fn tools() -> Value {
             },
         },
         {
+            "name": "notation",
+            "description": "How a kind of thing is written in SysML v2, with a worked example that this toolchain has checked: it parses, every name in it resolves against the standard library, and the constraints the specification states hold of it -- so it can be copied and adapted rather than guessed at. Asked with no `of`, it lists every construct with a line saying when to reach for it, which is the question a caller transcribing prose or code actually has: which of these is the sentence in front of me. Ask this before writing a construct you have not written here before; the examples are held right by a test, and what a language model remembers of SysML v2 largely is not.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "of": { "type": "string", "description": "The construct to show -- `part`, `requirement`, `state`, and so on. Leave it out for the list of what there is, each with when it is wanted." },
+                },
+            },
+        },
+        {
+            "name": "generation_plan",
+            "description": "What the model implies for code, in no language in particular -- the answer `generate_rust` writes Rust from, handed over so that you can write the language you actually have. Every definition with the shape it takes in code (`record`, `value` for a primitive under another name, `enumeration`, `variation`, `abstract`, `port`, `requirement`, `state machine`, `function`, `behaviour`), what the model declares it specializes (the parent it wrote, not everything above it), and for each feature the things a model does not wear on its face and a reader guesses wrong: what the type bottoms out in among the standard library's primitives (`ISQ::MassValue` is a `Real`, and its name does not say so), the declared default, and what inherited feature it redefines -- including the ones written with no name of their own, which carry a value the model states and used to go missing. A state machine says which state it starts in, which is not the first one declared. A requirement carries what it demands, as the model wrote it, and what it is about. A behaviour carries the order of its steps and what flows between them. `constants` carries what a package declares outright, so a default that names one can be followed. `annotations` carries what the model says about a definition that this toolchain has no opinion about -- most usefully `@code { writtenIn = \"rust\"; path = ... }` and its like, which say the thing already exists somewhere and what it is called there, so you bind to it rather than writing it again. Said only where it says something: a multiplicity that is absent is one of the thing, `ordered` and `unique` are given for collections, and `composite` for what a whole can be made of. Nothing here decides anything about a language: no identifier is spelled and no container is named, because those are yours. Ask this before writing code from a model, and write from the answer rather than from the SysML.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                    "within": { "type": "string", "description": "A qualified name to plan instead of the whole model" },
+                },
+            },
+        },
+        {
             "name": "library_search",
-            "description": "Search by name. Answers the qualified name, the metaclass and the documentation of each match -- what a quantity, port or action definition is actually called. `scope` says where to look: the standard library, the model being worked on (so the same concept is not defined twice), or both.",
+            "description": "Search the standard library and your own model. Answers the qualified name, the metaclass and the documentation of each match -- what a quantity, port or action definition is actually called. `scope` says where to look: the standard library, the model being worked on (so the same concept is not defined twice), or both. `in` says what to match: declared names, or the documentation, which is how to find a thing whose name you do not know -- the words a specification uses are rarely the words the library uses, and a sentence about how much a tank holds is asking for `ISQ::VolumeValue`. A name search that finds nothing falls back to the documentation by itself, and `searched` in the answer says which one answered.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Matched case-insensitively against the declared name" },
                     "limit": { "type": "integer", "description": "At most this many matches from each scope (default 20, at most 200)" },
                     "scope": { "type": "string", "enum": ["library", "model", "both"], "description": "Where to search (default `library`)" },
+                    "in": { "type": "string", "enum": ["names", "documentation", "both"], "description": "What to match `query` against (default `names`, which falls back to `documentation` when nothing is named that)" },
                     "text": source_properties["text"],
                     "path": source_properties["path"],
                     "name": source_properties["name"],

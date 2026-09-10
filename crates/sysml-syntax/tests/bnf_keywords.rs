@@ -12,6 +12,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use sysml_corpus::vendor;
+
 /// The words a `RESERVED_KEYWORD =` production reserves.
 fn reserved(path: &Path) -> BTreeSet<String> {
     let text = std::fs::read_to_string(path).unwrap();
@@ -46,11 +48,8 @@ const DEVIATIONS: [&str; 1] = ["new"];
 
 #[test]
 fn the_lexer_reserves_exactly_what_the_specification_does() {
-    let bnf = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release/bnf");
-    if !bnf.is_dir() {
-        eprintln!("skipping: {} not checked out", bnf.display());
-        return;
-    }
+    let Some(root) = vendor() else { return };
+    let bnf = root.join("bnf");
     let sysml = reserved(&bnf.join("SysML-textual-bnf.kebnf"));
     let kerml = reserved(&bnf.join("KerML-textual-bnf.kebnf"));
     assert!(sysml.len() > 100, "the SysML list looks truncated");

@@ -2109,7 +2109,7 @@ use crate::{ElementId, Model, Value};
 impl Model {
     /// `action`, as ActionDefinition declares it.
     pub fn action(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "action") {
+        match self.maybe(id, "action") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2117,7 +2117,7 @@ impl Model {
     }
     /// `actionDefinition`, as ActionUsage declares it.
     pub fn action_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "actionDefinition") {
+        match self.maybe(id, "actionDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2125,7 +2125,7 @@ impl Model {
     }
     /// `actorParameter`, as CaseDefinition declares it.
     pub fn actor_parameter(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "actorParameter") {
+        match self.maybe(id, "actorParameter") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2133,11 +2133,11 @@ impl Model {
     }
     /// `aliasIds`, as Element declares it.
     pub fn alias_ids(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "aliasIds")?.as_str()
+        self.maybe(id, "aliasIds")?.as_str()
     }
     /// `allocation`, as AllocationDefinition declares it.
     pub fn allocation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "allocation") {
+        match self.maybe(id, "allocation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2145,7 +2145,7 @@ impl Model {
     }
     /// `allocationDefinition`, as AllocationUsage declares it.
     pub fn allocation_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "allocationDefinition") {
+        match self.maybe(id, "allocationDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2153,11 +2153,11 @@ impl Model {
     }
     /// `analysisCaseDefinition`, as AnalysisCaseUsage declares it.
     pub fn analysis_case_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "analysisCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "analysisCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `annotatedElement`, as AnnotatingElement declares it.
     pub fn annotated_element(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "annotatedElement") {
+        match self.maybe(id, "annotatedElement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2165,11 +2165,11 @@ impl Model {
     }
     /// `annotatingElement`, as Annotation declares it.
     pub fn annotating_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "annotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "annotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `annotation`, as AnnotatingElement declares it.
     pub fn annotation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "annotation") {
+        match self.maybe(id, "annotation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2177,7 +2177,7 @@ impl Model {
     }
     /// `argument`, as InstantiationExpression declares it.
     pub fn argument(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "argument") {
+        match self.maybe(id, "argument") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2185,11 +2185,11 @@ impl Model {
     }
     /// `assertedConstraint`, as AssertConstraintUsage declares it.
     pub fn asserted_constraint(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "assertedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "assertedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `association`, as Connector declares it.
     pub fn association(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "association") {
+        match self.maybe(id, "association") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2197,7 +2197,7 @@ impl Model {
     }
     /// `associationEnd`, as Association declares it.
     pub fn association_end(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "associationEnd") {
+        match self.maybe(id, "associationEnd") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2205,7 +2205,7 @@ impl Model {
     }
     /// `assumedConstraint`, as RequirementDefinition declares it.
     pub fn assumed_constraint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "assumedConstraint") {
+        match self.maybe(id, "assumedConstraint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2213,7 +2213,7 @@ impl Model {
     }
     /// `attributeDefinition`, as AttributeUsage declares it.
     pub fn attribute_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "attributeDefinition") {
+        match self.maybe(id, "attributeDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2221,7 +2221,7 @@ impl Model {
     }
     /// `behavior`, as Step declares it.
     pub fn behavior(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "behavior") {
+        match self.maybe(id, "behavior") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2229,15 +2229,15 @@ impl Model {
     }
     /// `body`, as Comment declares it.
     pub fn body(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "body")?.as_str()
+        self.maybe(id, "body")?.as_str()
     }
     /// `bodyAction`, as LoopActionUsage declares it.
     pub fn body_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "bodyAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "bodyAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `bound`, as MultiplicityRange declares it.
     pub fn bound(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "bound") {
+        match self.maybe(id, "bound") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2245,7 +2245,7 @@ impl Model {
     }
     /// `calculation`, as CalculationDefinition declares it.
     pub fn calculation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "calculation") {
+        match self.maybe(id, "calculation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2253,15 +2253,15 @@ impl Model {
     }
     /// `calculationDefinition`, as CalculationUsage declares it.
     pub fn calculation_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "calculationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "calculationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `caseDefinition`, as CaseUsage declares it.
     pub fn case_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "caseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "caseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `chainingFeature`, as Feature declares it.
     pub fn chaining_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "chainingFeature") {
+        match self.maybe(id, "chainingFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2269,7 +2269,7 @@ impl Model {
     }
     /// `client`, as Dependency declares it.
     pub fn client(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "client") {
+        match self.maybe(id, "client") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2277,23 +2277,23 @@ impl Model {
     }
     /// `concernDefinition`, as ConcernUsage declares it.
     pub fn concern_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "concernDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "concernDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `condition`, as ElementFilterMembership declares it.
     pub fn condition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "condition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "condition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `conjugatedPortDefinition`, as ConjugatedPortTyping declares it.
     pub fn conjugated_port_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "conjugatedPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "conjugatedPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `conjugatedType`, as Conjugation declares it.
     pub fn conjugated_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "conjugatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "conjugatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `connectionDefinition`, as ConnectionUsage declares it.
     pub fn connection_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "connectionDefinition") {
+        match self.maybe(id, "connectionDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2301,7 +2301,7 @@ impl Model {
     }
     /// `connectionEnd`, as ConnectionDefinition declares it.
     pub fn connection_end(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "connectionEnd") {
+        match self.maybe(id, "connectionEnd") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2309,7 +2309,7 @@ impl Model {
     }
     /// `connectorEnd`, as Connector declares it.
     pub fn connector_end(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "connectorEnd") {
+        match self.maybe(id, "connectorEnd") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2317,35 +2317,35 @@ impl Model {
     }
     /// `constraintDefinition`, as ConstraintUsage declares it.
     pub fn constraint_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "constraintDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "constraintDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `crossFeature`, as Feature declares it.
     pub fn cross_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "crossFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "crossFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `crossedFeature`, as CrossSubsetting declares it.
     pub fn crossed_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "crossedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "crossedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `crossingFeature`, as CrossSubsetting declares it.
     pub fn crossing_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "crossingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "crossingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `declaredName`, as Element declares it.
     pub fn declared_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "declaredName")?.as_str()
+        self.maybe(id, "declaredName")?.as_str()
     }
     /// `declaredShortName`, as Element declares it.
     pub fn declared_short_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "declaredShortName")?.as_str()
+        self.maybe(id, "declaredShortName")?.as_str()
     }
     /// `defaultFeaturingType`, as Connector declares it.
     pub fn default_featuring_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "defaultFeaturingType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "defaultFeaturingType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `definition`, as Usage declares it.
     pub fn definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "definition") {
+        match self.maybe(id, "definition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2353,7 +2353,7 @@ impl Model {
     }
     /// `differencingType`, as Type declares it.
     pub fn differencing_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "differencingType") {
+        match self.maybe(id, "differencingType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2361,7 +2361,7 @@ impl Model {
     }
     /// `directedFeature`, as Type declares it.
     pub fn directed_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "directedFeature") {
+        match self.maybe(id, "directedFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2369,7 +2369,7 @@ impl Model {
     }
     /// `directedUsage`, as Definition declares it.
     pub fn directed_usage(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "directedUsage") {
+        match self.maybe(id, "directedUsage") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2377,19 +2377,19 @@ impl Model {
     }
     /// `direction`, as Feature declares it.
     pub fn direction(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "direction")?.as_str()
+        self.maybe(id, "direction")?.as_str()
     }
     /// `disjoiningType`, as Disjoining declares it.
     pub fn disjoining_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "disjoiningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "disjoiningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `doAction`, as StateDefinition declares it.
     pub fn do_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "doAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "doAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `documentation`, as Element declares it.
     pub fn documentation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "documentation") {
+        match self.maybe(id, "documentation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2397,11 +2397,11 @@ impl Model {
     }
     /// `documentedElement`, as Documentation declares it.
     pub fn documented_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "documentedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "documentedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `effectAction`, as TransitionUsage declares it.
     pub fn effect_action(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "effectAction") {
+        match self.maybe(id, "effectAction") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2409,15 +2409,15 @@ impl Model {
     }
     /// `elementId`, as Element declares it.
     pub fn element_id(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "elementId")?.as_str()
+        self.maybe(id, "elementId")?.as_str()
     }
     /// `elseAction`, as IfActionUsage declares it.
     pub fn else_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "elseAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "elseAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `endFeature`, as Type declares it.
     pub fn end_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "endFeature") {
+        match self.maybe(id, "endFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2425,15 +2425,15 @@ impl Model {
     }
     /// `endOwningType`, as Feature declares it.
     pub fn end_owning_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "endOwningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "endOwningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `entryAction`, as StateDefinition declares it.
     pub fn entry_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "entryAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "entryAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `enumeratedValue`, as EnumerationDefinition declares it.
     pub fn enumerated_value(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "enumeratedValue") {
+        match self.maybe(id, "enumeratedValue") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2441,23 +2441,23 @@ impl Model {
     }
     /// `enumerationDefinition`, as EnumerationUsage declares it.
     pub fn enumeration_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "enumerationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "enumerationDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `eventOccurrence`, as EventOccurrenceUsage declares it.
     pub fn event_occurrence(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "eventOccurrence") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "eventOccurrence") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `exhibitedState`, as ExhibitStateUsage declares it.
     pub fn exhibited_state(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "exhibitedState") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "exhibitedState") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `exitAction`, as StateDefinition declares it.
     pub fn exit_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "exitAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "exitAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `exposedElement`, as ViewUsage declares it.
     pub fn exposed_element(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "exposedElement") {
+        match self.maybe(id, "exposedElement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2465,7 +2465,7 @@ impl Model {
     }
     /// `expression`, as Function declares it.
     pub fn expression(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "expression") {
+        match self.maybe(id, "expression") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2473,7 +2473,7 @@ impl Model {
     }
     /// `feature`, as Type declares it.
     pub fn feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "feature") {
+        match self.maybe(id, "feature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2481,15 +2481,15 @@ impl Model {
     }
     /// `featureChained`, as FeatureChaining declares it.
     pub fn feature_chained(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "featureChained") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "featureChained") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `featureInverted`, as FeatureInverting declares it.
     pub fn feature_inverted(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "featureInverted") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "featureInverted") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `featureMembership`, as Type declares it.
     pub fn feature_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "featureMembership") {
+        match self.maybe(id, "featureMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2497,19 +2497,19 @@ impl Model {
     }
     /// `featureOfType`, as TypeFeaturing declares it.
     pub fn feature_of_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "featureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "featureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `featureTarget`, as Feature declares it.
     pub fn feature_target(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "featureTarget") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "featureTarget") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `featureWithValue`, as FeatureValue declares it.
     pub fn feature_with_value(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "featureWithValue") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "featureWithValue") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `featuringType`, as Feature declares it.
     pub fn featuring_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "featuringType") {
+        match self.maybe(id, "featuringType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2517,7 +2517,7 @@ impl Model {
     }
     /// `filterCondition`, as Package declares it.
     pub fn filter_condition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "filterCondition") {
+        match self.maybe(id, "filterCondition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2525,7 +2525,7 @@ impl Model {
     }
     /// `flowDefinition`, as FlowUsage declares it.
     pub fn flow_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "flowDefinition") {
+        match self.maybe(id, "flowDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2533,7 +2533,7 @@ impl Model {
     }
     /// `flowEnd`, as Flow declares it.
     pub fn flow_end(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "flowEnd") {
+        match self.maybe(id, "flowEnd") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2541,7 +2541,7 @@ impl Model {
     }
     /// `framedConcern`, as RequirementDefinition declares it.
     pub fn framed_concern(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "framedConcern") {
+        match self.maybe(id, "framedConcern") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2549,15 +2549,15 @@ impl Model {
     }
     /// `function`, as Expression declares it.
     pub fn function(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "function") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "function") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `general`, as Specialization declares it.
     pub fn general(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "general") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "general") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `guardExpression`, as TransitionUsage declares it.
     pub fn guard_expression(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "guardExpression") {
+        match self.maybe(id, "guardExpression") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2565,19 +2565,19 @@ impl Model {
     }
     /// `ifArgument`, as IfActionUsage declares it.
     pub fn if_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ifArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ifArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `importOwningNamespace`, as Import declares it.
     pub fn import_owning_namespace(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "importOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "importOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `importedElement`, as Import declares it.
     pub fn imported_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "importedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "importedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `importedMembership`, as Namespace declares it.
     pub fn imported_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "importedMembership") {
+        match self.maybe(id, "importedMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2585,11 +2585,11 @@ impl Model {
     }
     /// `importedNamespace`, as NamespaceImport declares it.
     pub fn imported_namespace(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "importedNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "importedNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `includedUseCase`, as UseCaseDefinition declares it.
     pub fn included_use_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "includedUseCase") {
+        match self.maybe(id, "includedUseCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2597,11 +2597,11 @@ impl Model {
     }
     /// `individualDefinition`, as OccurrenceUsage declares it.
     pub fn individual_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "individualDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "individualDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `inheritedFeature`, as Type declares it.
     pub fn inherited_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "inheritedFeature") {
+        match self.maybe(id, "inheritedFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2609,7 +2609,7 @@ impl Model {
     }
     /// `inheritedMembership`, as Type declares it.
     pub fn inherited_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "inheritedMembership") {
+        match self.maybe(id, "inheritedMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2617,7 +2617,7 @@ impl Model {
     }
     /// `input`, as Type declares it.
     pub fn input(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "input") {
+        match self.maybe(id, "input") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2625,11 +2625,11 @@ impl Model {
     }
     /// `instantiatedType`, as InstantiationExpression declares it.
     pub fn instantiated_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "instantiatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "instantiatedType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `interaction`, as Flow declares it.
     pub fn interaction(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "interaction") {
+        match self.maybe(id, "interaction") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2637,7 +2637,7 @@ impl Model {
     }
     /// `interfaceDefinition`, as InterfaceUsage declares it.
     pub fn interface_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "interfaceDefinition") {
+        match self.maybe(id, "interfaceDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2645,7 +2645,7 @@ impl Model {
     }
     /// `interfaceEnd`, as InterfaceDefinition declares it.
     pub fn interface_end(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "interfaceEnd") {
+        match self.maybe(id, "interfaceEnd") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2653,7 +2653,7 @@ impl Model {
     }
     /// `intersectingType`, as Type declares it.
     pub fn intersecting_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "intersectingType") {
+        match self.maybe(id, "intersectingType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2661,111 +2661,111 @@ impl Model {
     }
     /// `invertingFeature`, as FeatureInverting declares it.
     pub fn inverting_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "invertingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "invertingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `isAbstract`, as Type declares it.
     pub fn is_abstract(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isAbstract"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isAbstract"), Some(Value::Bool(true)))
     }
     /// `isComposite`, as Feature declares it.
     pub fn is_composite(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isComposite"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isComposite"), Some(Value::Bool(true)))
     }
     /// `isConjugated`, as Type declares it.
     pub fn is_conjugated(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isConjugated"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isConjugated"), Some(Value::Bool(true)))
     }
     /// `isConstant`, as Feature declares it.
     pub fn is_constant(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isConstant"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isConstant"), Some(Value::Bool(true)))
     }
     /// `isDefault`, as FeatureValue declares it.
     pub fn is_default(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isDefault"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isDefault"), Some(Value::Bool(true)))
     }
     /// `isDerived`, as Feature declares it.
     pub fn is_derived(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isDerived"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isDerived"), Some(Value::Bool(true)))
     }
     /// `isEnd`, as Feature declares it.
     pub fn is_end(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isEnd"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isEnd"), Some(Value::Bool(true)))
     }
     /// `isImplied`, as Relationship declares it.
     pub fn is_implied(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isImplied"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isImplied"), Some(Value::Bool(true)))
     }
     /// `isImpliedIncluded`, as Element declares it.
     pub fn is_implied_included(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isImpliedIncluded"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isImpliedIncluded"), Some(Value::Bool(true)))
     }
     /// `isImportAll`, as Expose declares it.
     pub fn is_import_all(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isImportAll"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isImportAll"), Some(Value::Bool(true)))
     }
     /// `isIndividual`, as OccurrenceDefinition declares it.
     pub fn is_individual(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isIndividual"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isIndividual"), Some(Value::Bool(true)))
     }
     /// `isInitial`, as FeatureValue declares it.
     pub fn is_initial(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isInitial"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isInitial"), Some(Value::Bool(true)))
     }
     /// `isLibraryElement`, as Element declares it.
     pub fn is_library_element(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isLibraryElement"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isLibraryElement"), Some(Value::Bool(true)))
     }
     /// `isModelLevelEvaluable`, as Expression declares it.
     pub fn is_model_level_evaluable(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isModelLevelEvaluable"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isModelLevelEvaluable"), Some(Value::Bool(true)))
     }
     /// `isNegated`, as Invariant declares it.
     pub fn is_negated(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isNegated"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isNegated"), Some(Value::Bool(true)))
     }
     /// `isOrdered`, as Feature declares it.
     pub fn is_ordered(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isOrdered"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isOrdered"), Some(Value::Bool(true)))
     }
     /// `isParallel`, as StateDefinition declares it.
     pub fn is_parallel(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isParallel"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isParallel"), Some(Value::Bool(true)))
     }
     /// `isPortion`, as Feature declares it.
     pub fn is_portion(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isPortion"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isPortion"), Some(Value::Bool(true)))
     }
     /// `isRecursive`, as Import declares it.
     pub fn is_recursive(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isRecursive"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isRecursive"), Some(Value::Bool(true)))
     }
     /// `isReference`, as AttributeUsage declares it.
     pub fn is_reference(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isReference"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isReference"), Some(Value::Bool(true)))
     }
     /// `isStandard`, as LibraryPackage declares it.
     pub fn is_standard(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isStandard"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isStandard"), Some(Value::Bool(true)))
     }
     /// `isSufficient`, as ConnectionDefinition declares it.
     pub fn is_sufficient(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isSufficient"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isSufficient"), Some(Value::Bool(true)))
     }
     /// `isUnique`, as Feature declares it.
     pub fn is_unique(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isUnique"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isUnique"), Some(Value::Bool(true)))
     }
     /// `isVariable`, as Feature declares it.
     pub fn is_variable(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isVariable"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isVariable"), Some(Value::Bool(true)))
     }
     /// `isVariation`, as Definition declares it.
     pub fn is_variation(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "isVariation"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "isVariation"), Some(Value::Bool(true)))
     }
     /// `itemDefinition`, as ItemUsage declares it.
     pub fn item_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "itemDefinition") {
+        match self.maybe(id, "itemDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2774,27 +2774,27 @@ impl Model {
     // `kind` is left to `Model::kind`, which is written by hand
     /// `language`, as TextualRepresentation declares it.
     pub fn language(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "language")?.as_str()
+        self.maybe(id, "language")?.as_str()
     }
     /// `locale`, as Comment declares it.
     pub fn locale(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "locale")?.as_str()
+        self.maybe(id, "locale")?.as_str()
     }
     /// `loopVariable`, as ForLoopActionUsage declares it.
     pub fn loop_variable(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "loopVariable") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "loopVariable") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `lowerBound`, as MultiplicityRange declares it.
     pub fn lower_bound(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "lowerBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "lowerBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `mayTimeVary`, as Usage declares it.
     pub fn may_time_vary(&self, id: ElementId) -> bool {
-        matches!(self.get(id, "mayTimeVary"), Some(Value::Bool(true)))
+        matches!(self.maybe(id, "mayTimeVary"), Some(Value::Bool(true)))
     }
     /// `member`, as Namespace declares it.
     pub fn member(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "member") {
+        match self.maybe(id, "member") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2802,23 +2802,23 @@ impl Model {
     }
     /// `memberElement`, as Membership declares it.
     pub fn member_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "memberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "memberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `memberElementId`, as Membership declares it.
     pub fn member_element_id(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "memberElementId")?.as_str()
+        self.maybe(id, "memberElementId")?.as_str()
     }
     /// `memberName`, as Membership declares it.
     pub fn member_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "memberName")?.as_str()
+        self.maybe(id, "memberName")?.as_str()
     }
     /// `memberShortName`, as Membership declares it.
     pub fn member_short_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "memberShortName")?.as_str()
+        self.maybe(id, "memberShortName")?.as_str()
     }
     /// `membership`, as Namespace declares it.
     pub fn membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "membership") {
+        match self.maybe(id, "membership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2826,24 +2826,24 @@ impl Model {
     }
     /// `membershipOwningNamespace`, as Membership declares it.
     pub fn membership_owning_namespace(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "membershipOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "membershipOwningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `metaclass`, as MetadataFeature declares it.
     pub fn metaclass(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "metaclass") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "metaclass") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `metadataDefinition`, as MetadataUsage declares it.
     pub fn metadata_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "metadataDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "metadataDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `multiplicity`, as Type declares it.
     pub fn multiplicity(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "multiplicity") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "multiplicity") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     // `name` is left to `Model::name`, which is written by hand
     /// `nestedAction`, as Usage declares it.
     pub fn nested_action(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedAction") {
+        match self.maybe(id, "nestedAction") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2851,7 +2851,7 @@ impl Model {
     }
     /// `nestedAllocation`, as Usage declares it.
     pub fn nested_allocation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedAllocation") {
+        match self.maybe(id, "nestedAllocation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2859,7 +2859,7 @@ impl Model {
     }
     /// `nestedAnalysisCase`, as Usage declares it.
     pub fn nested_analysis_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedAnalysisCase") {
+        match self.maybe(id, "nestedAnalysisCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2867,7 +2867,7 @@ impl Model {
     }
     /// `nestedAttribute`, as Usage declares it.
     pub fn nested_attribute(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedAttribute") {
+        match self.maybe(id, "nestedAttribute") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2875,7 +2875,7 @@ impl Model {
     }
     /// `nestedCalculation`, as Usage declares it.
     pub fn nested_calculation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedCalculation") {
+        match self.maybe(id, "nestedCalculation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2883,7 +2883,7 @@ impl Model {
     }
     /// `nestedCase`, as Usage declares it.
     pub fn nested_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedCase") {
+        match self.maybe(id, "nestedCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2891,7 +2891,7 @@ impl Model {
     }
     /// `nestedConcern`, as Usage declares it.
     pub fn nested_concern(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedConcern") {
+        match self.maybe(id, "nestedConcern") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2899,7 +2899,7 @@ impl Model {
     }
     /// `nestedConnection`, as Usage declares it.
     pub fn nested_connection(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedConnection") {
+        match self.maybe(id, "nestedConnection") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2907,7 +2907,7 @@ impl Model {
     }
     /// `nestedConstraint`, as Usage declares it.
     pub fn nested_constraint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedConstraint") {
+        match self.maybe(id, "nestedConstraint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2915,7 +2915,7 @@ impl Model {
     }
     /// `nestedEnumeration`, as Usage declares it.
     pub fn nested_enumeration(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedEnumeration") {
+        match self.maybe(id, "nestedEnumeration") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2923,7 +2923,7 @@ impl Model {
     }
     /// `nestedFlow`, as Usage declares it.
     pub fn nested_flow(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedFlow") {
+        match self.maybe(id, "nestedFlow") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2931,7 +2931,7 @@ impl Model {
     }
     /// `nestedInterface`, as Usage declares it.
     pub fn nested_interface(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedInterface") {
+        match self.maybe(id, "nestedInterface") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2939,7 +2939,7 @@ impl Model {
     }
     /// `nestedItem`, as Usage declares it.
     pub fn nested_item(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedItem") {
+        match self.maybe(id, "nestedItem") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2947,7 +2947,7 @@ impl Model {
     }
     /// `nestedMetadata`, as Usage declares it.
     pub fn nested_metadata(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedMetadata") {
+        match self.maybe(id, "nestedMetadata") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2955,7 +2955,7 @@ impl Model {
     }
     /// `nestedOccurrence`, as Usage declares it.
     pub fn nested_occurrence(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedOccurrence") {
+        match self.maybe(id, "nestedOccurrence") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2963,7 +2963,7 @@ impl Model {
     }
     /// `nestedPart`, as Usage declares it.
     pub fn nested_part(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedPart") {
+        match self.maybe(id, "nestedPart") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2971,7 +2971,7 @@ impl Model {
     }
     /// `nestedPort`, as Usage declares it.
     pub fn nested_port(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedPort") {
+        match self.maybe(id, "nestedPort") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2979,7 +2979,7 @@ impl Model {
     }
     /// `nestedReference`, as Usage declares it.
     pub fn nested_reference(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedReference") {
+        match self.maybe(id, "nestedReference") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2987,7 +2987,7 @@ impl Model {
     }
     /// `nestedRendering`, as Usage declares it.
     pub fn nested_rendering(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedRendering") {
+        match self.maybe(id, "nestedRendering") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -2995,7 +2995,7 @@ impl Model {
     }
     /// `nestedRequirement`, as Usage declares it.
     pub fn nested_requirement(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedRequirement") {
+        match self.maybe(id, "nestedRequirement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3003,7 +3003,7 @@ impl Model {
     }
     /// `nestedState`, as Usage declares it.
     pub fn nested_state(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedState") {
+        match self.maybe(id, "nestedState") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3011,7 +3011,7 @@ impl Model {
     }
     /// `nestedTransition`, as Usage declares it.
     pub fn nested_transition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedTransition") {
+        match self.maybe(id, "nestedTransition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3019,7 +3019,7 @@ impl Model {
     }
     /// `nestedUsage`, as Usage declares it.
     pub fn nested_usage(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedUsage") {
+        match self.maybe(id, "nestedUsage") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3027,7 +3027,7 @@ impl Model {
     }
     /// `nestedUseCase`, as Usage declares it.
     pub fn nested_use_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedUseCase") {
+        match self.maybe(id, "nestedUseCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3035,7 +3035,7 @@ impl Model {
     }
     /// `nestedVerificationCase`, as Usage declares it.
     pub fn nested_verification_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedVerificationCase") {
+        match self.maybe(id, "nestedVerificationCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3043,7 +3043,7 @@ impl Model {
     }
     /// `nestedView`, as Usage declares it.
     pub fn nested_view(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedView") {
+        match self.maybe(id, "nestedView") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3051,7 +3051,7 @@ impl Model {
     }
     /// `nestedViewpoint`, as Usage declares it.
     pub fn nested_viewpoint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "nestedViewpoint") {
+        match self.maybe(id, "nestedViewpoint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3059,11 +3059,11 @@ impl Model {
     }
     /// `objectiveRequirement`, as CaseDefinition declares it.
     pub fn objective_requirement(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "objectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "objectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `occurrenceDefinition`, as OccurrenceUsage declares it.
     pub fn occurrence_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "occurrenceDefinition") {
+        match self.maybe(id, "occurrenceDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3071,19 +3071,19 @@ impl Model {
     }
     /// `operator`, as CollectExpression declares it.
     pub fn operator(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "operator")?.as_str()
+        self.maybe(id, "operator")?.as_str()
     }
     /// `originalPortDefinition`, as ConjugatedPortDefinition declares it.
     pub fn original_port_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "originalPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "originalPortDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `originalType`, as Conjugation declares it.
     pub fn original_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "originalType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "originalType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `output`, as Type declares it.
     pub fn output(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "output") {
+        match self.maybe(id, "output") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3091,7 +3091,7 @@ impl Model {
     }
     /// `ownedAction`, as Definition declares it.
     pub fn owned_action(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAction") {
+        match self.maybe(id, "ownedAction") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3099,11 +3099,11 @@ impl Model {
     }
     /// `ownedActorParameter`, as ActorMembership declares it.
     pub fn owned_actor_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedActorParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedActorParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedAllocation`, as Definition declares it.
     pub fn owned_allocation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAllocation") {
+        match self.maybe(id, "ownedAllocation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3111,7 +3111,7 @@ impl Model {
     }
     /// `ownedAnalysisCase`, as Definition declares it.
     pub fn owned_analysis_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAnalysisCase") {
+        match self.maybe(id, "ownedAnalysisCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3119,11 +3119,11 @@ impl Model {
     }
     /// `ownedAnnotatingElement`, as Annotation declares it.
     pub fn owned_annotating_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedAnnotatingRelationship`, as AnnotatingElement declares it.
     pub fn owned_annotating_relationship(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAnnotatingRelationship") {
+        match self.maybe(id, "ownedAnnotatingRelationship") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3131,7 +3131,7 @@ impl Model {
     }
     /// `ownedAnnotation`, as Element declares it.
     pub fn owned_annotation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAnnotation") {
+        match self.maybe(id, "ownedAnnotation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3139,7 +3139,7 @@ impl Model {
     }
     /// `ownedAttribute`, as Definition declares it.
     pub fn owned_attribute(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedAttribute") {
+        match self.maybe(id, "ownedAttribute") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3147,7 +3147,7 @@ impl Model {
     }
     /// `ownedCalculation`, as Definition declares it.
     pub fn owned_calculation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedCalculation") {
+        match self.maybe(id, "ownedCalculation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3155,7 +3155,7 @@ impl Model {
     }
     /// `ownedCase`, as Definition declares it.
     pub fn owned_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedCase") {
+        match self.maybe(id, "ownedCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3163,7 +3163,7 @@ impl Model {
     }
     /// `ownedConcern`, as Definition declares it.
     pub fn owned_concern(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedConcern") {
+        match self.maybe(id, "ownedConcern") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3171,11 +3171,11 @@ impl Model {
     }
     /// `ownedConjugator`, as Type declares it.
     pub fn owned_conjugator(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedConnection`, as Definition declares it.
     pub fn owned_connection(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedConnection") {
+        match self.maybe(id, "ownedConnection") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3183,7 +3183,7 @@ impl Model {
     }
     /// `ownedConstraint`, as Definition declares it.
     pub fn owned_constraint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedConstraint") {
+        match self.maybe(id, "ownedConstraint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3191,11 +3191,11 @@ impl Model {
     }
     /// `ownedCrossSubsetting`, as Feature declares it.
     pub fn owned_cross_subsetting(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedCrossSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedCrossSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedDifferencing`, as Type declares it.
     pub fn owned_differencing(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedDifferencing") {
+        match self.maybe(id, "ownedDifferencing") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3203,7 +3203,7 @@ impl Model {
     }
     /// `ownedDisjoining`, as Type declares it.
     pub fn owned_disjoining(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedDisjoining") {
+        match self.maybe(id, "ownedDisjoining") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3211,7 +3211,7 @@ impl Model {
     }
     /// `ownedElement`, as Element declares it.
     pub fn owned_element(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedElement") {
+        match self.maybe(id, "ownedElement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3219,7 +3219,7 @@ impl Model {
     }
     /// `ownedEndFeature`, as Type declares it.
     pub fn owned_end_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedEndFeature") {
+        match self.maybe(id, "ownedEndFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3227,7 +3227,7 @@ impl Model {
     }
     /// `ownedEnumeration`, as Definition declares it.
     pub fn owned_enumeration(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedEnumeration") {
+        match self.maybe(id, "ownedEnumeration") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3235,7 +3235,7 @@ impl Model {
     }
     /// `ownedFeature`, as Type declares it.
     pub fn owned_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedFeature") {
+        match self.maybe(id, "ownedFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3243,7 +3243,7 @@ impl Model {
     }
     /// `ownedFeatureChaining`, as Feature declares it.
     pub fn owned_feature_chaining(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedFeatureChaining") {
+        match self.maybe(id, "ownedFeatureChaining") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3251,7 +3251,7 @@ impl Model {
     }
     /// `ownedFeatureInverting`, as Feature declares it.
     pub fn owned_feature_inverting(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedFeatureInverting") {
+        match self.maybe(id, "ownedFeatureInverting") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3259,7 +3259,7 @@ impl Model {
     }
     /// `ownedFeatureMembership`, as Type declares it.
     pub fn owned_feature_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedFeatureMembership") {
+        match self.maybe(id, "ownedFeatureMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3267,7 +3267,7 @@ impl Model {
     }
     /// `ownedFlow`, as Definition declares it.
     pub fn owned_flow(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedFlow") {
+        match self.maybe(id, "ownedFlow") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3275,7 +3275,7 @@ impl Model {
     }
     /// `ownedImport`, as Namespace declares it.
     pub fn owned_import(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedImport") {
+        match self.maybe(id, "ownedImport") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3283,7 +3283,7 @@ impl Model {
     }
     /// `ownedInterface`, as Definition declares it.
     pub fn owned_interface(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedInterface") {
+        match self.maybe(id, "ownedInterface") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3291,7 +3291,7 @@ impl Model {
     }
     /// `ownedIntersecting`, as Type declares it.
     pub fn owned_intersecting(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedIntersecting") {
+        match self.maybe(id, "ownedIntersecting") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3299,7 +3299,7 @@ impl Model {
     }
     /// `ownedItem`, as Definition declares it.
     pub fn owned_item(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedItem") {
+        match self.maybe(id, "ownedItem") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3307,7 +3307,7 @@ impl Model {
     }
     /// `ownedMember`, as Namespace declares it.
     pub fn owned_member(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedMember") {
+        match self.maybe(id, "ownedMember") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3315,31 +3315,31 @@ impl Model {
     }
     /// `ownedMemberElement`, as OwningMembership declares it.
     pub fn owned_member_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedMemberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedMemberElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedMemberElementId`, as OwningMembership declares it.
     pub fn owned_member_element_id(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "ownedMemberElementId")?.as_str()
+        self.maybe(id, "ownedMemberElementId")?.as_str()
     }
     /// `ownedMemberFeature`, as EndFeatureMembership declares it.
     pub fn owned_member_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedMemberFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedMemberFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedMemberName`, as OwningMembership declares it.
     pub fn owned_member_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "ownedMemberName")?.as_str()
+        self.maybe(id, "ownedMemberName")?.as_str()
     }
     /// `ownedMemberParameter`, as ParameterMembership declares it.
     pub fn owned_member_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedMemberParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedMemberParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedMemberShortName`, as OwningMembership declares it.
     pub fn owned_member_short_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "ownedMemberShortName")?.as_str()
+        self.maybe(id, "ownedMemberShortName")?.as_str()
     }
     /// `ownedMembership`, as Namespace declares it.
     pub fn owned_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedMembership") {
+        match self.maybe(id, "ownedMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3347,7 +3347,7 @@ impl Model {
     }
     /// `ownedMetadata`, as Definition declares it.
     pub fn owned_metadata(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedMetadata") {
+        match self.maybe(id, "ownedMetadata") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3355,11 +3355,11 @@ impl Model {
     }
     /// `ownedObjectiveRequirement`, as ObjectiveMembership declares it.
     pub fn owned_objective_requirement(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedObjectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedObjectiveRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedOccurrence`, as Definition declares it.
     pub fn owned_occurrence(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedOccurrence") {
+        match self.maybe(id, "ownedOccurrence") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3367,7 +3367,7 @@ impl Model {
     }
     /// `ownedPart`, as Definition declares it.
     pub fn owned_part(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedPart") {
+        match self.maybe(id, "ownedPart") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3375,7 +3375,7 @@ impl Model {
     }
     /// `ownedPort`, as Definition declares it.
     pub fn owned_port(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedPort") {
+        match self.maybe(id, "ownedPort") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3383,11 +3383,11 @@ impl Model {
     }
     /// `ownedPortConjugator`, as ConjugatedPortDefinition declares it.
     pub fn owned_port_conjugator(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedPortConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedPortConjugator") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedRedefinition`, as Feature declares it.
     pub fn owned_redefinition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedRedefinition") {
+        match self.maybe(id, "ownedRedefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3395,7 +3395,7 @@ impl Model {
     }
     /// `ownedReference`, as Definition declares it.
     pub fn owned_reference(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedReference") {
+        match self.maybe(id, "ownedReference") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3403,11 +3403,11 @@ impl Model {
     }
     /// `ownedReferenceSubsetting`, as Feature declares it.
     pub fn owned_reference_subsetting(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedReferenceSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedReferenceSubsetting") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedRelatedElement`, as Relationship declares it.
     pub fn owned_related_element(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedRelatedElement") {
+        match self.maybe(id, "ownedRelatedElement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3415,7 +3415,7 @@ impl Model {
     }
     /// `ownedRelationship`, as Element declares it.
     pub fn owned_relationship(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedRelationship") {
+        match self.maybe(id, "ownedRelationship") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3423,7 +3423,7 @@ impl Model {
     }
     /// `ownedRendering`, as Definition declares it.
     pub fn owned_rendering(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedRendering") {
+        match self.maybe(id, "ownedRendering") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3431,7 +3431,7 @@ impl Model {
     }
     /// `ownedRequirement`, as Definition declares it.
     pub fn owned_requirement(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedRequirement") {
+        match self.maybe(id, "ownedRequirement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3439,11 +3439,11 @@ impl Model {
     }
     /// `ownedResultExpression`, as ResultExpressionMembership declares it.
     pub fn owned_result_expression(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedResultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedResultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedSpecialization`, as Type declares it.
     pub fn owned_specialization(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedSpecialization") {
+        match self.maybe(id, "ownedSpecialization") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3451,11 +3451,11 @@ impl Model {
     }
     /// `ownedStakeholderParameter`, as StakeholderMembership declares it.
     pub fn owned_stakeholder_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedStakeholderParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedStakeholderParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedState`, as Definition declares it.
     pub fn owned_state(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedState") {
+        match self.maybe(id, "ownedState") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3463,7 +3463,7 @@ impl Model {
     }
     /// `ownedSubclassification`, as Classifier declares it.
     pub fn owned_subclassification(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedSubclassification") {
+        match self.maybe(id, "ownedSubclassification") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3471,11 +3471,11 @@ impl Model {
     }
     /// `ownedSubjectParameter`, as SubjectMembership declares it.
     pub fn owned_subject_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedSubjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedSubjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedSubsetting`, as Feature declares it.
     pub fn owned_subsetting(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedSubsetting") {
+        match self.maybe(id, "ownedSubsetting") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3483,7 +3483,7 @@ impl Model {
     }
     /// `ownedTransition`, as Definition declares it.
     pub fn owned_transition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedTransition") {
+        match self.maybe(id, "ownedTransition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3491,7 +3491,7 @@ impl Model {
     }
     /// `ownedTypeFeaturing`, as Feature declares it.
     pub fn owned_type_featuring(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedTypeFeaturing") {
+        match self.maybe(id, "ownedTypeFeaturing") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3499,7 +3499,7 @@ impl Model {
     }
     /// `ownedTyping`, as Feature declares it.
     pub fn owned_typing(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedTyping") {
+        match self.maybe(id, "ownedTyping") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3507,7 +3507,7 @@ impl Model {
     }
     /// `ownedUnioning`, as Type declares it.
     pub fn owned_unioning(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedUnioning") {
+        match self.maybe(id, "ownedUnioning") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3515,7 +3515,7 @@ impl Model {
     }
     /// `ownedUsage`, as Definition declares it.
     pub fn owned_usage(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedUsage") {
+        match self.maybe(id, "ownedUsage") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3523,7 +3523,7 @@ impl Model {
     }
     /// `ownedUseCase`, as Definition declares it.
     pub fn owned_use_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedUseCase") {
+        match self.maybe(id, "ownedUseCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3531,11 +3531,11 @@ impl Model {
     }
     /// `ownedVariantUsage`, as VariantMembership declares it.
     pub fn owned_variant_usage(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "ownedVariantUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "ownedVariantUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `ownedVerificationCase`, as Definition declares it.
     pub fn owned_verification_case(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedVerificationCase") {
+        match self.maybe(id, "ownedVerificationCase") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3543,7 +3543,7 @@ impl Model {
     }
     /// `ownedView`, as Definition declares it.
     pub fn owned_view(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedView") {
+        match self.maybe(id, "ownedView") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3551,7 +3551,7 @@ impl Model {
     }
     /// `ownedViewpoint`, as Definition declares it.
     pub fn owned_viewpoint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "ownedViewpoint") {
+        match self.maybe(id, "ownedViewpoint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3560,63 +3560,63 @@ impl Model {
     // `owner` is left to `Model::owner`, which is written by hand
     /// `owningAnnotatedElement`, as Annotation declares it.
     pub fn owning_annotated_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningAnnotatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningAnnotatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningAnnotatingElement`, as Annotation declares it.
     pub fn owning_annotating_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningAnnotatingElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningAnnotatingRelationship`, as AnnotatingElement declares it.
     pub fn owning_annotating_relationship(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningAnnotatingRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningAnnotatingRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningClassifier`, as Subclassification declares it.
     pub fn owning_classifier(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningClassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningClassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningDefinition`, as Usage declares it.
     pub fn owning_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningFeature`, as FeatureInverting declares it.
     pub fn owning_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningFeatureMembership`, as Feature declares it.
     pub fn owning_feature_membership(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningFeatureMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningFeatureMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningFeatureOfType`, as TypeFeaturing declares it.
     pub fn owning_feature_of_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningFeatureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningFeatureOfType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningMembership`, as Element declares it.
     pub fn owning_membership(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningMembership") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningNamespace`, as Element declares it.
     pub fn owning_namespace(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningNamespace") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningRelatedElement`, as Relationship declares it.
     pub fn owning_related_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningRelatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningRelatedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningRelationship`, as Element declares it.
     pub fn owning_relationship(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningRelationship") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningType`, as Conjugation declares it.
     pub fn owning_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `owningUsage`, as Usage declares it.
     pub fn owning_usage(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "owningUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "owningUsage") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `parameter`, as Behavior declares it.
     pub fn parameter(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "parameter") {
+        match self.maybe(id, "parameter") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3624,7 +3624,7 @@ impl Model {
     }
     /// `partDefinition`, as PartUsage declares it.
     pub fn part_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "partDefinition") {
+        match self.maybe(id, "partDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3632,19 +3632,19 @@ impl Model {
     }
     /// `payloadArgument`, as AcceptActionUsage declares it.
     pub fn payload_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "payloadArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "payloadArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `payloadFeature`, as Flow declares it.
     pub fn payload_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "payloadFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "payloadFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `payloadParameter`, as AcceptActionUsage declares it.
     pub fn payload_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "payloadParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "payloadParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `payloadType`, as Flow declares it.
     pub fn payload_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "payloadType") {
+        match self.maybe(id, "payloadType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3652,11 +3652,11 @@ impl Model {
     }
     /// `performedAction`, as PerformActionUsage declares it.
     pub fn performed_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "performedAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "performedAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `portDefinition`, as PortUsage declares it.
     pub fn port_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "portDefinition") {
+        match self.maybe(id, "portDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3664,59 +3664,59 @@ impl Model {
     }
     /// `portionKind`, as OccurrenceUsage declares it.
     pub fn portion_kind(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "portionKind")?.as_str()
+        self.maybe(id, "portionKind")?.as_str()
     }
     /// `predicate`, as BooleanExpression declares it.
     pub fn predicate(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "predicate") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "predicate") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `qualifiedName`, as Element declares it.
     pub fn qualified_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "qualifiedName")?.as_str()
+        self.maybe(id, "qualifiedName")?.as_str()
     }
     /// `receiverArgument`, as AcceptActionUsage declares it.
     pub fn receiver_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "receiverArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "receiverArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `redefinedFeature`, as Redefinition declares it.
     pub fn redefined_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "redefinedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "redefinedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `redefiningFeature`, as Redefinition declares it.
     pub fn redefining_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "redefiningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "redefiningFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencedConcern`, as FramedConcernMembership declares it.
     pub fn referenced_concern(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencedConcern") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencedConcern") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencedConstraint`, as RequirementConstraintMembership declares it.
     pub fn referenced_constraint(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencedConstraint") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencedElement`, as MetadataAccessExpression declares it.
     pub fn referenced_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencedFeature`, as ReferenceSubsetting declares it.
     pub fn referenced_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencedRendering`, as ViewRenderingMembership declares it.
     pub fn referenced_rendering(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencedRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencedRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referencingFeature`, as ReferenceSubsetting declares it.
     pub fn referencing_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referencingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referencingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `referent`, as AssignmentActionUsage declares it.
     pub fn referent(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "referent") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "referent") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `relatedElement`, as Relationship declares it.
     pub fn related_element(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "relatedElement") {
+        match self.maybe(id, "relatedElement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3724,7 +3724,7 @@ impl Model {
     }
     /// `relatedFeature`, as Connector declares it.
     pub fn related_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "relatedFeature") {
+        match self.maybe(id, "relatedFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3732,7 +3732,7 @@ impl Model {
     }
     /// `relatedType`, as Association declares it.
     pub fn related_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "relatedType") {
+        match self.maybe(id, "relatedType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3740,7 +3740,7 @@ impl Model {
     }
     /// `rendering`, as RenderingDefinition declares it.
     pub fn rendering(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "rendering") {
+        match self.maybe(id, "rendering") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3748,19 +3748,19 @@ impl Model {
     }
     /// `renderingDefinition`, as RenderingUsage declares it.
     pub fn rendering_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "renderingDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "renderingDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `representedElement`, as TextualRepresentation declares it.
     pub fn represented_element(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "representedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "representedElement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `reqId`, as RequirementDefinition declares it.
     pub fn req_id(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "reqId")?.as_str()
+        self.maybe(id, "reqId")?.as_str()
     }
     /// `requiredConstraint`, as RequirementDefinition declares it.
     pub fn required_constraint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "requiredConstraint") {
+        match self.maybe(id, "requiredConstraint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3768,23 +3768,23 @@ impl Model {
     }
     /// `requirementDefinition`, as RequirementUsage declares it.
     pub fn requirement_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "requirementDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "requirementDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `result`, as Expression declares it.
     pub fn result(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "result") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "result") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `resultExpression`, as AnalysisCaseDefinition declares it.
     pub fn result_expression(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "resultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "resultExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `satisfiedRequirement`, as SatisfyRequirementUsage declares it.
     pub fn satisfied_requirement(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "satisfiedRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "satisfiedRequirement") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `satisfiedViewpoint`, as ViewDefinition declares it.
     pub fn satisfied_viewpoint(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "satisfiedViewpoint") {
+        match self.maybe(id, "satisfiedViewpoint") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3792,23 +3792,23 @@ impl Model {
     }
     /// `satisfyingFeature`, as SatisfyRequirementUsage declares it.
     pub fn satisfying_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "satisfyingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "satisfyingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `senderArgument`, as SendActionUsage declares it.
     pub fn sender_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "senderArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "senderArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `seqArgument`, as ForLoopActionUsage declares it.
     pub fn seq_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "seqArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "seqArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `shortName`, as Element declares it.
     pub fn short_name(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "shortName")?.as_str()
+        self.maybe(id, "shortName")?.as_str()
     }
     /// `source`, as Relationship declares it.
     pub fn source(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "source") {
+        match self.maybe(id, "source") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3816,23 +3816,23 @@ impl Model {
     }
     /// `sourceFeature`, as Connector declares it.
     pub fn source_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "sourceFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "sourceFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `sourceOutputFeature`, as Flow declares it.
     pub fn source_output_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "sourceOutputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "sourceOutputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `sourceType`, as Association declares it.
     pub fn source_type(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "sourceType") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "sourceType") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `specific`, as Specialization declares it.
     pub fn specific(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "specific") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "specific") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `stakeholderParameter`, as RequirementDefinition declares it.
     pub fn stakeholder_parameter(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "stakeholderParameter") {
+        match self.maybe(id, "stakeholderParameter") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3840,7 +3840,7 @@ impl Model {
     }
     /// `state`, as StateDefinition declares it.
     pub fn state(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "state") {
+        match self.maybe(id, "state") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3848,7 +3848,7 @@ impl Model {
     }
     /// `stateDefinition`, as StateUsage declares it.
     pub fn state_definition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "stateDefinition") {
+        match self.maybe(id, "stateDefinition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3856,7 +3856,7 @@ impl Model {
     }
     /// `step`, as Behavior declares it.
     pub fn step(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "step") {
+        match self.maybe(id, "step") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3864,31 +3864,31 @@ impl Model {
     }
     /// `subclassifier`, as Subclassification declares it.
     pub fn subclassifier(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "subclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "subclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `subjectParameter`, as CaseDefinition declares it.
     pub fn subject_parameter(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "subjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "subjectParameter") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `subsettedFeature`, as Subsetting declares it.
     pub fn subsetted_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "subsettedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "subsettedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `subsettingFeature`, as Subsetting declares it.
     pub fn subsetting_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "subsettingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "subsettingFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `succession`, as TransitionUsage declares it.
     pub fn succession(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "succession") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "succession") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `superclassifier`, as Subclassification declares it.
     pub fn superclassifier(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "superclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "superclassifier") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `supplier`, as Dependency declares it.
     pub fn supplier(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "supplier") {
+        match self.maybe(id, "supplier") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3896,7 +3896,7 @@ impl Model {
     }
     /// `target`, as Relationship declares it.
     pub fn target(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "target") {
+        match self.maybe(id, "target") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3904,11 +3904,11 @@ impl Model {
     }
     /// `targetArgument`, as AssignmentActionUsage declares it.
     pub fn target_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "targetArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "targetArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `targetFeature`, as Connector declares it.
     pub fn target_feature(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "targetFeature") {
+        match self.maybe(id, "targetFeature") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3916,11 +3916,11 @@ impl Model {
     }
     /// `targetInputFeature`, as Flow declares it.
     pub fn target_input_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "targetInputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "targetInputFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `targetType`, as Association declares it.
     pub fn target_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "targetType") {
+        match self.maybe(id, "targetType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3928,15 +3928,15 @@ impl Model {
     }
     /// `terminatedOccurrenceArgument`, as TerminateActionUsage declares it.
     pub fn terminated_occurrence_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "terminatedOccurrenceArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "terminatedOccurrenceArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `text`, as RequirementDefinition declares it.
     pub fn text(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "text")?.as_str()
+        self.maybe(id, "text")?.as_str()
     }
     /// `textualRepresentation`, as Element declares it.
     pub fn textual_representation(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "textualRepresentation") {
+        match self.maybe(id, "textualRepresentation") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3944,15 +3944,15 @@ impl Model {
     }
     /// `thenAction`, as IfActionUsage declares it.
     pub fn then_action(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "thenAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "thenAction") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `transitionFeature`, as TransitionFeatureMembership declares it.
     pub fn transition_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "transitionFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "transitionFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `triggerAction`, as TransitionUsage declares it.
     pub fn trigger_action(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "triggerAction") {
+        match self.maybe(id, "triggerAction") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3960,7 +3960,7 @@ impl Model {
     }
     /// `type`, as Feature declares it.
     pub fn r#type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "type") {
+        match self.maybe(id, "type") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3968,27 +3968,27 @@ impl Model {
     }
     /// `typeDifferenced`, as Differencing declares it.
     pub fn type_differenced(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "typeDifferenced") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "typeDifferenced") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `typeDisjoined`, as Disjoining declares it.
     pub fn type_disjoined(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "typeDisjoined") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "typeDisjoined") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `typeIntersected`, as Intersecting declares it.
     pub fn type_intersected(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "typeIntersected") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "typeIntersected") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `typeUnioned`, as Unioning declares it.
     pub fn type_unioned(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "typeUnioned") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "typeUnioned") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `typedFeature`, as FeatureTyping declares it.
     pub fn typed_feature(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "typedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "typedFeature") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `unioningType`, as Type declares it.
     pub fn unioning_type(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "unioningType") {
+        match self.maybe(id, "unioningType") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -3996,15 +3996,15 @@ impl Model {
     }
     /// `untilArgument`, as WhileLoopActionUsage declares it.
     pub fn until_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "untilArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "untilArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `upperBound`, as MultiplicityRange declares it.
     pub fn upper_bound(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "upperBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "upperBound") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `usage`, as Definition declares it.
     pub fn usage(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "usage") {
+        match self.maybe(id, "usage") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4012,20 +4012,20 @@ impl Model {
     }
     /// `useCaseDefinition`, as UseCaseUsage declares it.
     pub fn use_case_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "useCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "useCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `useCaseIncluded`, as IncludeUseCaseUsage declares it.
     pub fn use_case_included(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "useCaseIncluded") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "useCaseIncluded") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     // `value` is declared as 5 different types; no one accessor fits
     /// `valueExpression`, as AssignmentActionUsage declares it.
     pub fn value_expression(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "valueExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "valueExpression") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `variant`, as Definition declares it.
     pub fn variant(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "variant") {
+        match self.maybe(id, "variant") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4033,7 +4033,7 @@ impl Model {
     }
     /// `variantMembership`, as Definition declares it.
     pub fn variant_membership(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "variantMembership") {
+        match self.maybe(id, "variantMembership") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4041,11 +4041,11 @@ impl Model {
     }
     /// `verificationCaseDefinition`, as VerificationCaseUsage declares it.
     pub fn verification_case_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "verificationCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "verificationCaseDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `verifiedRequirement`, as VerificationCaseDefinition declares it.
     pub fn verified_requirement(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "verifiedRequirement") {
+        match self.maybe(id, "verifiedRequirement") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4053,7 +4053,7 @@ impl Model {
     }
     /// `view`, as ViewDefinition declares it.
     pub fn view(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "view") {
+        match self.maybe(id, "view") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4061,7 +4061,7 @@ impl Model {
     }
     /// `viewCondition`, as ViewDefinition declares it.
     pub fn view_condition(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "viewCondition") {
+        match self.maybe(id, "viewCondition") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4069,19 +4069,19 @@ impl Model {
     }
     /// `viewDefinition`, as ViewUsage declares it.
     pub fn view_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "viewDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "viewDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `viewRendering`, as ViewDefinition declares it.
     pub fn view_rendering(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "viewRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "viewRendering") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `viewpointDefinition`, as ViewpointUsage declares it.
     pub fn viewpoint_definition(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "viewpointDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "viewpointDefinition") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
     /// `viewpointStakeholder`, as ViewpointDefinition declares it.
     pub fn viewpoint_stakeholder(&self, id: ElementId) -> &[ElementId] {
-        match self.get(id, "viewpointStakeholder") {
+        match self.maybe(id, "viewpointStakeholder") {
             Some(Value::RefList(list)) => list,
             Some(Value::Ref(to)) => std::slice::from_ref(to),
             _ => &[],
@@ -4089,11 +4089,11 @@ impl Model {
     }
     /// `visibility`, as Expose declares it.
     pub fn visibility(&self, id: ElementId) -> Option<&str> {
-        self.get(id, "visibility")?.as_str()
+        self.maybe(id, "visibility")?.as_str()
     }
     /// `whileArgument`, as WhileLoopActionUsage declares it.
     pub fn while_argument(&self, id: ElementId) -> Option<ElementId> {
-        match self.get(id, "whileArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
+        match self.maybe(id, "whileArgument") { Some(Value::Ref(to)) => Some(*to), _ => None }
     }
 }
 

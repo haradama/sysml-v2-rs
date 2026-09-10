@@ -13,27 +13,28 @@ const SCALARS: &str = "package ScalarValues {\n\
 /// A miniature bound API package, the shape `sysml import-rust` writes.
 const API: &str = "package Api {\n\
     \tprivate import ScalarValues::*;\n\
-    \tmetadata def rust {\n\
+    \tmetadata def code {\n\
+    \t\tattribute writtenIn : String;\n\
     \t\tattribute path : String;\n\
-    \t\tattribute crateName : String;\n\
+    \t\tattribute module : String;\n\
     \t\tattribute takesSelf : String;\n\
     \t\tattribute isAsync : Boolean;\n\
     \t\tattribute isFallible : Boolean;\n\
-    \t\tattribute derives : String;\n\
+    \t\tattribute capabilities : String;\n\
     \t}\n\
-    \tport def Store { @rust { :>> path = \"fake::Store\"; } }\n\
-    \tport def Metrics { @rust { :>> path = \"fake::Metrics\"; } }\n\
-    \taction def Ping { @rust { :>> path = \"fake::Store::ping\"; :>> takesSelf = \"&self\"; :>> isAsync = false; :>> isFallible = false; } }\n\
-    \taction def Consume { @rust { :>> path = \"fake::Store::consume\"; :>> takesSelf = \"self\"; } }\n\
-    \taction def Orphan { @rust { :>> path = \"elsewhere::Api::orphan\"; :>> takesSelf = \"&self\"; } }\n\
+    \tport def Store { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store\"; } }\n\
+    \tport def Metrics { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Metrics\"; } }\n\
+    \taction def Ping { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::ping\"; :>> takesSelf = \"&self\"; :>> isAsync = false; :>> isFallible = false; } }\n\
+    \taction def Consume { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::consume\"; :>> takesSelf = \"self\"; } }\n\
+    \taction def Orphan { @code { :>> writtenIn = \"rust\"; :>> path = \"elsewhere::Api::orphan\"; :>> takesSelf = \"&self\"; } }\n\
     \taction def Unbound;\n\
-    \taction def Fuzzy { @rust { :>> path = \"fake::Store::fuzzy\"; :>> takesSelf = \"&self\"; } in blob : Plain; }\n\
-    \taction def Purge { @rust { :>> path = \"fake::Store::purge\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out error : String; }\n\
-    \taction def Shuffle { @rust { :>> path = \"fake::Store::shuffle\"; :>> takesSelf = \"&self\"; } inout buffer : String; }\n\
-    \taction def Vanish { @rust { :>> path = \"fake::Store::vanish\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out result : String; }\n\
-    \taction def Count { @rust { :>> path = \"fake::Store::count\"; :>> takesSelf = \"&self\"; :>> isFallible = false; } out result : Real; }\n\
-    \taction def Watch { @rust { :>> path = \"fake::Store::watch\"; :>> takesSelf = \"&mut self\"; :>> isAsync = true; :>> isFallible = true; } in sku : String; out result : Payload; out error : String; }\n\
-    \titem def Payload { @rust { :>> path = \"fake::Payload\"; } }\n\
+    \taction def Fuzzy { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::fuzzy\"; :>> takesSelf = \"&self\"; } in blob : Plain; }\n\
+    \taction def Purge { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::purge\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out error : String; }\n\
+    \taction def Shuffle { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::shuffle\"; :>> takesSelf = \"&self\"; } inout buffer : String; }\n\
+    \taction def Vanish { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::vanish\"; :>> takesSelf = \"&self\"; :>> isFallible = true; } out result : String; }\n\
+    \taction def Count { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::count\"; :>> takesSelf = \"&self\"; :>> isFallible = false; } out result : Real; }\n\
+    \taction def Watch { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::watch\"; :>> takesSelf = \"&mut self\"; :>> isAsync = true; :>> isFallible = true; } in sku : String; out result : Payload; out error : String; }\n\
+    \titem def Payload { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Payload\"; } }\n\
     \tport def Plain;\n}\n";
 
 fn generate(system: &str) -> Result<String, sysml_rust::RustgenError> {
@@ -114,7 +115,7 @@ fn what_has_no_shape_becomes_a_comment_not_silence() {
     assert!(!rust.contains("pub sub:"));
     assert!(rust.contains("pub fn ping(&self)"));
     assert!(rust.contains("-- `fake::Store::consume` consumes its receiver"));
-    assert!(rust.contains("-- `Unbound` carries no `@rust` binding"));
+    assert!(rust.contains("-- `Unbound` carries no `@code` binding"));
 }
 
 #[test]
@@ -619,7 +620,7 @@ fn the_long_tail_of_shapes_and_signatures() {
          \t\tperform action local : LocalPing;\n\
          \t}\n\
          \taction def LocalPing {\n\
-         \t\t@rust { :>> path = \"fake::Store::local\"; :>> takesSelf = \"&self\"; }\n\
+         \t\t@code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::local\"; :>> takesSelf = \"&self\"; }\n\
          \t\tin holder : Holder;\n\
          \t}\n\
          }\n",
@@ -738,7 +739,7 @@ fn requirement_stubs_dedupe_and_survive_odd_satisfactions() {
          \t\tattribute upper : Integer = 9;\n\
          \t}\n\
          \tverification def CheckBounded {\n\
-         \t\t@rust { :>> path = \"crate::checks::bounded\"; }\n\
+         \t\t@code { :>> writtenIn = \"rust\"; :>> path = \"crate::checks::bounded\"; }\n\
          \t\tobjective { verify Bounded; }\n\
          \t}\n\
          \tverification def CheckUntested {\n\
@@ -851,11 +852,11 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
 
     // a metadata usage whose settings are broken in every way
     let rust_def = model.create(ElementKind::MetadataDefinition);
-    model.set(rust_def, "declaredName", Value::String("rust".to_string()));
+    model.set(rust_def, "declaredName", Value::String("code".to_string()));
     let meta = model.create(ElementKind::MetadataUsage);
-    let says_rust = model.create(ElementKind::FeatureTyping);
-    model.set(says_rust, "type", Value::Ref(rust_def));
-    model.add_owned(meta, says_rust);
+    let says_code = model.create(ElementKind::FeatureTyping);
+    model.set(says_code, "type", Value::Ref(rust_def));
+    model.add_owned(meta, says_code);
     model.add_owned(part, meta);
     // a second usage of somebody else's metadata definition, whose
     // settings look exactly like a binding's and are none of this
@@ -922,9 +923,36 @@ fn foreign_models_with_odd_bindings_do_not_confuse_the_reader() {
     model.set(holds_nothing, "value", Value::Ref(empty));
 
     let rust = sysml_rust::generate(&model, &[part]).unwrap().rust;
-    // the part has a binding now (retries = 3), so it is treated as an
-    // imported API and not generated at all
-    assert!(!rust.contains("struct Odd"));
+    // The binding says a good deal and never says which language it is
+    // about, so it is not this generator's: `@code` is written by models
+    // bound to any language, and a Python class this generator took for
+    // a Rust path would be a use of something no crate has. Read as no
+    // binding at all, the definition is generated.
+    assert!(rust.contains("struct Odd"), "{rust}");
+
+    // and with the language said, it is an imported API and generated
+    // not at all
+    let spoken = model.create(ElementKind::ReferenceUsage);
+    model.add_owned(meta, spoken);
+    let to_language = model.create(ElementKind::Redefinition);
+    model.add_owned(spoken, to_language);
+    let language = model.create(ElementKind::AttributeUsage);
+    model.set(
+        language,
+        "declaredName",
+        Value::String("writtenIn".to_string()),
+    );
+    model.add_owned(part, language);
+    model.set(to_language, "redefinedFeature", Value::Ref(language));
+    let says_rust = model.create(ElementKind::FeatureValue);
+    model.add_owned(spoken, says_rust);
+    let rust_literal = model.create(ElementKind::LiteralString);
+    model.set(rust_literal, "value", Value::String("rust".to_string()));
+    model.add_owned(says_rust, rust_literal);
+    model.set(says_rust, "value", Value::Ref(rust_literal));
+
+    let rust = sysml_rust::generate(&model, &[part]).unwrap().rust;
+    assert!(!rust.contains("struct Odd"), "{rust}");
 
     // without the metadata, the dangling typing is a comment
     let mut plain = Model::new();
@@ -1641,14 +1669,14 @@ fn a_bound_type_is_the_type_the_model_names() {
         "package S {\n\
          \tprivate import Api::*;\n\
          \tprivate import ScalarValues::*;\n\
-         \tattribute def Millis :> Integer { @rust { :>> path = \"u16\"; :>> derives = \"Debug, Clone, PartialEq\"; } }\n\
-         \tattribute def Ticks :> Integer { @rust { :>> path = \"u8\"; } }\n\
+         \tattribute def Millis :> Integer { @code { :>> writtenIn = \"rust\"; :>> path = \"u16\"; :>> capabilities = \"Debug, Clone, PartialEq\"; } }\n\
+         \tattribute def Ticks :> Integer { @code { :>> writtenIn = \"rust\"; :>> path = \"u8\"; } }\n\
          \tpart def Timer {\n\
          \t\tattribute period : Millis = 500;\n\
          \t\tattribute plain : Integer = 7;\n\
          \t\tcalc def Left { in now : Millis; in started : Millis; now - started }\n\
          \t}\n\
-         \tattribute def Volts :> Real { @rust { :>> path = \"f32\"; :>> derives = \"Debug, Clone, PartialEq, Default\"; } }\n\
+         \tattribute def Volts :> Real { @code { :>> writtenIn = \"rust\"; :>> path = \"f32\"; :>> capabilities = \"Debug, Clone, PartialEq, Default\"; } }\n\
     \tpart def Counter { attribute seen : Ticks; }\n\
     \tpart def Rail { attribute level : Volts; }\n\
          }\n",
@@ -1704,7 +1732,7 @@ fn a_diamond_flattens_and_only_a_real_circle_is_refused() {
 }
 
 /// Metadata is how a model says anything about anything, and only one
-/// definition of it -- this crate's own `@rust` -- says which Rust item
+/// definition of it -- this crate's own `@code` -- says which Rust item
 /// something stands for. A `@Safety { :>> level = "high"; }` once read
 /// as a binding, and its part vanished without so much as a note.
 #[test]

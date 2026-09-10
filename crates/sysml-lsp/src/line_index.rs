@@ -3,12 +3,18 @@
 use lsp_types::{Position, Range};
 use sysml_syntax::{TextRange, TextSize};
 
+/// Where each line of a document begins.
+///
+/// The client counts UTF-16 code units from the start of a line and the
+/// model counts bytes from the start of the file, so every crossing
+/// between them goes through this.
 pub struct LineIndex {
     /// byte offset of each line start
     starts: Vec<usize>,
 }
 
 impl LineIndex {
+    /// Index `text` once, for as long as it does not change.
     pub fn new(text: &str) -> LineIndex {
         let mut starts = vec![0];
         for (i, b) in text.bytes().enumerate() {
@@ -19,6 +25,7 @@ impl LineIndex {
         LineIndex { starts }
     }
 
+    /// The line and UTF-16 column a byte offset falls on.
     pub fn position(&self, text: &str, offset: TextSize) -> Position {
         let offset = usize::from(offset).min(text.len());
         let line = self
@@ -32,6 +39,7 @@ impl LineIndex {
         Position::new(line as u32, col_utf16 as u32)
     }
 
+    /// The same, for both ends of a range.
     pub fn range(&self, text: &str, range: TextRange) -> Range {
         Range::new(
             self.position(text, range.start()),
@@ -39,6 +47,8 @@ impl LineIndex {
         )
     }
 
+    /// And back: the byte offset a client's position names, or nothing
+    /// where it names somewhere the document does not reach.
     pub fn offset(&self, text: &str, position: Position) -> Option<TextSize> {
         let line_start = *self.starts.get(position.line as usize)?;
         // the line's own text, without the break that ends it: a

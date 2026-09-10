@@ -3,26 +3,10 @@
 //! Requires the `vendor/sysml-v2-release` git submodule; the test is skipped
 //! (with a note) when the submodule is not checked out.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use sysml_corpus::model_files;
 use sysml_syntax::{parse_dialect, Dialect};
-
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
-            out.push(path);
-        }
-    }
-}
 
 fn check_corpus(subdir: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -32,9 +16,7 @@ fn check_corpus(subdir: &str) {
         eprintln!("skipping corpus test: {} not checked out", root.display());
         return;
     }
-    let mut files = Vec::new();
-    collect_files(&root, &mut files);
-    files.sort();
+    let files = model_files(&root);
     assert!(
         !files.is_empty(),
         "no corpus files under {}",

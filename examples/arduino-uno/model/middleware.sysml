@@ -2,7 +2,7 @@ package ArduinoHal {
     doc
     /*
      * The board as an application may touch it: set a pin, wait, read the
-     * clock. Every definition carries a `@rust { ... }` usage naming the
+     * clock. Every definition carries a `@code { ... }` usage naming the
      * item it stands for, so what `sysml rustgen` writes calls the real
      * trait in `src/hal.rs` rather than inventing a parallel one.
      *
@@ -13,13 +13,14 @@ package ArduinoHal {
 
     private import ScalarValues::*;
 
-    metadata def rust {
+    metadata def code {
+        attribute writtenIn : String;
         attribute path : String;
-        attribute crateName : String;
+        attribute module : String;
         attribute takesSelf : String;
         attribute isAsync : Boolean;
         attribute isFallible : Boolean;
-        attribute derives : String;
+        attribute capabilities : String;
     }
 
     attribute def PinNumber :> Integer {
@@ -30,33 +31,37 @@ package ArduinoHal {
          * microcontroller costs both flash and time, so the model says
          * the width it means rather than leaving it to be assumed.
          */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "u8";
-            :>> derives = "Debug, Clone, PartialEq, Default";
+            :>> capabilities = "Debug, Clone, PartialEq, Default";
         }
     }
 
     attribute def Millis :> Integer {
         doc /* A duration in milliseconds; a minute of them fits in u16. */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "u16";
-            :>> derives = "Debug, Clone, PartialEq, Default";
+            :>> capabilities = "Debug, Clone, PartialEq, Default";
         }
     }
 
     port def Gpio {
         doc /* What the application is given to reach the board with. */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "crate::hal::Gpio";
-            :>> crateName = "arduino_uno";
+            :>> module = "arduino_uno";
         }
     }
 
     action def SetPin {
         doc /* Drive one digital pin high or low. */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "crate::hal::Gpio::set_pin";
-            :>> crateName = "arduino_uno";
+            :>> module = "arduino_uno";
             :>> takesSelf = "&mut self";
             :>> isAsync = false;
             :>> isFallible = false;
@@ -67,9 +72,10 @@ package ArduinoHal {
 
     action def Wait {
         doc /* Block for that many milliseconds. */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "crate::hal::Gpio::wait_millis";
-            :>> crateName = "arduino_uno";
+            :>> module = "arduino_uno";
             :>> takesSelf = "&mut self";
             :>> isAsync = false;
             :>> isFallible = false;
@@ -79,9 +85,10 @@ package ArduinoHal {
 
     action def Uptime {
         doc /* Milliseconds since the board came up. */
-        @rust {
+        @code {
+            :>> writtenIn = "rust";
             :>> path = "crate::hal::Gpio::uptime_millis";
-            :>> crateName = "arduino_uno";
+            :>> module = "arduino_uno";
             :>> takesSelf = "&self";
             :>> isAsync = false;
             :>> isFallible = false;

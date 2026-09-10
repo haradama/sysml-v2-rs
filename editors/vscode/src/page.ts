@@ -62,6 +62,10 @@ export function page(): string {
     <option value="browser">Tree</option>
   </select>
   <input id="element" placeholder="element name" style="display:none">
+  <select id="scope" title="How much of the model the diagram is of">
+    <option value="file">This file</option>
+    <option value="directory">This folder</option>
+  </select>
   <span class="spacer"></span>
   <button id="out" title="Zoom out (-)">&minus;</button>
   <span id="zoom">100%</span>
@@ -75,6 +79,7 @@ export function page(): string {
   const vscode = acquireVsCodeApi();
   const view = document.getElementById("view");
   const element = document.getElementById("element");
+  const scope = document.getElementById("scope");
   const diagram = document.getElementById("diagram");
   const sizer = document.getElementById("sizer");
   const canvas = document.getElementById("canvas");
@@ -190,38 +195,62 @@ export function page(): string {
     event.preventDefault();
   });
 
+  /// Which of the toolbar's inputs the view being shown has a use for:
+  /// only an internal view is of one element, and only the two views
+  /// drawn from a set of files can be of more than this one.
+  function controls(showing) {
+    element.style.display = showing === "internal" ? "inline" : "none";
+    scope.style.display = showing === "internal" ? "none" : "inline";
+  }
+
   function send() {
-    element.style.display = view.value === "internal" ? "inline" : "none";
-    vscode.postMessage({ command: "setView", view: view.value, element: element.value });
+    controls(view.value);
+    vscode.postMessage({
+      command: "setView",
+      view: view.value,
+      element: element.value,
+      scope: scope.value,
+    });
   }
   view.addEventListener("change", send);
   element.addEventListener("change", send);
+  scope.addEventListener("change", send);
 
   /// The drawing as it is on screen, written out so it can be rasterised.
   ///
   /// The SVG carries a palette for either theme and chooses between them
   /// with a media query. Once it is loaded back as an image it is a
   /// document of its own, and which way that query goes there is the
-  /// engine's business -- so the colours it resolved to on screen are
-  /// pinned onto the copy, and what is saved is what is being looked at.
+  /// engine's business -- so the copy says outright what this window
+  /// settled on, and what is saved is what is being looked at.
+  ///
+  /// What the query holds is the dark half of the stylesheet. Said again
+  /// with nothing to qualify it, it is what any viewer of the copy reads;
+  /// dropped, the light half above it stands. Either way the copy no
+  /// longer asks the viewer which it would prefer.
   function pinned(svg) {
-    const shown = getComputedStyle(svg);
-    const names = new Set();
-    svg.querySelectorAll("style").forEach((sheet) => {
-      const declarations = sheet.textContent.match(/--[\\w-]+(?=\\s*:)/g) || [];
-      declarations.forEach((name) => names.add(name));
-    });
-    const settled = Array.from(names)
-      .map((name) => [name, shown.getPropertyValue(name).trim()])
-      .filter(([, colour]) => colour !== "");
+    // a window that cannot say which it prefers is taken at the drawing's
+    // own word, which is the light half
+    const dark =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
     const copy = svg.cloneNode(true);
-    if (settled.length > 0) {
+    let pinning = "";
+    copy.querySelectorAll("style").forEach((sheet) => {
+      const query = sheet.textContent.match(
+        /@media[^{]*prefers-color-scheme[^{]*\\{([\\s\\S]*)\\}\\s*$/
+      );
+      if (!query) {
+        return;
+      }
+      sheet.textContent = sheet.textContent.slice(0, query.index);
+      if (dark) {
+        pinning += query[1];
+      }
+    });
+    if (pinning !== "") {
       const pin = document.createElementNS("http://www.w3.org/2000/svg", "style");
-      // last, and outside any query, so it is the one that wins
-      pin.textContent =
-        ":root{" +
-        settled.map(([name, colour]) => name + ":" + colour + ";").join("") +
-        "}";
+      pin.textContent = pinning;
       copy.appendChild(pin);
     }
     return new XMLSerializer().serializeToString(copy);
@@ -301,7 +330,8 @@ export function page(): string {
     }
     view.value = drawn.view;
     element.value = drawn.element;
-    element.style.display = drawn.view === "internal" ? "inline" : "none";
+    scope.value = drawn.scope;
+    controls(drawn.view);
     if (drawn.kind === "svg") {
       canvas.innerHTML = drawn.body;
       const svg = canvas.querySelector("svg");

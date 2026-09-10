@@ -5,6 +5,7 @@ use std::io::{Cursor, Write};
 use std::process::{Command, Stdio};
 
 use serde_json::{json, Value};
+use sysml_corpus::library;
 
 /// Drive `serve` over the lines given and read the answers back.
 fn session(lines: &[Value]) -> Vec<Value> {
@@ -13,6 +14,26 @@ fn session(lines: &[Value]) -> Vec<Value> {
         .map(|line| format!("{line}\n"))
         .collect::<String>();
     talk(&input)
+}
+
+/// Drive a server that was given the standard library.
+///
+/// The constraints the specification states are written against the
+/// library, so a server without it is not asked them at all -- which is
+/// the answer, and not a model that broke none of them.
+fn with_library(library: &std::path::Path, lines: &[Value]) -> Vec<Value> {
+    let input: String = lines
+        .iter()
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    let mut server = sysml_cli::mcp::Server::new(Some(library));
+    let mut out: Vec<u8> = Vec::new();
+    sysml_cli::mcp::serve(&mut server, Cursor::new(input.as_bytes()), &mut out).unwrap();
+    String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every answer is JSON"))
+        .collect()
 }
 
 /// Drive a server that holds a project, the way a launcher starts one.
@@ -31,8 +52,15 @@ fn in_project(dir: &std::path::Path, lines: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+/// Drive a server with no standard library.
+///
+/// Loading and resolving one is the whole of what starting a server
+/// costs, and most of these tests are about the protocol, the shape of
+/// an answer or a refusal rather than about a library name. The ones
+/// that are about the library say so: `with_library` for a given one,
+/// `Server::new(None)` for the copy built in.
 fn talk(input: &str) -> Vec<Value> {
-    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut server = sysml_cli::mcp::Server::without_library(None);
     let mut out: Vec<u8> = Vec::new();
     sysml_cli::mcp::serve(&mut server, Cursor::new(input.as_bytes()), &mut out).unwrap();
     String::from_utf8(out)
@@ -89,6 +117,8 @@ fn a_client_handshakes_lists_and_calls() {
             "outline",
             "generate_rust",
             "import_rust",
+            "notation",
+            "generation_plan",
             "library_search"
         ]
     );
@@ -198,11 +228,8 @@ fn library_search_answers_out_of_the_library_it_was_given() {
 
 #[test]
 fn library_search_finds_what_the_library_declares() {
-    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
-    if !library.is_dir() {
-        return; // the corpus submodule is not checked out
-    }
-    let mut server = sysml_cli::mcp::Server::new(Some(library));
+    let library = library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&library));
     let response = server
         .handle(&call(
             "library_search",
@@ -329,6 +356,29 @@ fn the_binary_speaks_it_over_its_own_stdio() {
         let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(answered(&answer)["found"][0]["name"], "Tiny::Widget");
     }
+
+    // and `--no-library` wins over both of those, for a client that
+    // means to ask what a model says on its own terms
+    let mut child = Command::new(binary)
+        .args(["--no-library", "mcp"])
+        .env("SYSML_LIBRARY_PATH", &dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":\
+              {\"name\":\"library_search\",\"arguments\":{\"query\":\"widget\"}}}\n",
+        )
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(answered(&answer)["found"], json!([]));
 }
 
 /// A model is rarely one file. `alongside` names the others so that the
@@ -435,7 +485,7 @@ fn a_message_that_carries_an_id_is_always_answered() {
 /// client had in flight.
 #[test]
 fn a_line_that_is_not_text_is_a_parse_error_not_the_end() {
-    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut server = sysml_cli::mcp::Server::without_library(None);
     let mut out: Vec<u8> = Vec::new();
     let mut input: Vec<u8> = b"\xff\xfe not text\n".to_vec();
     input.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n");
@@ -479,13 +529,17 @@ fn check_says_which_library_it_answered_against() {
         .expect("a request is answered");
     assert_eq!(answered(&response)["library"], dir.to_str().unwrap());
 
-    // and one that will not load leaves the server without a library:
-    // a path that is not there, and a file that will not open
+    // and one that will not load falls back to the copy built in --
+    // a path that is not there, and a file that will not open. The
+    // warning goes to the launcher's log; what the client is told is
+    // which library actually answered, so a wrong path costs it the
+    // library it meant rather than every name in its model.
+    let built_in = format!("built in ({})", sysml_stdlib::RELEASE);
     let mut nowhere = sysml_cli::mcp::Server::new(Some(std::path::Path::new("/nowhere/library")));
     let response = nowhere
         .handle(&call("check", json!({ "text": "package P;\n" })))
         .expect("a request is answered");
-    assert!(answered(&response)["library"].is_null());
+    assert_eq!(answered(&response)["library"], built_in);
 
     #[cfg(unix)]
     {
@@ -499,7 +553,7 @@ fn check_says_which_library_it_answered_against() {
         let response = server
             .handle(&call("check", json!({ "text": "package P;\n" })))
             .expect("a request is answered");
-        assert!(answered(&response)["library"].is_null());
+        assert_eq!(answered(&response)["library"], built_in);
         std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
 }
@@ -569,10 +623,11 @@ fn a_project_is_the_model_a_call_that_names_no_source_is_about() {
     .unwrap();
 
     // `Wheel` is declared in one file and used in the other, so it
-    // resolving at all is the proof that both were opened
+    // resolving at all is the proof that both were opened -- it and the
+    // path the import writes are the two references there are
     let answer = answered(&in_project(&dir, &[call("check", json!({}))])[0]);
     assert_eq!(answer["ok"], true, "{answer}");
-    assert_eq!(answer["references"], 1, "{answer}");
+    assert_eq!(answer["references"], 2, "{answer}");
     assert_eq!(answer["project"], dir.display().to_string(), "{answer}");
 }
 
@@ -604,14 +659,15 @@ fn a_file_the_call_brings_stands_in_for_the_one_on_disk() {
         )[0],
     );
 
-    // the edit is what was checked: `Wheel` and `NoSuchThing`, and not
-    // the third reference the copy on disk would have brought with it
-    assert_eq!(answer["references"], 2, "{answer}");
+    // the edit is what was checked: the import's path, `Wheel` and
+    // `NoSuchThing`, and not the references the copy on disk would have
+    // brought with it
+    assert_eq!(answer["references"], 3, "{answer}");
     let unresolved = answer["unresolved"].as_array().unwrap();
     assert_eq!(unresolved.len(), 1, "{answer}");
     assert_eq!(unresolved[0]["name"], "NoSuchThing", "{answer}");
     // and the sibling on disk still answers for `Wheel`
-    assert_eq!(answer["resolved"], 1, "{answer}");
+    assert_eq!(answer["resolved"], 2, "{answer}");
 }
 
 /// The agent asking these questions is the one writing the files.
@@ -663,12 +719,6 @@ fn a_call_with_nothing_to_answer_about_says_both_ways_out() {
     let why = answered(&refused[0])["error"].as_str().unwrap().to_string();
     assert!(why.contains("`text` or `path`"), "{why}");
     assert!(why.contains("--project"), "{why}");
-}
-
-/// The library, where the submodule is checked out.
-fn library() -> Option<&'static std::path::Path> {
-    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
-    library.is_dir().then_some(library)
 }
 
 /// Re-reading a model file answers a different question: what a
@@ -732,8 +782,8 @@ fn an_outline_says_what_a_definition_inherits_as_well_as_what_it_declares() {
 /// used, and doing so needs no model of one's own.
 #[test]
 fn an_outline_describes_the_library_with_no_model_at_all() {
-    let Some(library) = library() else { return };
-    let mut server = sysml_cli::mcp::Server::new(Some(library));
+    let library = library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&library));
     let described = answered(
         &server
             .handle(&call(
@@ -834,8 +884,9 @@ fn import_rust_states_a_crate_and_says_what_it_could_not() {
 
     // from a path, against the library, so the answer can say whether
     // every name in what it wrote resolves
-    if let Some(library) = library() {
-        let mut server = sysml_cli::mcp::Server::new(Some(library));
+    {
+        let library = library();
+        let mut server = sysml_cli::mcp::Server::new(Some(&library));
         let imported = answered(
             &server
                 .handle(&call(
@@ -855,10 +906,15 @@ fn import_rust_states_a_crate_and_says_what_it_could_not() {
 
     // or written out in the call
     let inline = answered(&session(&[call("import_rust", json!({ "json": json }))])[0]);
-    assert!(inline["sysml"]
-        .as_str()
-        .unwrap()
-        .contains("metadata def rust"));
+    // the notation says which language it is about rather than being
+    // Rust's own, so a model bound to another language is written the
+    // same way
+    let written = inline["sysml"].as_str().unwrap();
+    assert!(written.contains("metadata def code"), "{written:.400}");
+    assert!(
+        written.contains(":>> writtenIn = \"rust\";"),
+        "{written:.400}"
+    );
 
     // with neither, the refusal says what writes the file
     let refused = session(&[call("import_rust", json!({}))]);
@@ -944,10 +1000,16 @@ fn a_project_file_that_cannot_be_read_is_left_out_and_said_so() {
 /// model has to satisfy, and `check` runs them.
 #[test]
 fn check_runs_the_constraints_the_specification_states() {
+    let library = library();
     // a control node at the top of a file is wrong in two ways the
     // specification names: a control node is composite, and what owns
     // one is an action
-    let broken = answered(&session(&[call("check", json!({ "text": "action a;\njoin j;\n" }))])[0]);
+    let broken = answered(
+        &with_library(
+            &library,
+            &[call("check", json!({ "text": "action a;\njoin j;\n" }))],
+        )[0],
+    );
     assert_eq!(broken["ok"], false, "{broken}");
     // the names still all resolve: this is the other half of the answer
     assert_eq!(
@@ -955,6 +1017,7 @@ fn check_runs_the_constraints_the_specification_states() {
         0,
         "{broken}"
     );
+    assert_eq!(broken["rules"]["asked"], true, "{broken}");
     let violations = broken["rules"]["violations"].as_array().unwrap();
     let named: Vec<&str> = violations
         .iter()
@@ -976,11 +1039,441 @@ fn check_runs_the_constraints_the_specification_states() {
 
     // and a model that breaks none of them says so, with a count of
     // what could not be asked at all
-    let sound = answered(&session(&[call("check", json!({ "text": "part def Car;\n" }))])[0]);
+    let sound = answered(
+        &with_library(
+            &library,
+            &[call("check", json!({ "text": "part def Car;\n" }))],
+        )[0],
+    );
     assert_eq!(sound["ok"], true, "{sound}");
+    assert_eq!(sound["rules"]["asked"], true, "{sound}");
     assert_eq!(sound["rules"]["violations"], json!([]), "{sound}");
     assert!(
         sound["rules"]["unevaluated"].as_u64().unwrap() > 0,
         "{sound}"
     );
+}
+
+/// The same model, checked by a server that was given no library: the
+/// constraints are not put at all, and the answer says so rather than
+/// reporting a model that broke none of them.
+///
+/// This is what the constraints are worth without the library they are
+/// written against -- `validateControlNodeOwningType` is about an
+/// `ActionDefinition` the model reaches through `Actions::Action` --
+/// and an agent reading an empty `violations` as a clean bill is
+/// reading a question that was never asked.
+#[test]
+fn without_the_library_the_constraints_are_not_put_at_all() {
+    let answer = answered(&session(&[call("check", json!({ "text": "action a;\njoin j;\n" }))])[0]);
+    assert_eq!(answer["rules"]["asked"], false, "{answer}");
+    assert_eq!(answer["rules"]["violations"], json!([]), "{answer}");
+    assert_eq!(answer["rules"]["held"], 0, "{answer}");
+}
+
+/// A root package of one's own under a name the standard library has
+/// already taken is reported, the way the command line and the language
+/// server report it.
+///
+/// Both sides still resolve -- each name is read on the side of the
+/// library boundary it was written on -- so this is not an unresolved
+/// name and not a broken constraint. It is the third thing `check` has
+/// to say, and the MCP server used not to say it at all: an agent
+/// writing `package Parts` of its own was told the model was sound.
+#[test]
+fn check_reports_a_root_package_named_after_a_library_one() {
+    let library = library();
+    let answer = answered(
+        &with_library(
+            &library,
+            &[call(
+                "check",
+                json!({ "text": "package Parts {\n\tpart def Mine;\n}\n" }),
+            )],
+        )[0],
+    );
+    let collisions = answer["collisions"].as_array().unwrap();
+    assert_eq!(collisions.len(), 1, "{answer}");
+    assert!(
+        collisions[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("standard library"),
+        "{answer}"
+    );
+    // it is placed the way every other finding is
+    assert_eq!(collisions[0]["line"], 1, "{answer}");
+    assert!(collisions[0]["column"].is_number(), "{answer}");
+}
+
+/// And a model with a name that resolves to nothing is not asked them
+/// either: a constraint put to a model with a hole in it answers about
+/// the hole.
+#[test]
+fn a_dangling_name_stops_the_constraints_before_they_complain_about_the_hole() {
+    let library = library();
+    let answer = answered(
+        &with_library(
+            &library,
+            &[call(
+                "check",
+                json!({ "text": "part def Boiler {\n\tref part pump : NoSuchType;\n\tconnect pump to nothingHere;\n}\n" }),
+            )],
+        )[0],
+    );
+    assert_eq!(answer["ok"], false, "{answer}");
+    assert!(
+        !answer["unresolved"].as_array().unwrap().is_empty(),
+        "{answer}"
+    );
+    assert_eq!(answer["rules"]["asked"], false, "{answer}");
+    assert_eq!(answer["rules"]["violations"], json!([]), "{answer}");
+}
+
+/// Asked for nothing in particular, `notation` answers what there is to
+/// ask about -- which is what a caller with prose in front of it needs
+/// before it can ask anything more precise.
+#[test]
+fn notation_lists_what_it_can_show() {
+    let answers = session(&[call("notation", json!({}))]);
+    let found = answered(&answers[0]);
+    let listed = found["constructs"].as_array().expect("a list");
+    let named: Vec<&str> = listed.iter().map(|it| it["of"].as_str().unwrap()).collect();
+    assert!(named.contains(&"requirement"), "{named:?}");
+    assert!(named.contains(&"state"), "{named:?}");
+    // the list is for choosing from, so each says when it is wanted
+    assert!(listed.iter().all(|it| it["when"].is_string()), "{found}");
+    // and none of them carries its example, which is what makes the
+    // list something a caller can read at all
+    assert!(listed.iter().all(|it| it["sysml"].is_null()), "{found}");
+}
+
+/// Asked about one, it answers the example -- and the example is SysML
+/// the toolchain agrees with, which is the whole point of shipping one.
+#[test]
+fn notation_shows_an_example_that_checks() {
+    let answers = session(&[call("notation", json!({ "of": "Requirement" }))]);
+    let found = answered(&answers[0]);
+    assert_eq!(found["of"], "requirement", "asking is not case-sensitive");
+    let example = found["sysml"].as_str().expect("an example");
+    assert!(example.contains("requirement def"), "{example}");
+
+    let library = library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&library));
+    let response = server
+        .handle(&call("check", json!({ "text": example })))
+        .expect("a request is answered");
+    let said = answered(&response);
+    assert_eq!(said["ok"], true, "{said}");
+    assert_eq!(said["rules"]["violations"], json!([]), "{said}");
+}
+
+/// Asked about something it has no example of, it says so and says what
+/// it does have, rather than answering with silence.
+#[test]
+fn notation_asked_for_what_it_has_not_got_says_what_it_has() {
+    let answers = session(&[call("notation", json!({ "of": "class diagram" }))]);
+    assert_eq!(answers[0]["result"]["isError"], true);
+    let why = answered(&answers[0])["error"].as_str().unwrap().to_string();
+    assert!(why.contains("class diagram"), "{why}");
+    assert!(why.contains("requirement"), "{why}");
+}
+
+/// A server told where no library is has one anyway: the copy built into
+/// the binary.
+///
+/// An agent's launcher often has nowhere to put a path -- `.mcp.json`
+/// names a command and little else -- and a server that answers
+/// `library_search` with nothing reads as "the library does not declare
+/// that", which is a wrong answer rather than a missing one.
+#[test]
+fn a_server_told_nothing_answers_out_of_the_copy_built_in() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let found = answered(
+        &server
+            .handle(&call("library_search", json!({ "query": "MassValue" })))
+            .expect("a request is answered"),
+    );
+    assert!(
+        found["found"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["name"] == "ISQBase::MassValue"),
+        "{found}"
+    );
+
+    // and it says so, since which library answered decides how much of
+    // an answer is worth believing
+    let said = answered(
+        &server
+            .handle(&call("check", json!({ "text": "package P;\n" })))
+            .expect("a request is answered"),
+    );
+    assert_eq!(
+        said["library"],
+        format!("built in ({})", sysml_stdlib::RELEASE),
+        "{said}"
+    );
+}
+
+/// A library of two documented definitions, for the searches that are
+/// about what a definition says rather than what it is called.
+fn saying_library() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("sysml-mcp-documented");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tiny.sysml"),
+        "package Tiny {\n\
+         \tattribute def Widget { doc /* a thing that spins */ }\n\
+         \tattribute def Spinner {\n\
+         \t\tdoc /* also a thing that spins, and called a widget in the trade */\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// Searching the documentation is how a caller finds a definition whose
+/// name it does not know, which is the position anybody transcribing a
+/// specification is in.
+#[test]
+fn library_search_can_look_at_what_a_definition_says() {
+    let dir = saying_library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&dir));
+    let found = answered(
+        &server
+            .handle(&call(
+                "library_search",
+                json!({ "query": "spins", "in": "documentation" }),
+            ))
+            .expect("a request is answered"),
+    );
+    assert_eq!(found["searched"], "documentation");
+    let named: Vec<&str> = found["found"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    // the shorter documentation first: the one that is mostly about it
+    assert_eq!(named, ["Tiny::Widget", "Tiny::Spinner"]);
+}
+
+/// And it looks there by itself when nothing is named what was asked
+/// for. An empty answer reads as "the library does not have one", which
+/// is what sends a model off to invent its own.
+#[test]
+fn a_name_that_finds_nothing_falls_back_to_the_documentation() {
+    let dir = saying_library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&dir));
+
+    // a name it does know is answered as a name, and says so
+    let found = answered(
+        &server
+            .handle(&call("library_search", json!({ "query": "widget" })))
+            .expect("a request is answered"),
+    );
+    assert_eq!(found["searched"], "names");
+    assert_eq!(found["found"][0]["name"], "Tiny::Widget");
+
+    // one it does not is answered out of the documentation
+    let found = answered(
+        &server
+            .handle(&call("library_search", json!({ "query": "spins" })))
+            .expect("a request is answered"),
+    );
+    assert_eq!(found["searched"], "documentation");
+    assert_eq!(found["found"][0]["name"], "Tiny::Widget");
+
+    // and one that is in neither is still nothing, said as a name
+    // search, since that is the question that was asked
+    let found = answered(
+        &server
+            .handle(&call("library_search", json!({ "query": "torque" })))
+            .expect("a request is answered"),
+    );
+    assert_eq!(found["searched"], "documentation");
+    assert_eq!(found["found"], json!([]));
+}
+
+/// Asked for both, the names come first and nothing is listed twice.
+#[test]
+fn both_puts_the_names_first_and_says_each_once() {
+    let dir = saying_library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&dir));
+    let found = answered(
+        &server
+            .handle(&call(
+                "library_search",
+                json!({ "query": "widget", "in": "both" }),
+            ))
+            .expect("a request is answered"),
+    );
+    let named: Vec<&str> = found["found"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, ["Tiny::Widget", "Tiny::Spinner"]);
+}
+
+/// The model can be searched the same way, and what the model says is
+/// kept apart from what the library says only by `scope`.
+#[test]
+fn the_model_is_searched_by_what_it_says_too() {
+    let dir = std::env::temp_dir().join("sysml-mcp-documented-project");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("model.sysml"),
+        "package App {\n\tpart def Pump { doc /* moves the coolant round */ }\n}\n",
+    )
+    .unwrap();
+    let answers = in_project(
+        &dir,
+        &[call(
+            "library_search",
+            json!({ "query": "coolant", "scope": "model" }),
+        )],
+    );
+    let found = answered(&answers[0]);
+    assert_eq!(found["searched"], "documentation");
+    assert_eq!(found["found"][0]["name"], "App::Pump");
+}
+
+/// A name that resolved to nothing is answered with what it might have
+/// meant, which is two different answers: a name declared somewhere is a
+/// right name nothing imported, and a name declared nowhere is a wrong
+/// one with a right one beside it. Told only that both missed, a client
+/// has to work that out one name at a time.
+#[test]
+fn check_says_what_a_name_that_missed_might_have_meant() {
+    let declared = answered(
+        &session(&[call(
+            "check",
+            json!({ "text": "package Q { part def Wheel; }\n\
+                             package P { part def Car { part w : Wheel; } }\n" }),
+        )])[0],
+    );
+    let missed = &declared["unresolved"][0];
+    assert_eq!(missed["name"], "Wheel", "{declared}");
+    assert_eq!(missed["declared_as"][0], "Q::Wheel", "{declared}");
+    assert!(missed["did_you_mean"].is_null(), "{declared}");
+
+    let misspelt = answered(
+        &session(&[call(
+            "check",
+            json!({ "text": "package P { part def Wheel; part def Car { part w : Wheeel; } }\n" }),
+        )])[0],
+    );
+    let missed = &misspelt["unresolved"][0];
+    assert_eq!(missed["did_you_mean"][0], "P::Wheel", "{misspelt}");
+    assert!(missed["declared_as"].is_null(), "{misspelt}");
+}
+
+/// A search that finds an alias says what it is an alias for, and
+/// answers about the thing rather than about the name: an agent handed
+/// `Rueda` and nothing else would write it and mean nothing by it.
+#[test]
+fn a_search_that_finds_an_alias_says_what_it_stands_for() {
+    let dir = std::env::temp_dir().join("sysml-mcp-alias");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("model.sysml"),
+        "package P {\n\
+         \tpart def Wheel { doc /* the round one */ }\n\
+         \talias Rueda for Wheel;\n\
+         }\n",
+    )
+    .unwrap();
+    let answers = in_project(
+        &dir,
+        &[call(
+            "library_search",
+            json!({ "query": "Rueda", "scope": "model" }),
+        )],
+    );
+    let found = answered(&answers[0]);
+    let first = &found["found"][0];
+    assert_eq!(first["name"], "P::Rueda", "{found}");
+    assert_eq!(first["alias_for"], "P::Wheel", "{found}");
+    assert_eq!(first["kind"], "PartDefinition", "{found}");
+    // and what the thing itself says, since the alias says nothing
+    assert_eq!(first["documentation"], "the round one", "{found}");
+}
+
+/// The plan says what a model implies for code, in no language in
+/// particular -- and says the things a reader of the SysML would have to
+/// guess at.
+#[test]
+fn generation_plan_says_what_the_model_implies() {
+    // with the library, since what `ScalarValues::String` bottoms out in
+    // is a question about the library and not about the model
+    let answers = with_library(
+        &library(),
+        &[call(
+            "generation_plan",
+            json!({ "text": "package Cars {\n\
+                         \tpart def Wheel;\n\
+                         \tpart def Car {\n\
+                         \t\tpart wheels : Wheel[4];\n\
+                         \t\tref part spare : Wheel;\n\
+                         \t\tattribute name : ScalarValues::String;\n\
+                         \t}\n\
+                         }\n" }),
+        )],
+    );
+    let plan = answered(&answers[0]);
+    let car = plan["definitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["of"] == "Cars::Car")
+        .expect("the model's own definitions are planned");
+    assert_eq!(car["shape"], "record", "{car}");
+
+    let wheels = &car["features"][0];
+    assert_eq!(wheels["name"], "wheels");
+    assert_eq!(wheels["kind"], "PartUsage");
+    assert_eq!(wheels["type"], "Cars::Wheel");
+    // four of them, exactly: an array and not a list
+    assert_eq!(wheels["multiplicity"]["lower"], 4, "{wheels}");
+    assert_eq!(wheels["multiplicity"]["upper"], 4, "{wheels}");
+    // the car is made of them
+    assert_eq!(wheels["composite"], true, "{wheels}");
+    // and the model said nothing about uniqueness, which is the
+    // specification saying they are unique
+    assert_eq!(wheels["unique"], true, "{wheels}");
+
+    // a `ref part` is referred to rather than owned, which is the
+    // difference between a field and a pointer in most languages
+    let spare = &car["features"][1];
+    assert_eq!(spare["composite"], false, "{spare}");
+
+    // and what a library type bottoms out in, which its name does not say
+    let name = &car["features"][2];
+    assert_eq!(name["primitive"], "String", "{name}");
+}
+
+/// `within` plans one definition instead of the whole model, which is
+/// how a caller writes a file at a time.
+#[test]
+fn generation_plan_can_be_asked_about_one_definition() {
+    let answers = session(&[call(
+        "generation_plan",
+        json!({
+            "text": "package P { part def A; part def B; }\n",
+            "within": "P::B",
+        }),
+    )]);
+    let plan = answered(&answers[0]);
+    let named: Vec<&str> = plan["definitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["of"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, ["P::B"], "{plan}");
 }

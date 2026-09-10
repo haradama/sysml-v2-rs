@@ -3,7 +3,7 @@
 //! The input is what `rustdoc` writes with `--output-format json`: the one
 //! machine-readable statement of a crate's public API, re-exports resolved
 //! and macros expanded. [`rustdoc_to_sysml`] turns it into a SysML package
-//! in which every definition carries a `@rust { ... }` metadata usage
+//! in which every definition carries a `@code { ... }` metadata usage
 //! naming the Rust item it binds to -- so a systems model can `import` the
 //! package, type its ports and `perform` its actions, and a code generator
 //! can later call the real API instead of inventing parallel types.
@@ -237,10 +237,12 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, I
         for (rust, name, scalar) in EXACT.iter().filter(|(_, name, _)| ctx.exact.contains(name)) {
             writeln!(
                 out,
-                "\tattribute def {name} :> {scalar} {{ @{} {{ :>> {} = \"{rust}\"; :>> {} = \"{DERIVES}\"; }} }}",
+                "\tattribute def {name} :> {scalar} {{ @{} {{ :>> {} = \"{}\"; :>> {} = \"{rust}\"; :>> {} = \"{DERIVES}\"; }} }}",
                 binding::DEF,
-                binding::PATH,
-                binding::DERIVES
+                binding::LANGUAGE,
+                binding::RUST,
+                binding::ITEM,
+                binding::CAPABILITIES
             )
             .unwrap();
         }
@@ -263,6 +265,7 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, I
 /// A crate's public API as SysML, and what of it had no SysML shape.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Imported {
+    /// The SysML the crate's API was read as.
     pub sysml: String,
     /// Every item that could not be stated, and why. The package says
     /// them in comments too; this is for whoever has to model them by
@@ -552,7 +555,7 @@ impl<'a> Context<'a> {
         true
     }
 
-    /// The `@rust { ... }` usage binding one definition to its Rust item.
+    /// The `@code { ... }` usage binding one definition to its Rust item.
     fn binding(
         &self,
         out: &mut String,
@@ -563,10 +566,12 @@ impl<'a> Context<'a> {
         let tabs = "\t".repeat(indent);
         write!(
             out,
-            "{tabs}@{} {{ :>> {} = \"{path}\"; :>> {} = \"{}\";",
+            "{tabs}@{} {{ :>> {} = \"{}\"; :>> {} = \"{path}\"; :>> {} = \"{}\";",
             binding::DEF,
-            binding::PATH,
-            binding::CRATE,
+            binding::LANGUAGE,
+            binding::RUST,
+            binding::ITEM,
+            binding::MODULE,
             self.crate_name
         )
         .unwrap();

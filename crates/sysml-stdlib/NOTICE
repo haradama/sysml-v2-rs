@@ -1,0 +1,21 @@
+The SysML v2 standard library
+=============================
+
+The files under `library/` are the KerML and SysML v2 standard model
+libraries, taken verbatim from the OMG SysML v2 Release repository:
+
+    https://github.com/Systems-Modeling/SysML-v2-Release
+    release 2026-05, commit de1070ae8e79c21532b8004fc663d47b35d0e9fa
+
+They are maintained by the Reference Implementation Working Group of the
+OMG Systems Modeling Community, and are licensed under the Eclipse Public
+License 2.0. The licence text is in `LICENSE` beside this file, and is
+the licence of this crate.
+
+Nothing in `library/` was written here and nothing in it was changed. The
+rest of sysml-v2-rs is licensed under MIT or Apache-2.0, at your option;
+this crate is separate from it so that which files are under which
+licence is a question with a one-word answer.
+
+OMG®, SysML® and Systems Modeling Language™ are trademarks of the Object
+Management Group.

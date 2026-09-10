@@ -8,104 +8,14 @@
 //! renamed here, about twelve hundred in all -- which is how it came out
 //! that a name mentioned in the middle of a qualified one, in an import,
 //! or through a redefinition that borrowed it was left behind.
-use lsp_server::{Connection, Message, Notification, Request, RequestId};
+
+mod common;
+
+use common::serving;
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
-
-struct Client {
-    connection: Connection,
-    next_id: i32,
-}
-
-impl Client {
-    fn ask(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = RequestId::from(self.next_id);
-        self.next_id += 1;
-        self.connection
-            .sender
-            .send(Message::Request(Request {
-                id: id.clone(),
-                method: method.into(),
-                params,
-            }))
-            .map_err(|e| e.to_string())?;
-        loop {
-            let got = self
-                .connection
-                .receiver
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .map_err(|_| format!("no answer to {method}"))?;
-            if let Message::Response(resp) = got {
-                if resp.id == id {
-                    return match resp.error {
-                        Some(e) => Err(e.message),
-                        None => Ok(resp.result.unwrap_or(Value::Null)),
-                    };
-                }
-            }
-        }
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.connection
-            .sender
-            .send(Message::Notification(Notification {
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-    }
-
-    fn diagnostics(&mut self, uri: &str) {
-        loop {
-            let got = self
-                .connection
-                .receiver
-                .recv_timeout(std::time::Duration::from_secs(30))
-                .expect("no diagnostics");
-            if let Message::Notification(n) = got {
-                if n.method == lsp_types::notification::PublishDiagnostics::METHOD
-                    && n.params["uri"] == uri
-                {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-fn vendor() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release")
-        .canonicalize()
-        .ok()?;
-    root.join("sysml.library").is_dir().then_some(root)
-}
-
-fn models(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join("sysml/src"), root.join("kerml/src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
+use sysml_corpus::{models, vendor};
 
 /// Apply LSP text edits to `text`, last first so the offsets hold.
 fn apply(text: &str, edits: &[Value]) -> Option<String> {
@@ -157,16 +67,11 @@ fn resolution(name: &str, text: &str) -> (usize, usize, bool) {
 #[test]
 fn a_rename_leaves_the_model_saying_the_same_thing() {
     let Some(root) = vendor() else { return };
-    let (server_side, client_side) = Connection::memory();
-    std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, _handle) = serving();
     client
         .ask(
             lsp_types::request::Initialize::METHOD,
-            json!({ "capabilities": {} }),
+            json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
         )
         .unwrap();
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
@@ -182,7 +87,7 @@ fn a_rename_leaves_the_model_saying_the_same_thing() {
             lsp_types::notification::DidOpenTextDocument::METHOD,
             json!({"textDocument":{"uri":&uri,"languageId":"sysml","version":1,"text":text}}),
         );
-        client.diagnostics(&uri);
+        client.diagnostics_for(&uri);
         let before = resolution(&path.to_string_lossy(), &text);
 
         let symbols = client

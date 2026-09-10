@@ -3,86 +3,12 @@
 //! of the project on disk, or every import into a sibling file reads as
 //! an unresolved reference in a file that is perfectly correct.
 
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+mod common;
+
+use common::{serving, Client};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use serde_json::{json, Value};
-
-struct Client {
-    connection: Connection,
-    next_id: i32,
-}
-
-impl Client {
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        let id = RequestId::from(self.next_id);
-        self.next_id += 1;
-        self.connection
-            .sender
-            .send(Message::Request(Request {
-                id: id.clone(),
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-        loop {
-            match self.recv() {
-                Message::Response(Response {
-                    id: got,
-                    result,
-                    error,
-                }) if got == id => {
-                    assert!(error.is_none(), "error response: {error:?}");
-                    return result.unwrap_or(Value::Null);
-                }
-                _ => continue,
-            }
-        }
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.connection
-            .sender
-            .send(Message::Notification(Notification {
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-    }
-
-    fn recv(&mut self) -> Message {
-        self.connection
-            .receiver
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("server did not answer")
-    }
-
-    /// The next `count` publications, by the file they are about.
-    ///
-    /// One arrives per open document per change, and in no particular
-    /// order, so taking them one at a time and discarding what does not
-    /// match throws away the answer to the next question.
-    fn diagnostics(&mut self, count: usize) -> std::collections::HashMap<String, Vec<Value>> {
-        let mut out = std::collections::HashMap::new();
-        while out.len() < count {
-            if let Message::Notification(n) = self.recv() {
-                if n.method == lsp_types::notification::PublishDiagnostics::METHOD {
-                    let uri = n.params["uri"].as_str().unwrap().to_string();
-                    let found = n.params["diagnostics"].as_array().unwrap().clone();
-                    out.insert(uri, found);
-                }
-            }
-        }
-        out
-    }
-
-    fn messages(found: &[Value]) -> Vec<&str> {
-        found
-            .iter()
-            .map(|d| d["message"].as_str().unwrap())
-            .collect()
-    }
-}
 
 #[test]
 fn a_sibling_file_resolves_without_being_open() {
@@ -111,12 +37,7 @@ fn a_sibling_file_resolves_without_being_open() {
     )
     .unwrap();
 
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     let root_uri = lsp_types::Url::from_file_path(&root).unwrap();
     client.request(
         lsp_types::request::Initialize::METHOD,
@@ -250,12 +171,7 @@ fn excluded_directories_are_not_the_project() {
     // be unreadable, whether because it is binary or because it is gone
     std::fs::write(root.join("model/binary.sysml"), [0xff, 0xfe, 0x00]).unwrap();
 
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     let root_uri = lsp_types::Url::from_file_path(&root).unwrap();
     client.request(
         lsp_types::request::Initialize::METHOD,
@@ -263,7 +179,7 @@ fn excluded_directories_are_not_the_project() {
             "capabilities": {},
             "workspaceFolders": [{ "uri": root_uri, "name": "project" }],
             // one relative to the workspace folder, one absolute
-            "initializationOptions": { "excludePaths": [
+            "initializationOptions": { "noLibrary": true, "excludePaths": [
                 "vendor",
                 root.join("elsewhere").to_str().unwrap(),
             ] }
@@ -293,6 +209,75 @@ fn excluded_directories_are_not_the_project() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A document opened from an excluded directory is read in the company
+/// it was written in.
+///
+/// The exclusion is there so that opening one file does not pay for
+/// reading a whole vendored corpus -- not so that a file read out of one
+/// reports every name its other half declares as unresolved.
+#[test]
+fn a_document_from_an_excluded_directory_is_read_with_the_files_beside_it() {
+    let root = std::env::temp_dir().join("sysml-lsp-beside-test");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("vendor/example/parts")).unwrap();
+    std::fs::create_dir_all(root.join("model")).unwrap();
+    let root = std::fs::canonicalize(&root).unwrap();
+    // a directory below the one the document is in, which the reading
+    // and the drawing both reach
+    std::fs::write(
+        root.join("vendor/example/parts/Definitions.sysml"),
+        "package Definitions {\n    part def Wheel;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("model/mine.sysml"),
+        "package Mine {\n    part def Own;\n}\n",
+    )
+    .unwrap();
+
+    let (mut client, handle) = serving();
+    let root_uri = lsp_types::Url::from_file_path(&root).unwrap();
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({
+            "capabilities": {},
+            "workspaceFolders": [{ "uri": root_uri, "name": "project" }],
+            "initializationOptions": { "noLibrary": true, "excludePaths": ["vendor"] }
+        }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+
+    // the usages half of the vendored model, opened on its own
+    let usages = lsp_types::Url::from_file_path(root.join("vendor/example/Usages.sysml")).unwrap();
+    let text = "package Usages {\n    private import Definitions::*;\n    part w : Wheel;\n}\n";
+    std::fs::write(root.join("vendor/example/Usages.sysml"), text).unwrap();
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": usages, "languageId": "sysml", "version": 1,
+                                  "text": text } }),
+    );
+    let found = client.diagnostics(1);
+    assert_eq!(Client::messages(&found[usages.as_str()]), [] as [String; 0]);
+
+    // the file alone declares no definition, so its own drawing is the
+    // tree; the folder it was written in declares one
+    let alone = client.request("sysml/diagram", json!({ "uri": usages }));
+    let svg = alone["svg"].as_str().unwrap();
+    assert!(!svg.contains("<rect class=\"box\""), "{svg}");
+    let folder = client.request(
+        "sysml/diagram",
+        json!({ "uri": usages, "scope": "directory" }),
+    );
+    let svg = folder["svg"].as_str().unwrap();
+    assert!(svg.contains("<rect class=\"box\""), "{svg}");
+    assert!(svg.contains(">Wheel<"), "{svg}");
+
+    client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
+    client.notify(lsp_types::notification::Exit::METHOD, json!({}));
+    handle.join().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A root package of one's own named after one of the standard
 /// library's still resolves -- each side reads its own -- but the name
 /// then means one thing here and another in the library, and nothing in
@@ -315,12 +300,7 @@ fn a_package_named_after_a_library_one_is_pointed_out() {
     )
     .unwrap();
 
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
     let root_uri = lsp_types::Url::from_file_path(&root).unwrap();
     client.request(
         lsp_types::request::Initialize::METHOD,
@@ -360,29 +340,19 @@ fn workspace(name: &str) -> std::path::PathBuf {
 }
 
 /// A server serving `root` as its one workspace folder.
-fn serving(root: &std::path::Path) -> (Client, std::thread::JoinHandle<()>) {
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+fn over(root: &std::path::Path) -> (Client, std::thread::JoinHandle<()>) {
+    let (mut client, handle) = serving();
     let root_uri = lsp_types::Url::from_file_path(root).unwrap();
     client.request(
         lsp_types::request::Initialize::METHOD,
         json!({
             "capabilities": {},
+            "initializationOptions": { "noLibrary": true },
             "workspaceFolders": [{ "uri": root_uri, "name": "project" }],
         }),
     );
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
     (client, handle)
-}
-
-fn stop(mut client: Client, handle: std::thread::JoinHandle<()>) {
-    client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
-    client.notify(lsp_types::notification::Exit::METHOD, json!({}));
-    handle.join().unwrap();
 }
 
 /// How many places in the whole workspace answer to a name.
@@ -404,7 +374,7 @@ fn a_uri_encoded_the_way_vscode_encodes_it_names_the_file_the_scan_found() {
     let text = "package Weird {\n    part def Thing;\n}\n";
     std::fs::write(&path, text).unwrap();
 
-    let (mut client, handle) = serving(&root);
+    let (mut client, handle) = over(&root);
     // VSCode percent-encodes characters this server's URL type leaves
     // alone; compared as strings the buffer and the scanned file are
     // then two files, and everything in them is declared twice
@@ -425,7 +395,7 @@ fn a_uri_encoded_the_way_vscode_encodes_it_names_the_file_the_scan_found() {
     );
     client.diagnostics(1);
     assert_eq!(declarations(&mut client, "Thing"), 1);
-    stop(client, handle);
+    client.stop(handle);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -441,7 +411,7 @@ fn a_file_reached_through_a_link_is_still_one_file() {
     // the folder is opened through the link, the document through the
     // path the link points at -- which is how an editor that resolves
     // one and not the other made this server analyse the file twice
-    let (mut client, handle) = serving(&root.join("link"));
+    let (mut client, handle) = over(&root.join("link"));
     let uri = lsp_types::Url::from_file_path(root.join("real/m.sysml")).unwrap();
     client.notify(
         lsp_types::notification::DidOpenTextDocument::METHOD,
@@ -462,7 +432,7 @@ fn a_file_reached_through_a_link_is_still_one_file() {
         }),
     );
     assert_eq!(definition["uri"], Value::String(uri.to_string()));
-    stop(client, handle);
+    client.stop(handle);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -471,7 +441,7 @@ fn a_file_written_after_startup_belongs_to_the_project() {
     let root = workspace("sysml-lsp-fresh-file-test");
     let app = root.join("app.sysml");
     std::fs::write(&app, "package App {\n    part x : New::Thing;\n}\n").unwrap();
-    let (mut client, handle) = serving(&root);
+    let (mut client, handle) = over(&root);
     let app_uri = lsp_types::Url::from_file_path(&app).unwrap();
     let open = |client: &mut Client, uri: &lsp_types::Url, text: &str| {
         client.notify(
@@ -524,7 +494,7 @@ fn a_file_written_after_startup_belongs_to_the_project() {
     );
     let found = client.diagnostics(2);
     assert!(found[app_uri.as_str()].is_empty(), "{found:?}");
-    stop(client, handle);
+    client.stop(handle);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -540,7 +510,7 @@ fn an_internal_view_draws_the_element_in_front_of_you() {
         "package Elsewhere {\n    part def Part;\n}\n",
     )
     .unwrap();
-    let (mut client, handle) = serving(&root);
+    let (mut client, handle) = over(&root);
     let uri = lsp_types::Url::from_file_path(root.join("mine.sysml")).unwrap();
     client.notify(
         lsp_types::notification::DidOpenTextDocument::METHOD,
@@ -561,6 +531,6 @@ fn an_internal_view_draws_the_element_in_front_of_you() {
     assert!(drawn(&mut client, "Part").contains("w : Wheel"));
     // and a qualified name says which one, wherever it is
     assert!(!drawn(&mut client, "Elsewhere::Part").contains("w : Wheel"));
-    stop(client, handle);
+    client.stop(handle);
     let _ = std::fs::remove_dir_all(&root);
 }

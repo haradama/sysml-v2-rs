@@ -76,10 +76,10 @@ function open() {
     zoom: () => Number(at("zoom").textContent.replace("%", "")),
     sizer: at("sizer"),
     canvas: at("canvas"),
-    draw: (kind, body, view = "definitions", element = "") =>
+    draw: (kind, body, view = "definitions", element = "", scope = "file") =>
       window.dispatchEvent(
         new window.MessageEvent("message", {
-          data: { command: "draw", kind, body, view, element },
+          data: { command: "draw", kind, body, view, element, scope },
         })
       ),
     click: (id) =>
@@ -224,8 +224,25 @@ test("the view controls report what was chosen", () => {
     command: "setView",
     view: "internal",
     element: "",
+    scope: "file",
   });
   assert.equal(it.at("element").style.display, "inline");
+  // an internal view is of one element, whichever files were read
+  assert.equal(it.at("scope").style.display, "none");
+});
+
+test("the scope control asks for more of the model than the file", () => {
+  const it = open();
+  const scope = it.at("scope");
+  scope.value = "directory";
+  scope.dispatchEvent(new it.window.Event("change"));
+  assert.deepEqual(it.last(), {
+    command: "setView",
+    view: "definitions",
+    element: "",
+    scope: "directory",
+  });
+  assert.equal(scope.style.display, "inline");
 });
 
 test("a drawing arriving sets the controls to what is being shown", () => {
@@ -234,8 +251,11 @@ test("a drawing arriving sets the controls to what is being shown", () => {
   assert.equal(it.at("view").value, "internal");
   assert.equal(it.at("element").value, "Car");
   assert.equal(it.at("element").style.display, "inline");
-  it.draw("svg", DRAWING, "browser", "");
+  assert.equal(it.at("scope").style.display, "none");
+  it.draw("svg", DRAWING, "browser", "", "directory");
   assert.equal(it.at("element").style.display, "none");
+  assert.equal(it.at("scope").value, "directory");
+  assert.equal(it.at("scope").style.display, "inline");
 });
 
 test("a message takes the place of a drawing and no room to zoom", () => {
@@ -248,34 +268,47 @@ test("a message takes the place of a drawing and no room to zoom", () => {
   assert.equal(it.zoom(), 100);
 });
 
+/// A drawing with a palette for either theme, as the server draws one.
+const THEMED =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">' +
+  "<style>.box { fill: #ffffff; stroke: #000000; }\n" +
+  "@media (prefers-color-scheme: dark) {\n" +
+  "  .box { fill: #1e1e1e; stroke: #d4d4d4; }\n" +
+  "}\n</style><rect class=\"box\"/></svg>";
+
 test("what is written out carries the colours that are on screen", () => {
   const it = open();
-  it.draw(
-    "svg",
-    '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">' +
-      "<style>:root { --box: #ffffff; --line: #000000; }" +
-      "@media (prefers-color-scheme: dark) { :root { --box: #1e1e1e; } }" +
-      "</style><rect/></svg>"
-  );
-  // the query has already been settled by the window it is shown in
-  const svg = it.canvas.querySelector("svg");
-  svg.style.setProperty("--box", "#1e1e1e");
-  svg.style.setProperty("--line", "#d4d4d4");
+  it.window.matchMedia = () => ({ matches: true });
+  it.draw("svg", THEMED);
 
-  const written = it.window.pinned(svg);
-  const pin = written.slice(written.lastIndexOf(":root{"));
-  assert.equal(pin, ":root{--box:#1e1e1e;--line:#d4d4d4;}</style></svg>");
-  // and it comes after the query, so it is the rule that wins
-  assert.ok(written.lastIndexOf(":root{") > written.indexOf("prefers-color-scheme"));
+  const written = it.window.pinned(it.canvas.querySelector("svg"));
+  // the dark half said again with nothing to qualify it, and the query
+  // it was written under gone, so the copy cannot be read either way
+  assert.ok(written.includes("#1e1e1e"), written);
+  assert.ok(!written.includes("prefers-color-scheme"), written);
   // what was written is a copy: the drawing on screen is left alone
   assert.equal(it.canvas.querySelectorAll("style").length, 1);
+  assert.ok(
+    it.canvas.querySelector("style").textContent.includes("prefers-color-scheme")
+  );
 });
 
-test("a drawing that settled no colours is written out as it is", () => {
+test("a light window writes out the light half and no query", () => {
+  const it = open();
+  it.window.matchMedia = () => ({ matches: false });
+  it.draw("svg", THEMED);
+
+  const written = it.window.pinned(it.canvas.querySelector("svg"));
+  assert.ok(written.includes("#ffffff"), written);
+  assert.ok(!written.includes("#1e1e1e"), written);
+  assert.ok(!written.includes("prefers-color-scheme"), written);
+});
+
+test("a drawing that carries no query is written out as it is", () => {
   const it = open();
   it.draw("svg", DRAWING);
   const written = it.window.pinned(it.canvas.querySelector("svg"));
-  assert.ok(!written.includes(":root{"), written);
+  assert.ok(!written.includes("<style"), written);
   assert.ok(written.includes("<rect"));
 });
 

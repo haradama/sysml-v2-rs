@@ -6,10 +6,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-readme.workspace = true
+# its own, not the workspace one: `readme` inherited from
+# `workspace.package` resolves against the workspace root, so every
+# crate published carried the whole project's README
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 sysml-syntax.workspace = true
 sysml-model.workspace = true
+
+[dev-dependencies]
+sysml-corpus.workspace = true

@@ -9,39 +9,10 @@
 //! five hundred open braces, an unterminated note, a lone byte order
 //! mark. About twenty thousand inputs in all. None may panic, and the
 //! tree must still spell the input back exactly.
+
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
 
-fn vendor() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release")
-        .canonicalize()
-        .ok()?;
-    root.join("sysml.library").is_dir().then_some(root)
-}
-
-fn files(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join("sysml/src"), root.join("kerml/src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
+use sysml_corpus::{model_files, vendor};
 
 /// Everything but the spacing: what the formatter may move around but
 /// may not add to or take away from.
@@ -93,7 +64,9 @@ fn survives(
 fn broken_input_is_still_parsed() {
     let Some(root) = vendor() else { return };
     let mut found: Vec<String> = Vec::new();
-    let all = files(&root);
+    let mut all = model_files(&root.join("sysml/src"));
+    all.extend(model_files(&root.join("kerml/src")));
+    all.sort();
     eprintln!("{} files", all.len());
 
     for (n, path) in all.iter().enumerate() {

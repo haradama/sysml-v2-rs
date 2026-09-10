@@ -57,8 +57,10 @@ fn render(input: &Path, output: &Path, scale: f32) -> Result<(), String> {
         ..usvg::Options::default()
     };
 
-    let tree = usvg::Tree::from_str(&flatten_variables(&svg), &options)
-        .map_err(|e| format!("cannot parse the SVG: {e}"))?;
+    // the drawing's own light palette is what this reads: `usvg` answers
+    // no media query, so the dark half of the stylesheet passes it by
+    let tree =
+        usvg::Tree::from_str(&svg, &options).map_err(|e| format!("cannot parse the SVG: {e}"))?;
     let size = tree.size().to_int_size().scale_by(scale).ok_or("empty")?;
     let mut pixmap =
         tiny_skia::Pixmap::new(size.width(), size.height()).ok_or("canvas too large")?;
@@ -74,28 +76,3 @@ fn render(input: &Path, output: &Path, scale: f32) -> Result<(), String> {
         .map_err(|e| format!("cannot write {output:?}: {e}"))
 }
 
-/// Substitute the CSS custom properties the diagrams carry.
-///
-/// They exist so one document reads correctly in a light or a dark viewer,
-/// but `usvg` resolves neither `var()` nor `@media`, and everything would
-/// come out in the default paint. Rasterizing is for review, so the light
-/// palette is inlined and the dark rules dropped.
-fn flatten_variables(svg: &str) -> String {
-    const PALETTE: [(&str, &str); 4] = [
-        ("var(--box)", "#ffffff"),
-        ("var(--line)", "#000000"),
-        ("var(--text)", "#000000"),
-        ("var(--muted)", "#000000"),
-    ];
-    let mut out = svg.to_string();
-    if let (Some(start), Some(end)) = (out.find("@media"), out.find("</style>")) {
-        // the dark block sits between the light `:root` and the classes
-        if let Some(close) = out[start..end].find("}\n}") {
-            out.replace_range(start..start + close + 3, "");
-        }
-    }
-    for (name, colour) in PALETTE {
-        out = out.replace(name, colour);
-    }
-    out
-}

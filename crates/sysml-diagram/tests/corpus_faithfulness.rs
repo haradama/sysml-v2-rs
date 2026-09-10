@@ -11,43 +11,10 @@
 
 use std::collections::HashSet;
 
+use sysml_corpus::{kerml_examples, sysml_examples};
 use sysml_diagram::{definition_diagram, interconnection_diagram, Diagram, Relation, Shape};
 use sysml_model::{ElementId, ElementKind, Model, Value};
 use sysml_semantics::Workspace;
-
-fn corpus() -> Option<std::path::PathBuf> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release/sysml/src");
-    if root.is_dir() {
-        return Some(root);
-    }
-    eprintln!("skipping: {} not checked out", root.display());
-    None
-}
-
-/// The KerML half of the corpus, drawn through the same checks.
-fn kerml_corpus() -> Option<std::path::PathBuf> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release/kerml/src");
-    root.is_dir().then_some(root)
-}
-
-fn sysml_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            sysml_files(&path, out);
-        } else if path
-            .extension()
-            .is_some_and(|e| e == "sysml" || e == "kerml")
-        {
-            out.push(path);
-        }
-    }
-}
 
 fn loaded(path: &std::path::Path) -> Workspace {
     let mut ws = Workspace::new();
@@ -183,7 +150,7 @@ fn expected_specializations(model: &Model, drawn: &[ElementId]) -> Vec<(ElementI
             if model.kind(relationship) != ElementKind::Subclassification {
                 continue;
             }
-            let Some(Value::Ref(supertype)) = model.get(relationship, "superclassifier") else {
+            let Some(Value::Ref(supertype)) = model.maybe(relationship, "superclassifier") else {
                 continue;
             };
             if drawn.contains(supertype) {
@@ -196,11 +163,10 @@ fn expected_specializations(model: &Model, drawn: &[ElementId]) -> Vec<(ElementI
 
 #[test]
 fn definition_diagrams_are_faithful_to_their_models() {
-    let Some(root) = corpus() else { return };
-    let mut files = Vec::new();
-    sysml_files(&root, &mut files);
-    if let Some(kerml) = kerml_corpus() {
-        sysml_files(&kerml, &mut files);
+    let Some(root) = sysml_examples() else { return };
+    let mut files = sysml_semantics::model_files(&root);
+    if let Some(kerml) = kerml_examples() {
+        files.extend(sysml_semantics::model_files(&kerml));
     }
     files.sort();
     assert!(files.len() > 100, "the corpus looks truncated");
@@ -269,7 +235,7 @@ fn specializes(model: &Model, sub: ElementId, sup: ElementId) -> bool {
             if model.kind(rel) != sysml_model::ElementKind::Subclassification {
                 continue;
             }
-            if let Some(sysml_model::Value::Ref(target)) = model.get(rel, "superclassifier") {
+            if let Some(sysml_model::Value::Ref(target)) = model.maybe(rel, "superclassifier") {
                 queue.push(*target);
             }
         }
@@ -279,10 +245,8 @@ fn specializes(model: &Model, sub: ElementId, sup: ElementId) -> bool {
 
 #[test]
 fn interconnection_diagrams_only_draw_what_is_in_scope() {
-    let Some(root) = corpus() else { return };
-    let mut files = Vec::new();
-    sysml_files(&root, &mut files);
-    files.sort();
+    let Some(root) = sysml_examples() else { return };
+    let files = sysml_semantics::model_files(&root);
 
     let mut drawn_any = 0usize;
     for path in &files {

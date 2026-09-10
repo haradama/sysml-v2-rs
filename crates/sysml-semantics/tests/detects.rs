@@ -34,8 +34,8 @@
 //! is missing rather than what is wrong.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 
+use sysml_corpus::{library, vendor};
 use sysml_semantics::Workspace;
 
 /// One wrong model, and every constraint that is expected to fire on it.
@@ -170,18 +170,9 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
     ),
 ];
 
-fn library() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release");
-    if root.join("sysml.library").is_dir() {
-        return Some(root.join("sysml.library"));
-    }
-    eprintln!("skipping: {} not checked out", root.display());
-    None
-}
-
 #[test]
 fn a_model_the_standard_rejects_is_reported_as_rejected() {
-    let Some(library) = library() else { return };
+    let library = library();
     // The library is resolved once and every model is asked against it:
     // asking costs about a millisecond, and this is the second the whole
     // file spends.
@@ -424,8 +415,14 @@ const MUTATED: &[(&str, Break, &[&str])] = &[
         &["validateWhileLoopActionUsage"],
     ),
     (
+        // Both restrictions on `annotatedElement` become
+        // `PartDefinition`, and every element the metadata is about is a
+        // part usage. (Turning the typing into a subsetting instead --
+        // `:> annotatedElement :> SysML::PartDefinition` -- breaks the
+        // name rather than the model: what a feature subsets is a
+        // feature, and a metadata definition is not one.)
         "Metadata Example-1.sysml",
-        Swap(" : ", " :> "),
+        SwapNth("SysML::PartUsage", "SysML::PartDefinition", 0),
         &["validateMetadataFeatureAnnotatedElement"],
     ),
     (
@@ -549,14 +546,23 @@ impl Break {
 
 #[test]
 fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
-    let Some(library) = library() else { return };
-    let root = library.parent().expect("the library sits in the release");
+    // the library is `sysml-stdlib`'s and the examples are the
+    // release's, so each is asked for where it lives
+    let library = library();
+    let Some(root) = vendor() else { return };
     let mut corpus = sysml_semantics::model_files(&root.join("sysml/src"));
     corpus.extend(sysml_semantics::model_files(&root.join("kerml/src")));
 
-    let mut ws = Workspace::new();
-    ws.load_dir(&library).expect("the library loads");
-    ws.resolve_all();
+    let mut base = Workspace::new();
+    base.load_dir(&library).expect("the library loads");
+    base.resolve_all();
+    let named = |kerml: bool| {
+        if kerml {
+            "mutated.kerml"
+        } else {
+            "mutated.sysml"
+        }
+    };
 
     for (name, broken, expected) in MUTATED {
         let path = corpus
@@ -570,20 +576,36 @@ fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
 
         // one break at a time, each against a library that was resolved
         // once: cloning it costs a tenth of what loading it does
-        let mut ws = ws.clone();
+        let mut ws = base.clone();
         let kerml = path.extension().is_some_and(|it| it == "kerml");
-        let file = ws.add_file(
-            if kerml {
-                "mutated.kerml"
-            } else {
-                "mutated.sysml"
-            },
-            &mutated,
-        );
+        let file = ws.add_file(named(kerml), &mutated);
         ws.resolve_files(&[file]);
         let found = ws.findings(&[file]);
         assert!(found.syntax.is_empty(), "{name}: does not parse");
-        assert!(found.names.is_empty(), "{name}: does not resolve {found:?}");
+        // A corpus file may be one of several a model is spread over,
+        // and the names its neighbours declare are not here -- `import
+        // Atoms::*;` names a package another file in the same directory
+        // declares. So what counts is that breaking the file leaves
+        // nothing unresolved that the file did not already leave
+        // unresolved standing on its own, which is only worth the
+        // second resolve when there is something to explain.
+        if !found.names.is_empty() {
+            let mut whole = base.clone();
+            let unbroken = whole.add_file(named(kerml), &text);
+            whole.resolve_files(&[unbroken]);
+            let already: BTreeSet<String> = whole
+                .findings(&[unbroken])
+                .names
+                .into_iter()
+                .map(|it| it.what)
+                .collect();
+            for missing in &found.names {
+                assert!(
+                    already.contains(&missing.what),
+                    "{name}: does not resolve {missing:?}"
+                );
+            }
+        }
 
         let fired: BTreeSet<&str> = ws
             .check_rules(&[file])
@@ -636,7 +658,7 @@ const LIBRARY_BROKEN: &[(&str, Break, &[&str])] = &[
 
 #[test]
 fn a_library_broken_on_purpose_is_reported_as_broken() {
-    let Some(library) = library() else { return };
+    let library = library();
     let files = sysml_semantics::model_files(&library);
 
     for (name, broken, expected) in LIBRARY_BROKEN {

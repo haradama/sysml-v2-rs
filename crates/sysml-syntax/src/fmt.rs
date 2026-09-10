@@ -219,8 +219,12 @@ fn space_between(prev: &SyntaxToken, next: &SyntaxToken) -> bool {
     if matches!(n, SEMICOLON | COMMA | R_PAREN | R_BRACKET) {
         return false;
     }
-    // never after openers and prefix markers
-    if matches!(p, L_PAREN | L_BRACKET | HASH | AT | AT_AT | TILDE | DOLLAR) {
+    // never after openers and prefix markers -- `~P` conjugates the type
+    // it stands in front of, where `feature g ~ B::f` writes the same
+    // relationship as a clause, spaced like the `conjugates` it stands for
+    if matches!(p, L_PAREN | L_BRACKET | HASH | AT | AT_AT | DOLLAR)
+        || p == TILDE && prev.parent().is_none_or(|parent| parent.kind() != RELATION)
+    {
         return false;
     }
     // tight path/scope operators
@@ -326,6 +330,17 @@ mod tests {
         // trimmed from the output
         let out = fmt("doc /* open  ");
         assert!(out.ends_with("open\n"), "{out:?}");
+    }
+
+    /// `~` is a word where it stands for `conjugates` and a mark where
+    /// it stands in front of a type.
+    #[test]
+    fn a_conjugation_clause_is_spaced_like_the_word_it_stands_for() {
+        assert_eq!(
+            crate::fmt::format_file("m.kerml", "feature g ~B::f;"),
+            "feature g ~ B::f;\n"
+        );
+        assert_eq!(fmt("port p : ~ P;"), "port p : ~P;\n");
     }
 
     #[test]

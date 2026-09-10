@@ -8,43 +8,11 @@
 //! panic; the JSON must survive a round trip unchanged; the SVG must be
 //! balanced; and formatting must be idempotent, must keep every token,
 //! and must leave the library resolving to exactly what it did before.
+
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn vendor() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release")
-        .canonicalize()
-        .ok()?;
-    root.join("sysml.library").is_dir().then_some(root)
-}
-
-fn files(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![
-        root.join("sysml/src"),
-        root.join("kerml/src"),
-        root.join("sysml.library"),
-    ];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
+use sysml_corpus::{everything, vendor};
 
 fn why(said: Box<dyn std::any::Any + Send>) -> String {
     said.downcast_ref::<String>()
@@ -57,7 +25,7 @@ fn why(said: Box<dyn std::any::Any + Send>) -> String {
 fn sweep() {
     let Some(root) = vendor() else { return };
     let mut found: Vec<String> = Vec::new();
-    let all = files(&root);
+    let all = everything(&root);
     eprintln!("{} files", all.len());
 
     for path in &all {

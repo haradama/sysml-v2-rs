@@ -233,11 +233,6 @@ fn a_recursive_import_offers_what_is_nested_in_it() {
     assert!(!labels.contains(&"F"), "{labels:?}");
 }
 
-/// A feature with no name of its own answers to the name of what it
-/// redefines -- which is the very thing being looked up when that
-/// redefinition is resolved. Letting it match itself makes the answer
-/// its own premise, and a model naming something that exists nowhere is
-/// then reported as sound.
 #[test]
 fn a_borrowed_name_cannot_answer_the_question_it_came_from() {
     let ws = ws(&[(
@@ -610,7 +605,7 @@ fn connector_statements_become_elements_with_resolved_ends() {
         .ids()
         .find(|id| model.kind(*id) == ElementKind::ConnectionUsage)
         .unwrap();
-    let Some(sysml_model::Value::RefList(ends)) = model.get(connection, "relatedFeature") else {
+    let Some(sysml_model::Value::RefList(ends)) = model.maybe(connection, "relatedFeature") else {
         panic!("no relatedFeature on the connection");
     };
     let names: Vec<&str> = ends.iter().filter_map(|e| model.name(*e)).collect();
@@ -772,7 +767,7 @@ fn a_connection_written_as_a_usage_still_relates_its_ends() {
         .ids()
         .find(|&id| model.kind(id) == ElementKind::ConnectionUsage)
         .unwrap();
-    let Some(sysml_model::Value::RefList(ends)) = model.get(connection, "relatedFeature") else {
+    let Some(sysml_model::Value::RefList(ends)) = model.maybe(connection, "relatedFeature") else {
         panic!("the usage form recorded no ends");
     };
     let names: Vec<&str> = ends.iter().filter_map(|&e| model.name(e)).collect();
@@ -816,7 +811,7 @@ fn resolving_what_is_reached_says_the_same_as_resolving_everything() {
             .owned(used)
             .iter()
             .filter(|&&child| model.kind(child) == ElementKind::Subclassification)
-            .filter_map(|&child| model.get(child, "superclassifier")?.as_id())
+            .filter_map(|&child| model.maybe(child, "superclassifier")?.as_id())
             .filter_map(|base| model.name(base))
             .collect();
         (
@@ -880,7 +875,8 @@ fn a_connector_relates_what_it_is_written_with() {
             .expect("declared")
     };
     // every connector says which features it holds together
-    let related = |connector: sysml_model::ElementId| match model.get(connector, "relatedFeature") {
+    let related = |connector: sysml_model::ElementId| match model.maybe(connector, "relatedFeature")
+    {
         Some(sysml_model::Value::RefList(features)) => features.len(),
         _ => 0,
     };
@@ -1023,7 +1019,8 @@ fn imported_members_walk_the_imports() {
     };
 
     // `A::*` sees the public members only; `A::X` just the one; `A::**`
-    // reaches into the nested package as well
+    // is a membership import made recursive, so it brings `A` itself
+    // along with everything under it
     assert_eq!(names_of(&mut ws, "B"), ["X", "Inner"]);
     // an import that never resolves brings nothing, and `import all`
     // reaches past the private member; the import inside A is not a member
@@ -1038,7 +1035,7 @@ fn imported_members_walk_the_imports() {
     assert_eq!(names_of(&mut ws2, "F"), ["X", "Hidden"]);
     assert_eq!(names_of(&mut ws2, "G"), Vec::<String>::new());
     assert_eq!(names_of(&mut ws, "C"), ["X"]);
-    assert_eq!(names_of(&mut ws, "D"), ["X", "Inner", "Y"]);
+    assert_eq!(names_of(&mut ws, "D"), ["A", "X", "Inner", "Y"]);
     assert_eq!(names_of(&mut ws, "E"), Vec::<String>::new());
 
     // and each import says what it resolved to
@@ -1130,7 +1127,7 @@ fn an_end_redefines_the_one_its_own_type_inherits() {
         .iter()
         .copied()
         .filter(|&it| model.kind(it) == sysml_model::ElementKind::Redefinition)
-        .filter_map(|it| model.get(it, "redefinedFeature").and_then(|v| v.as_id()))
+        .filter_map(|it| model.maybe(it, "redefinedFeature").and_then(|v| v.as_id()))
         .map(|to| ws.qualified_name_of(to))
         .collect();
     assert_eq!(
@@ -1184,7 +1181,7 @@ fn a_flow_relates_flow_ends_that_own_what_flows() {
         (ends[1], "engine", "fuelIn", "in"),
     ] {
         assert_eq!(
-            model.get(end, "isEnd"),
+            model.maybe(end, "isEnd"),
             Some(&sysml_model::Value::Bool(true)),
             "`validateFlowEndIsEnd`"
         );
@@ -1203,13 +1200,13 @@ fn a_flow_relates_flow_ends_that_own_what_flows() {
             .iter()
             .copied()
             .find(|&it| model.kind(it) == sysml_model::ElementKind::Redefinition)
-            .and_then(|it| model.get(it, "redefinedFeature").and_then(|v| v.as_id()))
+            .and_then(|it| model.maybe(it, "redefinedFeature").and_then(|v| v.as_id()))
             .expect("the feature that flows redefines the one it names");
         assert_eq!(redefines, named(flows));
         // and is passed the way the one it redefines is, which is what
         // `validateRedefinitionDirectionConformance` reads
         assert_eq!(
-            model.get(owned[0], "direction"),
+            model.maybe(owned[0], "direction"),
             model.get(named(flows), "direction"),
             "`{flows}` flows {direction}"
         );
@@ -1242,7 +1239,7 @@ fn a_flow_relates_flow_ends_that_own_what_flows() {
             .copied()
             .find(|&it| model.kind(it) == sysml_model::ElementKind::Feature)
             .expect("one feature flows");
-        assert_eq!(model.get(flows, "direction"), None);
+        assert_eq!(model.maybe(flows, "direction"), None);
         assert_eq!(sysml_model::end_reaches(model, end).len(), 1);
     }
 }
@@ -1346,8 +1343,8 @@ fn an_end_chain_is_cut_where_the_dots_fall() {
         .model()
         .owned(succession)
         .iter()
-        .filter(|&&end| ws.model().get(end, "isEnd") == Some(&sysml_model::Value::Bool(true)))
-        .filter_map(|&end| match ws.model().get(end, "chainingFeature") {
+        .filter(|&&end| ws.model().maybe(end, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter_map(|&end| match ws.model().maybe(end, "chainingFeature") {
             Some(sysml_model::Value::RefList(chain)) => Some(chain.len()),
             _ => None,
         })
@@ -1468,12 +1465,12 @@ fn implied_specializations_are_materialized_once() {
         .copied()
         .filter(|&child| {
             model.kind(child) == sysml_model::ElementKind::Subclassification
-                && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+                && model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
         })
         .collect();
     assert_eq!(implied.len(), 1);
     assert_eq!(
-        model.get(implied[0], "superclassifier"),
+        model.maybe(implied[0], "superclassifier"),
         Some(&sysml_model::Value::Ref(named("Part")))
     );
     assert_eq!(
@@ -1484,7 +1481,7 @@ fn implied_specializations_are_materialized_once() {
     // ...Car reaches it explicitly, so nothing was implied for it
     let car = named("Car");
     assert!(!model.owned(car).iter().any(|&child| {
-        model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+        model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
             && model.kind(child) == sysml_model::ElementKind::Subclassification
     }));
 
@@ -1498,13 +1495,13 @@ fn implied_specializations_are_materialized_once() {
         .collect();
     assert!(subsets.iter().any(|&child| {
         model.get(child, "subsettedFeature") == Some(&sysml_model::Value::Ref(named("things")))
-            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            && model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
     }));
     // and is implicitly typed by the base classifier, not subsetting it
     assert!(model.owned(mass).iter().any(|&child| {
         model.kind(child) == sysml_model::ElementKind::FeatureTyping
             && model.get(child, "type") == Some(&sysml_model::Value::Ref(named("DataValue")))
-            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            && model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
     }));
 
     // running the pass again writes nothing: everything is reachable now
@@ -1522,7 +1519,8 @@ fn implied_bases_reach_through_chains_and_keywords() {
         "model.sysml",
         "package P {\n\
          \tmetadata def SemanticMetadata { attribute baseType; }\n\
-         \tpart causes;\n\
+         \tpart def CauseBase;\n\
+         \tpart causes : CauseBase;\n\
          \tmetadata def cause :> SemanticMetadata { :>> baseType = causes meta X; }\n\
          \t#cause part def Storm;\n\
          \tmetadata def plain;\n\
@@ -1545,19 +1543,27 @@ fn implied_bases_reach_through_chains_and_keywords() {
             .owned(elem)
             .iter()
             .copied()
-            .filter(|&child| model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true)))
+            .filter(|&child| {
+                model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            })
             .count()
     };
 
     // `Leaf` reaches `Parts::Part` through `Middle`, so nothing is implied
     assert_eq!(implied_of(named("Leaf")), 0);
-    // `#cause` implies the keyword's base alongside the library base
+    // `#cause` implies the keyword's base alongside the library base --
+    // and the base being a feature, what a definition specializes is
+    // the type of that feature, a definition subsetting nothing
     let storm = named("Storm");
-    assert!(model.owned(storm).iter().any(|&child| {
-        model.kind(child) == sysml_model::ElementKind::Subclassification
-            && model.get(child, "superclassifier")
-                == Some(&sysml_model::Value::Ref(named("causes")))
-    }));
+    let specialized: Vec<_> = model
+        .owned(storm)
+        .iter()
+        .filter(|&&child| model.kind(child) == sysml_model::ElementKind::Subclassification)
+        .map(|&child| model.maybe(child, "superclassifier").cloned())
+        .collect();
+    assert!(specialized.contains(&Some(sysml_model::Value::Ref(named("CauseBase")))));
+    assert!(specialized.contains(&Some(sysml_model::Value::Ref(named("Part")))));
+    assert_eq!(specialized.len(), 2);
     // a keyword that names no SemanticMetadata implies nothing extra, and
     // an unresolvable one implies nothing at all
     assert_eq!(implied_of(named("Cloudy")), 1);
@@ -1596,7 +1602,7 @@ fn a_dangling_typing_does_not_stop_the_implied_walk() {
     assert!(model.owned(accept).iter().any(|&child| {
         model.kind(child) == sysml_model::ElementKind::FeatureTyping
             && model.get(child, "type") == Some(&sysml_model::Value::Ref(base))
-            && model.get(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            && model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
     }));
     // the payload feature itself: its declared typing never resolved, so
     // the walk passed the dangling relationship and implied the subset
@@ -1691,6 +1697,17 @@ fn a_name_missing_when_it_was_first_looked_up_is_found_once_its_file_arrives() {
     let b = ws.add_file("b.sysml", "package B { part def Vehicle; }");
     let c = ws.add_file("c.sysml", "package C { part v : A::Vehicle; }");
     ws.resolve_files(&[b, c]);
+    // `A::Vehicle` is found through the re-export, which is what the
+    // cached failure used to stop. What `a.sysml` was told about its own
+    // import while `B` was missing stands until `a.sysml` is resolved
+    // again -- a pass reports the files it was given -- so the test is
+    // about the file that was.
+    assert!(
+        ws.unresolved().iter().all(|u| u.file != c),
+        "{:?}",
+        ws.unresolved()
+    );
+    ws.resolve_files(&[a]);
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }
 
@@ -1953,7 +1970,11 @@ package R {
 }
 ",
     )]);
-    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    // `P::A::Nothing` is the path that walks back into the type, and it
+    // names nothing -- that is the point of the model, and the only
+    // thing in it that must not resolve.
+    let missing: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(missing, ["P::A::Nothing"], "{:?}", ws.unresolved());
 }
 
 /// Everything a pass reifies, in one model: typings, a specialization,
@@ -2096,7 +2117,11 @@ package R {
 }
 ",
     )]);
-    assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
+    // `P::A::Nothing` is the path that walks back into the type, and it
+    // names nothing -- that is the point of the model, and the only
+    // thing in it that must not resolve.
+    let missing: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(missing, ["P::A::Nothing"], "{:?}", ws.unresolved());
 }
 
 /// `then b;` names where the flow goes and not where it comes from, and
@@ -2115,7 +2140,7 @@ fn a_succession_records_what_it_follows() {
             .ids()
             .find(|&id| model.kind(id).name() == "SuccessionAsUsage")
             .expect("the succession is built");
-        match model.get(succession, "relatedFeature") {
+        match model.maybe(succession, "relatedFeature") {
             Some(sysml_model::Value::RefList(ends)) => ends
                 .iter()
                 .map(|&end| model.name(end).unwrap_or("?").to_string())
@@ -2147,7 +2172,7 @@ fn a_succession_records_what_it_follows() {
         model
             .ids()
             .filter(|&id| model.kind(id).name() == "SuccessionAsUsage")
-            .map(|id| match model.get(id, "relatedFeature") {
+            .map(|id| match model.maybe(id, "relatedFeature") {
                 Some(sysml_model::Value::RefList(ends)) => ends
                     .iter()
                     .map(|&end| model.name(end).unwrap_or("?").to_string())
@@ -2209,7 +2234,7 @@ fn a_message_says_where_it_runs_as_well_as_what_it_follows() {
             .ids()
             .find(|&id| model.kind(id).name() == metaclass)
             .unwrap_or_else(|| panic!("the {metaclass} is built"));
-        match model.get(id, "relatedFeature") {
+        match model.maybe(id, "relatedFeature") {
             Some(sysml_model::Value::RefList(related)) => related
                 .iter()
                 .map(|&end| model.name(end).unwrap_or("?").to_string())
@@ -2265,8 +2290,8 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
             .iter()
             .copied()
             .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
-        let expression = model.get(value, "value")?.as_id()?;
-        let referent = model.get(expression, "referent")?.as_id()?;
+        let expression = model.maybe(value, "value")?.as_id()?;
+        let referent = model.maybe(expression, "referent")?.as_id()?;
         model.name(referent).map(str::to_string)
     };
 
@@ -2365,11 +2390,11 @@ fn a_result_parameter_redefines_the_one_the_general_function_declares() {
     assert_eq!(implied.len(), 1, "one implied redefinition, past Middle");
     let redefinition = implied[0];
     assert_eq!(
-        model.get(redefinition, "redefinedFeature"),
+        model.maybe(redefinition, "redefinedFeature"),
         Some(&sysml_model::Value::Ref(general))
     );
     assert_eq!(
-        model.get(redefinition, "isImplied"),
+        model.maybe(redefinition, "isImplied"),
         Some(&sysml_model::Value::Bool(true))
     );
     // `validateElementIsImpliedIncluded` -- what owns an implied
@@ -2506,7 +2531,7 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
         .expect("what it crosses to");
     let chain: Vec<String> = ws
         .model()
-        .get(crossed, "chainingFeature")
+        .maybe(crossed, "chainingFeature")
         .and_then(sysml_model::Value::as_ids)
         .expect("the chain it names")
         .to_vec()
@@ -2583,7 +2608,7 @@ fn a_succession_that_names_one_end_reifies_both() {
         .owned(succession)
         .iter()
         .copied()
-        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter(|&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
         .map(|end| {
             sysml_model::end_reaches(ws.model(), end)
                 .last()
@@ -2594,7 +2619,7 @@ fn a_succession_that_names_one_end_reifies_both() {
     assert_eq!(reaches, [Some("one"), Some("two")]);
     assert_eq!(
         ws.model()
-            .get(succession, "relatedFeature")
+            .maybe(succession, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .iter()
@@ -2625,10 +2650,8 @@ fn a_succession_that_names_one_end_reifies_both() {
 #[test]
 fn what_relates_exactly_two_things_is_binary() {
     let mut ws = Workspace::new();
-    ws.load_dir(std::path::Path::new(
-        "../../vendor/sysml-v2-release/sysml.library",
-    ))
-    .expect("the library is a submodule");
+    ws.load_dir(std::path::Path::new("../sysml-stdlib/library"))
+        .expect("the library is a submodule");
     let file = ws.add_file(
         "a.sysml",
         "package K {\n\
@@ -2727,7 +2750,7 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
         .expect("the connector is declared");
     assert_eq!(
         ws.model()
-            .get(connector, "relatedFeature")
+            .maybe(connector, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .iter()
@@ -2745,7 +2768,7 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
         .expect("the connector is declared");
     assert_eq!(
         ws.model()
-            .get(counted, "relatedFeature")
+            .maybe(counted, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .iter()
@@ -2784,7 +2807,7 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
                 .find(|&c| ws.model().kind(c).is_a(ElementKind::SuccessionAsUsage))
                 .and_then(|s| {
                     ws.model()
-                        .get(s, "relatedFeature")
+                        .maybe(s, "relatedFeature")
                         .and_then(sysml_model::Value::as_ids)
                 })
                 .unwrap_or_default()
@@ -2843,10 +2866,10 @@ fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
         .copied()
         .find(|&it| ws.model().kind(it).is_a(ElementKind::SuccessionAsUsage))
         .expect("a transition owns one");
-    assert!(ws.model().get(transition, "relatedFeature").is_none());
+    assert!(ws.model().maybe(transition, "relatedFeature").is_none());
     assert_eq!(
         ws.model()
-            .get(succession, "relatedFeature")
+            .maybe(succession, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .len(),
@@ -2856,7 +2879,7 @@ fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
         ws.model()
             .owned(succession)
             .iter()
-            .filter(|&&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+            .filter(|&&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
             .count(),
         2
     );
@@ -2873,7 +2896,7 @@ fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
         .owned(connector)
         .iter()
         .copied()
-        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter(|&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
         .map(|it| ws.model().name(it))
         .collect();
     assert_eq!(ends, [Some("c1"), Some("c2")]);
@@ -2916,14 +2939,14 @@ fn a_named_declaration_with_a_reference_is_the_end() {
         .owned(interface)
         .iter()
         .copied()
-        .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter(|&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
         .map(|it| ws.model().name(it))
         .collect();
     assert_eq!(ends, [Some("lcp"), Some("scp")]);
     // and what they refer to is what the interface relates
     assert_eq!(
         ws.model()
-            .get(interface, "relatedFeature")
+            .maybe(interface, "relatedFeature")
             .and_then(sysml_model::Value::as_ids)
             .unwrap_or_default()
             .iter()
@@ -2940,7 +2963,7 @@ fn a_named_declaration_with_a_reference_is_the_end() {
             .owned(interface)
             .iter()
             .copied()
-            .filter(|&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+            .filter(|&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
             .filter_map(|end| {
                 ws.model().owned(end).iter().copied().find(|&it| {
                     ws.model().kind(it) == sysml_model::ElementKind::ReferenceSubsetting
@@ -2996,7 +3019,7 @@ fn a_bound_written_before_an_end_is_not_part_of_its_name() {
         .expect("the connector is declared");
     let related: Vec<String> = ws
         .model()
-        .get(connector, "relatedFeature")
+        .maybe(connector, "relatedFeature")
         .and_then(sysml_model::Value::as_ids)
         .unwrap_or_default()
         .iter()
@@ -3022,7 +3045,7 @@ fn a_connector_end_is_one_thing() {
         .find(|&it| ws.model().kind(it).is_a(ElementKind::Connector))
         .expect("the connection is declared");
     for end in ws.model().owned(connector).to_vec() {
-        if ws.model().get(end, "isEnd") != Some(&sysml_model::Value::Bool(true)) {
+        if ws.model().maybe(end, "isEnd") != Some(&sysml_model::Value::Bool(true)) {
             continue;
         }
         let range = ws
@@ -3037,7 +3060,7 @@ fn a_connector_end_is_one_thing() {
             .model()
             .owned(range)
             .iter()
-            .map(|&it| ws.model().get(it, "value"))
+            .map(|&it| ws.model().maybe(it, "value"))
             .collect();
         assert_eq!(
             bounds,
@@ -3092,7 +3115,7 @@ fn a_binding_binds_what_was_written_around_its_equals() {
             (
                 ws.model().name(it).map(str::to_string),
                 ws.model()
-                    .get(it, "relatedFeature")
+                    .maybe(it, "relatedFeature")
                     .and_then(sysml_model::Value::as_ids)
                     .unwrap_or_default()
                     .iter()
@@ -3159,7 +3182,7 @@ fn a_kerml_connector_relates_what_it_was_written_between() {
             (
                 ws.model().name(it).map(str::to_string),
                 ws.model()
-                    .get(it, "relatedFeature")
+                    .maybe(it, "relatedFeature")
                     .and_then(sysml_model::Value::as_ids)
                     .unwrap_or_default()
                     .iter()
@@ -3227,13 +3250,13 @@ fn a_cross_feature_is_the_ends_and_subsets_what_the_end_it_redefines_crosses_to(
         .model()
         .owned(selection)
         .iter()
-        .filter(|&&it| ws.model().get(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+        .filter(|&&it| ws.model().maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
         .map(|&it| ws.model().name(it))
         .collect();
     assert_eq!(ends, [Some("cart"), Some("selectedProduct")]);
     let cross = named("K::Selection::cart::inCart");
     assert_eq!(
-        ws.model().get(cross, "isEnd"),
+        ws.model().maybe(cross, "isEnd"),
         None,
         "a cross feature is not an end"
     );
@@ -3253,7 +3276,7 @@ fn a_cross_feature_is_the_ends_and_subsets_what_the_end_it_redefines_crosses_to(
                         .and_then(sysml_model::Value::as_id)
                         .expect("what it subsets"),
                 ),
-                ws.model().get(it, "isImplied"),
+                ws.model().maybe(it, "isImplied"),
             )
         })
         .collect();
@@ -3306,10 +3329,12 @@ fn an_end_redefines_the_one_at_its_position_in_what_its_type_specializes() {
             .owned(named(of))
             .iter()
             .filter(|&&it| ws.model().kind(it) == ElementKind::Redefinition)
-            .filter(|&&it| ws.model().get(it, "isImplied") == Some(&sysml_model::Value::Bool(true)))
+            .filter(|&&it| {
+                ws.model().maybe(it, "isImplied") == Some(&sysml_model::Value::Bool(true))
+            })
             .filter_map(|&it| {
                 ws.model()
-                    .get(it, "redefinedFeature")
+                    .maybe(it, "redefinedFeature")
                     .and_then(sysml_model::Value::as_id)
             })
             .map(|it| ws.qualified_name_of(it))
@@ -3357,7 +3382,7 @@ fn a_feature_that_redefines_an_end_is_an_end_and_is_not_composite() {
     for want in ["outer", "middle", "inner"] {
         let id = named(want);
         assert_eq!(
-            ws.model().get(id, "isEnd"),
+            ws.model().maybe(id, "isEnd"),
             Some(&sysml_model::Value::Bool(true)),
             "`{want}` is an end"
         );
@@ -3463,7 +3488,7 @@ fn a_dotted_operand_of_a_subsetting_is_the_chain_and_not_its_last_step() {
     let stats = ws.resolve_all();
     assert_eq!(stats.unresolved, 0, "{stats:?}");
 
-    let steps = |id| match ws.model().get(id, "chainingFeature") {
+    let steps = |id| match ws.model().maybe(id, "chainingFeature") {
         Some(Value::RefList(chain)) => chain.len(),
         _ => 0,
     };

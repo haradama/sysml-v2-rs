@@ -7,6 +7,12 @@ import { page } from "./page";
 
 type View = "definitions" | "internal" | "browser";
 
+/// How much of the model a drawing is of: the document alone, or its
+/// directory and the tree below it. A model written across several
+/// files -- one declaring the definitions, another the usages of them --
+/// is half a drawing either side of that choice.
+type Scope = "file" | "directory";
+
 /// What the preview is showing: a drawing, or a line of text where there
 /// is none to show.
 type Drawing = { kind: "svg" | "message"; body: string };
@@ -21,6 +27,7 @@ export class Preview {
   private panel: vscode.WebviewPanel | undefined;
   private uri: vscode.Uri | undefined;
   private view: View = "definitions";
+  private scope: Scope = "file";
   private element: string | undefined;
   private timer: NodeJS.Timeout | undefined;
   /// Closing the preview closes it: opening by itself must not undo
@@ -73,9 +80,13 @@ export class Preview {
     if (!editor || !isModel(editor) || this.panel || this.dismissed) {
       return;
     }
+    // Off unless asked for: a panel that appears unasked takes half the
+    // window from the file the reader came to read, every time they open
+    // one. The default here and the one in `package.json` say the same
+    // thing, and this is the one that answers when the setting is absent.
     const wanted = vscode.workspace
       .getConfiguration("sysml")
-      .get<boolean>("preview.openAutomatically", true);
+      .get<boolean>("preview.openAutomatically", false);
     if (wanted) {
       await this.open(editor.document.uri, "definitions");
     }
@@ -120,6 +131,7 @@ export class Preview {
     command: string;
     view?: View;
     element?: string;
+    scope?: Scope;
     png?: string;
   }): void {
     if (message.command === "ready") {
@@ -127,6 +139,7 @@ export class Preview {
     } else if (message.command === "setView") {
       this.view = message.view ?? "definitions";
       this.element = message.element || undefined;
+      this.scope = message.scope ?? "file";
       this.scheduleRender();
     } else if (message.command === "save") {
       void this.save(message.png);
@@ -218,6 +231,7 @@ export class Preview {
           uri: this.uri.toString(),
           view: this.view,
           element: this.element,
+          scope: this.scope,
           layout: vscode.workspace
             .getConfiguration("sysml")
             .get<string>("diagram.layout", "elk"),
@@ -246,6 +260,7 @@ export class Preview {
       body: drawing.body,
       view: this.view,
       element: this.element ?? "",
+      scope: this.scope,
     });
   }
 }

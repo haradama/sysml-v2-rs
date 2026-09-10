@@ -5,6 +5,8 @@
 # is whatever its dependencies happened to raise theirs to this week.
 resolver = "3"
 members = [
+    "crates/sysml-corpus",
+    "crates/sysml-stdlib",
     "crates/sysml-syntax",
     "crates/sysml-model",
     "crates/sysml-semantics",
@@ -38,6 +40,24 @@ categories = ["parser-implementations", "development-tools"]
 logos = "0.15"
 rowan = "0.15"
 clap = { version = "4", features = ["derive"] }
+
+# rustc's own diagnostic renderer, taken out of it and published. What a
+# finding looks like to a person -- the line quoted, the span underlined,
+# what is known about it underneath -- is a solved problem, and solving
+# it again badly is how a caret ends up half a line from what it means
+# on any file with a wide character in it.
+annotate-snippets = "0.12"
+
+# Test support, and the only workspace dependency with no version: a
+# path dev-dependency without one is dropped from what `cargo publish`
+# uploads, which is what keeps an unpublished crate out of a published
+# one's manifest.
+sysml-corpus = { path = "crates/sysml-corpus" }
+
+# The standard library, as text. Under EPL-2.0 rather than this
+# workspace's MIT/Apache, which is the whole reason it is a crate of its
+# own: whoever takes it on knows exactly what they are taking on.
+sysml-stdlib = { path = "crates/sysml-stdlib", version = "0.1.0" }
 
 sysml-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
 sysml-model = { path = "crates/sysml-model", version = "0.1.0" }

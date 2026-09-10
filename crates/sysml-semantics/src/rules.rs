@@ -593,6 +593,7 @@ pub struct Violation {
 /// What running the constraints over a model came to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Checked {
+    /// Every constraint that did not hold, with the element it is about.
     pub violations: Vec<Violation>,
     /// The constraints that were asked of something and held, by name.
     pub held: Vec<&'static str>,
@@ -974,7 +975,7 @@ impl Scope<'_> {
         };
         self.ws
             .model()
-            .get(*elem, "operator")
+            .maybe(*elem, "operator")
             .and_then(Value::as_str)
             .map(str::to_string)
     }
@@ -1073,35 +1074,6 @@ impl Scope<'_> {
         }
     }
 
-    /// Fill in [`REVERSE_ENDS`] for the whole model, once.
-    ///
-    /// Read one at a time each of these is a scan of every element, and
-    /// the derivation of a feature's types walks them over every type
-    /// it reaches -- which is the difference between the check taking
-    /// seconds and taking a quarter of a minute.
-    fn index_reverse_ends(&mut self) {
-        if self.ws.reverse.0 == self.ws.model().len() {
-            return;
-        }
-        let model = self.ws.model();
-        let mut index: HashMap<(&'static str, ElementId), Vec<ElementId>> = HashMap::new();
-        for it in model.ids() {
-            let kind = model.kind(it);
-            for &(end, relationship, forward) in &REVERSE_ENDS {
-                if !kind.is_a(relationship) {
-                    continue;
-                }
-                let held = model
-                    .get(it, forward)
-                    .or_else(|| redefining(kind, forward).and_then(|under| model.get(it, under)));
-                if let Some(Value::Ref(of)) = held {
-                    index.entry((end, *of)).or_default().push(it);
-                }
-            }
-        }
-        self.ws.reverse = (model.len(), index);
-    }
-
     /// What features `elem`: what a `featured by` writes, else the type
     /// that owns it as a feature -- and where nothing does either, what
     /// features the feature it is written inside.
@@ -1137,7 +1109,7 @@ impl Scope<'_> {
             sysml_model::membership_kind(model, elem).is_a(ElementKind::FeatureMembership)
         });
         let inside = owner.filter(|&it| model.kind(it).is_a(ElementKind::Feature));
-        let first_step = match model.get(elem, "chainingFeature") {
+        let first_step = match model.maybe(elem, "chainingFeature") {
             Some(Value::RefList(chain)) => chain.first().copied(),
             _ => None,
         };
@@ -1251,21 +1223,18 @@ impl Scope<'_> {
                         .then_some(member)
                 })
                 .collect();
-            // Finding none of them is the ambiguous answer only where
-            // the answer is relationships at large: the builder reifies
-            // some of the ones the abstract syntax has and not others,
-            // so an empty answer there is as likely to be one it does
-            // not build as one the element does not have. Asked for a
-            // kind of relationship it does build -- a membership, an
-            // import, a specialization -- owning none of them is what
-            // an empty answer means.
-            if owned.is_empty() && kind == ElementKind::Relationship {
-                return Val::Unknown(format!(
-                    "`{name}` is empty here, and this model does not build every {} \
-                     the abstract syntax has",
-                    kind.name()
-                ));
-            }
+            // Owning none of them used to be answered "cannot say"
+            // here, on the grounds that the builder reifies some of the
+            // relationships the abstract syntax has and not others, so
+            // an empty answer might be one it does not build rather
+            // than one the element does not have. That cost 188818
+            // answers over the corpus -- more than any other reason
+            // there was -- and the abstract syntax the OMG publishes
+            // says it was wrong: a literal is written
+            // `<ownedRelatedElement xsi:type="sysml:LiteralInteger"/>`,
+            // closed on itself, owning nothing at all. An element of
+            // this model that owns nothing owns no relationship, and
+            // says so.
             // What the metamodel declares single-valued answers with
             // the value rather than with a collection of one:
             // `ownedPortConjugator` is `[0..1]`, and
@@ -1385,13 +1354,9 @@ impl Scope<'_> {
         // answer is found by looking the other way about, the way
         // `sourceConnector` is above.
         if let Some(&(end, ..)) = REVERSE_ENDS.iter().find(|(end, ..)| *end == name) {
-            self.index_reverse_ends();
-            let found = self.ws.reverse.1.get(&(end, elem));
-            return Val::Set(
-                found
-                    .map(|them| them.iter().copied().map(Val::Elem).collect())
-                    .unwrap_or_default(),
-            );
+            let found: Vec<ElementId> =
+                self.ws.reverse_ends(index_reverse_ends, end, elem).to_vec();
+            return Val::Set(found.into_iter().map(Val::Elem).collect());
         }
         // "The Types that feature this Feature". The metamodel derives
         // it from a `featuring` that no metaclass declares, so the
@@ -1489,8 +1454,17 @@ impl Scope<'_> {
         // `Specialization::general`, and a constraint written of the
         // general one is asking about the same thing under the name the
         // metaclass it is being asked of gives it.
-        let held = model.get(elem, name).or_else(|| {
-            redefining(model.kind(elem), name).and_then(|under| model.get(elem, under))
+        //
+        // `maybe` rather than `get`, because this is the one place in
+        // the toolchain where any property may fairly be asked of any
+        // element: a constraint is put to every element of the
+        // metaclass it is about, subtypes included, and the abstract
+        // syntax it reaches through is the specification's rather than
+        // this model's. Six hundred and thirteen pairs of metaclass and
+        // property go through here that the metaclass does not have,
+        // and none of them is a misspelling.
+        let held = model.maybe(elem, name).or_else(|| {
+            redefining(model.kind(elem), name).and_then(|under| model.maybe(elem, under))
         });
         match held {
             Some(Value::Bool(it)) => Val::Bool(*it),
@@ -1643,7 +1617,7 @@ impl Scope<'_> {
         // `redefinedFeature` is Redefinition's alone, so what holds one
         // is a redefinition and what does not is not
         for owned in self.ws.model().owned(feature) {
-            let target = match self.ws.model().get(*owned, "redefinedFeature") {
+            let target = match self.ws.model().maybe(*owned, "redefinedFeature") {
                 Some(Value::Ref(target)) => *target,
                 _ => continue,
             };
@@ -2239,7 +2213,7 @@ impl Scope<'_> {
         }
         seen.push(of);
         if self.ws.model().owner(feature) == Some(of) {
-            return match self.ws.model().get(feature, "direction") {
+            return match self.ws.model().maybe(feature, "direction") {
                 Some(Value::EnumLit(it)) => Some(it),
                 _ => None,
             };
@@ -2298,7 +2272,6 @@ fn unknown_from(value: &Val, what: &str) -> Val {
     }
 }
 
-/// Two values, compared the way OCL compares them.
 /// The same collection with nothing in it twice.
 ///
 /// The memberships a type inherits arrive by as many routes as its
@@ -2316,6 +2289,7 @@ fn once_each(items: Vec<Val>) -> Vec<Val> {
         .collect()
 }
 
+/// Two values, compared the way OCL compares them.
 fn equal(left: &Val, right: &Val) -> Val {
     if let Some(unknown) = left.unknown().or_else(|| right.unknown()) {
         return unknown;
@@ -2327,6 +2301,31 @@ fn equal(left: &Val, right: &Val) -> Val {
         (Val::Null, Val::Set(items)) | (Val::Set(items), Val::Null) => Val::Bool(items.is_empty()),
         _ => Val::Bool(left == right),
     }
+}
+
+/// [`REVERSE_ENDS`] for the whole model, in one pass.
+///
+/// Handed to [`Workspace::reverse_ends`], which decides when it is worth
+/// running and remembers what it built.
+fn index_reverse_ends(
+    model: &sysml_model::Model,
+) -> HashMap<(&'static str, ElementId), Vec<ElementId>> {
+    let mut index: HashMap<(&'static str, ElementId), Vec<ElementId>> = HashMap::new();
+    for it in model.ids() {
+        let kind = model.kind(it);
+        for &(end, relationship, forward) in &REVERSE_ENDS {
+            if !kind.is_a(relationship) {
+                continue;
+            }
+            let held = model
+                .maybe(it, forward)
+                .or_else(|| redefining(kind, forward).and_then(|under| model.maybe(it, under)));
+            if let Some(Value::Ref(of)) = held {
+                index.entry((end, *of)).or_default().push(it);
+            }
+        }
+    }
+    index
 }
 
 /// The ends of an association the metamodel declares on neither of the
@@ -3259,14 +3258,18 @@ mod tests {
         // answered outright. `ownedMember` is read off the memberships,
         // and a membership stands for each member the containment
         // holds -- so a definition that owns nothing owns no member,
-        // and there is nothing an empty answer could be hiding. The
-        // same goes for each kind of relationship the builder does
-        // write. Relationships at large are what it writes only some
-        // of, so there an empty answer says nothing either way.
+        // and there is nothing an empty answer could be hiding.
+        //
+        // Relationships at large answer the same way, and once did not:
+        // an empty answer was called ambiguous, on the grounds that the
+        // builder writes some of the ones the abstract syntax has and
+        // not others. The abstract syntax the OMG publishes says
+        // otherwise -- a literal is written closed on itself, owning
+        // nothing -- and the doubt cost 188818 answers over the corpus.
         let (mut ws, car) = about("part def Car;\n", "Car");
         assert_eq!(ws.judge("ownedMember->isEmpty()", car), Some(true));
         assert_eq!(ws.judge("ownedSpecialization->isEmpty()", car), Some(true));
-        assert_eq!(ws.judge("ownedRelationship->isEmpty()", car), None);
+        assert_eq!(ws.judge("ownedRelationship->isEmpty()", car), Some(true));
     }
 
     /// A `selectByKind` that keeps nothing says one thing where the

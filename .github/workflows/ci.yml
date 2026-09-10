@@ -39,6 +39,48 @@ jobs:
       - name: tests (incl. corpus regressions)
         run: cargo test --release --all-features
 
+  # Nothing else here would notice the toolchain getting an order of
+  # magnitude slower. The gates are correctness gates: a resolver that
+  # takes a quarter of a minute where it took a second still resolves
+  # every reference, and every test still passes -- slowly. That has
+  # happened twice already, both times because an answer that wants an
+  # index was being scanned for instead, and both times it was found by
+  # somebody waiting rather than by CI. Both are written down where they
+  # were fixed: `ResolveStats::lookups` ("a millisecond and half a
+  # minute on a forty-line file") and `Workspace::reverse_ends` ("the
+  # check taking seconds and taking a quarter of a minute").
+  #
+  # The bound is deliberately loose. A shared runner has no constant, so
+  # a threshold tight enough to catch a 20% regression would be a
+  # threshold that fails on a noisy afternoon; this one catches the
+  # shape-of-the-algorithm regressions that are what actually happen.
+  # Locally the whole corpus checks in about four seconds.
+  timing:
+    name: the corpus still checks in seconds, not minutes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build the tool
+        run: cargo build --release -p sysml-cli
+      - name: parse, resolve and check all 403 files
+        run: |
+          set -eu
+          started=$(date +%s)
+          ./target/release/sysml --format json check \
+            vendor/sysml-v2-release/sysml/src \
+            vendor/sysml-v2-release/kerml/src \
+            crates/sysml-stdlib/library > /dev/null
+          took=$(( $(date +%s) - started ))
+          echo "checked the whole corpus in ${took}s"
+          if [ "$took" -gt 120 ]; then
+            echo "::error::the corpus took ${took}s; it takes about four" >&2
+            exit 1
+          fi
+
   # `rust-version` in Cargo.toml is a promise to users of the crates, and
   # nothing else here would notice it being broken: the other jobs build
   # with whatever `stable` is that day
@@ -123,13 +165,13 @@ jobs:
             model/blink.sysml model/requirements.sysml model/verification.sysml \
             --library model/hardware.sysml \
             --library model/middleware.sysml \
-            --library ../../vendor/sysml-v2-release/sysml.library \
+            --library ../../crates/sysml-stdlib/library \
             -o /tmp/generated.rs
           diff -u src/generated.rs /tmp/generated.rs
       - name: the model resolves whole
         run: |
           cargo run -p sysml-cli -- check examples/arduino-uno/model \
-            vendor/sysml-v2-release/sysml.library
+            crates/sysml-stdlib/library
       - name: it runs, and says what the README says it says
         working-directory: examples/arduino-uno
         run: |

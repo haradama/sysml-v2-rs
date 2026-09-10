@@ -2,26 +2,8 @@
 //! equivalence (identical non-trivia token streams, no new errors) and
 //! idempotency. Skipped when the submodule is not checked out.
 
-use std::path::{Path, PathBuf};
-
+use sysml_corpus::{model_files, vendor};
 use sysml_syntax::{fmt::format, parse_dialect, Dialect, SyntaxKind};
-
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
-            out.push(path);
-        }
-    }
-}
 
 fn tokens(parse: &sysml_syntax::Parse) -> Vec<(SyntaxKind, String)> {
     parse
@@ -35,14 +17,8 @@ fn tokens(parse: &sysml_syntax::Parse) -> Vec<(SyntaxKind, String)> {
 
 #[test]
 fn corpus_formats_safely_and_idempotently() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release");
-    if !root.exists() {
-        eprintln!("skipping: {} not checked out", root.display());
-        return;
-    }
-    let mut files = Vec::new();
-    collect_files(&root, &mut files);
-    files.sort();
+    let Some(root) = vendor() else { return };
+    let files = model_files(&root);
     assert!(!files.is_empty());
 
     for path in &files {

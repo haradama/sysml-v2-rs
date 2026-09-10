@@ -1,0 +1,29 @@
+[package]
+name = "sysml-stdlib"
+description = "The KerML and SysML v2 standard model libraries, as text a program can load"
+# Not the workspace's licence. Everything under `library/` is the OMG
+# release's, unchanged, and is under the Eclipse Public License 2.0; this
+# crate is separate from the rest of sysml-v2-rs so that which files are
+# under which licence is a question with a one-word answer. See NOTICE.
+license = "EPL-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["sysml", "kerml", "mbse", "modeling", "stdlib"]
+categories = ["development-tools", "science"]
+# `library/` is the whole point; `build.rs` reads it and nothing else
+# does, so nothing else needs to travel.
+include = ["src/**", "library/**", "build.rs", "README.md", "LICENSE", "NOTICE"]
+
+[dependencies]
+
+# Nothing. This crate is data, and a data crate that drags a toolchain
+# behind it is one nobody can take just the data from.
+
+# The resolver, only so that the example in the crate documentation is
+# compiled rather than asserted. A dev-dependency reaches no further
+# than `cargo test` here: nothing that depends on this crate builds it.
+[dev-dependencies]
+sysml-semantics.workspace = true

@@ -1,71 +1,12 @@
 //! Second end-to-end pass: a preloaded library, misses and error paths.
 
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+mod common;
+
+use common::{serving, Client};
+use lsp_server::{Connection, Message, RequestId, Response};
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use serde_json::{json, Value};
-
-struct Client {
-    connection: Connection,
-    next_id: i32,
-}
-
-impl Client {
-    fn send_request(&mut self, method: &str, params: Value) -> Response {
-        let id = RequestId::from(self.next_id);
-        self.next_id += 1;
-        self.connection
-            .sender
-            .send(Message::Request(Request {
-                id: id.clone(),
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-        loop {
-            match self.recv() {
-                Message::Response(resp) if resp.id == id => return resp,
-                _ => continue,
-            }
-        }
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        let resp = self.send_request(method, params);
-        assert!(resp.error.is_none(), "error response: {:?}", resp.error);
-        resp.result.unwrap_or(Value::Null)
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.connection
-            .sender
-            .send(Message::Notification(Notification {
-                method: method.into(),
-                params,
-            }))
-            .unwrap();
-    }
-
-    fn recv(&mut self) -> Message {
-        self.connection
-            .receiver
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("server did not answer")
-    }
-
-    fn wait_diagnostics(&mut self) -> Value {
-        loop {
-            match self.recv() {
-                Message::Notification(n)
-                    if n.method == lsp_types::notification::PublishDiagnostics::METHOD =>
-                {
-                    return n.params;
-                }
-                _ => continue,
-            }
-        }
-    }
-}
 
 #[test]
 fn library_navigation_and_error_paths() {
@@ -79,12 +20,7 @@ fn library_navigation_and_error_paths() {
     )
     .unwrap();
 
-    let (server_side, client_side) = Connection::memory();
-    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side).unwrap());
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let (mut client, handle) = serving();
 
     client.request(
         lsp_types::request::Initialize::METHOD,
@@ -126,6 +62,46 @@ fn library_navigation_and_error_paths() {
     );
     let contents = hover["contents"]["value"].as_str().unwrap();
     assert!(contents.contains("Base::Anything"), "{contents}");
+
+    // A library file opened for reading is the library's copy, not a
+    // second one: the files beside it are never read into the project,
+    // which holds for what the library already declares.
+    let base = lsp_types::Url::from_file_path(lib_dir.join("Base.sysml")).unwrap();
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": base, "languageId": "sysml", "version": 1,
+                "text": "package Base {\n    part def Anything { doc /* the base of everything */ }\n}\n" } }),
+    );
+    client.wait_diagnostics();
+    // a document from outside the project has the files beside it read
+    // into it, which is what builds that layer again -- with the library
+    // file above open, and standing where no directory does
+    let ghost = "file:///sysml-lsp-no-such-directory/ghost.sysml";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": ghost, "languageId": "sysml", "version": 1,
+                                  "text": "package Ghost {\n    part def Absent;\n}\n" } }),
+    );
+    client.wait_diagnostics();
+    let definition = client.request(
+        lsp_types::request::GotoDefinition::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 2, "character": 20 }
+        }),
+    );
+    assert!(
+        definition["uri"].as_str().unwrap().contains("Base.sysml"),
+        "{definition}"
+    );
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": ghost } }),
+    );
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": base } }),
+    );
 
     // find-references without the declaration
     let refs = client.request(
@@ -208,14 +184,10 @@ fn library_navigation_and_error_paths() {
     assert!(resp.error.is_some());
 
     // a stray response message is ignored by the server
-    client
-        .connection
-        .sender
-        .send(Message::Response(Response::new_ok(
-            RequestId::from(999),
-            Value::Null,
-        )))
-        .unwrap();
+    client.send_raw(Message::Response(Response::new_ok(
+        RequestId::from(999),
+        Value::Null,
+    )));
 
     // formatting a messy document yields one full-document edit
     client.notify(
@@ -335,13 +307,10 @@ fn library_navigation_and_error_paths() {
 fn client_disconnect_without_shutdown_terminates_the_server() {
     let (server_side, client_side) = Connection::memory();
     let handle = std::thread::spawn(move || sysml_lsp::run(&server_side));
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let mut client = Client::new(client_side);
     client.request(
         lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {} }),
+        json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
     );
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
     drop(client);
@@ -355,13 +324,10 @@ fn exit_before_shutdown_leaves_with_a_failure() {
     // it asked for from a server that fell over
     let (server_side, client_side) = Connection::memory();
     let handle = std::thread::spawn(move || sysml_lsp::run(&server_side));
-    let mut client = Client {
-        connection: client_side,
-        next_id: 1,
-    };
+    let mut client = Client::new(client_side);
     client.request(
         lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {} }),
+        json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
     );
     client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
     client.notify(lsp_types::notification::Exit::METHOD, Value::Null);

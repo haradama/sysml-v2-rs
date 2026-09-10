@@ -8,34 +8,11 @@
 //!
 //! Skipped when the submodule is not checked out.
 
-use std::path::{Path, PathBuf};
-
-use sysml_diagram::{definition_diagram, interconnection_diagram, render, render_with_elk, Style};
+use sysml_corpus::sysml_examples;
+#[cfg(feature = "elk")]
+use sysml_diagram::render_with_elk;
+use sysml_diagram::{definition_diagram, interconnection_diagram, render, Style};
 use sysml_semantics::Workspace;
-
-fn corpus() -> Option<PathBuf> {
-    let root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release/sysml/src");
-    if root.is_dir() {
-        return Some(root);
-    }
-    eprintln!("skipping: {} not checked out", root.display());
-    None
-}
-
-fn sysml_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            sysml_files(&path, out);
-        } else if path.extension().is_some_and(|it| it == "sysml") {
-            out.push(path);
-        }
-    }
-}
 
 /// The value of one attribute of an opening tag.
 fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -109,10 +86,8 @@ fn overflows(svg: &str) -> Vec<String> {
 
 #[test]
 fn every_word_of_a_corpus_drawing_is_inside_its_canvas() {
-    let Some(root) = corpus() else { return };
-    let mut files = Vec::new();
-    sysml_files(&root, &mut files);
-    files.sort();
+    let Some(root) = sysml_examples() else { return };
+    let files = sysml_semantics::model_files(&root);
     assert!(files.len() > 100, "the corpus is there");
 
     let style = Style::default();
@@ -141,10 +116,8 @@ fn every_word_of_a_corpus_drawing_is_inside_its_canvas() {
 
 #[test]
 fn every_word_of_an_internal_view_is_inside_its_canvas() {
-    let Some(root) = corpus() else { return };
-    let mut files = Vec::new();
-    sysml_files(&root, &mut files);
-    files.sort();
+    let Some(root) = sysml_examples() else { return };
+    let files = sysml_semantics::model_files(&root);
 
     let style = Style::default();
     let mut findings = Vec::new();
@@ -181,9 +154,10 @@ fn every_word_of_an_internal_view_is_inside_its_canvas() {
 /// be left after it has answered.
 ///
 /// Skipped where `elkrs` is not installed.
+#[cfg(feature = "elk")]
 #[test]
 fn every_word_of_an_elk_drawing_is_inside_its_canvas() {
-    let Some(root) = corpus() else { return };
+    let Some(root) = sysml_examples() else { return };
     let style = Style::default();
     let mut findings = Vec::new();
     for name in [

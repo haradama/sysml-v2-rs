@@ -1,19 +1,8 @@
 //! Resolution-rate regression test against the official corpus.
 //! Skipped when the submodule is not checked out.
 
-use std::path::Path;
-
+use sysml_corpus::vendor;
 use sysml_semantics::Workspace;
-
-fn vendor() -> Option<std::path::PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release");
-    if root.exists() {
-        Some(root)
-    } else {
-        eprintln!("skipping: {} not checked out", root.display());
-        None
-    }
-}
 
 #[test]
 fn standard_library_resolves_completely() {

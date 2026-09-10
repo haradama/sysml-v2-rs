@@ -30,23 +30,67 @@
 //!
 //! With the official standard library loaded, every reference in the
 //! library and in all official example models resolves (regression-tested).
+//!
+//! # Where things are
+//!
+//! This file holds the [`Workspace`] itself -- what it is made of, what
+//! it caches, and the questions an editor asks it: where an element is,
+//! what is visible at a point, what a name is spelled from the root,
+//! what is wrong with a file. The work of answering a written name is
+//! next door:
+//!
+//! | Module | What it does |
+//! | --- | --- |
+//! | `resolve` | What gets resolved, in what order, and what is cleared first |
+//! | `lookup` | Working a written name out to the element it names |
+//! | `inherit` | What a type reaches through what it specializes |
+//! | `imports` | What an `import` brings in, and what an `alias` stands for |
+//! | `reify` | Turning a resolved name into the relationship the model keeps |
+//! | `implied` | The relationships the notation leaves to be inferred |
+//! | `expressions` | The names written inside an expression |
+//! | `syntax` | What the notation writes, read off the syntax tree |
+//! | `rules` | The constraints the specification states, evaluated |
+//! | `ocl` | Reading those constraints, which the metamodel states in OCL |
+//!
+//! Every one of them is `impl Workspace` over the fields declared here,
+//! so the split is for a reader and costs nothing at run time. It was
+//! one file of six and a half thousand lines, of which a single impl
+//! block was four and a half.
 
+// Nothing here needs `unsafe`, and saying so is what keeps it that way.
+#![forbid(unsafe_code)]
+// Every public item carries a line saying what it is for. The two
+// crates that do not turn this on are `sysml-syntax`, whose public
+// surface is two hundred and seventy-nine syntax kinds whose names are
+// the documentation, and `sysml-model`, whose is generated from the
+// metamodel and would want the generator to write it.
+#![warn(missing_docs)]
+mod expressions;
+mod implied;
+mod imports;
+mod inherit;
+mod lookup;
 mod ocl;
+mod reify;
+mod resolve;
+/// The well-formedness constraints the specification states in OCL,
+/// read from the metamodel and evaluated over a model.
 pub mod rules;
+mod syntax;
+
+use syntax::*;
 
 use std::collections::{HashMap, HashSet};
 
-use sysml_model::{build_into, ElementId, ElementKind, Model, Role, Value, Vis};
-use sysml_syntax::{
-    is_name_chain, parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange,
-};
+use sysml_model::{build_into, ElementId, ElementKind, Model, Value, Vis};
+use sysml_syntax::{parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRange};
 
 /// How many namespaces deep a lookup will walk through inherited
 /// members before it gives up. The corpus, standard library included,
 /// never goes past a few dozen; a model that goes thousands deep would
 /// take the stack down with it, so it is told its name resolves to
 /// nothing instead. The parser bounds its own nesting the same way.
-const MAX_INHERITANCE: usize = 512;
+pub(crate) const MAX_INHERITANCE: usize = 512;
 
 /// Whether a resolution pass replaces what was found about the files it
 /// touches, or adds to it.
@@ -61,18 +105,22 @@ enum Clear {
 pub struct Unresolved {
     /// Index of the file (in insertion order) the reference appears in.
     pub file: usize,
+    /// Where the name was written.
     pub range: TextRange,
+    /// The name, as it was written.
     pub name: String,
 }
 
 /// A successfully resolved reference (for go-to-definition etc.).
 #[derive(Clone, Copy, Debug)]
 pub struct Reference {
+    /// Index of the file it is in.
     pub file: usize,
     /// whole qualified-name range
     pub range: TextRange,
     /// final segment only (what a rename replaces)
     pub name_range: TextRange,
+    /// The element the name resolved to.
     pub target: ElementId,
 }
 
@@ -92,14 +140,50 @@ pub struct Findings {
     pub collisions: Vec<Finding>,
 }
 
+/// Everything wrong with a model, in the order it is worth saying.
+///
+/// [`Workspace::diagnose`] builds this; the field it adds over
+/// [`Findings`] is the one no front end can be trusted to decide for
+/// itself, which is whether the constraints were worth asking at all.
+pub struct Diagnosis {
+    /// What the parser and the resolver found.
+    pub found: Findings,
+    /// What the specification's own constraints found -- empty, and not
+    /// merely holding, where the model was in no state to be asked.
+    pub rules: rules::Checked,
+    /// Whether they were asked at all.
+    ///
+    /// `rules` is empty both when every constraint held and when none
+    /// was put, and those are not the same answer: a reader told "0
+    /// violations" about a model nothing was asked of has been told
+    /// nothing. Whoever reports this says which of the two it was.
+    pub asked: bool,
+}
+
 /// One thing wrong, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
     /// Index of the file (in insertion order) it is in.
     pub file: usize,
+    /// The range the finding is about.
     pub range: TextRange,
     /// The parser's complaint, or the name that resolved to nothing.
     pub what: String,
+}
+
+/// What a name that resolved to nothing might have meant.
+///
+/// See [`Workspace::suggestions`], which is where the two halves are
+/// told apart.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Suggestion {
+    /// Elements that answer to the name somewhere in the workspace,
+    /// spelled from the root. The name is not wrong; nothing brought it
+    /// into scope where it was written, and an import would.
+    pub elsewhere: Vec<String>,
+    /// Declared names near enough to be worth offering, shortest first.
+    /// What to look at when the name is wrong rather than unimported.
+    pub near: Vec<String>,
 }
 
 /// How a connector end reached what it relates.
@@ -110,9 +194,13 @@ enum Reached {
     Beside(ElementId),
 }
 
+/// What a pass of resolution came to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResolveStats {
+    /// References that found what they name.
     pub resolved: usize,
+    /// References that found nothing. Each is in [`Workspace::unresolved`]
+    /// with the place it was written.
     pub unresolved: usize,
     /// How many times an import or an alias had to be worked out from
     /// its path rather than recalled. A resolver that remembers does
@@ -153,18 +241,63 @@ struct ImportTarget {
     leaf: Option<String>,
     /// `import all ...` also exposes non-public members
     all: bool,
+    /// The conditions an imported member has to satisfy -- the ones in
+    /// the import's own brackets and the ones the importing namespace
+    /// states beside it -- each with the element its names resolve from.
+    filters: Vec<(SyntaxNode, ElementId)>,
 }
 
+/// Which memberships an import brings into the namespace that writes it.
+///
+/// `A::B::**` and `A::B::*::**` are not the same import. The first is a
+/// membership import made recursive, and the specification says its
+/// `importedMemberships` "returns at least the importedMembership" --
+/// `B` itself -- and then, `B` being a namespace, everything below it.
+/// The second is a namespace import, which brings in what is inside `B`
+/// and not `B`. Reading both as the second left `import P::C::**; x : C;`
+/// with nothing named `C`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ImportScope {
     /// `import A::B;` — one member
     Member,
     /// `import A::*;`
     Members,
-    /// `import A::**;`
+    /// `import A::*::**;` — everything under A, but not A
     Recursive,
+    /// `import A::B::**;` — B, and everything under it
+    RecursiveMember,
 }
 
+impl ImportScope {
+    /// Is the named element itself imported?
+    fn brings_the_member(self) -> bool {
+        matches!(self, ImportScope::Member | ImportScope::RecursiveMember)
+    }
+
+    /// Are the named element's own members imported?
+    fn brings_its_members(self) -> bool {
+        !matches!(self, ImportScope::Member)
+    }
+
+    /// And what is nested below those?
+    fn reaches_below(self) -> bool {
+        matches!(self, ImportScope::Recursive | ImportScope::RecursiveMember)
+    }
+}
+
+/// Any number of parsed files, built into one model and resolved
+/// against each other.
+///
+/// Everything is owned by a synthetic root namespace -- the KerML global
+/// namespace, which a model addresses as `$`. Files are added with
+/// [`Workspace::add_file`] or [`Workspace::load_dir`] and resolved with
+/// [`Workspace::resolve_all`]; what is wrong with the result is
+/// [`Workspace::diagnose`].
+///
+/// A workspace caches a great deal about the model it holds, and
+/// [`Clone`] is how a copy is taken to ask questions of -- the language
+/// server clones the resolved standard library rather than reading it
+/// again for every project.
 pub struct Workspace {
     model: Model,
     root: ElementId,
@@ -197,10 +330,11 @@ pub struct Workspace {
     /// inherits -- which is why this is only set for a redefinition.
     redefining: bool,
     /// Relationships by the element they name at the end their
-    /// association owns -- the way `Feature::typing` is read. Built in
-    /// one pass over the model for every such property at once, and
-    /// again from scratch once the model has grown.
-    pub(crate) reverse: (usize, HashMap<(&'static str, ElementId), Vec<ElementId>>),
+    /// association owns -- the way `Feature::typing` is read -- with the
+    /// size of the model they were indexed from. Read through
+    /// [`Workspace::reverse_ends`], which is what keeps the two halves
+    /// of that pair agreeing.
+    reverse: (usize, HashMap<(&'static str, ElementId), Vec<ElementId>>),
     in_progress: HashSet<ElementId>,
     /// The imports and aliases whose targets are being worked out, from
     /// the outermost in. An import naturally consults itself while
@@ -319,6 +453,7 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    /// An empty workspace, holding nothing but its root namespace.
     pub fn new() -> Workspace {
         let mut model = Model::new();
         let root = model.create(ElementKind::Namespace);
@@ -405,28 +540,6 @@ impl Workspace {
         file_idx
     }
 
-    /// Forget what was worked out from names that were not there.
-    ///
-    /// A workspace grows a file at a time: an editor opens a buffer
-    /// over a project already loaded, a project loads its library
-    /// after the file being edited. A lookup that failed before the
-    /// file arrived is no evidence about the workspace it is asked
-    /// about now, and remembering it is how a language server comes to
-    /// underline a name the model does resolve. What was found stands
-    /// -- a file only adds names, and the ones already found are still
-    /// where they were.
-    fn forget_failures(&mut self) {
-        self.imports.retain(|_, target| target.is_some());
-        self.aliases.retain(|_, target| target.is_some());
-        for id in std::mem::take(&mut self.incomplete) {
-            self.supertypes.remove(&id);
-            self.semantic_bases.remove(&id);
-        }
-        // the new file's members are members of the root namespace, and
-        // its own namespaces have none indexed yet
-        self.members.clear();
-    }
-
     /// Recursively load every `.sysml`/`.kerml` file under `dir`.
     pub fn load_dir(&mut self, dir: &std::path::Path) -> std::io::Result<usize> {
         let paths = model_files(dir);
@@ -443,22 +556,30 @@ impl Workspace {
         Ok(count)
     }
 
+    /// The model every file was built into.
     pub fn model(&self) -> &Model {
         &self.model
     }
 
+    /// The root namespace everything is owned by, which a model
+    /// addresses as `$`.
     pub fn root(&self) -> ElementId {
         self.root
     }
 
+    /// What a file was added under. For a file read from disk this is
+    /// its path, lossily; for a buffer it is whatever the editor calls
+    /// it.
     pub fn file_name(&self, file: usize) -> &str {
         &self.files[file].name
     }
 
+    /// The outermost elements a file declares.
     pub fn file_roots(&self, file: usize) -> &[ElementId] {
         &self.files[file].roots
     }
 
+    /// Every reference that found nothing, with where it was written.
     pub fn unresolved(&self) -> &[Unresolved] {
         &self.unresolved
     }
@@ -523,6 +644,47 @@ impl Workspace {
         }
     }
 
+    /// [`Workspace::findings`], and the specification's own constraints
+    /// after them.
+    ///
+    /// The order is the point, and so is the stop. A constraint asked of
+    /// a model with a dangling reference answers about the hole and not
+    /// about the model: one undeclared type in a five-line file drew
+    /// four complaints of its own, none of them a second thing to fix.
+    /// The constraints are written against the standard library too, so
+    /// a workspace loaded without it is not asked them either.
+    ///
+    /// That rule was written out three times -- once in the command
+    /// line, once in the language server, once nowhere at all in the MCP
+    /// server, which asked them of anything. Reading the same paragraph
+    /// in two places and not the third is how the third stayed wrong, so
+    /// the decision is made here and the front ends only say what came
+    /// of it.
+    ///
+    /// `files` empty means every file, as it does for `findings`.
+    pub fn diagnose(&mut self, files: &[usize]) -> Diagnosis {
+        let found = self.findings(files);
+        let settled =
+            found.syntax.is_empty() && found.names.is_empty() && self.has_standard_library();
+        let every: Vec<usize>;
+        let asked = match files.is_empty() {
+            true => {
+                every = (0..self.file_count()).collect();
+                &every
+            }
+            false => files,
+        };
+        let rules = match settled {
+            true => self.check_rules(asked),
+            false => rules::Checked::default(),
+        };
+        Diagnosis {
+            found,
+            rules,
+            asked: settled,
+        }
+    }
+
     /// Root packages declared under a name the standard library has
     /// already taken.
     ///
@@ -562,53 +724,58 @@ impl Workspace {
             .collect()
     }
 
-    /// All references resolving to `target`.
-    /// Whether `elem` is an `alias X for Y;`. A name reached through one
-    /// resolves to what it stands for, so nothing records that the alias
-    /// was the way in -- which is why renaming one cannot be offered.
-    pub fn is_alias(&self, elem: ElementId) -> bool {
-        self.source
-            .get(&elem)
-            .is_some_and(|node| node.kind() == SyntaxKind::ALIAS)
-    }
-
-    /// What an `alias X for Y;` stands for, once it has been resolved.
-    ///
-    /// Read back off the model rather than out of the resolver's
-    /// memory, so it costs nothing and answers for a workspace that is
-    /// only being read. A model written out carries the alias as an
-    /// element of its own, and an alias that says nothing about what it
-    /// names is a name given to nothing.
-    pub fn alias_target(&self, alias: ElementId) -> Option<ElementId> {
-        self.model.member_element(alias)
-    }
-
     /// Everything that answers to the same name as `elem` because it
     /// redefines (or references) it without declaring a name of its own:
     /// `part l : Logical { part :>> component; }` gives `component` a
     /// second home, and `l.component` names that one. A rename that
     /// stops at the declaration leaves those mentions behind.
     pub fn named_after(&self, elem: ElementId) -> Vec<ElementId> {
+        // Who borrows a name from whom, over the whole model, once.
+        //
+        // This used to be asked one step at a time, and each step was a
+        // scan of every element there is: with the standard library
+        // loaded that is a millisecond and a quarter apiece, so a
+        // feature sixty redefinitions deep cost seventy-five
+        // milliseconds -- in the rename an editor is waiting on, and
+        // growing with the model rather than with the answer.
+        let mut borrowers: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
+        for heir in self.model.ids() {
+            // one that named itself is its own name from here on
+            if self.model.get(heir, "declaredName").is_some() {
+                continue;
+            }
+            // Asked of the redefining side, which owns the relationship:
+            // that way there is no side of it to be missing.
+            for &rel in self.model.owned(heir) {
+                let to = match self.model.kind(rel) {
+                    ElementKind::Redefinition => "redefinedFeature",
+                    ElementKind::ReferenceSubsetting => "referencedFeature",
+                    _ => continue,
+                };
+                if let Some(&Value::Ref(at)) = self.model.maybe(rel, to) {
+                    borrowers.entry(at).or_default().push(heir);
+                }
+            }
+        }
+
+        // where the name these all answer to is declared, which is what
+        // tells a redefinition that borrows it from one that redefines
+        // this feature and is called something else
+        let declaration = self.model.naming_element(elem);
         let mut found = Vec::new();
         let mut queue = vec![elem];
         let mut seen: HashSet<ElementId> = std::iter::once(elem).collect();
         while let Some(at) = queue.pop() {
-            // Asked of the redefining side, which owns the relationship:
-            // that way there is no side of it to be missing.
-            for heir in self.model.ids() {
-                // one that named itself is its own name from here on
-                if self.model.get(heir, "declaredName").is_some() {
+            for &heir in borrowers.get(&at).map_or(&[][..], Vec::as_slice) {
+                // A feature that redefines more than one thing answers to
+                // the first of them alone: `part :>> driver :>> driver_b`
+                // is a `driver`, so `driver_b` is not the name it goes by
+                // and renaming `driver_b` leaves every mention of it
+                // standing.
+                if self.model.naming_element(heir) != declaration {
                     continue;
                 }
-                let borrows = self.model.owned(heir).iter().any(|&rel| {
-                    let to = match self.model.kind(rel) {
-                        ElementKind::Redefinition => "redefinedFeature",
-                        ElementKind::ReferenceSubsetting => "referencedFeature",
-                        _ => return false,
-                    };
-                    self.model.get(rel, to) == Some(&Value::Ref(at))
-                });
-                if borrows && seen.insert(heir) {
+                if seen.insert(heir) {
                     found.push(heir);
                     queue.push(heir);
                 }
@@ -617,6 +784,8 @@ impl Workspace {
         found
     }
 
+    /// Every reference that resolved to `target`, for find-references
+    /// and for a rename that has to reach all of them.
     pub fn references_to(&self, target: ElementId) -> impl Iterator<Item = &Reference> {
         self.references.iter().filter(move |r| r.target == target)
     }
@@ -638,10 +807,8 @@ impl Workspace {
             .map(|(id, _)| id)
     }
 
-    /// Names visible at `offset` in `file` (for completion): members of the
-    /// enclosing scopes, inherited members, and imported names.
-    /// The innermost model element whose syntax covers `offset` in `file`
-    /// (the workspace root when none does).
+    /// The innermost model element whose syntax covers `offset` in
+    /// `file` -- the workspace root when none does.
     pub fn innermost_element(&self, file: usize, offset: sysml_syntax::TextSize) -> ElementId {
         self.elements_of(file)
             .iter()
@@ -782,6 +949,161 @@ impl Workspace {
         found.into_iter().map(|(_, _, id)| id).collect()
     }
 
+    /// The named elements whose *documentation* `query` finds, best
+    /// first: the whole of it as a phrase, then its words found apart,
+    /// and within each the shorter documentation before the longer -- a
+    /// paragraph that is largely about what was asked for before one
+    /// that mentions it in passing.
+    ///
+    /// This is the question a search over names cannot answer. Somebody
+    /// transcribing a specification has the words the specification
+    /// used, not the words the library used: a sentence about "the
+    /// resistance a fluid offers to flow" is asking for
+    /// `ISQ::DynamicViscosityValue`, which shares not one word with it
+    /// -- but the library says "viscosity" and "fluid" in the
+    /// documentation of the thing it means.
+    ///
+    /// An empty query finds nothing rather than everything: every
+    /// documented element in the library is not an answer to a question
+    /// nobody asked, and it is the answer a name search gives for the
+    /// same query only because a symbol picker opens with one.
+    pub fn search_documentation(&self, query: &str, limit: usize) -> Vec<ElementId> {
+        let needle = query.trim().to_lowercase();
+        if needle.is_empty() {
+            return Vec::new();
+        }
+        let words: Vec<&str> = needle.split_whitespace().collect();
+        let mut found: Vec<(u8, usize, ElementId)> = self
+            .named_elements()
+            .filter_map(|(id, _)| {
+                let doc = self.documented(id)?;
+                let lowered = doc.to_lowercase();
+                let rank = if lowered.contains(&needle) {
+                    0
+                } else if words.len() > 1 && words.iter().all(|word| lowered.contains(word)) {
+                    1
+                } else {
+                    return None;
+                };
+                Some((rank, doc.len(), id))
+            })
+            .collect();
+        found.sort_by_key(|&(rank, length, _)| (rank, length));
+        found.truncate(limit);
+        found.into_iter().map(|(_, _, id)| id).collect()
+    }
+
+    /// What a name that resolved to nothing might have meant.
+    ///
+    /// Two answers, and telling them apart is the whole point. A name
+    /// the workspace declares somewhere is not a wrong name: it is a
+    /// right one that nothing brought into scope, and what it wants is
+    /// an import. A name nothing declares is a wrong one, and what it
+    /// wants is the nearest thing that is declared.
+    ///
+    /// `attribute capacity : VolumeValue;` and `attribute temp :
+    /// Temperature;` are reported the same way by resolution -- two
+    /// names that found nothing -- and are not the same mistake at all:
+    /// the first is `ISQ::VolumeValue` un-imported, the second is
+    /// `TemperatureValue` misremembered. A reader told only that both
+    /// resolved to nothing has to work that out one name at a time.
+    ///
+    /// Asked for several names at once because the walk over every
+    /// declared name is what costs: sixty thousand of them with the
+    /// standard library loaded, once rather than once per name.
+    pub fn suggestions(&self, wanted: &[String]) -> Vec<Suggestion> {
+        // the last segment is what a name answers to; `ISQ::Volume`
+        // missed because of `Volume`, not because of `ISQ`
+        let asked: Vec<&str> = wanted
+            .iter()
+            .map(|it| it.rsplit("::").next().unwrap_or(it))
+            .collect();
+        let lowered: Vec<String> = asked.iter().map(|it| it.to_lowercase()).collect();
+
+        let mut elsewhere: Vec<Vec<ElementId>> = vec![Vec::new(); wanted.len()];
+        let mut near: Vec<Vec<(u8, usize, usize, ElementId)>> = vec![Vec::new(); wanted.len()];
+        // How many letters wrong is still the same name. A typo in a
+        // short name is most of it, so the allowance grows with the
+        // name and never falls to nothing: `Mas` for `Mass` counts,
+        // `Mas` for `Materials` does not.
+        let slack: Vec<usize> = lowered
+            .iter()
+            .map(|it| it.chars().count().max(3) / 3)
+            .collect();
+        for (id, name) in self.named_elements() {
+            let spelled = name.to_lowercase();
+            for (at, needle) in lowered.iter().enumerate() {
+                if &spelled == needle {
+                    elsewhere[at].push(id);
+                    continue;
+                }
+                // A declared name that holds what was asked for --
+                // `TemperatureValue` for `Temperature`. The other way
+                // about is worth offering too, since a name may be
+                // asked for with more on it than the library gives it,
+                // but only where what is declared is a real word and
+                // most of what was asked: otherwise every one-letter
+                // parameter in the library matches every query that
+                // happens to contain its letter, and the answer to
+                // `VolumeValue` is `L`, `M`, `o`, `u`, `v`.
+                let holds = spelled.contains(needle);
+                let held = spelled.len() >= 4
+                    && needle.contains(&spelled)
+                    && spelled.len() * 2 >= needle.len();
+                // Ranked the way `search_names` ranks, and for the
+                // same reason: a name that *begins* with what was asked
+                // is the one that was probably meant.
+                // `TemperatureValue` before `debyeTemperature`, and
+                // both before what merely held the query.
+                // And a name that is neither -- because the mistake was
+                // a letter, not a word. `Wheeel` holds no declared name
+                // and is held by none, and is the commonest kind of
+                // wrong name there is.
+                let (rank, off) = match (holds, held) {
+                    (true, _) if spelled.starts_with(needle) => (0, 0),
+                    (true, _) => (1, 0),
+                    (_, true) => (2, 0),
+                    _ => match within(&spelled, needle, slack[at]) {
+                        Some(apart) => (3, apart),
+                        None => continue,
+                    },
+                };
+                // then how far off it was, and then the shorter name,
+                // which is what puts `MassValue` above `SpecificMassValue`
+                near[at].push((rank, off, name.len(), id));
+            }
+        }
+
+        /// How many of each a reader can act on before the list is
+        /// worse than the question.
+        const MOST: usize = 5;
+
+        (0..wanted.len())
+            .map(|at| {
+                let mut ranked = std::mem::take(&mut near[at]);
+                ranked.sort_by_key(|&(kind, off, len, id)| (kind, off, len, id));
+                Suggestion {
+                    elsewhere: elsewhere[at]
+                        .iter()
+                        .take(MOST)
+                        .map(|&id| self.qualified_name_of(id))
+                        .collect(),
+                    near: ranked
+                        .iter()
+                        .take(MOST)
+                        .map(|&(_, _, _, id)| self.qualified_name_of(id))
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    /// The names that may legally be written at a point in a file: the
+    /// members of every enclosing scope, what those inherit, and what
+    /// they import, filtered by what is visible from there.
+    ///
+    /// This is what completion offers, so it answers the same question
+    /// resolution asks and answers it the same way.
     pub fn visible_names(
         &mut self,
         file: usize,
@@ -792,7 +1114,7 @@ impl Workspace {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         loop {
-            self.collect_visible(scope, Access::Internal, &mut out, &mut seen);
+            self.collect_visible(scope, Access::Internal, &mut out, &mut seen, &[]);
             match self.model.owner(scope) {
                 Some(owner) => scope = owner,
                 None => break,
@@ -810,6 +1132,11 @@ impl Workspace {
         access: Access,
         out: &mut Vec<(String, ElementKind)>,
         seen: &mut HashSet<ElementId>,
+        // The filters a name has to get past to have arrived here:
+        // empty for the namespace being typed in, and the import's own
+        // once the walk has followed one. What is offered as you type
+        // has to be what a lookup would find.
+        filters: &[(SyntaxNode, ElementId)],
     ) {
         // Every namespace is walked once, which both ends the walk and
         // keeps it as long as it needs to be: a chain of twenty
@@ -827,6 +1154,9 @@ impl Workspace {
             if kind.is_a(ElementKind::Import) {
                 continue;
             }
+            if !self.admits(child, filters) {
+                continue;
+            }
             if let Some(name) = self.model.name(child) {
                 out.push((name.to_string(), kind));
             }
@@ -837,7 +1167,7 @@ impl Workspace {
             access
         };
         for sup in self.supertypes_of(ns) {
-            self.collect_visible(sup, sub_access, out, seen);
+            self.collect_visible(sup, sub_access, out, seen, filters);
         }
         if access != Access::Inherited {
             for import in self.imports_of(ns) {
@@ -852,33 +1182,34 @@ impl Workspace {
                 let Some(imp) = self.import_target(import) else {
                     continue;
                 };
-                match imp.scope {
-                    ImportScope::Member => {
-                        if let Some(name) = imp
-                            .leaf
-                            .clone()
-                            .or_else(|| self.model.name(imp.target).map(String::from))
-                        {
-                            out.push((name, self.model.kind(imp.target)));
-                        }
+                if imp.scope.brings_the_member() && self.admits(imp.target, &imp.filters) {
+                    if let Some(name) = imp
+                        .leaf
+                        .clone()
+                        .or_else(|| self.model.name(imp.target).map(String::from))
+                    {
+                        out.push((name, self.model.kind(imp.target)));
                     }
-                    ImportScope::Members | ImportScope::Recursive => {
-                        let target_access = if imp.all {
-                            Access::Internal
-                        } else {
-                            Access::External
-                        };
-                        self.collect_visible(imp.target, target_access, out, seen);
-                        // `import Q::**` reaches what is nested in Q as
-                        // well, which is how `class Z :> F;` finds
-                        // `Q::Q2::F`. Offering only Q's own members left
-                        // the modeller typing blind a name the model
-                        // resolves -- lookup has always followed it there.
-                        if imp.scope == ImportScope::Recursive {
-                            for desc in self.nested_visible(imp.target, target_access) {
-                                if let Some(name) = self.model.name(desc) {
-                                    out.push((name.to_string(), self.model.kind(desc)));
-                                }
+                }
+                if imp.scope.brings_its_members() {
+                    let target_access = if imp.all {
+                        Access::Internal
+                    } else {
+                        Access::External
+                    };
+                    self.collect_visible(imp.target, target_access, out, seen, &imp.filters);
+                    // `import Q::**` reaches what is nested in Q as
+                    // well, which is how `class Z :> F;` finds
+                    // `Q::Q2::F`. Offering only Q's own members left
+                    // the modeller typing blind a name the model
+                    // resolves -- lookup has always followed it there.
+                    if imp.scope.reaches_below() {
+                        for desc in self.nested_visible(imp.target, target_access) {
+                            if !self.admits(desc, &imp.filters) {
+                                continue;
+                            }
+                            if let Some(name) = self.model.name(desc) {
+                                out.push((name.to_string(), self.model.kind(desc)));
                             }
                         }
                     }
@@ -898,6 +1229,8 @@ impl Workspace {
         self.elem_file.get(&elem).copied()
     }
 
+    /// How many files have been added. A file is named by its index
+    /// into that order.
     pub fn file_count(&self) -> usize {
         self.files.len()
     }
@@ -908,6 +1241,8 @@ impl Workspace {
         &self.files[file].elements
     }
 
+    /// The syntax tree a file was parsed into, with whatever the parser
+    /// could not read beside it.
     pub fn file_parse(&self, file: usize) -> &Parse {
         &self.files[file].parse
     }
@@ -925,6 +1260,39 @@ impl Workspace {
     /// the library is.
     pub fn has_standard_library(&mut self) -> bool {
         self.named_globally("Base::Anything").is_some()
+    }
+
+    /// The elements that name `of` at the association end `end`.
+    ///
+    /// `Feature::typing` is "the FeatureTypings for which a certain
+    /// Feature is the typedFeature": a property no metaclass declares,
+    /// because the association that has it owns the end. The model keeps
+    /// the relationship, so the answer is found by looking the other way
+    /// about -- and read one at a time each of those is a scan of every
+    /// element, walked over every type a feature reaches, which is the
+    /// difference between a check taking seconds and a quarter of a
+    /// minute.
+    ///
+    /// So it is indexed once, for every such end at a time. `fill` is
+    /// what builds that index; which ends there are is the metamodel's
+    /// business, and is stated where the constraints are read.
+    ///
+    /// The model grows while the constraints are checked -- a derivation
+    /// may reify what it reads -- so the index carries the size it was
+    /// built for and is built again when that has moved. Stamping it
+    /// here rather than at the call site is what stops the two from
+    /// disagreeing: the caller cannot record a generation it did not
+    /// index.
+    pub(crate) fn reverse_ends(
+        &mut self,
+        fill: impl FnOnce(&Model) -> HashMap<(&'static str, ElementId), Vec<ElementId>>,
+        end: &'static str,
+        of: ElementId,
+    ) -> &[ElementId] {
+        if self.reverse.0 != self.model.len() {
+            self.reverse = (self.model.len(), fill(&self.model));
+        }
+        self.reverse.1.get(&(end, of)).map_or(&[], Vec::as_slice)
     }
 
     /// Where an element is written, for a report that points at it.
@@ -983,3670 +1351,99 @@ impl Workspace {
             .join("::")
     }
 
-    /// The `doc` body attached to an element, if any.
+    /// The `doc` body attached to an element, if any, as prose.
+    ///
+    /// What the parser keeps is the inside of the comment, margin and
+    /// all: a `doc /* ... */` written over several lines arrives as
+    /// `"* Two states, and the LED follows\n         * which one is
+    /// current"`. The `*` down the left is decoration and so is the
+    /// indentation that carried it, and every reader wanting the
+    /// sentence had to know that -- the diagrams stripped it, hover and
+    /// the MCP server did not, and a code generator handed it wrote the
+    /// asterisks into a docstring.
     pub fn documentation_of(&self, elem: ElementId) -> Option<String> {
+        self.documented(elem).map(prose)
+    }
+
+    /// The same, without the copy -- which is what a search over every
+    /// documented element in the library wants.
+    fn documented(&self, elem: ElementId) -> Option<&str> {
         self.model
             .owned(elem)
             .iter()
             .find(|c| self.model.kind(**c) == ElementKind::Documentation)
-            .and_then(|d| self.model.get(*d, "body"))
+            .and_then(|d| self.model.maybe(*d, "body"))
             .and_then(Value::as_str)
-            .map(String::from)
-    }
-
-    /// Resolve every explicit relationship target in the workspace and
-    /// reify the relationship elements.
-    pub fn resolve_all(&mut self) -> ResolveStats {
-        let ids: Vec<ElementId> = self.model.ids().collect();
-        self.resolve_ids(&ids, Clear::TheseFiles)
-    }
-
-    /// Resolve only elements belonging to the given files (imports,
-    /// supertypes etc. from other files are still resolved on demand).
-    /// Resolve `files`, and then whatever they turned out to reach,
-    /// until nothing new is reached.
-    ///
-    /// A reader of the model -- a drawing, a generator -- follows the
-    /// relationships resolution reifies, so a type that was never
-    /// resolved has no members to show and no supertype to inherit
-    /// from. Resolving every loaded file answers that by doing far more
-    /// work than the question needs: a standard library is thousands of
-    /// references, of which a model uses a handful. This resolves the
-    /// files asked for, sees which files the answers landed in, and
-    /// goes round again.
-    pub fn resolve_reached(&mut self, files: &[usize]) -> ResolveStats {
-        let mut stats = self.resolve_files(files);
-        let mut done: HashSet<ElementId> = self
-            .model
-            .ids()
-            .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
-            .collect();
-        loop {
-            let mut fresh = Vec::new();
-            for reference in &self.references {
-                if done.contains(&reference.target) {
-                    continue;
-                }
-                // A package is a place to look names up, not something
-                // a model is made of: nothing is typed by one, and a
-                // qualified name records every namespace it passed
-                // through on the way. What is actually used out of a
-                // package records itself, so following the package
-                // would be reading a library to find two words in it.
-                if self.model.kind(reference.target).is_a(ElementKind::Package) {
-                    continue;
-                }
-                // what a name landed on is of no use without what it
-                // holds: the members a box would show, and the types
-                // those are declared with
-                fresh.extend(self.model.descendants(reference.target));
-            }
-            fresh.retain(|id| done.insert(*id));
-            if fresh.is_empty() {
-                return stats;
-            }
-            // every element is resolved once, so nothing said about one
-            // round is there to be replaced by the next
-            let round = self.resolve_ids(&fresh, Clear::Nothing);
-            stats.resolved += round.resolved;
-            stats.unresolved += round.unresolved;
-            stats.lookups += round.lookups;
-        }
-    }
-
-    pub fn resolve_files(&mut self, files: &[usize]) -> ResolveStats {
-        let ids: Vec<ElementId> = self
-            .model
-            .ids()
-            .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
-            .collect();
-        self.resolve_ids(&ids, Clear::TheseFiles)
-    }
-
-    fn resolve_ids(&mut self, ids: &[ElementId], clear: Clear) -> ResolveStats {
-        // Resolving the same elements again replaces what was found
-        // about them rather than adding to it: asking twice is a thing
-        // callers do, and it should not double every finding. A caller
-        // that resolves each element exactly once says so instead, so
-        // that one round does not wipe what the last one found.
-        if clear == Clear::TheseFiles {
-            let touched: HashSet<usize> = ids
-                .iter()
-                .filter_map(|id| self.elem_file.get(id).copied())
-                .collect();
-            self.unresolved.retain(|u| !touched.contains(&u.file));
-            self.references.retain(|r| !touched.contains(&r.file));
-        }
-
-        let mut stats = ResolveStats::default();
-        let began = self.lookups;
-        self.claimed.clear();
-        for &id in ids {
-            let Some(node) = self.source.get(&id).cloned() else {
-                continue;
-            };
-            // `first x;` names which step comes first: a membership
-            // whose member is written elsewhere, the way an alias's is.
-            if node.kind() == SyntaxKind::CONTROL_STMT
-                && self.model.kind(id).is_a(ElementKind::Membership)
-            {
-                if let Some(operand) = operand_after(&node, SyntaxKind::FIRST_KW) {
-                    self.resolve_operand_into(id, &operand, "memberElement", &mut stats, false);
-                }
-                continue;
-            }
-            if matches!(
-                node.kind(),
-                SyntaxKind::CONNECTOR_STMT | SyntaxKind::CONTROL_STMT
-            ) {
-                self.resolve_connector_ends(id, &node, &mut stats);
-                self.resolve_trigger_type(id, &node, &mut stats);
-                self.resolve_action_arguments(id, &node, &mut stats);
-                continue;
-            }
-            // `comment about A, B /* ... */` and `metadata m : M about
-            // A` both say what they are about, and the names they say it
-            // about are references like any other
-            self.resolve_annotation(id, &node, &mut stats);
-            if matches!(
-                node.kind(),
-                SyntaxKind::COMMENT_ELEM | SyntaxKind::DOCUMENTATION | SyntaxKind::REP
-            ) {
-                continue;
-            }
-            // `#Safety part def Boiler;` -- the prefix is a metadata
-            // usage typed by what it names, and the typing is written as
-            // a bare qualified name rather than a typing clause
-            if node.kind() == SyntaxKind::PREFIX_METADATA {
-                self.resolve_prefix_metadata(id, &node, &mut stats);
-                continue;
-            }
-            // `dependency use from A to B;` is a statement of its own,
-            // and the names on either side of `to` are references like
-            // any other
-            if node.kind() == SyntaxKind::DEPENDENCY {
-                self.resolve_dependency(id, &node, &mut stats);
-                continue;
-            }
-            // `@rust { ... }` types the metadata usage by its metadata
-            // definition; resolving it is what lets the `:>> attribute`
-            // settings inside reach the definition's attributes
-            if node.kind() == SyntaxKind::METADATA_ANNOTATION {
-                self.resolve_metadata_typing(id, &node, &mut stats);
-                continue;
-            }
-            // `import P1::*;` names P1, and an editor renaming P1 has to
-            // be told so -- otherwise the rename leaves the import
-            // pointing at a package that is no longer there. Imports are
-            // not counted among the resolved references, which are the
-            // explicit relationship targets; this only says where they
-            // were written.
-            if matches!(node.kind(), SyntaxKind::IMPORT | SyntaxKind::EXPOSE) {
-                self.record_import(id, &node);
-                continue;
-            }
-            // `alias Q for P;` is a membership whose member is the
-            // element it renames. Nothing else asks for it -- a name
-            // reached through the alias resolves to what it stands for
-            // and forgets the way in -- so a reader of the model alone
-            // would find an alias that names nothing.
-            if node.kind() == SyntaxKind::ALIAS {
-                self.record_alias(id, &node, &mut stats);
-                continue;
-            }
-            // `mass * speed` ending a calculation body, or the body of
-            // `require constraint { ... }`: an expression standing on
-            // its own, whose names are as much references as a typing's
-            if node.kind() == SyntaxKind::EXPR_STMT {
-                if let Some(written) = node.children().next() {
-                    self.resolve_expression(id, &written, &mut stats);
-                }
-                continue;
-            }
-            // `subset g.g subsets b.f.a;` writes as a statement of its
-            // own what `feature g :> f` writes as a clause. Written as a
-            // clause the declaration is the element and the
-            // relationship is reified under it; written as a statement
-            // the relationship *is* the element, and both of the things
-            // it relates are names on it that nothing else reads.
-            if node.kind() == SyntaxKind::RELATION_STMT {
-                self.resolve_relation_ends(id, &node, &mut stats);
-                continue;
-            }
-            // a payload carries a typing of its own -- `flow f of Fuel`
-            // -- and is an element the builder made, so it resolves like
-            // any declaration
-            if !matches!(
-                node.kind(),
-                SyntaxKind::DEFINITION | SyntaxKind::USAGE | SyntaxKind::PAYLOAD
-            ) {
-                continue;
-            }
-            // `action initialization assign index := 1;` writes the
-            // action's own name before the keyword, so the statement
-            // parses as a usage rather than as a control statement --
-            // and what it assigns is a name to look up either way
-            self.resolve_action_arguments(id, &node, &mut stats);
-            // `attribute pin : PinNumber = ledPinNumber;` -- the value is
-            // an expression like any other, and the name in it is a
-            // reference like any other. `binding a = b;` writes the same
-            // `=` and means something else by it: what follows is the
-            // second end, which the ends are read from instead.
-            for clause in node
-                .children()
-                .filter(|_| !binds_an_end(&node))
-                .filter(|child| child.kind() == SyntaxKind::VALUE)
-            {
-                for written in clause
-                    .children()
-                    .filter(|child| child.kind() != SyntaxKind::BODY)
-                {
-                    self.resolve_expression(id, &written, &mut stats);
-                }
-            }
-            let is_definition = node.kind() == SyntaxKind::DEFINITION;
-            for (part_kind, targets) in relationship_parts(&node) {
-                for t in targets {
-                    // `member step merge ... featured by
-                    // TakePicture_snapshots { member feature
-                    // TakePicture_snapshots ... }` -- what features a
-                    // feature may be declared inside it, and the
-                    // featuring is written inside it too, so the name is
-                    // read from there before it is read from around.
-                    let found = match part_kind {
-                        SyntaxKind::FEATURED_KW => self.resolve_inside(id, &t.segments),
-                        _ => None,
-                    };
-                    let redefining = std::mem::replace(
-                        &mut self.redefining,
-                        part_kind == SyntaxKind::REDEFINITION,
-                    );
-                    let found = found.or_else(|| {
-                        self.resolve_written(
-                            id,
-                            &t.segments,
-                            may_name_itself(part_kind, is_definition),
-                        )
-                    });
-                    self.redefining = redefining;
-                    match found {
-                        Some(target) => {
-                            stats.resolved += 1;
-                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                            self.record(file, t.range, t.name_range, &t.at, target);
-                            // `chains source.target` names the steps of
-                            // one chain, and each step is a chaining of
-                            // its own: read as a single relationship the
-                            // feature comes to have one chaining
-                            // feature, which the standard does not
-                            // allow it.
-                            if part_kind == SyntaxKind::CHAINS_KW {
-                                for depth in 1..=t.segments.len() {
-                                    if let Some(step) = self.resolve_from(id, &t.segments[..depth])
-                                    {
-                                        self.reify(id, is_definition, part_kind, step);
-                                    }
-                                }
-                                continue;
-                            }
-                            // A dotted operand names a chain, not the
-                            // feature at the end of it. The abstract
-                            // syntax the OMG publishes makes a `Feature`
-                            // of its own of it, carrying the steps as
-                            // `FeatureChaining`: `Occurrences.kermlx`
-                            // does exactly that for `subset
-                            // laterOccurrence.successors subsets
-                            // earlierOccurrence.successors;`. Read as
-                            // the last step alone, the operand is the
-                            // feature that step names anywhere rather
-                            // than the one this path reaches, and what
-                            // features it is read off the wrong element
-                            // -- which is the whole of what
-                            // `validateSubsettingFeaturingTypes` and
-                            // `validateRedefinitionFeaturingTypes` ask.
-                            // A reference subsetting is one too -- the
-                            // published abstract syntax stands 106 of
-                            // them under the standard library alone --
-                            // and a connector end written as `lcp ::>
-                            // w.lcp` reaches what it relates through the
-                            // chain rather than as it.
-                            // For a cross subsetting there is more:
-                            // `deriveFeatureCrossFeature` reads
-                            // `crossedFeature.chainingFeature->at(2)`,
-                            // and `validateCrossSubsettingCrossedFeature`
-                            // holds the first step to being the other
-                            // end of the association.
-                            let names_a_chain = matches!(
-                                part_kind,
-                                SyntaxKind::CROSSES_KW
-                                    | SyntaxKind::REDEFINITION
-                                    | SyntaxKind::REFERENCES
-                                    | SyntaxKind::DISJOINT_KW
-                            ) || part_kind == SyntaxKind::SUBSETTING
-                                && !is_definition;
-                            let reached = match names_a_chain {
-                                true => self.chained(id, &t.segments, &t.chain, target),
-                                false => target,
-                            };
-                            self.reify(id, is_definition, part_kind, reached);
-                        }
-                        None => {
-                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                            self.record_miss(file, t.range, &t.segments, &mut stats);
-                        }
-                    }
-                }
-            }
-            // `perform w;`, `exhibit s;`, `assert c;`, `include u;` --
-            // `PerformActionUsageDeclaration : PerformActionUsage = (
-            // ownedRelationship += OwnedReferenceSubsetting ... )`. The
-            // reference is what the usage is *about*, and without it the
-            // model says only that something is performed.
-            //
-            // A name that does not resolve is left alone rather than
-            // reported: `satisfy requirement viewpointConformance by
-            // that;` writes the same shape and *declares* that name, so
-            // a finding here would be a false one.
-            //
-            // `satisfy r by p;` and `verify r;` have resolvers of their
-            // own below, which record the same operand: recording it here
-            // too would give a rename two edits over the one name.
-            let handled = self
-                .model
-                .kind(id)
-                .is_a(ElementKind::SatisfyRequirementUsage)
-                || self.model.member_role(id) == Some(Role::Verify);
-            if let Some(operand) = adapter_target(&node).filter(|_| !handled) {
-                if let Some(target) = self.resolve_from(id, &operand_segments(&operand)) {
-                    stats.resolved += 1;
-                    let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                    let range = operand.text_range();
-                    let name_range = last_name_range(&operand);
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
-                    self.reify(id, false, SyntaxKind::REFERENCES, target);
-                }
-            }
-            // `connection c : L connect a to b;` is written as a usage, so
-            // its ends arrive here rather than through a connector
-            // statement -- and so is KerML's `connector c from a to b;`,
-            // which is a `Connector` and not a usage at all.
-            if self.model.kind(id).is_a(ElementKind::Connector) {
-                self.resolve_connector_ends(id, &node, &mut stats);
-            }
-            if self
-                .model
-                .kind(id)
-                .is_a(ElementKind::SatisfyRequirementUsage)
-            {
-                self.resolve_satisfaction(id, &node, &mut stats);
-            }
-            if self.model.member_role(id) == Some(Role::Verify) {
-                self.resolve_verification(id, &node, &mut stats);
-            }
-        }
-        self.carry_ends();
-        self.resolve_expression_tree(ids);
-        self.count_with_what_is_named();
-        self.relate_named_ends();
-        self.imply_end_redefinitions();
-        self.imply_end_participation();
-        self.imply_cross_subsettings();
-        stats.lookups = self.lookups - began;
-        stats
-    }
-
-    /// What a connector relates, where it wrote its ends as
-    /// declarations of their own.
-    ///
-    /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort
-    /// to [1] shankPort ::> hub.shankPort;` writes the ends and not the
-    /// things they stand for, and `relatedFeature =
-    /// connectorEnd.ownedReferenceSubsetting.subsettedFeature` says
-    /// which of them the connector relates. What an end refers to is
-    /// resolved with the end rather than with the connector, so this
-    /// waits until both are.
-    ///
-    /// A dotted reference is a chain, and what the connector relates is
-    /// the feature that chain ends at -- which is what an end written
-    /// without a name of its own already reports, and a consumer asking
-    /// what is connected to what wants the port and not the path to it.
-    fn relate_named_ends(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            if !self.model.kind(elem).is_a(ElementKind::Connector)
-                || self.model.get(elem, "relatedFeature").is_some()
-            {
-                continue;
-            }
-            let related: Vec<ElementId> = self
-                .model
-                .owned(elem)
-                .iter()
-                .filter(|&&it| self.model.get(it, "isEnd") == Some(&Value::Bool(true)))
-                .filter_map(|&end| {
-                    self.model
-                        .owned(end)
-                        .iter()
-                        .copied()
-                        .find(|&it| self.model.kind(it) == ElementKind::ReferenceSubsetting)
-                        .and_then(|it| self.model.referenced_feature(it))
-                        .map(|reached| {
-                            self.model
-                                .chaining_feature(reached)
-                                .last()
-                                .copied()
-                                .unwrap_or(reached)
-                        })
-                })
-                .collect();
-            if !related.is_empty() {
-                self.try_set(elem, "relatedFeature", Value::RefList(related));
-            }
-        }
-    }
-
-    /// What each expression in the tree refers to, and what it invokes.
-    ///
-    /// A feature reference names a feature; an invocation names the
-    /// function it hands its arguments to, which an operator names by
-    /// the symbol the specification's operator table maps -- `a + b`
-    /// invokes `DataFunctions::'+'`. Both are held on a `Membership`
-    /// the builder stands there ahead of everything else, since
-    /// `instantiatedType()` and `referent` each read the first one.
-    fn resolve_expression_tree(&mut self, asked: &[ElementId]) {
-        // Only what was asked for. Walking a name before the file it is
-        // written in has been resolved settles what the walk found into
-        // the caches this workspace keeps, and the answer a later pass
-        // gets is then the one from before that file was there.
-        let asked: HashSet<ElementId> = asked.iter().copied().collect();
-        // What the expression builder made, and only that: a
-        // `RequirementUsage` is a kind of `BooleanExpression` in SysML,
-        // and reading one as an invocation hands its subject over as an
-        // argument of something it never invoked.
-        let expressions: Vec<(ElementId, SyntaxNode)> = self
-            .expressions
-            .clone()
-            .into_iter()
-            .filter(|elem| asked.contains(elem))
-            .filter_map(|elem| Some((elem, self.source.get(&elem)?.clone())))
-            .collect();
-        for (elem, node) in expressions {
-            // `x istype T` names the type it asks about through a
-            // membership of its own, beside the one naming the function
-            if self.model.kind(elem) == ElementKind::Membership {
-                match self.model.owner(elem).map(|it| self.model.kind(it)) {
-                    Some(ElementKind::FeatureChainExpression) => self.chains_to(elem, &node),
-                    _ => self.names_what_it_asks_about(elem, &node),
-                }
-                continue;
-            }
-            if self.model.kind(elem) == ElementKind::FeatureReferenceExpression {
-                if self.model.get(elem, "referent").is_none() {
-                    let segments = operand_segments(&node);
-                    if let Some(target) = self.resolve_operand(elem, &segments) {
-                        self.refers_to(elem, target);
-                    }
-                }
-                continue;
-            }
-            let triggered = match self.model.get(elem, "kind") {
-                Some(Value::EnumLit(kind)) => triggered_function(kind),
-                _ => None,
-            };
-            let found = match (
-                self.model.get(elem, "operator").and_then(Value::as_str),
-                triggered,
-            ) {
-                (Some(operator), _) => {
-                    invoked_function(operator).and_then(|it| self.named_globally(it))
-                }
-                (None, Some(named)) => self.named_globally(named),
-                (None, None) => match invoked_through_arrow(&node) {
-                    Some(named) => self.resolve_operand(elem, &[named]),
-                    None => invoked_by_name(&node)
-                        .and_then(|callee| self.resolve_operand(elem, &operand_segments(&callee))),
-                },
-            };
-            let Some(target) = found else {
-                continue;
-            };
-            let standing = self
-                .model
-                .owned(elem)
-                .iter()
-                .copied()
-                .find(|&child| self.model.kind(child) == ElementKind::Membership);
-            if let Some(membership) = standing {
-                self.try_set(membership, "memberElement", Value::Ref(target));
-            }
-            // `private calc getElapsedUtcTime { ... }` names no type,
-            // and `validateInvocationExpressionInstantiatedType` holds
-            // what invokes it to invoking something typed by a
-            // behaviour. The notation writes that type nowhere.
-            self.materialize_implied_for(target);
-            self.hands_over_what_it_takes(elem, target);
-            self.comes_to_what_it_invokes(elem, target);
-        }
-    }
-
-    /// The type a classification operator asks about.
-    ///
-    /// `x istype T` hands over `x` and names `T`, and the name is held
-    /// on a membership of the expression's own beside the one naming
-    /// the function it invokes.
-    fn names_what_it_asks_about(&mut self, membership: ElementId, node: &SyntaxNode) {
-        let segments = operand_segments(node);
-        let Some(target) = self.resolve_operand(membership, &segments) else {
-            return;
-        };
-        self.try_set(membership, "memberElement", Value::Ref(target));
-        self.comes_to_what_it_casts_to(membership, target);
-    }
-
-    /// A cast comes to the type it casts to.
-    ///
-    /// `as` is "select instances of type (cast)" and `meta` the same of
-    /// a metaclass, and `BaseFunctions::'as'` returns `Anything`: the
-    /// type is named beside the operator rather than returned, so what
-    /// the expression comes to is nowhere in the model unless this puts
-    /// it there. `(that as SpatialItem).localClock` reads `localClock`
-    /// from a `SpatialItem` on the strength of it, which is what
-    /// `validateFeatureChainExpressionConformance` asks about.
-    fn comes_to_what_it_casts_to(&mut self, membership: ElementId, cast: ElementId) {
-        let casts = self
-            .model
-            .owner(membership)
-            .filter(|&it| {
-                matches!(
-                    self.model.get(it, "operator").and_then(Value::as_str),
-                    Some("as" | "meta")
-                )
-            })
-            .and_then(|expression| self.hands_back(expression));
-        let Some(result) = casts else {
-            return;
-        };
-        let (kind, from, to) = match self.model.kind(cast).is_a(ElementKind::Classifier) {
-            true => (ElementKind::FeatureTyping, "typedFeature", "type"),
-            false => (
-                ElementKind::Subsetting,
-                "subsettingFeature",
-                "subsettedFeature",
-            ),
-        };
-        self.reified(
-            result,
-            kind,
-            &[
-                (from, Value::Ref(result)),
-                (to, Value::Ref(cast)),
-                ("isImplied", Value::Bool(true)),
-            ],
-        );
-        self.model
-            .set(result, "isImpliedIncluded", Value::Bool(true));
-        // what it specializes was worked out before this was written
-        self.supertypes.remove(&result);
-    }
-
-    /// The feature a chain expression chains to.
-    ///
-    /// "If the membershipOwningNamespace is a FeatureChainExpression,
-    /// then the local Namespace is the result parameter of the argument
-    /// Expression": `(that as SpatialItem).localClock` reads
-    /// `localClock` from what `that as SpatialItem` comes to, which for
-    /// a cast is the type it casts to and otherwise what its result
-    /// specializes.
-    fn chains_to(&mut self, membership: ElementId, node: &SyntaxNode) {
-        let owner = self
-            .model
-            .owner(membership)
-            .expect("the builder puts the membership on the expression it chains from");
-        let mut segments = operand_segments(node);
-        let Some(name) = segments.pop() else {
-            return;
-        };
-        let held: Vec<ElementId> = self
-            .takes(owner)
-            .into_iter()
-            .filter_map(|argument| {
-                self.model
-                    .owned(argument)
-                    .iter()
-                    .copied()
-                    .find(|&it| self.model.kind(it) == ElementKind::FeatureValue)
-                    .and_then(|it| self.model.get(it, "value").and_then(Value::as_id))
-            })
-            .collect();
-        let mut scopes = Vec::new();
-        for expression in held {
-            // a cast names the type it casts to outright
-            scopes.extend(
-                self.model
-                    .owned(expression)
-                    .iter()
-                    .copied()
-                    .filter(|&it| self.model.kind(it) == ElementKind::Membership)
-                    .filter_map(|it| self.model.get(it, "memberElement").and_then(Value::as_id))
-                    .collect::<Vec<_>>(),
-            );
-            if let Some(result) = self.hands_back(expression) {
-                scopes.extend(self.supertypes_of(result));
-            }
-        }
-        for scope in scopes {
-            // a chain chains to a feature: `targetFeature` is null where
-            // what the name reaches is not one, which is what the
-            // derivation's own `oclIsKindOf(Feature)` guard says
-            let found = self
-                .lookup(scope, &name, Access::External, true, None)
-                .filter(|&it| self.model.kind(it).is_a(ElementKind::Feature));
-            if let Some(target) = found {
-                self.try_set(membership, "memberElement", Value::Ref(target));
-                // `checkFeatureChainExpressionResultSpecialization` --
-                // what a chain comes to is what it chains to
-                if let Some(result) = self.hands_back(owner) {
-                    self.reified(
-                        result,
-                        ElementKind::Subsetting,
-                        &[
-                            ("subsettingFeature", Value::Ref(result)),
-                            ("subsettedFeature", Value::Ref(target)),
-                            ("isImplied", Value::Bool(true)),
-                        ],
-                    );
-                    self.model
-                        .set(result, "isImpliedIncluded", Value::Bool(true));
-                    self.supertypes.remove(&result);
-                }
-                return;
-            }
-        }
-    }
-
-    /// Each argument redefines the parameter it is handed to.
-    ///
-    /// `deriveInvocationExpressionArgument` reads an argument back as
-    /// "the owned feature that redefines this input, and the value it
-    /// holds", and `validateInvocationExpressionParameterRedefinition`
-    /// holds every argument to redefining exactly one of them. The
-    /// notation writes the arguments in order and names none of them,
-    /// so the order is what says which is which.
-    fn hands_over_what_it_takes(&mut self, invocation: ElementId, function: ElementId) {
-        let taken = self.taken_by(function, &mut Vec::new());
-        let handed = self.takes(invocation);
-        // An argument that names the parameter it is for says which one
-        // it redefines; where none of them do, the order says it.
-        let named: Vec<Option<ElementId>> = handed
-            .iter()
-            .map(|&argument| self.names_a_parameter(argument, function))
-            .collect();
-        let pairs: Vec<(ElementId, ElementId)> = match named.iter().all(Option::is_some) {
-            true => handed
-                .iter()
-                .copied()
-                .zip(named.into_iter().flatten())
-                .collect(),
-            false => handed.into_iter().zip(taken).collect(),
-        };
-        for (argument, input) in pairs {
-            self.reified(
-                argument,
-                ElementKind::Redefinition,
-                &[
-                    ("redefiningFeature", Value::Ref(argument)),
-                    ("redefinedFeature", Value::Ref(input)),
-                    ("isImplied", Value::Bool(true)),
-                ],
-            );
-            self.model
-                .set(argument, "isImpliedIncluded", Value::Bool(true));
-            // what it specializes was worked out before this was written
-            self.supertypes.remove(&argument);
-        }
-    }
-
-    /// An invocation comes to what the function it invokes hands back.
-    ///
-    /// The result an invocation owns redefines the function's own, which
-    /// is where an expression gets what it comes to: `@Safety` is a
-    /// boolean because `BaseFunctions::'@'` returns one, and nothing
-    /// else in the model says so.
-    ///
-    /// `checkInvocationExpressionSpecialization` has the invocation
-    /// specialize the function outright. Read that way it inherits the
-    /// function's parameters as well, and every constraint that counts
-    /// what an invocation is handed then counts the ones it inherits
-    /// beside the ones it was given -- which the standard removes as
-    /// redefined and this model does not.
-    fn comes_to_what_it_invokes(&mut self, invocation: ElementId, function: ElementId) {
-        let mine = self.hands_back(invocation).expect(
-            "the builder gives every invocation the parameter it hands its value back through",
-        );
-        // `checkInvocationExpressionBehaviorResultSpecialization` --
-        // where what is invoked is no function, what the invocation
-        // comes to is the thing itself: `new A(...)` comes to an `A`,
-        // and a classifier hands nothing back for the result to
-        // redefine.
-        let a_function = self.model.kind(function).is_a(ElementKind::Function)
-            || self
-                .supertypes_of(function)
-                .into_iter()
-                .any(|up| self.model.kind(up).is_a(ElementKind::Function));
-        if !a_function {
-            self.reified(
-                mine,
-                ElementKind::FeatureTyping,
-                &[
-                    ("typedFeature", Value::Ref(mine)),
-                    ("type", Value::Ref(function)),
-                    ("isImplied", Value::Bool(true)),
-                ],
-            );
-            self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
-            self.supertypes.remove(&mine);
-            return;
-        }
-        let Some(theirs) = self.handed_back_by(function, &mut Vec::new()) else {
-            return;
-        };
-        self.reified(
-            mine,
-            ElementKind::Redefinition,
-            &[
-                ("redefiningFeature", Value::Ref(mine)),
-                ("redefinedFeature", Value::Ref(theirs)),
-                ("isImplied", Value::Bool(true)),
-            ],
-        );
-        self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
-        // what it specializes was worked out before this was written
-        self.supertypes.remove(&mine);
-    }
-
-    /// The parameter something hands its value back through.
-    fn hands_back(&self, of: ElementId) -> Option<ElementId> {
-        self.model
-            .owned(of)
-            .iter()
-            .copied()
-            .find(|&it| self.model.get(it, "direction") == Some(&Value::EnumLit("out")))
-    }
-
-    /// The one a function hands back, its own or the one it inherits.
-    fn handed_back_by(
-        &mut self,
-        function: ElementId,
-        seen: &mut Vec<ElementId>,
-    ) -> Option<ElementId> {
-        if seen.contains(&function) {
-            return None;
-        }
-        seen.push(function);
-        if let Some(own) = self.hands_back(function) {
-            return Some(own);
-        }
-        for up in self.supertypes_of(function) {
-            if let Some(found) = self.handed_back_by(up, seen) {
-                return Some(found);
-            }
-        }
-        None
-    }
-
-    /// The parameter an argument names itself for, where it names one.
-    fn names_a_parameter(&mut self, argument: ElementId, function: ElementId) -> Option<ElementId> {
-        let node = self.source.get(&argument)?.clone();
-        let name = operand_segments(&node).pop()?;
-        self.lookup(function, &name, Access::Internal, true, None)
-    }
-
-    /// What something is handed, in the order it is handed them.
-    fn takes(&self, of: ElementId) -> Vec<ElementId> {
-        self.model
-            .owned(of)
-            .iter()
-            .copied()
-            .filter(|&it| {
-                matches!(
-                    self.model.get(it, "direction"),
-                    Some(Value::EnumLit("in") | Value::EnumLit("inout"))
-                )
-            })
-            .collect()
-    }
-
-    /// What a function takes, its own or the ones it inherits.
-    ///
-    /// `calc getOutput` is a usage, and the parameters it is invoked
-    /// with are declared on the calculation that defines it. Read off
-    /// the usage alone there are none, and every argument then redefines
-    /// nothing.
-    fn taken_by(&mut self, function: ElementId, seen: &mut Vec<ElementId>) -> Vec<ElementId> {
-        if seen.contains(&function) {
-            return Vec::new();
-        }
-        seen.push(function);
-        let own = self.takes(function);
-        if !own.is_empty() {
-            return own;
-        }
-        for up in self.supertypes_of(function) {
-            let taken = self.taken_by(up, seen);
-            if !taken.is_empty() {
-                return taken;
-            }
-        }
-        Vec::new()
-    }
-
-    /// The element a whole name answers to, read from the root.
-    ///
-    /// `Namespace::resolveGlobal` is one of the four the metamodel
-    /// writes as prose about what it would do rather than as OCL. The
-    /// index is over declared names, so the last segment finds the
-    /// candidates and the whole name picks one out -- a scan of every
-    /// name in the workspace, which is why the answers are kept.
-    pub(crate) fn named_globally(&mut self, qualified: &str) -> Option<ElementId> {
-        if let Some(&found) = self.globals.get(qualified) {
-            return found;
-        }
-        let declared = qualified.rsplit("::").next().unwrap_or(qualified);
-        let found = self
-            .search_names(declared, 500)
-            .into_iter()
-            .find(|&it| self.qualified_name_of(it) == qualified);
-        self.globals.insert(qualified.to_string(), found);
-        found
-    }
-
-    /// The names a multiplicity counts with.
-    ///
-    /// `succession causalOrdering first [nCauses] causes.startShot then
-    /// [nEffects] effects { attribute nCauses = size(causes); ... }`
-    /// counts with an attribute the succession declares, and
-    /// `validateMultiplicityRangeBoundResultTypes` reads what such a
-    /// bound comes to. The builder keeps a named bound as the text it
-    /// was written as; until the name is looked up the bound refers to
-    /// nothing, and says nothing about what it counts.
-    fn count_with_what_is_named(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            if self.model.kind(elem) != ElementKind::FeatureReferenceExpression
-                || self.model.get(elem, "referent").is_some()
-            {
-                continue;
-            }
-            let Some(owner) = self
-                .model
-                .owner(elem)
-                .filter(|&it| self.model.kind(it) == ElementKind::MultiplicityRange)
-                .and_then(|range| self.model.owner(range))
-            else {
-                continue;
-            };
-            let written = self
-                .written_as(elem)
-                .expect("the builder keeps a named bound as the text it was written as");
-            let segments: Vec<String> = written.split("::").map(str::to_string).collect();
-            let found = self
-                .resolve_inside(owner, &segments)
-                .or_else(|| self.resolve_from(owner, &segments));
-            if let Some(target) = found {
-                self.refers_to(elem, target);
-            }
-        }
-    }
-
-    /// The text an element was written as, where the builder kept it.
-    fn written_as(&self, elem: ElementId) -> Option<String> {
-        self.model
-            .owned(elem)
-            .iter()
-            .copied()
-            .find(|&it| self.model.kind(it) == ElementKind::TextualRepresentation)
-            .and_then(|it| self.model.get(it, "body"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    }
-
-    /// The redefinition an end declared beside a supertype's implies.
-    ///
-    /// "If a Feature has isEnd = true and an owningType that is not
-    /// empty, then, for each direct supertype of its owningType, it
-    /// must redefine the endFeature at the same position, if any."
-    /// Almost nothing writes it: `connect a to b` names no end at all,
-    /// and the binary connection it specializes is reached implicitly.
-    /// Read without it every such connector has four ends -- the two it
-    /// was written with and the two it inherits -- and "a connector
-    /// specializing a binary one is binary" is true of none of the
-    /// eight hundred in the corpus.
-    fn imply_end_redefinitions(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            let mine = self.own_ends(elem);
-            if mine.is_empty() {
-                continue;
-            }
-            let above: Vec<Vec<ElementId>> = self
-                .supertypes_of(elem)
-                .into_iter()
-                .map(|up| self.ends_of(up))
-                .collect();
-            for (at, &end) in mine.iter().enumerate() {
-                for other in above.iter().filter_map(|ends| ends.get(at).copied()) {
-                    // What it already redefines it does not redefine
-                    // again -- and only a redefinition counts, since
-                    // only a redefinition stands in the place of what
-                    // it names. `end feature transferSource references
-                    // source` subsets the end it refers to and leaves
-                    // it inherited beside itself.
-                    if other == end || self.redefines(end, other) {
-                        continue;
-                    }
-                    let redefinition = self.reified(
-                        end,
-                        ElementKind::Redefinition,
-                        &[
-                            ("redefiningFeature", Value::Ref(end)),
-                            ("redefinedFeature", Value::Ref(other)),
-                        ],
-                    );
-                    self.model.set(redefinition, "isImplied", Value::Bool(true));
-                    self.model.set(end, "isImpliedIncluded", Value::Bool(true));
-                    self.supertypes.clear();
-                }
-            }
-        }
-    }
-
-    /// The library types an element specializes without saying so.
-    ///
-    /// What it specializes is not read off its metaclass alone: a
-    /// connector or an association that relates more than two things is
-    /// not a binary one, whatever keyword declared it.
-    fn implied_bases_of(&mut self, elem: ElementId) -> Vec<&'static str> {
-        let mut implied = implied_bases(self.model.kind(elem));
-        // "numEnds != 2 ? base : binary" -- what a connector or an
-        // association specializes without saying so is the binary
-        // library type where it relates exactly two things and the
-        // general one otherwise, counted over the ends it owns. A usage
-        // that declares none of its own -- `interface i :
-        // WheelHubInterface;` -- reaches whichever of the two its type
-        // reached.
-        let ends = self.own_ends(elem).len();
-        if ends != 2 {
-            implied.retain(|path| !BINARY.contains(path));
-        }
-        if ends == 0 {
-            implied.retain(|path| !OWNING_ENDS.contains(path));
-        }
-        implied
-    }
-
-    /// Whether a feature redefines another, directly or through what it
-    /// redefines in turn.
-    fn redefines(&self, feature: ElementId, other: ElementId) -> bool {
-        let mut queue = vec![feature];
-        let mut seen = Vec::new();
-        while let Some(at) = queue.pop() {
-            if at == other {
-                return true;
-            }
-            if seen.contains(&at) {
-                continue;
-            }
-            seen.push(at);
-            queue.extend(self.model.owned(at).iter().filter_map(|&owned| {
-                match self.model.get(owned, "redefinedFeature") {
-                    Some(Value::Ref(target)) => Some(*target),
-                    _ => None,
-                }
-            }));
-        }
-        false
-    }
-
-    /// The end features a type declares itself, in the order it wrote
-    /// them -- `ownedEndFeature`.
-    fn own_ends(&self, elem: ElementId) -> Vec<ElementId> {
-        self.model
-            .owned(elem)
-            .iter()
-            .copied()
-            .filter(|&it| self.model.get(it, "isEnd") == Some(&Value::Bool(true)))
-            .collect()
-    }
-
-    /// The end features a type has, its own or the ones it inherits.
-    ///
-    /// A type that declares no ends of its own stands for the ends of
-    /// what it specializes -- `Connections::Connection` is reached
-    /// through `BinaryConnection`, which is where the two ends are --
-    /// so a position has to be looked for past a silent supertype
-    /// rather than given up on there.
-    fn ends_of(&mut self, elem: ElementId) -> Vec<ElementId> {
-        let mut queue = vec![elem];
-        let mut seen = Vec::new();
-        let mut at = 0;
-        while at < queue.len() {
-            let up = queue[at];
-            at += 1;
-            if seen.contains(&up) {
-                continue;
-            }
-            seen.push(up);
-            let mine = self.own_ends(up);
-            if !mine.is_empty() {
-                return mine;
-            }
-            queue.extend(self.supertypes_of(up));
-        }
-        Vec::new()
-    }
-
-    /// Every end of an association or a connector subsets
-    /// `Links::Link::participant`.
-    ///
-    /// "If a Feature has isEnd = true and an owningType that is an
-    /// Association or a Connector, then it must directly or indirectly
-    /// specialize `Links::Link::participant` from the Kernel Semantic
-    /// Library", and the semantics section writes an N-ary association
-    /// out "with implied relationships included" as one `end feature
-    /// eN[1..1] subsets Links::Link::participant;` per end.
-    ///
-    /// The first two ends reach it already, through the `source` and
-    /// `target` they are made to redefine -- the library writes both as
-    /// `subsets participant`. A third end redefines nothing, because
-    /// nothing above it has a third, and without this it has no
-    /// supertype and so no type at all: `abstract connection def C {
-    /// end end1; end end2; end end3; }` of `ConnectionTest.sysml` was
-    /// the one model in the corpus that `validateAssociationEndTypes`
-    /// reported, and it is sound.
-    fn imply_end_participation(&mut self) {
-        let Some(participant) = self.named_globally("Links::Link::participant") else {
-            return;
-        };
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            let kind = self.model.kind(elem);
-            if !kind.is_a(ElementKind::Association) && !kind.is_a(ElementKind::Connector) {
-                continue;
-            }
-            for end in self.own_ends(elem) {
-                if end == participant || self.reaches(end, participant) {
-                    continue;
-                }
-                let subsetting = self.reified(
-                    end,
-                    ElementKind::Subsetting,
-                    &[
-                        ("subsettingFeature", Value::Ref(end)),
-                        ("subsettedFeature", Value::Ref(participant)),
-                    ],
-                );
-                self.model.set(subsetting, "isImplied", Value::Bool(true));
-                self.model.set(end, "isImpliedIncluded", Value::Bool(true));
-                self.supertypes.clear();
-            }
-        }
-    }
-
-    /// Whether a feature specializes another, however far up.
-    fn reaches(&mut self, feature: ElementId, other: ElementId) -> bool {
-        let mut queue = vec![feature];
-        let mut seen = Vec::new();
-        let mut at = 0;
-        while at < queue.len() {
-            let up = queue[at];
-            at += 1;
-            if up == other {
-                return true;
-            }
-            if seen.contains(&up) {
-                continue;
-            }
-            seen.push(up);
-            queue.extend(self.supertypes_of(up));
-        }
-        false
-    }
-
-    /// The subsetting an owned cross feature implies.
-    ///
-    /// "If this Feature is the ownedCrossFeature of an end Feature,
-    /// then, for any end Feature that is redefined by the owning end
-    /// Feature of this Feature, this Feature must subset the
-    /// crossFeature of the redefined end Feature, if this exists."
-    /// Nothing writes it down: the association declares the cross
-    /// feature and the redefinition and leaves what holds between them
-    /// to the tool, and `validateFeatureCrossFeatureSpecialization` is
-    /// the specification asking for it back.
-    fn imply_cross_subsettings(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            let Some(mine) = self.owned_cross_feature(elem) else {
-                continue;
-            };
-            let redefined: Vec<ElementId> = self
-                .model
-                .owned(elem)
-                .iter()
-                .filter_map(|&it| match self.model.get(it, "redefinedFeature") {
-                    Some(Value::Ref(target)) => Some(*target),
-                    _ => None,
-                })
-                .collect();
-            for up in redefined {
-                let Some(theirs) = self.cross_feature(up) else {
-                    continue;
-                };
-                if theirs == mine || reaches(&self.model, mine, theirs) {
-                    continue;
-                }
-                let subsetting = self.reified(
-                    mine,
-                    ElementKind::Subsetting,
-                    &[
-                        ("subsettingFeature", Value::Ref(mine)),
-                        ("subsettedFeature", Value::Ref(theirs)),
-                    ],
-                );
-                self.model.set(subsetting, "isImplied", Value::Bool(true));
-                self.model.set(mine, "isImpliedIncluded", Value::Bool(true));
-                // what a feature specializes was worked out and
-                // remembered while this pass was still deciding
-                self.supertypes.clear();
-            }
-        }
-    }
-
-    /// The cross feature an end owns, where it wrote one.
-    ///
-    /// `ownedCrossFeature()` is "the first ownedMember of the Feature
-    /// that is a Feature, but not a Multiplicity or a MetadataFeature,
-    /// and whose owningMembership is not a FeatureMembership". The
-    /// notation writes that two ways, and both are read here from what
-    /// was written: `member feature inCart;` inside the end, and `end
-    /// inCart[0..1] feature cart : ShoppingCart;` in front of it.
-    fn owned_cross_feature(&self, elem: ElementId) -> Option<ElementId> {
-        if self.model.get(elem, "isEnd") != Some(&Value::Bool(true)) {
-            return None;
-        }
-        self.model.owned(elem).iter().copied().find(|&it| {
-            self.model.kind(it).is_a(ElementKind::Feature)
-                && !self.model.kind(it).is_a(ElementKind::Multiplicity)
-                && !self.model.kind(it).is_a(ElementKind::MetadataUsage)
-                && self.source.get(&it).is_some_and(written_as_member)
-        })
-    }
-
-    /// The cross feature of an end: the one it owns, or the second step
-    /// of the chain its cross subsetting names.
-    fn cross_feature(&self, elem: ElementId) -> Option<ElementId> {
-        if let Some(owned) = self.owned_cross_feature(elem) {
-            return Some(owned);
-        }
-        let crossed = self
-            .model
-            .owned(elem)
-            .iter()
-            .copied()
-            .find(|&it| self.model.kind(it).is_a(ElementKind::CrossSubsetting))
-            .and_then(|it| self.model.crossed_feature(it))?;
-        // `crosses a.b` names the chain; a single name names no chain
-        // at all, and the standard gives a cross feature nothing to be
-        // the second step of
-        self.model.chaining_feature(crossed).get(1).copied()
-    }
-
-    /// A feature that redefines an end is an end, and an end is not
-    /// composite.
-    ///
-    /// `end` is written once: the corpus writes it on the outer feature
-    /// and nests redefinitions of it without repeating the keyword, and
-    /// the standard says as much --
-    /// `validateRedefinitionEndConformance` holds a feature redefining
-    /// an end to being one, and
-    /// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` holds
-    /// an end to not being composite. Redefinitions are resolved by
-    /// now, so this is where the two can be said.
-    fn carry_ends(&mut self) {
-        loop {
-            let mut carried = false;
-            for elem in self.model.ids().collect::<Vec<_>>() {
-                if self.model.get(elem, "isEnd") == Some(&Value::Bool(true)) {
-                    continue;
-                }
-                let redefines_an_end = self.model.owned(elem).iter().any(|&owned| {
-                    self.model.kind(owned).is_a(ElementKind::Redefinition)
-                        && matches!(
-                            self.model.get(owned, "redefinedFeature"),
-                            Some(Value::Ref(up))
-                                if self.model.get(*up, "isEnd") == Some(&Value::Bool(true))
-                        )
-                });
-                if redefines_an_end && self.model.kind(elem).feature("isEnd").is_some() {
-                    self.model.set(elem, "isEnd", Value::Bool(true));
-                    if self.model.kind(elem).feature("isComposite").is_some() {
-                        self.model.set(elem, "isComposite", Value::Bool(false));
-                    }
-                    carried = true;
-                }
-            }
-            // a redefinition of a redefinition of an end is one too
-            if !carried {
-                return;
-            }
-        }
-    }
-
-    /// Resolve the metadata definition an `@name { ... }` usage is typed
-    /// by, and reify the typing so the settings inside the body resolve
-    /// against the definition's attributes.
-    fn resolve_metadata_typing(
-        &mut self,
-        usage: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let Some(target) = metadata_target(node) else {
-            return;
-        };
-        match self.resolve_from(usage, &target.segments) {
-            Some(def) => {
-                stats.resolved += 1;
-                self.references.push(Reference {
-                    file: self.elem_file.get(&usage).copied().unwrap_or(0),
-                    range: target.range,
-                    name_range: target.name_range,
-                    target: def,
-                });
-                self.reify(usage, false, SyntaxKind::TYPING, def);
-            }
-            None => {
-                self.record_miss(
-                    self.elem_file.get(&usage).copied().unwrap_or(0),
-                    target.range,
-                    &target.segments,
-                    stats,
-                );
-            }
-        }
-    }
-
-    /// Resolve a qualified name starting from the scope that contains
-    /// `elem`. `elem` itself is excluded from name matches: a feature's own
-    /// (effective) name must not shadow the inherited feature it redefines.
-    pub fn resolve_from(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
-        self.resolve_written(elem, segments, true)
-    }
-
-    /// As `resolve_from`, saying whether the declaration the name is
-    /// written on may answer with itself.
-    fn resolve_written(
-        &mut self,
-        elem: ElementId,
-        segments: &[String],
-        may_name_itself: bool,
-    ) -> Option<ElementId> {
-        if segments.is_empty() {
-            return None;
-        }
-        self.depth += 1;
-        // Kept for the whole walk and put back afterwards: an import
-        // resolving its own path is a reference of its own, written
-        // where the import is rather than where the name that woke it
-        // was.
-        let outer = std::mem::replace(&mut self.origin, elem);
-        let exclude = Some(elem);
-        let found = self.resolve_segments(elem, segments, exclude).or_else(|| {
-            // A self-reference (`part p4 :> p4;`) is a legal name even
-            // though a declaration cannot shadow the feature it
-            // redefines, so the name is looked up once more with the
-            // declaration itself allowed to answer.
-            if !may_name_itself {
-                return None;
-            }
-            let hit = self.resolve_segments(elem, segments, None)?;
-            // But a feature with no name of its own answers to the name
-            // of what it redefines, and that is the very thing being
-            // looked up here. Letting it match itself would make the
-            // answer its own premise: `attribute :>> nothingHere;` would
-            // resolve, and a model naming something that exists nowhere
-            // would be reported as sound.
-            let names_itself = self.model.name(elem) == segments.last().map(String::as_str);
-            (hit != elem || names_itself).then_some(hit)
-        });
-        self.depth -= 1;
-        self.origin = outer;
-        if found.is_none() {
-            self.misses += 1;
-            // A walk that found nothing named nothing. The segments a
-            // walk started from inside this one recorded are not this
-            // one's, and left behind they are handed to whatever
-            // reference is recorded next -- which is how a rename comes
-            // to rewrite a token the name never touched.
-            self.chain.clear();
-        }
-        self.forget_provisional();
-        found
-    }
-
-    /// Record a resolved reference, and with it every earlier segment of
-    /// the qualified name that got there. `Classes::A` names the package
-    /// as well as the class, and an editor renaming the package has to
-    /// be told where it was named -- otherwise it rewrites the
-    /// declaration and leaves the mentions of it behind.
-    /// Where an import's path was written, and what each part of it
-    /// names. The wildcard at the end names nothing.
-    fn record_import(&mut self, import: ElementId, node: &SyntaxNode) {
-        let (mut segments, mut at) = node
-            .children()
-            .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)
-            .map(|qname| (name_segments(&qname), segment_ranges(&qname)))
-            .unwrap_or_default();
-        while matches!(segments.last().map(String::as_str), Some("*" | "**")) {
-            segments.pop();
-            at.pop();
-        }
-        let (Some(last), false) = (at.last().copied(), segments.is_empty()) else {
-            return;
-        };
-        if let Some(target) = self.resolve_from(import, &segments) {
-            let file = self.elem_file.get(&import).copied().unwrap_or(0);
-            self.record(file, last, last, &at, target);
-        }
-    }
-
-    /// Resolve what an alias names, put it on the membership, and say
-    /// where it was written -- renaming the element has to reach the
-    /// alias too.
-    fn record_alias(&mut self, alias: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
-        let file = self.elem_file.get(&alias).copied().unwrap_or(0);
-        // An alias writes exactly one name -- the parser puts one there
-        // even where the text does not, empty rather than missing.
-        for qname in node
-            .children()
-            .filter(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)
-        {
-            let at = segment_ranges(&qname);
-            let range = qname.text_range();
-            match self.resolve_alias(alias) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    self.try_set(alias, "memberElement", Value::Ref(target));
-                    self.record(file, range, last_name_range(&qname), &at, target);
-                }
-                None => self.record_miss(file, range, &name_segments(&qname), stats),
-            }
-        }
-    }
-
-    /// Say that a name resolved to nothing, and count it.
-    fn record_miss(
-        &mut self,
-        file: usize,
-        range: TextRange,
-        segments: &[String],
-        stats: &mut ResolveStats,
-    ) {
-        stats.unresolved += 1;
-        self.unresolved.push(Unresolved {
-            file,
-            range,
-            name: Self::spell(segments),
-        });
-    }
-
-    fn record(
-        &mut self,
-        file: usize,
-        range: TextRange,
-        name_range: TextRange,
-        at: &[TextRange],
-        target: ElementId,
-    ) {
-        let walked = std::mem::take(&mut self.chain);
-        self.references.push(Reference {
-            file,
-            range,
-            name_range,
-            target,
-        });
-        // the last segment is the reference just recorded
-        let earlier = walked.len().saturating_sub(1);
-        for (&range, &element) in at.iter().zip(walked.iter()).take(earlier) {
-            self.references.push(Reference {
-                file,
-                range,
-                name_range: range,
-                target: element,
-            });
-        }
-    }
-
-    fn resolve_segments(
-        &mut self,
-        elem: ElementId,
-        segments: &[String],
-        exclude: Option<ElementId>,
-    ) -> Option<ElementId> {
-        let (mut current, rest) = if segments[0].is_empty() {
-            (self.root, &segments[1..])
-        } else {
-            let first = self.resolve_first_segment(elem, &segments[0], exclude);
-            (first?, &segments[1..])
-        };
-        // Kept per segment, and only handed over once the whole name has
-        // resolved: a walk that gives up halfway named nothing, and one
-        // started from inside this one (an import resolving its own
-        // path) must not be mistaken for it.
-        let mut walked = vec![current];
-        for seg in rest {
-            current = self.lookup(current, seg, Access::External, true, exclude)?;
-            walked.push(current);
-        }
-        self.chain = walked;
-        Some(current)
-    }
-
-    /// A name read from inside `elem`, which is where a relationship
-    /// written in its declaration sits.
-    fn resolve_inside(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
-        let first = segments.first().filter(|it| !it.is_empty())?;
-        let mut current = self.lookup(elem, first, Access::Internal, true, None)?;
-        for seg in &segments[1..] {
-            current = self.lookup(current, seg, Access::External, true, None)?;
-        }
-        Some(current)
-    }
-
-    fn resolve_first_segment(
-        &mut self,
-        elem: ElementId,
-        name: &str,
-        exclude: Option<ElementId>,
-    ) -> Option<ElementId> {
-        // Connector/association ends resolve against the connector's own
-        // ends, then the types those ends relate, then the enclosing scope;
-        // members inherited through the container's typing come last (so a
-        // connector usage's ends prefer its featuring scope over its type).
-        if let Some(container) = self.end_context(elem) {
-            if let Some(hit) =
-                self.lookup(container, name, Access::Internal, self.redefining, exclude)
-            {
-                return Some(hit);
-            }
-            for end in self.model.owned(container).to_vec() {
-                if !self.is_end_member(end) {
-                    continue;
-                }
-                let mut candidates = self.supertypes_of(end);
-                for nested in self.model.owned(end).to_vec() {
-                    candidates.extend(self.supertypes_of(nested));
-                }
-                for candidate in candidates {
-                    if let Some(hit) =
-                        self.lookup(candidate, name, Access::Inherited, true, exclude)
-                    {
-                        return Some(hit);
-                    }
-                }
-            }
-            let mut scope = self.model.owner(container);
-            while let Some(ns) = scope {
-                if let Some(hit) = self.lookup(ns, name, Access::Internal, true, exclude) {
-                    return Some(hit);
-                }
-                scope = self.model.owner(ns);
-            }
-            return self.lookup(container, name, Access::Internal, true, exclude);
-        }
-        let mut scope = self.model.owner(elem);
-        while let Some(ns) = scope {
-            if let Some(hit) = self.lookup(ns, name, Access::Internal, true, exclude) {
-                return Some(hit);
-            }
-            scope = self.model.owner(ns);
-        }
-        None
-    }
-
-    /// The connector/association owning the nearest enclosing `end` member,
-    /// if `elem` lives inside one.
-    fn end_context(&mut self, elem: ElementId) -> Option<ElementId> {
-        let mut current = elem;
-        loop {
-            if self.is_end_member(current) {
-                return self.model.owner(current);
-            }
-            current = self.model.owner(current)?;
-        }
-    }
-
-    /// Look up `name` as a member of `ns`.
-    fn lookup(
-        &mut self,
-        ns: ElementId,
-        name: &str,
-        access: Access,
-        allow_inherited: bool,
-        exclude: Option<ElementId>,
-    ) -> Option<ElementId> {
-        let mut guard = HashSet::new();
-        self.lookup_guarded(ns, name, access, allow_inherited, true, exclude, &mut guard)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lookup_guarded(
-        &mut self,
-        ns: ElementId,
-        name: &str,
-        access: Access,
-        allow_inherited: bool,
-        allow_imports: bool,
-        exclude: Option<ElementId>,
-        guard: &mut HashSet<ElementId>,
-    ) -> Option<ElementId> {
-        if !guard.insert(ns) {
-            return None;
-        }
-        // A namespace inherits from a namespace that inherits from a
-        // namespace: the walk goes as deep as the model specializes,
-        // and a model can specialize deeper than a stack goes. Past
-        // this the walk stops and the name is reported unresolved,
-        // which is a finding a reader can act on rather than a crash.
-        if self.walking >= MAX_INHERITANCE {
-            return None;
-        }
-        self.walking += 1;
-        let found = self.lookup_walk(
-            ns,
-            name,
-            access,
-            allow_inherited,
-            allow_imports,
-            exclude,
-            guard,
-        );
-        self.walking -= 1;
-        found
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn lookup_walk(
-        &mut self,
-        ns: ElementId,
-        name: &str,
-        access: Access,
-        allow_inherited: bool,
-        allow_imports: bool,
-        exclude: Option<ElementId>,
-        guard: &mut HashSet<ElementId>,
-    ) -> Option<ElementId> {
-        // Direct members and aliases, in the order they are written.
-        let mut candidates = self.members_named(ns, name);
-        if ns == self.root && candidates.len() > 1 {
-            // Two files may declare a root package of the same name --
-            // a model's own `Requirements` and the standard library's.
-            // Which one is meant is settled by where the name was
-            // written rather than by the order the files were loaded:
-            // the library resolves within the library, a model within
-            // its own files. `findings` reports the collision.
-            let side = self.in_library(self.origin);
-            candidates.sort_by_key(|&member| self.in_library(member) != side);
-        }
-        for child in candidates {
-            if Some(child) == exclude || !self.visible(child, access) {
-                continue;
-            }
-            // an import is a member of the namespace but answers to no
-            // name of its own, so the index never files one
-            if self.model.kind(child) == ElementKind::Membership {
-                if let Some(target) = self.resolve_alias(child) {
-                    return Some(target);
-                }
-            } else {
-                return Some(child);
-            }
-        }
-        // inherited members through specializations/typings. Private members
-        // are not inherited; through an external path only public ones are
-        // accessible.
-        if allow_inherited {
-            let sub_access = match access {
-                Access::Internal | Access::Inherited => Access::Inherited,
-                Access::External => Access::External,
-            };
-            // Two supertypes may both answer to the name, and one of
-            // their answers may be a refinement of the other's --
-            // `classifier C specializes A, B` where `B` redefines
-            // `A::f`. The refinement is the member, whichever order the
-            // supertypes happen to be written in, so the answer is the
-            // candidate no other candidate specializes.
-            let mut hits = Vec::new();
-            for sup in self.supertypes_of(ns) {
-                if let Some(hit) =
-                    self.lookup_guarded(sup, name, sub_access, true, false, exclude, guard)
-                {
-                    if !hits.contains(&hit) {
-                        hits.push(hit);
-                    }
-                }
-            }
-            if let Some(&most) = hits
-                .iter()
-                .find(|&&hit| {
-                    !hits
-                        .iter()
-                        .any(|&other| other != hit && reaches(&self.model, other, hit))
-                })
-                .or(hits.first())
-            {
-                return Some(most);
-            }
-        }
-        // imported members: all imports apply inside the namespace itself,
-        // only `public import`s re-export
-        if allow_imports && access != Access::Inherited {
-            for import in self.imports_of(ns) {
-                if access == Access::External && self.visibility(import) != Vis::Public {
-                    continue;
-                }
-                let Some(imp) = self.import_target(import) else {
-                    continue;
-                };
-                // `import all` overrides target-side visibility
-                let target_access = if imp.all {
-                    Access::Internal
-                } else {
-                    Access::External
-                };
-                match imp.scope {
-                    ImportScope::Member => {
-                        // `import A::B;` makes the member visible under
-                        // the name the import wrote, and where that is
-                        // the member's own its short name answers too.
-                        // Where it is an alias's -- `import A::Alias;`
-                        // -- the member's own name was not imported,
-                        // and offering it as well would let a name the
-                        // importing file never wrote resolve.
-                        let wrote = imp.leaf.as_deref();
-                        let by_its_own_name =
-                            wrote.is_some_and(|leaf| self.member_name_matches(imp.target, leaf));
-                        if wrote == Some(name)
-                            || (by_its_own_name && self.member_name_matches(imp.target, name))
-                        {
-                            return Some(imp.target);
-                        }
-                    }
-                    ImportScope::Members => {
-                        let inherited = self.inherits_into_imports(imp.target);
-                        if let Some(hit) = self.lookup_guarded(
-                            imp.target,
-                            name,
-                            target_access,
-                            inherited,
-                            true,
-                            exclude,
-                            guard,
-                        ) {
-                            return Some(hit);
-                        }
-                    }
-                    ImportScope::Recursive => {
-                        let inherited = self.inherits_into_imports(imp.target);
-                        if let Some(hit) = self.lookup_guarded(
-                            imp.target,
-                            name,
-                            target_access,
-                            inherited,
-                            true,
-                            exclude,
-                            guard,
-                        ) {
-                            return Some(hit);
-                        }
-                        for desc in self.nested_visible(imp.target, target_access) {
-                            if Some(desc) != exclude && self.member_name_matches(desc, name) {
-                                return Some(desc);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// The members of `ns` that answer to `name`, in the order a walk
-    /// of the namespace would have met them.
-    fn members_named(&mut self, ns: ElementId, name: &str) -> Vec<ElementId> {
-        if !self.members.contains_key(&ns) {
-            let index = self.member_index(ns);
-            self.members.insert(ns, index);
-        }
-        self.members[&ns].get(name).cloned().unwrap_or_default()
-    }
-
-    /// Every member of `ns`, filed under each name it answers to.
-    ///
-    /// Kept until a file arrives, because what resolution itself adds to
-    /// a namespace is relationships and connector ends, and neither has
-    /// a name to be found under.
-    fn member_index(&self, ns: ElementId) -> HashMap<String, Vec<ElementId>> {
-        // An `end` member's body can nest further -- an association
-        // whose end holds a feature which itself holds the one being
-        // named -- and the whole of it belongs to the connector's
-        // scope, so a subtype naming it inherits the lot.
-        let mut members = self.model.owned(ns).to_vec();
-        for &child in self.model.owned(ns) {
-            if self.is_end_member(child) {
-                members.extend(self.model.descendants(child));
-            }
-        }
-        let mut index: HashMap<String, Vec<ElementId>> = HashMap::new();
-        for member in members {
-            for name in self.member_names(member) {
-                index.entry(name).or_default().push(member);
-            }
-        }
-        index
-    }
-
-    /// Does `import T::*` of this namespace bring in what it inherits?
-    ///
-    /// A package's members are the ones written in it, but a type's
-    /// are its own and every public one it inherits -- KerML puts them
-    /// both in `Type::visibleMemberships` -- so importing a type
-    /// imports what its supertypes give it.
-    fn inherits_into_imports(&self, ns: ElementId) -> bool {
-        self.model.kind(ns).is_a(ElementKind::Type)
-    }
-
-    /// Which side of the library boundary an element is written on:
-    /// whether the root package holding it is a `library package`.
-    fn in_library(&self, elem: ElementId) -> bool {
-        let mut at = elem;
-        while let Some(owner) = self.model.owner(at) {
-            if owner == self.root {
-                return self.model.kind(at).is_a(ElementKind::LibraryPackage);
-            }
-            at = owner;
-        }
-        false
-    }
-
-    /// Everything an `import N::**` reaches below `ns`: the members
-    /// `access` can see, then the members of those, and so on down.
-    ///
-    /// The walk stops at a member it cannot see rather than stepping
-    /// over it. KerML's `visibleMemberships` recurses only into member
-    /// namespaces that are themselves visible, so a `private package`
-    /// hides what is nested in it however public each of those is.
-    fn nested_visible(&mut self, ns: ElementId, access: Access) -> Vec<ElementId> {
-        let mut out = Vec::new();
-        let mut stack: Vec<ElementId> = self.model.owned(ns).iter().rev().copied().collect();
-        while let Some(at) = stack.pop() {
-            if self.model.kind(at).is_a(ElementKind::Relationship) || !self.visible(at, access) {
-                continue;
-            }
-            out.push(at);
-            stack.extend(self.model.owned(at).iter().rev().copied());
-        }
-        out
-    }
-
-    /// Declared visibility of a member (imports default to private, other
-    /// members to public).
-    fn visibility(&mut self, elem: ElementId) -> Vis {
-        if let Some(cached) = self.visibilities.get(&elem) {
-            return *cached;
-        }
-        // what the member was declared with, read from the model rather
-        // than worked out from the syntax a second time
-        let vis = self.model.member_visibility(elem).unwrap_or_else(|| {
-            // nothing written: an import keeps to itself, a member does not
-            if self.model.kind(elem).is_a(ElementKind::Import) {
-                Vis::Private
-            } else {
-                Vis::Public
-            }
-        });
-        self.visibilities.insert(elem, vis);
-        vis
-    }
-
-    fn visible(&mut self, elem: ElementId, access: Access) -> bool {
-        match access {
-            Access::Internal => true,
-            Access::Inherited => self.visibility(elem) != Vis::Private,
-            Access::External => self.visibility(elem) == Vis::Public,
-        }
-    }
-
-    /// Is this an end of the connector or association that owns it?
-    ///
-    /// What an end relates is reached through the types of the other
-    /// ends, so an end is where a name lookup carries on from.
-    fn is_end_member(&self, elem: ElementId) -> bool {
-        self.model.get(elem, "isEnd") == Some(&Value::Bool(true))
-    }
-
-    fn member_name_matches(&self, elem: ElementId, name: &str) -> bool {
-        self.member_names(elem).iter().any(|known| known == name)
-    }
-
-    /// Every name a member answers to: the one it was declared with or,
-    /// where it declared none, the one it borrows from what it
-    /// redefines (`attribute :>> mass = 10.0;` is found as `mass`), and
-    /// its short name.
-    fn member_names(&self, elem: ElementId) -> Vec<String> {
-        let mut names = Vec::new();
-        match self.model.name(elem) {
-            Some(name) => names.push(name.to_string()),
-            None => names.extend(self.effective_name(elem)),
-        }
-        names.extend(
-            self.model
-                .get(elem, "declaredShortName")
-                .and_then(Value::as_str)
-                .map(String::from),
-        );
-        names
-    }
-
-    /// Effective name of an unnamed feature from its first redefinition (or
-    /// reference-subsetting) target's last segment. An unnamed `return`
-    /// parameter is implicitly named `result` (KerML function semantics).
-    fn effective_name(&self, elem: ElementId) -> Option<String> {
-        let Some(node) = self.source.get(&elem) else {
-            // A parameter the standard implies has no syntax to read.
-            // `ReferenceUsage::namingFeature` -- "if this ReferenceUsage
-            // is the payload parameter of a TransitionUsage, then its
-            // naming Feature is the payloadParameter of the
-            // triggerAction of that TransitionUsage" -- and what it
-            // subsets is that parameter, which is how `bind payload =
-            // aState.aTransition.apayload;` names it from the
-            // transition.
-            return self
-                .model
-                .owned(elem)
-                .iter()
-                .find(|&&it| self.model.kind(it) == ElementKind::Subsetting)
-                .and_then(|&it| self.model.subsetted_feature(it))
-                .and_then(|named| self.model.name(named))
-                .map(String::from);
-        };
-        if node.kind() != SyntaxKind::USAGE {
-            return None;
-        }
-        for (part, targets) in relationship_parts(node) {
-            if matches!(part, SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES) {
-                if let Some(target) = targets.first() {
-                    return target.segments.last().cloned();
-                }
-            }
-        }
-        // `perform providePower.generateTorque;` subsets the performed
-        // feature, so the usage answers to `generateTorque` -- the same
-        // target `supertypes_of` already inherits members through.
-        if let Some(segments) = adapter_target_segments(node) {
-            return segments.last().cloned();
-        }
-        let leads_with_return = node
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .find(|t| !t.kind().is_trivia())
-            .is_some_and(|t| t.kind() == SyntaxKind::RETURN_KW);
-        if leads_with_return {
-            return Some("result".to_string());
-        }
-        None
-    }
-
-    /// What an element specializes, as the resolver worked it out.
-    ///
-    /// The text of a model does not say this: a definition's shape is
-    /// what it inherits as much as what it declares, and only a resolved
-    /// workspace knows which is which.
-    pub fn supertypes(&mut self, elem: ElementId) -> Vec<ElementId> {
-        self.supertypes_of(elem)
-    }
-
-    /// Supertypes of an element for inherited-member lookup: resolved
-    /// targets of its typings, specializations, subsettings, redefinitions,
-    /// plus the implicit base type from the semantic libraries.
-    fn supertypes_of(&mut self, elem: ElementId) -> Vec<ElementId> {
-        if let Some(cached) = self.supertypes.get(&elem) {
-            return cached.clone();
-        }
-        if !self.in_progress.insert(elem) {
-            // this element's supertypes are already being computed —
-            // break the specialization cycle
-            return Vec::new();
-        }
-        let cut = self.misses;
-        let refused = self.blocked;
-        let mut supers = Vec::new();
-        if let Some(node) = self.source.get(&elem).cloned() {
-            // an `@name` metadata usage inherits the definition's members
-            if let Some(target) = metadata_target(&node) {
-                if let Some(def) = self.resolve_from(elem, &target.segments) {
-                    push_supertype(&mut supers, elem, def);
-                }
-            }
-            for (part, targets) in relationship_parts(&node) {
-                // `classifier U unions A, B;` says which things a `U`
-                // is one of; it does not say a `U` is an `A`.
-                // `unions`, `intersects` and `differences` narrow an
-                // extent rather than specialize a type, and nothing is
-                // inherited through them: read as specializations, a
-                // connector typed by a union of two associations had
-                // the ends of both.
-                if matches!(
-                    part,
-                    SyntaxKind::UNIONS_KW | SyntaxKind::INTERSECTS_KW | SyntaxKind::DIFFERENCES_KW
-                ) {
-                    continue;
-                }
-                for t in targets {
-                    if let Some(target) = self.resolve_from(elem, &t.segments) {
-                        push_supertype(&mut supers, elem, target);
-                    }
-                }
-            }
-            // `perform vehicleMassTest.collectData { :>> param }` — the
-            // performed/exhibited/included target contributes its members
-            if let Some(segments) = adapter_target_segments(&node) {
-                if let Some(target) = self.resolve_from(elem, &segments) {
-                    push_supertype(&mut supers, elem, target);
-                }
-            }
-            // `#cause 'battery old' { ... }` — a user-defined keyword makes
-            // the element specialize the keyword's SemanticMetadata baseType
-            for segments in prefix_metadata_segments(&node) {
-                if let Some(meta_def) = self.resolve_from(elem, &segments) {
-                    for base in self.semantic_bases(meta_def) {
-                        push_supertype(&mut supers, elem, base);
-                    }
-                }
-            }
-        }
-        // `port def P` defines its conjugate as well, and `~P` has
-        // what `P` has: conjugating a type reverses the direction of
-        // its features, not which features it has. The conjugate is
-        // reified and has no syntax to read, so what it is the
-        // conjugate of is read off the conjugation it owns -- and
-        // without it `apsc.subscr` names nothing where `apsc` is a
-        // port typed `~SubscriptionPort`.
-        let conjugated: Vec<ElementId> = self
-            .model
-            .owned(elem)
-            .iter()
-            .copied()
-            .filter(|&owned| self.model.kind(owned).is_a(ElementKind::Conjugation))
-            .filter_map(|owned| match self.model.get(owned, "originalType") {
-                Some(Value::Ref(target)) => Some(*target),
-                _ => None,
-            })
-            .collect();
-        for target in conjugated {
-            push_supertype(&mut supers, elem, target);
-        }
-        // A relationship the standard implies is written into the model
-        // and nowhere else, so the source cannot answer for it -- an
-        // owned cross feature subsets the cross feature of the end its
-        // owner redefines, and nothing in the notation says so. See
-        // `imply_cross_subsettings`.
-        let implied: Vec<ElementId> = self
-            .model
-            .owned(elem)
-            .iter()
-            .copied()
-            .filter(|&owned| {
-                self.model.kind(owned).is_a(ElementKind::Specialization)
-                    && self.model.get(owned, "isImplied") == Some(&Value::Bool(true))
-            })
-            .filter_map(|owned| {
-                // a specialization of any kind: a cast is typed by what
-                // it casts to, and a typing is a specialization like a
-                // subsetting is
-                [
-                    "redefinedFeature",
-                    "subsettedFeature",
-                    "type",
-                    "superclassifier",
-                    "general",
-                ]
-                .iter()
-                .find_map(|named| self.model.get(owned, named).and_then(Value::as_id))
-            })
-            .collect();
-        for target in implied {
-            push_supertype(&mut supers, elem, target);
-        }
-        // An element the builder reified has no syntax of its own. An
-        // accept node's payload is one: `accept cl : Cmd` declares it on
-        // the statement, and the typing written there is attached to the
-        // payload once it resolves. Read back from the model it is a
-        // supertype like any other, and without it `cl.itms` names
-        // nothing.
-        if supers.is_empty() {
-            let typed: Vec<ElementId> = self
-                .model
-                .owned(elem)
-                .iter()
-                .copied()
-                .filter(|&owned| self.model.kind(owned) == ElementKind::FeatureTyping)
-                .filter_map(|owned| match self.model.get(owned, "type") {
-                    Some(Value::Ref(target)) => Some(*target),
-                    _ => None,
-                })
-                .collect();
-            for target in typed {
-                push_supertype(&mut supers, elem, target);
-            }
-        }
-        // A feature can redeclare an inherited one by naming it the
-        // same: `in p { ... }` inside a specialization stands for the
-        // `p` its supertype declares, and inherits what that one has.
-        // Only where nothing else was written about it -- an explicit
-        // typing or subsetting is the whole story.
-        if supers.is_empty() {
-            if let (Some(name), Some(owner)) = (
-                self.model.name(elem).map(String::from),
-                self.model.owner(elem),
-            ) {
-                for sup in self.supertypes_of(owner) {
-                    for sibling in self.model.owned(sup).to_vec() {
-                        if self.model.name(sibling) == Some(name.as_str()) {
-                            push_supertype(&mut supers, elem, sibling);
-                        }
-                    }
-                }
-            }
-        }
-        // `variant manualTransmission;` names one of the usages the
-        // model already has; `variant part v;` declares a new one. The
-        // difference is whether a kind keyword was written, and the
-        // reference form has to bring what it names along with it.
-        // An enumeration value is a variant of its enumeration, and it
-        // *declares* the value rather than naming one written
-        // elsewhere: `enum def E1 { a; b; c; }` has no `a` anywhere
-        // else to bring along, and looking for one reaches past the
-        // enumeration to whatever else the workspace calls `a`.
-        let enumerated = self.model.owner(elem).is_some_and(|owner| {
-            self.model
-                .kind(owner)
-                .is_a(ElementKind::EnumerationDefinition)
-        });
-        if supers.is_empty() && !enumerated && self.model.member_role(elem) == Some(Role::Variant) {
-            let bare = self.source.get(&elem).is_some_and(|node| {
-                !node
-                    .children_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind().is_def_kind_kw())
-            });
-            if let (true, Some(name)) = (bare, self.model.name(elem).map(String::from)) {
-                if let Some(target) = self.resolve_from(elem, &[name]) {
-                    push_supertype(&mut supers, elem, target);
-                }
-            }
-        }
-        // A usage has at most one `subject` and one `objective`, so the
-        // one it writes stands for the one its type declares -- which is
-        // what `objective { verify x :>> massRequirement; }` redefines a
-        // member of. Nothing says so in the text; the roles do.
-        if let Some(role) = self.model.member_role(elem) {
-            if matches!(role, Role::Subject | Role::Objective) {
-                let owners: Vec<ElementId> = self.model.owner(elem).into_iter().collect();
-                for owner in owners {
-                    for sup in self.supertypes_of(owner) {
-                        for sibling in self.model.owned(sup).to_vec() {
-                            if self.model.member_role(sibling) == Some(role) {
-                                push_supertype(&mut supers, elem, sibling);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        for path in self.implied_bases_of(elem) {
-            // From the root: these are the standard library's own
-            // names, and a model is free to declare a package called
-            // `Requirements` of its own -- `SimpleVehicleModel` does --
-            // which would otherwise stand in front of the library's and
-            // leave the usage specializing nothing.
-            let segments: Vec<String> = std::iter::once(String::new())
-                .chain(path.split("::").map(String::from))
-                .collect();
-            if let Some(target) = self.resolve_from(elem, &segments) {
-                if target != elem
-                    && !supers.contains(&target)
-                    && !reaches(&self.model, target, elem)
-                {
-                    supers.push(target);
-                }
-            }
-        }
-        self.in_progress.remove(&elem);
-        if self.misses != cut {
-            self.incomplete.insert(elem);
-        }
-        // A name this walk asked for was refused by the guard that
-        // stops an import from resolving itself, so a supertype may be
-        // missing from the list for no reason but the order things
-        // were asked in. Kept for the reference under way and worked
-        // out again for the next one.
-        if self.blocked != refused {
-            self.provisional.insert(elem);
-        }
-        self.supertypes.insert(elem, supers.clone());
-        supers
-    }
-
-    /// The base type referenced by a SemanticMetadata definition's
-    /// `:>> baseType = <ref> meta ...` member, if any.
-    fn semantic_bases(&mut self, meta_def: ElementId) -> Vec<ElementId> {
-        if let Some(cached) = self.semantic_bases.get(&meta_def) {
-            return cached.clone();
-        }
-        if !self.in_progress.insert(meta_def) {
-            return Vec::new();
-        }
-        let cut = self.misses;
-        let refused = self.blocked;
-        let mut found = Vec::new();
-        for child in self.model.owned(meta_def).to_vec() {
-            if !self.member_name_matches(child, "baseType") {
-                continue;
-            }
-            // `= if p ? A meta T else B meta T` names two bases, and
-            // which one a given element gets is decided by an expression
-            // this resolver does not evaluate. Both are taken: a name
-            // that either of them declares is one the model can mean.
-            let operands: Vec<SyntaxNode> = self
-                .source
-                .get(&child)
-                .cloned()
-                .into_iter()
-                .flat_map(|node| node.children())
-                .filter(|c| c.kind() == SyntaxKind::VALUE)
-                .flat_map(|value| value.descendants())
-                .filter(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
-                .collect();
-            for operand in operands {
-                let segments = operand_segments(&operand);
-                if segments.is_empty() {
-                    continue;
-                }
-                found.extend(self.resolve_from(child, &segments));
-            }
-            break;
-        }
-        self.in_progress.remove(&meta_def);
-        if self.misses != cut {
-            self.incomplete.insert(meta_def);
-        }
-        if self.blocked != refused {
-            self.provisional.insert(meta_def);
-        }
-        self.semantic_bases.insert(meta_def, found.clone());
-        found
-    }
-
-    /// What one import element resolved to: the member a
-    /// `import A::B;` names, or the namespace whose members a
-    /// `import A::*;` or `import A::**;` exposes.
-    pub fn import_of(&mut self, import: ElementId) -> Option<ElementId> {
-        self.import_target(import).map(|target| target.target)
-    }
-
-    /// The members the imports of `ns` bring into it, resolved and
-    /// visibility-filtered, in import order: what the standard's derived
-    /// `importedMembership` reaches beyond the owned members.
-    ///
-    /// A member import contributes the member itself; a namespace import
-    /// contributes the target's visible members (all of them under
-    /// `import all`); a recursive import adds the visible members of every
-    /// namespace below the target as well.
-    pub fn imported_members(&mut self, ns: ElementId) -> Vec<ElementId> {
-        let mut out = Vec::new();
-        let mut seen: HashSet<ElementId> = self.model.owned(ns).iter().copied().collect();
-        for import in self.imports_of(ns) {
-            let Some(imp) = self.import_target(import) else {
-                continue;
-            };
-            let access = if imp.all {
-                Access::Internal
-            } else {
-                Access::External
-            };
-            match imp.scope {
-                ImportScope::Member => {
-                    if seen.insert(imp.target) {
-                        out.push(imp.target);
-                    }
-                }
-                ImportScope::Members => {
-                    self.visible_members_into(imp.target, access, &mut out, &mut seen);
-                }
-                ImportScope::Recursive => {
-                    self.visible_members_into(imp.target, access, &mut out, &mut seen);
-                    for below in self.nested_visible(imp.target, access) {
-                        if self.model.kind(below).is_a(ElementKind::Namespace) {
-                            self.visible_members_into(below, access, &mut out, &mut seen);
-                        }
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Append the members of `ns` that `access` can see, each once.
-    fn visible_members_into(
-        &mut self,
-        ns: ElementId,
-        access: Access,
-        out: &mut Vec<ElementId>,
-        seen: &mut HashSet<ElementId>,
-    ) {
-        for child in self.model.owned(ns).to_vec() {
-            if self.model.kind(child).is_a(ElementKind::Import)
-                || self.model.kind(child).is_a(ElementKind::Relationship)
-            {
-                continue;
-            }
-            if self.visible(child, access) && seen.insert(child) {
-                out.push(child);
-            }
-        }
-    }
-
-    /// Reify the implied specializations resolution reasons with, as the
-    /// relationship elements the standard stores.
-    ///
-    /// Every definition and usage inherits from a semantic-library base --
-    /// a `part def` from `Parts::Part`, a feature from `Base::things`, an
-    /// element under a user-defined `#keyword` from that keyword's base --
-    /// and resolution has always used those bases without materializing
-    /// them. This pass writes each one the model does not already reach
-    /// explicitly as an owned `Subclassification` (classifiers) or
-    /// `Subsetting` (features) with `isImplied` set, the way the standard
-    /// interchanges them. Elements that gained one are marked
-    /// `isImpliedIncluded`.
-    ///
-    /// Call after [`resolve_all`](Workspace::resolve_all); bases that do
-    /// not resolve (no library loaded) are skipped. Running the pass again
-    /// adds nothing: what the first run wrote is reachable now. Returns
-    /// how many relationships were written.
-    pub fn materialize_implied(&mut self) -> usize {
-        let mut written = 0;
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            written += self.materialize_implied_for(elem);
-        }
-        written += self.imply_return_redefinitions();
-        written
-    }
-
-    /// What one element specializes without saying so.
-    ///
-    /// `private calc getElapsedUtcTime { ... }` names no type, and what
-    /// invokes it is held to invoking something typed by a behaviour --
-    /// so the constraint reads a type the notation never wrote and the
-    /// model has to hold.
-    fn materialize_implied_for(&mut self, elem: ElementId) -> usize {
-        let mut written = 0;
-        {
-            let kind = self.model.kind(elem);
-            // relationships do not specialize; only types inherit
-            if kind.is_a(ElementKind::Relationship) || !kind.is_a(ElementKind::Type) {
-                return 0;
-            }
-            // "The specific Type of a Specialization cannot be a
-            // conjugated Type" -- `validateSpecificationSpecificNot
-            // Conjugated`. `class B conjugates A;` takes what it has
-            // from the conjugation and specializes nothing, so writing
-            // it a base of its own reports the model that wrote it:
-            // `Conjugation.kerml` is one of the corpus's.
-            if self
-                .model
-                .owned(elem)
-                .iter()
-                .any(|&child| self.model.kind(child).is_a(ElementKind::Conjugation))
-            {
-                return 0;
-            }
-            let mut bases = Vec::new();
-            for path in self.implied_bases_of(elem) {
-                let segments: Vec<String> = std::iter::once(String::new())
-                    .chain(path.split("::").map(String::from))
-                    .collect();
-                if let Some(target) = self.resolve_from(elem, &segments) {
-                    if target != elem && !bases.contains(&target) {
-                        bases.push(target);
-                    }
-                }
-            }
-            // `#cause 'battery old' { ... }` implies the keyword's baseType
-            if let Some(node) = self.source.get(&elem).cloned() {
-                for segments in prefix_metadata_segments(&node) {
-                    if let Some(meta_def) = self.resolve_from(elem, &segments) {
-                        for base in self.semantic_bases(meta_def) {
-                            if base != elem && !bases.contains(&base) {
-                                bases.push(base);
-                            }
-                        }
-                    }
-                }
-            }
-            for base in bases {
-                // implied only where nothing explicit -- or already
-                // implied -- reaches the base; what this loop writes
-                // counts for the bases after it. Nor does anything
-                // specialize what specializes it: `Connections::
-                // Connection` is a connection definition like any
-                // other, and the base its metaclass names is
-                // `BinaryConnection`, which specializes it.
-                if reaches(&self.model, elem, base) || reaches(&self.model, base, elem) {
-                    continue;
-                }
-                // a classifier subclassifies its base; a feature is
-                // implicitly typed by a base classifier and subsets a
-                // base feature
-                let (kind, from, to) = if self.model.kind(elem).is_a(ElementKind::Classifier) {
-                    (
-                        ElementKind::Subclassification,
-                        "subclassifier",
-                        "superclassifier",
-                    )
-                } else if self.model.kind(base).is_a(ElementKind::Classifier) {
-                    (ElementKind::FeatureTyping, "typedFeature", "type")
-                } else {
-                    (
-                        ElementKind::Subsetting,
-                        "subsettingFeature",
-                        "subsettedFeature",
-                    )
-                };
-                let relationship = self.model.create(kind);
-                self.model.add_owned(elem, relationship);
-                self.model.set(relationship, from, Value::Ref(elem));
-                self.model.set(relationship, to, Value::Ref(base));
-                self.model.set(relationship, "isImplied", Value::Bool(true));
-                self.model.set(elem, "isImpliedIncluded", Value::Bool(true));
-                written += 1;
-            }
-        }
-        written
-    }
-
-    /// The redefinition a declared result parameter implies.
-    ///
-    /// `abstract function LiteralEvaluation specializes Evaluation {
-    /// return : ScalarValue[1]; }` -- the library writes no `redefines`,
-    /// and the standard says it does not have to: a result parameter of
-    /// a function that specializes another redefines that one's. Without
-    /// the redefinition the specializing function has two result
-    /// parameters, its own and the one it inherits, and "a function has
-    /// exactly one" is true of none of the five hundred in the corpus
-    /// that declare one.
-    fn imply_return_redefinitions(&mut self) -> usize {
-        let mut written = 0;
-        for elem in self.model.ids().collect::<Vec<_>>() {
-            let Some(result) = self.result_parameter(elem) else {
-                continue;
-            };
-            // What it already says it redefines is what it redefines.
-            if self
-                .model
-                .owned(result)
-                .iter()
-                .any(|&it| self.model.kind(it).is_a(ElementKind::Redefinition))
-            {
-                continue;
-            }
-            let Some(inherited) = self.inherited_result(elem, result) else {
-                continue;
-            };
-            let redefinition = self.model.create(ElementKind::Redefinition);
-            self.model.add_owned(result, redefinition);
-            self.model
-                .set(redefinition, "redefiningFeature", Value::Ref(result));
-            self.model
-                .set(redefinition, "redefinedFeature", Value::Ref(inherited));
-            self.model.set(redefinition, "isImplied", Value::Bool(true));
-            // `validateElementIsImpliedIncluded` -- what owns an implied
-            // relationship says that it does
-            self.model
-                .set(result, "isImpliedIncluded", Value::Bool(true));
-            written += 1;
-        }
-        written
-    }
-
-    /// The result parameter the nearest general type declares.
-    ///
-    /// A function may specialize one that declares no result of its own
-    /// and inherits it in turn -- `LiteralBooleanEvaluation` through
-    /// `BooleanEvaluation` -- so the walk carries on up rather than
-    /// stopping where the first general type is silent.
-    fn inherited_result(&mut self, elem: ElementId, mine: ElementId) -> Option<ElementId> {
-        let mut queue = self.supertypes_of(elem);
-        let mut seen = vec![elem];
-        let mut at = 0;
-        while at < queue.len() {
-            let up = queue[at];
-            at += 1;
-            if seen.contains(&up) {
-                continue;
-            }
-            seen.push(up);
-            match self.result_parameter(up) {
-                Some(result) if result != mine => return Some(result),
-                _ => queue.extend(self.supertypes_of(up)),
-            }
-        }
-        None
-    }
-
-    /// The one member a type declares with `return`, where it declares one.
-    fn result_parameter(&self, elem: ElementId) -> Option<ElementId> {
-        self.model
-            .owned(elem)
-            .iter()
-            .copied()
-            .find(|&it| self.model.member_role(it) == Some(Role::Return))
-    }
-
-    fn imports_of(&self, ns: ElementId) -> Vec<ElementId> {
-        self.model
-            .owned(ns)
-            .iter()
-            .copied()
-            .filter(|c| self.model.kind(*c).is_a(ElementKind::Import))
-            .collect()
-    }
-
-    fn import_target(&mut self, import: ElementId) -> Option<ImportTarget> {
-        if let Some(cached) = self.imports.get(&import) {
-            return cached.clone();
-        }
-        if !self.in_progress.insert(import) {
-            if self.resolving.last() != Some(&import) {
-                self.blocked += 1;
-            }
-            return None; // import cycle
-        }
-        self.resolving.push(import);
-        self.lookups += 1;
-        let cut = self.blocked;
-        let result = (|| {
-            let node = self.source.get(&import)?.clone();
-            let qname = node
-                .children()
-                .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-            let mut segments = name_segments(&qname);
-            let scope = match segments.last().map(String::as_str) {
-                Some("**") => {
-                    segments.pop();
-                    if segments.last().map(String::as_str) == Some("*") {
-                        segments.pop();
-                    }
-                    ImportScope::Recursive
-                }
-                Some("*") => {
-                    segments.pop();
-                    ImportScope::Members
-                }
-                _ => ImportScope::Member,
-            };
-            // `expose P::*;` writes no `all` and means it: "An Expose
-            // always imports all Elements, regardless of visibility
-            // (isImportAll = true)". A view shows what it is pointed
-            // at, and what a package keeps to itself is still part of
-            // what it is.
-            let all = node.kind() == SyntaxKind::EXPOSE
-                || node
-                    .children_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind() == SyntaxKind::ALL_KW);
-            let target = self.resolve_from(import, &segments)?;
-            let leaf = if scope == ImportScope::Member {
-                segments.last().cloned()
-            } else {
-                None
-            };
-            Some(ImportTarget {
-                target,
-                scope,
-                leaf,
-                all,
-            })
-        })();
-        self.resolving.pop();
-        self.in_progress.remove(&import);
-        // Resolving one import can ask for another -- `import A::B;` then
-        // `import B::c;` -- and the guard above answers `None` for
-        // whichever is already under way. That `None` says nothing about
-        // the import, so remembering it would leave the import dead for
-        // the rest of the session. Every other failure is the real
-        // answer and must be remembered: a name that is genuinely absent
-        // is asked for once per reference, and re-searching every scope
-        // each time costs seconds on a forty-line file.
-        self.imports.insert(import, result.clone());
-        if result.is_none() && self.blocked != cut {
-            self.provisional.insert(import);
-        }
-        result
-    }
-
-    /// Drop what the guard's refusals shaped, once the reference that
-    /// prompted them has been answered. An element is an import, an
-    /// alias or a type, so at most one of these has anything under it.
-    fn forget_provisional(&mut self) {
-        if self.depth == 0 && self.resolving.is_empty() {
-            for id in std::mem::take(&mut self.provisional) {
-                self.imports.remove(&id);
-                self.aliases.remove(&id);
-                self.supertypes.remove(&id);
-                self.semantic_bases.remove(&id);
-            }
-        }
-    }
-
-    fn resolve_alias(&mut self, alias: ElementId) -> Option<ElementId> {
-        if let Some(cached) = self.aliases.get(&alias) {
-            return *cached;
-        }
-        if !self.in_progress.insert(alias) {
-            if self.resolving.last() != Some(&alias) {
-                self.blocked += 1;
-            }
-            return None;
-        }
-        self.resolving.push(alias);
-        self.lookups += 1;
-        let cut = self.blocked;
-        let result = (|| {
-            let node = self.source.get(&alias)?.clone();
-            let qname = node
-                .children()
-                .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-            let segments = name_segments(&qname);
-            self.resolve_from(alias, &segments)
-        })();
-        self.resolving.pop();
-        self.in_progress.remove(&alias);
-        self.aliases.insert(alias, result);
-        if result.is_none() && self.blocked != cut {
-            self.provisional.insert(alias);
-        }
-        result
-    }
-
-    /// Put an element of `kind` with `props` under `owner`, taking the
-    /// one an earlier pass made rather than making a second.
-    ///
-    /// Resolving the same file again is a thing callers do -- asking
-    /// what is wrong with a model resolves it -- and it does the same
-    /// work over again: the same declarations, the same targets, the
-    /// same relationships. Made afresh each time, a feature would come
-    /// to hold its type twice and everything reading the model would
-    /// see it twice. What this pass has already taken is passed over,
-    /// so `connect a to a`, which really does write one end twice,
-    /// still gets two.
-    fn reified(
-        &mut self,
-        owner: ElementId,
-        kind: ElementKind,
-        props: &[(&str, Value)],
-    ) -> ElementId {
-        let already = self.model.owned(owner).iter().copied().find(|&child| {
-            self.model.kind(child) == kind
-                && !self.claimed.contains(&child)
-                && props
-                    .iter()
-                    .all(|(prop, value)| self.model.get(child, prop) == Some(value))
-        });
-        let made = match already {
-            Some(child) => child,
-            None => {
-                let child = self.model.create(kind);
-                self.model.add_owned(owner, child);
-                for (prop, value) in props {
-                    self.try_set(child, prop, value.clone());
-                }
-                child
-            }
-        };
-        self.claimed.insert(made);
-        made
-    }
-
-    /// Create the relationship element for one resolved target.
-    fn reify(&mut self, elem: ElementId, is_definition: bool, part: SyntaxKind, target: ElementId) {
-        let (kind, source_prop, target_prop) = match part {
-            SyntaxKind::SUBSETTING if is_definition => (
-                ElementKind::Subclassification,
-                "subclassifier",
-                "superclassifier",
-            ),
-            SyntaxKind::SUBSETTING => (
-                ElementKind::Subsetting,
-                "subsettingFeature",
-                "subsettedFeature",
-            ),
-            SyntaxKind::REDEFINITION => (
-                ElementKind::Redefinition,
-                "redefiningFeature",
-                "redefinedFeature",
-            ),
-            SyntaxKind::REFERENCES => (
-                ElementKind::ReferenceSubsetting,
-                "referencingFeature",
-                "referencedFeature",
-            ),
-            // `datatype N :> V, A intersects V, A;` -- a type written as
-            // the union, intersection or difference of others, and
-            // `feature chain chains source.target` a feature written as
-            // the chain through them
-            SyntaxKind::UNIONS_KW => (ElementKind::Unioning, "typeUnioned", "unioningType"),
-            SyntaxKind::INTERSECTS_KW => (
-                ElementKind::Intersecting,
-                "typeIntersected",
-                "intersectingType",
-            ),
-            SyntaxKind::DIFFERENCES_KW => (
-                ElementKind::Differencing,
-                "typeDifferenced",
-                "differencingType",
-            ),
-            SyntaxKind::CHAINS_KW => (
-                ElementKind::FeatureChaining,
-                "featureChained",
-                "chainingFeature",
-            ),
-            // `feature h2 ... disjoint from h1;` -- what a feature is
-            // declared not to overlap. Written this way there is no
-            // statement to hang it off, and until it was read the name
-            // after `from` was looked at by nothing: a typo in one was a
-            // model this toolchain called sound.
-            SyntaxKind::DISJOINT_KW => (ElementKind::Disjoining, "typeDisjoined", "disjoiningType"),
-            // A cross subsetting is a subsetting, so the end that
-            // declares it is its `subsettingFeature` like any other;
-            // what it crosses to is the narrower name. Its
-            // `crossingFeature` is derived from which feature owns it,
-            // so nothing is stored for that.
-            SyntaxKind::CROSSES_KW => (
-                ElementKind::CrossSubsetting,
-                "subsettingFeature",
-                "crossedFeature",
-            ),
-            // `class B conjugates A;` -- the conjugation is owned by the
-            // type that is conjugated, which is what tells it from
-            // `conjugation c conjugate B conjugates A;`, where the
-            // namespace owns it and B is not itself a conjugated type.
-            SyntaxKind::CONJUGATES_KW => {
-                (ElementKind::Conjugation, "conjugatedType", "originalType")
-            }
-            // `member feature inCart : ShoppingCart featured by
-            // Product_Account;` -- what features a feature, written
-            // beside the declaration rather than as a statement of its
-            // own. Without it the feature is featured by whatever owns
-            // it, which is what it says the feature is *not*.
-            SyntaxKind::FEATURED_KW => {
-                (ElementKind::TypeFeaturing, "featureOfType", "featuringType")
-            }
-            // relationship_parts only yields the kinds above plus TYPING
-            _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
-        };
-        self.reified(
-            elem,
-            kind,
-            &[
-                (source_prop, Value::Ref(elem)),
-                (target_prop, Value::Ref(target)),
-            ],
-        );
-    }
-
-    /// What a dotted operand names: the chain, and not the feature at
-    /// the end of it.
-    ///
-    /// The abstract syntax the OMG publishes stands a `Feature` of its
-    /// own for it, carrying each step as a `FeatureChaining` --
-    /// `Occurrences.kermlx` does exactly that for `subset
-    /// laterOccurrence.successors subsets earlierOccurrence.successors;`
-    /// -- because `b.f` is `f` of that `b` and not `f` wherever it is
-    /// found. What features it is read off the chain, which is what
-    /// makes the two ends of such a relationship differ at all.
-    ///
-    /// A single name is no chain: that is the feature the name reached,
-    /// and nothing stands between it and the relationship.
-    fn chained(
-        &mut self,
-        owner: ElementId,
-        segments: &[String],
-        steps: &[usize],
-        target: ElementId,
-    ) -> ElementId {
-        if steps.len() < 2 {
-            return target;
-        }
-        // the whole path already resolved, so every prefix of it does too
-        let chain: Vec<ElementId> = steps
-            .iter()
-            .filter_map(|&depth| self.resolve_from(owner, &segments[..depth]))
-            .collect();
-        self.reified(
-            owner,
-            ElementKind::Feature,
-            &[("chainingFeature", Value::RefList(chain))],
-        )
-    }
-
-    /// The two types a relationship written as its own statement relates.
-    ///
-    /// `feature g :> f;` reifies a `Subsetting` under `g` and gives it
-    /// both ends from the declaration it hangs off. `subset g subsets
-    /// f;` says the same thing with no declaration to hang off: the
-    /// `Subsetting` is what was written, and it reaches the model with
-    /// neither end until the name before the clause and the name inside
-    /// it are read here.
-    /// Resolve one operand a statement wrote and keep what it landed on
-    /// under `property`, or record that it landed on nothing.
-    ///
-    /// `first x;` and `specialization s subtype A :> B;` both write a
-    /// name where the abstract syntax keeps a reference, and what has
-    /// to happen either way is the same: resolve it, record it so a
-    /// rename can find it, and set the property.
-    fn resolve_operand_into(
-        &mut self,
-        id: ElementId,
-        operand: &SyntaxNode,
-        property: &str,
-        stats: &mut ResolveStats,
-        chains: bool,
-    ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        let segments = operand_segments(operand);
-        let range = operand.text_range();
-        match self.resolve_written(id, &segments, false) {
-            Some(target) => {
-                stats.resolved += 1;
-                let name_range = last_name_range(operand);
-                self.record(file, range, name_range, &operand_ranges(operand), target);
-                let reached = match chains {
-                    true => self.chained(id, &segments, &operand_chain_steps(operand), target),
-                    false => target,
-                };
-                self.model.set(id, property, Value::Ref(reached));
-            }
-            None => self.record_miss(file, range, &segments, stats),
-        }
-    }
-
-    fn resolve_relation_ends(
-        &mut self,
-        id: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let Some((keyword, source_prop, target_prop)) = relation_ends(self.model.kind(id)) else {
-            return;
-        };
-        // `subset a.b subsets c.d;` writes a chain on either side, and a
-        // subsetting is the one relationship the abstract syntax stands
-        // a chain feature under. A specialization or a typing relates
-        // types, and the published abstract syntax carries no chain
-        // beneath either.
-        let chains = self.model.kind(id).is_a(ElementKind::Subsetting)
-            || self.model.kind(id) == ElementKind::Disjoining;
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        if let Some(operand) = operand_after(node, keyword) {
-            self.resolve_operand_into(id, &operand, source_prop, stats, chains);
-        }
-        for (part, targets) in relationship_parts(node) {
-            // What stands before `from` is what is disjoined, and what
-            // stands after it is what it is disjoined from. `disjoint A
-            // from B;` writes both bare; `disjoining d disjoint A from
-            // B;` names the relationship first, which leaves `disjoint
-            // A` a part of its own -- so the part is the end this one
-            // relationship reads as its source rather than its target.
-            let prop = match part == SyntaxKind::DISJOINT_KW {
-                true => source_prop,
-                false => target_prop,
-            };
-            for t in targets {
-                match self.resolve_written(id, &t.segments, false) {
-                    Some(target) => {
-                        stats.resolved += 1;
-                        self.record(file, t.range, t.name_range, &t.at, target);
-                        let reached = match chains {
-                            true => self.chained(id, &t.segments, &t.chain, target),
-                            false => target,
-                        };
-                        self.model.set(id, prop, Value::Ref(reached));
-                    }
-                    None => self.record_miss(file, t.range, &t.segments, stats),
-                }
-            }
-        }
-        // and the end after `from` has no part of its own in either
-        // shape: only the keyword standing before it says where it is.
-        if self.model.kind(id) == ElementKind::Disjoining {
-            if let Some(operand) = operand_after(node, SyntaxKind::FROM_KW) {
-                self.resolve_operand_into(id, &operand, target_prop, stats, chains);
-            }
-        }
-    }
-
-    /// Resolve the operands of a `connect`/`bind`/`allocate` statement and
-    /// record what they point at as the connector's `relatedFeature`s, so a
-    /// consumer can read the connected ends off the model.
-    fn resolve_connector_ends(
-        &mut self,
-        id: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        // What the connector relates, in the order it relates them, and
-        // how each of them was reached. The ends are reified once that
-        // order is settled: `connectorEnd->at(1)` is the one it runs
-        // from and `->at(2)` the one it runs to, and the notation lets
-        // the first go unwritten.
-        let mut related = Vec::new();
-        let mut reached: Vec<Reached> = Vec::new();
-        for operand in end_operands(node, self.model.kind(id)) {
-            // an operand with no identifiers resolves to nothing, which the
-            // `None` arm below reports like any other unresolved end
-            let segments = operand_segments(&operand);
-            let range = operand.text_range();
-            let name_range = last_name_range(&operand);
-            match self.resolve_from(id, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
-                    related.push(target);
-                    reached.push(Reached::Written(segments, operand_chain_steps(&operand)));
-                }
-                None => {
-                    self.record_miss(file, range, &segments, stats);
-                }
-            }
-        }
-        // `then action b;` writes no operand at all: what it flows into
-        // is the declaration it wraps. That declaration belongs to the
-        // enclosing scope rather than to the succession, so nothing an
-        // operand search looks at holds it -- and a succession that
-        // relates nothing is a step the model cannot say follows.
-        let mut beside = None;
-        if related.is_empty() && self.model.kind(id).is_a(ElementKind::ConnectorAsUsage) {
-            beside = self.declared_beside(id, node);
-            if let Some(target) = self.wrapped_declaration(id, node).or(beside) {
-                related.push(target);
-                reached.push(Reached::Beside(target));
-            }
-        }
-        // A succession relates two things and the notation lets one of
-        // them go unwritten. `then b;` says where the flow goes and not
-        // where it comes from; `first start;` says the other. Which one
-        // is missing is what the statement wrote, and the answer is its
-        // neighbour in the same body. Without it the model says a step
-        // follows nothing, and `validateConnectorRelatedFeatures` -- "a
-        // concrete Connector must have at least two relatedFeatures" --
-        // is the specification saying so.
-        if related.len() == 1 && self.model.kind(id).is_a(ElementKind::SuccessionAsUsage) {
-            let written = |wanted: &[SyntaxKind]| {
-                node.children_with_tokens()
-                    .filter_map(|it| it.into_token())
-                    .any(|token| wanted.contains(&token.kind()))
-            };
-            // `then message m of T from a to b;` writes the succession's
-            // own end with its leading keyword alone: the `from` and the
-            // `to` say where the flow it declares runs, and are not this
-            // relationship's to read.
-            let ends = match beside {
-                Some(_) => (
-                    &[SyntaxKind::FIRST_KW][..],
-                    &[SyntaxKind::THEN_KW, SyntaxKind::ELSE_KW][..],
-                ),
-                None => (
-                    &[SyntaxKind::FIRST_KW, SyntaxKind::FROM_KW][..],
-                    &[SyntaxKind::THEN_KW, SyntaxKind::TO_KW, SyntaxKind::ELSE_KW][..],
-                ),
-            };
-            // Only the source can be the missing one. `first a;` says
-            // which step comes first and writes no flow at all --
-            // `InitialNodeMember` rather than a succession -- so a
-            // succession that names one end names the one it runs to.
-            if written(ends.1) && !written(ends.0) {
-                if let Some(source) = self.step_before(id) {
-                    related.insert(0, source);
-                    reached.insert(0, Reached::Beside(source));
-                }
-            }
-        }
-        // `accept Go then s2;` is a transition out of the state it is
-        // written in. It says where it goes and not where it comes from,
-        // and where it comes from is the state around it -- without
-        // that, the succession it owns relates one thing, which
-        // `validateConnectorRelatedFeatures` says a concrete connector
-        // cannot do.
-        if related.len() == 1
-            && self.model.kind(id).is_a(ElementKind::TransitionUsage)
-            && !has_leading(node, SyntaxKind::FIRST_KW)
-        {
-            // the state it follows, as a succession takes the step
-            // before it; failing that the one it is written inside
-            let leaves = self.step_before(id).or_else(|| {
-                self.model
-                    .owner(id)
-                    .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Step))
-            });
-            if let Some(state) = leaves {
-                related.insert(0, state);
-                reached.insert(0, Reached::Beside(state));
-            }
-        }
-        // A transition relates its source and target through the
-        // `Succession` it owns rather than by being a connector itself,
-        // so that is where the two ends belong.
-        let holder = self
-            .model
-            .owned(id)
-            .iter()
-            .copied()
-            .find(|&child| self.model.kind(child).is_a(ElementKind::SuccessionAsUsage))
-            .filter(|_| self.model.kind(id).is_a(ElementKind::TransitionUsage))
-            .unwrap_or(id);
-        for step in reached {
-            match step {
-                Reached::Written(segments, steps) => self.reify_end(holder, &segments, &steps),
-                Reached::Beside(target) => self.end_reaching(holder, vec![target]),
-            }
-        }
-        if !related.is_empty() {
-            self.try_set(holder, "relatedFeature", Value::RefList(related));
-        }
-        // How many things it relates says which library type it
-        // specializes, and the ends were not there to be counted when
-        // anything asked earlier.
-        self.supertypes.remove(&id);
-    }
-
-    /// What a succession runs from, where the statement left it
-    /// unwritten: the nearest member of the same body before it that a
-    /// succession can join.
-    ///
-    /// A step or an occurrence, since a sequence model writes `event
-    /// occurrence e; then f;`. Where the nearest one is another
-    /// succession the answer is the end of it facing this one: `then a;
-    /// then b;` runs a to b, not the first succession to b.
-    fn step_before(&self, succession: ElementId) -> Option<ElementId> {
-        let owner = self.model.owner(succession)?;
-        let members = self.model.owned(owner);
-        let at = members.iter().position(|&it| it == succession)?;
-        for &member in members[..at].iter().rev() {
-            let kind = self.model.kind(member);
-            if kind.is_a(ElementKind::ConnectorAsUsage) {
-                // the one before this went somewhere, and that is where
-                // this one starts
-                if let Some(Value::RefList(related)) = self.model.get(member, "relatedFeature") {
-                    return related.last().copied();
-                }
-                continue;
-            }
-            // `first x;` says which step comes first without owning
-            // it, so what it names is what a `then` after it follows
-            if kind.is_a(ElementKind::Membership) {
-                if let Some(Value::Ref(named)) = self.model.get(member, "memberElement") {
-                    return Some(*named);
-                }
-                continue;
-            }
-            if kind.is_a(ElementKind::Step) || kind.is_a(ElementKind::OccurrenceUsage) {
-                return Some(member);
-            }
-        }
-        None
-    }
-
-    /// What a comment says it is about.
-    ///
-    /// `comment about A, B /* ... */` names what it annotates, and the
-    /// standard reifies one `Annotation` per name -- without them the
-    /// comment says something about nothing in particular.
-    fn resolve_annotation(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        let Some(about) = node
-            .children()
-            .find(|child| child.kind() == SyntaxKind::ABOUT)
-        else {
-            return;
-        };
-        for operand in about
-            .children()
-            .filter(|child| child.kind() == SyntaxKind::TYPE_REF)
-        {
-            for qname in operand
-                .children()
-                .filter(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
-            {
-                let segments = name_segments(&qname);
-                let range = operand.text_range();
-                match self.resolve_from(id, &segments) {
-                    Some(target) => {
-                        stats.resolved += 1;
-                        // the earlier steps of `a::b::c` are references too,
-                        // and a rename has to reach every one of them
-                        let at = segment_ranges(&qname);
-                        self.record(file, range, last_name_range(&operand), &at, target);
-                        self.reified(
-                            id,
-                            ElementKind::Annotation,
-                            &[
-                                ("annotatingElement", Value::Ref(id)),
-                                ("annotatedElement", Value::Ref(target)),
-                            ],
-                        );
-                    }
-                    None => {
-                        self.record_miss(file, range, &segments, stats);
-                    }
-                }
-            }
-        }
-    }
-
-    /// What a `#Safety` prefix is typed by.
-    fn resolve_prefix_metadata(
-        &mut self,
-        id: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        for qname in node
-            .children()
-            .filter(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
-        {
-            let segments = name_segments(&qname);
-            if let Some(target) = self.resolve_from(id, &segments) {
-                stats.resolved += 1;
-                let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                let range = qname.text_range();
-                let at = segment_ranges(&qname);
-                self.record(file, range, last_name_range(&qname), &at, target);
-                self.reify(id, false, SyntaxKind::TYPING, target);
-            }
-        }
-    }
-
-    /// The clients and suppliers of a `dependency a, b to c;`.
-    ///
-    /// `Dependency = 'dependency' ( Identification? 'from' )? client +=
-    /// [QualifiedName] ( ',' client )* 'to' supplier += [QualifiedName]
-    /// ( ',' supplier )*` -- so `to` divides the two, and a name before
-    /// `from` is the dependency's own, not a client.
-    fn resolve_dependency(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        let (mut clients, mut suppliers) = (Vec::new(), Vec::new());
-        let mut supplying = false;
-        for part in node.children_with_tokens() {
-            if part.kind() == SyntaxKind::TO_KW {
-                supplying = true;
-                continue;
-            }
-            // `dependency Use from A to B` names itself before `from`;
-            // without `from` there is no such name, and `dependency Z to
-            // A` starts with a client
-            let Some(operand) = part
-                .into_node()
-                .filter(|child| {
-                    matches!(
-                        child.kind(),
-                        SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR | SyntaxKind::QUALIFIED_NAME
-                    )
-                })
-                .filter(|operand| !before_from(node, operand))
-            else {
-                continue;
-            };
-            let segments = operand_segments(&operand);
-            let range = operand.text_range();
-            match self.resolve_from(id, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    let name_range = last_name_range(&operand);
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
-                    if supplying {
-                        &mut suppliers
-                    } else {
-                        &mut clients
-                    }
-                    .push(target);
-                }
-                None => {
-                    self.record_miss(file, range, &segments, stats);
-                }
-            }
-        }
-        if !clients.is_empty() {
-            self.try_set(id, "client", Value::RefList(clients));
-        }
-        if !suppliers.is_empty() {
-            self.try_set(id, "supplier", Value::RefList(suppliers));
-        }
-    }
-
-    /// The declaration a control statement wraps, as the element the
-    /// build hoisted it to.
-    ///
-    /// A wrapper keeps the name in the enclosing scope rather than one
-    /// level in, so the declaration is a sibling of the statement --
-    /// found by the syntax it was built from, which is the only thing
-    /// that still tells the two apart.
-    fn wrapped_declaration(&self, connector: ElementId, node: &SyntaxNode) -> Option<ElementId> {
-        let declared = node
-            .children()
-            .find(|child| matches!(child.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE))?;
-        let owner = self.model.owner(connector)?;
-        self.model
-            .owned(owner)
-            .iter()
-            .copied()
-            .find(|member| self.source.get(member) == Some(&declared))
-    }
-
-    /// What a `send`, an `accept` or an `assign` names.
-    ///
-    /// `send new S() via displayPort to screen;` says which port the
-    /// message leaves by and who receives it, and `assign v := 1;` which
-    /// feature it sets. None of the three was being looked up at all, so
-    /// the names stood for nothing -- and a name that stands for nothing
-    /// was not reported either, which is worse than reporting it.
-    ///
-    /// The standard keeps the first two as arguments of the action, in
-    /// the input parameters the builder laid out in the order the
-    /// specification declares them, and the last as a membership the
-    /// assignment does not own: `deriveAssignmentActionUsageReferent`
-    /// reads back the first member of one, and
-    /// `validateAssignmentActionUsageReferent` says there must be one.
-    fn resolve_action_arguments(
-        &mut self,
-        id: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let kind = self.model.kind(id);
-        let arguments: &[(usize, SyntaxKind)] = match kind {
-            ElementKind::SendActionUsage => &[(1, SyntaxKind::VIA_KW), (2, SyntaxKind::TO_KW)],
-            ElementKind::AcceptActionUsage => &[(1, SyntaxKind::VIA_KW)],
-            ElementKind::AssignmentActionUsage => &[],
-            _ => return,
-        };
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        let mut resolve = |ws: &mut Self, operand: SyntaxNode| {
-            let segments = operand_segments(&operand);
-            let at = operand_ranges(&operand);
-            let name_range = *at.last().expect("an operand spells a name");
-            match ws.resolve_operand(id, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    ws.record(file, operand.text_range(), name_range, &at, target);
-                    Some(target)
-                }
-                None => {
-                    ws.record_miss(file, operand.text_range(), &segments, stats);
-                    None
-                }
-            }
-        };
-        // `assign v := 1;` refers to `v` without owning it, which is the
-        // one membership of an assignment that is not an owning one
-        if kind == ElementKind::AssignmentActionUsage {
-            if let Some(target) = operand_after(node, SyntaxKind::ASSIGN_KW)
-                .and_then(|operand| resolve(self, operand))
-            {
-                self.reified(
-                    id,
-                    ElementKind::Membership,
-                    &[("memberElement", Value::Ref(target))],
-                );
-            }
-            return;
-        }
-        let parameters: Vec<ElementId> = self
-            .model
-            .owned(id)
-            .iter()
-            .copied()
-            .filter(|&child| self.model.kind(child) == ElementKind::ReferenceUsage)
-            .collect();
-        for &(slot, keyword) in arguments {
-            let Some(operand) = operand_after(node, keyword) else {
-                continue;
-            };
-            let Some(target) = resolve(self, operand) else {
-                continue;
-            };
-            // the expression the builder made of it stands for that
-            // feature, the way `= ledPinNumber` does
-            if let Some(reference) = parameters
-                .get(slot)
-                .and_then(|&p| self.reference_expression(p))
-            {
-                self.refers_to(reference, target);
-            }
-        }
-    }
-
-    /// Record what a `FeatureReferenceExpression` stands for.
-    ///
-    /// `= ledPinNumber` refers to a feature without owning it, and the
-    /// standard reads the referent back off the membership that says so
-    /// -- `deriveFeatureReferenceExpressionReferent` takes the first
-    /// owned membership that is not a parameter's. Holding the answer
-    /// and not the membership leaves the expression referring to
-    /// something by a route the specification does not have.
-    fn refers_to(&mut self, reference: ElementId, target: ElementId) {
-        self.try_set(reference, "referent", Value::Ref(target));
-        // The builder stood the membership there ahead of the text the
-        // expression was written as, since the standard takes the first
-        // one. What it relates is only known once the name is looked up.
-        let standing = self
-            .model
-            .owned(reference)
-            .iter()
-            .copied()
-            .find(|&child| self.model.kind(child).is_a(ElementKind::Membership));
-        // `attribute simpleUnitSelf : SimpleUnit = self;` -- `self` names
-        // the feature every occurrence has of itself, and this model
-        // resolves it to the type it is written in because that is the
-        // scope it means. Which feature it stands for is not something
-        // this can say, so the membership is left relating nothing
-        // rather than relating a type where the standard has a feature.
-        if let Some(membership) =
-            standing.filter(|_| self.model.kind(target).is_a(ElementKind::Feature))
-        {
-            self.try_set(membership, "memberElement", Value::Ref(target));
-            self.results_in_what_it_names(reference, target);
-        }
-    }
-
-    /// What a feature reference comes to is what it names.
-    ///
-    /// `checkFeatureReferenceExpressionResultSpecialization` --
-    /// "result.owningType() = self and result.specializes(referent)".
-    /// The builder gives the expression the parameter it hands its value
-    /// back through; what that parameter stands for is only known once
-    /// the name is looked up, and without it `[n]` says nothing about
-    /// what kind of thing `n` counts.
-    fn results_in_what_it_names(&mut self, reference: ElementId, referent: ElementId) {
-        let result = self
-            .model
-            .owned(reference)
-            .iter()
-            .copied()
-            .find(|&child| self.model.member_role(child) == Some(sysml_model::Role::Return))
-            .expect("the builder gives every feature reference the result it comes to");
-        self.reified(
-            result,
-            ElementKind::Subsetting,
-            &[
-                ("subsettingFeature", Value::Ref(result)),
-                ("subsettedFeature", Value::Ref(referent)),
-                ("isImplied", Value::Bool(true)),
-            ],
-        );
-        self.model
-            .set(result, "isImpliedIncluded", Value::Bool(true));
-    }
-
-    /// What the statement a succession was built from declares.
-    ///
-    /// `then merge continue;` writes the node and the succession into it
-    /// as one statement, so the two elements share the one syntax node
-    /// and the declaration is the sibling that node also became. A
-    /// `then message m of T;` writes a flow that way, which is a
-    /// connector itself -- so what is looked for is what the statement
-    /// declared, never the succession beside it.
-    fn declared_beside(&self, succession: ElementId, node: &SyntaxNode) -> Option<ElementId> {
-        let owner = self.model.owner(succession)?;
-        self.model.owned(owner).iter().copied().find(|&member| {
-            member != succession
-                && !self.model.kind(member).is_a(ElementKind::SuccessionAsUsage)
-                && self.source.get(&member) == Some(node)
-        })
-    }
-
-    /// Reify one connector end as a `Feature` whose `chainingFeature` holds
-    /// what each segment of the operand resolved to.
-    ///
-    /// The final target alone cannot say which part an end belongs to --
-    /// `w1.hub` and `w2.hub` resolve to the same port of the same type --
-    /// so the chain is what an interconnection view needs.
-    fn reify_end(&mut self, connector: ElementId, segments: &[String], steps: &[usize]) {
-        let mut chain = Vec::new();
-        // the full path already resolved, so every prefix normally does too
-        for &depth in steps {
-            if let Some(step) = self.resolve_from(connector, &segments[..depth]) {
-                chain.push(step);
-            }
-        }
-        self.end_reaching(connector, chain);
-    }
-
-    /// Stand a `Feature` for one connector end, reaching what it names.
-    ///
-    /// One name is not a chain: `validateFeatureChainingFeatureNotOne`
-    /// gives a feature either no chaining features or more than one, so
-    /// an end naming a single feature refers to it through a subsetting
-    /// instead. Read either way by [`sysml_model::end_reaches`].
-    fn end_reaching(&mut self, connector: ElementId, chain: Vec<ElementId>) {
-        // What a connector relates it relates through ends of its own:
-        // `EndFeatureMembership` is how the standard owns one, and
-        // saying so is also what tells such a feature from a member the
-        // source wrote as a reference.
-        // An end, and only an end: a connector may own a feature the
-        // source wrote -- `connector ps : P ([1] myCart, ...)` counts
-        // what each end relates in front of its name -- and taking one
-        // of those for an end reified here would give it a second
-        // multiplicity and the connector a third thing to relate.
-        // A flow relates its ends through `FlowEnd`s, and the last step
-        // of what one names is not part of the path to it but the thing
-        // that flows: `FlowEnd = ( OwnedReferenceSubsetting '.' )?
-        // FlowFeatureMember`, where the member is the one feature a
-        // flow end owns.
-        let flowing = self.model.kind(connector).is_a(ElementKind::Flow);
-        let end = self.reified(
-            connector,
-            match flowing {
-                true => ElementKind::FlowEnd,
-                false => ElementKind::Feature,
-            },
-            &[("isEnd", Value::Bool(true))],
-        );
-        self.counts_one(end);
-        let chain = match flowing {
-            // an end is reified only for an operand that resolved, so
-            // there is always a last step to be the thing that flows
-            true => {
-                let (&flows, path) = chain.split_last().expect("an end names something");
-                let path = path.to_vec();
-                self.flowing_feature(end, flows);
-                path
-            }
-            false => chain,
-        };
-        match chain.as_slice() {
-            // One name is not a chain: the standard gives a feature
-            // either no chaining features or more than one, so an end
-            // naming a single feature refers to it instead.
-            [only] => {
-                let only = *only;
-                self.reified(
-                    end,
-                    ElementKind::ReferenceSubsetting,
-                    &[
-                        ("referencingFeature", Value::Ref(end)),
-                        ("referencedFeature", Value::Ref(only)),
-                    ],
-                );
-            }
-            _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
-        }
-    }
-
-    /// Stand the last step of what a flow end names up as the feature
-    /// that flows through it.
-    ///
-    /// `flow from tank.fuelOut to engine.fuelIn` runs from `tank`, and
-    /// what flows is `fuelOut`. The standard keeps them apart -- the
-    /// path is what the end refers to, the feature is the one thing it
-    /// owns -- and three constraints about a flow end read that shape.
-    /// [`sysml_model::end_reaches`] puts the two back together.
-    fn flowing_feature(&mut self, end: ElementId, flows: ElementId) {
-        let feature = self.reified(end, ElementKind::Feature, &[]);
-        self.reified(
-            feature,
-            ElementKind::Redefinition,
-            &[
-                ("redefiningFeature", Value::Ref(feature)),
-                ("redefinedFeature", Value::Ref(flows)),
-            ],
-        );
-        // The standard says so in a note beside the grammar: "to ensure
-        // that a FlowFeature passes the
-        // validateRedefinitionDirectionConformance constraint, its
-        // direction must be set to the direction of its
-        // redefinedFeature". Written nowhere, `out fuelOut` flowed into
-        // a feature with no direction at all, and the two are then not
-        // the same way round.
-        if let Some(direction) = self.model.get(flows, "direction").cloned() {
-            self.try_set(feature, "direction", direction);
-        }
-    }
-
-    /// An end is one thing.
-    ///
-    /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd =
-    /// true, then it must have multiplicity 1..1" -- and the notation
-    /// writes it nowhere. What stands before an end in `first [0..1]
-    /// decide then [0..1] merge` is the cross multiplicity, how many
-    /// things at the far end go with one at this one; the end itself is
-    /// a participant, and there is one of it. Without the range, the
-    /// four constraints that count what a control node is joined by
-    /// have nothing to read.
-    fn counts_one(&mut self, end: ElementId) {
-        let range = self.reified(end, ElementKind::MultiplicityRange, &[]);
-        if self.model.get(range, "upperBound").is_none() {
-            let mut one = || {
-                let bound = self.model.create(ElementKind::LiteralInteger);
-                self.model.add_owned(range, bound);
-                self.model.set(bound, "value", Value::Int(1));
-                bound
-            };
-            let (lower, upper) = (one(), one());
-            self.model.set(range, "lowerBound", Value::Ref(lower));
-            self.model.set(range, "upperBound", Value::Ref(upper));
-        }
-        self.try_set(end, "multiplicity", Value::Ref(range));
-    }
-
-    /// A transition's `accept x : T` writes a typing that belongs to the
-    /// trigger it declares, not to the transition itself.
-    fn resolve_trigger_type(
-        &mut self,
-        transition: ElementId,
-        node: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let declared = match self.model.get(transition, "triggerAction") {
-            Some(Value::RefList(triggers)) => triggers.first().copied(),
-            // `accept cl : CallGiveItems do action { ... }` is an accept
-            // node rather than a transition, so what it waits for is its
-            // own payload parameter instead of a trigger. The type is
-            // written after the payload's name and belongs to it either
-            // way: without it `cl.itms` names nothing.
-            _ if self
-                .model
-                .kind(transition)
-                .is_a(ElementKind::AcceptActionUsage) =>
-            {
-                Some(transition)
-            }
-            _ => None,
-        };
-        // `deriveAcceptActionUsagePayloadParameter` -- "the
-        // payloadParameter of an AcceptActionUsage is its first
-        // parameter", and the type written after the payload's name
-        // belongs to it rather than to the node that waits for it.
-        let Some(trigger) = declared.and_then(|it| sysml_model::payload_parameter(&self.model, it))
-        else {
-            return;
-        };
-        let file = self.elem_file.get(&transition).copied().unwrap_or(0);
-        let typings = relationship_parts(node)
-            .into_iter()
-            .filter(|(part, _)| *part == SyntaxKind::TYPING);
-        for (_, targets) in typings {
-            for t in targets {
-                match self.resolve_written(transition, &t.segments, false) {
-                    Some(target) => {
-                        stats.resolved += 1;
-                        self.record(file, t.range, t.name_range, &t.at, target);
-                        self.reified(
-                            trigger,
-                            ElementKind::FeatureTyping,
-                            &[
-                                ("typedFeature", Value::Ref(trigger)),
-                                ("type", Value::Ref(target)),
-                            ],
-                        );
-                    }
-                    None => {
-                        self.record_miss(file, t.range, &t.segments, stats);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Resolve what `satisfy r by p;` relates: the requirement named after
-    /// `satisfy` and the feature named after `by`.
-    ///
-    /// `satisfy requirement r : R by p;` declares the requirement inline
-    /// instead of naming one, so only the `by` side is a reference there --
-    /// the usage is the requirement.
-    fn resolve_satisfaction(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        for (keyword, property) in [
-            (SyntaxKind::SATISFY_KW, "satisfiedRequirement"),
-            (SyntaxKind::BY_KW, "satisfyingFeature"),
-        ] {
-            let Some(operand) = operand_after(node, keyword) else {
-                // `satisfy requirement req1 : Req1 by system;` declares
-                // the satisfaction rather than writing the requirement
-                // after the keyword, and names what is satisfied by
-                // typing it. That typing is reified by now, so the
-                // answer is already in the model. Where the keyword is
-                // there but the typing is not, nothing is satisfied.
-                if property == "satisfiedRequirement" {
-                    if let Some(typed) = self.model.type_of(id) {
-                        self.try_set(id, property, Value::Ref(typed));
-                    }
-                }
-                continue;
-            };
-            let segments = operand_segments(&operand);
-            let range = operand.text_range();
-            match self.resolve_operand(id, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    self.record(file, range, range, &operand_ranges(&operand), target);
-                    self.try_set(id, property, Value::Ref(target));
-                }
-                None => {
-                    self.record_miss(file, range, &segments, stats);
-                }
-            }
-        }
-    }
-
-    /// Resolve an operand that may be the implicit `self` or `that` rather
-    /// than a declared name -- `satisfy requirement r by that;` means the
-    /// type the assertion is written in satisfies it.
-    /// Resolve what `verify r;` names, and hang it on the case.
-    ///
-    /// The requirement a verification case answers for is written inside
-    /// its objective, several levels down from the case itself, and
-    /// `verifiedRequirement` is the case's own property. Recording it
-    /// there is what lets a reader of the model ask what verifies a
-    /// requirement without walking back down through the objective.
-    fn resolve_verification(&mut self, id: ElementId, node: &SyntaxNode, stats: &mut ResolveStats) {
-        let Some(operand) = operand_after(node, SyntaxKind::VERIFY_KW) else {
-            return;
-        };
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
-        let segments = operand_segments(&operand);
-        let range = operand.text_range();
-        let Some(target) = self.resolve_operand(id, &segments) else {
-            self.record_miss(file, range, &segments, stats);
-            return;
-        };
-        stats.resolved += 1;
-        self.record(file, range, range, &operand_ranges(&operand), target);
-
-        let mut scope = self.model.owner(id);
-        while let Some(current) = scope {
-            if matches!(
-                self.model.kind(current),
-                ElementKind::VerificationCaseDefinition | ElementKind::VerificationCaseUsage
-            ) {
-                let mut verified = match self.model.get(current, "verifiedRequirement") {
-                    Some(Value::RefList(already)) => already.clone(),
-                    _ => Vec::new(),
-                };
-                if !verified.contains(&target) {
-                    verified.push(target);
-                }
-                self.try_set(current, "verifiedRequirement", Value::RefList(verified));
-                return;
-            }
-            scope = self.model.owner(current);
-        }
-    }
-
-    /// Resolve every name written in an expression, from `owner`.
-    ///
-    /// An expression is not reified as a tree of elements -- the model
-    /// keeps it as the text the author wrote -- so the names in it are
-    /// read off the syntax and looked up from the element the expression
-    /// belongs to. That is the scope the language gives them: the
-    /// constraint of a requirement sees the requirement's subject, the
-    /// result of a `calc` sees its parameters.
-    fn resolve_expression(
-        &mut self,
-        owner: ElementId,
-        expr: &SyntaxNode,
-        stats: &mut ResolveStats,
-    ) {
-        let file = self.elem_file.get(&owner).copied().unwrap_or(0);
-        let mut chains = Vec::new();
-        name_chains(expr, &mut chains);
-        for chain in chains {
-            let segments = operand_segments(&chain);
-            let at = operand_ranges(&chain);
-            let name_range = *at.last().expect("a name chain spells a name");
-            let range = chain.text_range();
-            match self.resolve_operand(owner, &segments) {
-                Some(target) => {
-                    stats.resolved += 1;
-                    self.record(file, range, name_range, &at, target);
-                    // where the whole expression is that one name, the
-                    // model reified it as a reference to a feature and
-                    // this is the feature
-                    if chain == *expr {
-                        if let Some(reference) = self.reference_expression(owner) {
-                            self.refers_to(reference, target);
-                        }
-                    }
-                }
-                None => {
-                    self.record_miss(file, range, &segments, stats);
-                }
-            }
-        }
-    }
-
-    /// The `FeatureReferenceExpression` an element's value was built
-    /// into, where the model made one -- which it does exactly when the
-    /// whole value is a name.
-    fn reference_expression(&self, owner: ElementId) -> Option<ElementId> {
-        let membership = self
-            .model
-            .owned(owner)
-            .iter()
-            .copied()
-            .find(|&child| self.model.kind(child) == ElementKind::FeatureValue)?;
-        let expression = self.model.get(membership, "value")?.as_id()?;
-        (self.model.kind(expression) == ElementKind::FeatureReferenceExpression)
-            .then_some(expression)
-    }
-
-    fn resolve_operand(&mut self, elem: ElementId, segments: &[String]) -> Option<ElementId> {
-        if !matches!(segments, [only] if only == "self" || only == "that") {
-            return self.resolve_from(elem, segments);
-        }
-        // `self` and `that` are not looked up, so no qualified name was
-        // walked to reach what they name.
-        self.chain.clear();
-        let mut scope = self.model.owner(elem);
-        while let Some(current) = scope {
-            if self.model.kind(current).is_a(ElementKind::Type) {
-                return Some(current);
-            }
-            scope = self.model.owner(current);
-        }
-        None
-    }
-
-    fn try_set(&mut self, id: ElementId, prop: &str, value: Value) {
-        if self.model.kind(id).feature(prop).is_some() {
-            self.model.set(id, prop, value);
-        }
     }
 }
 
-/// The library types every definition/usage of a given metaclass implicitly
-/// specializes (KerML §7 / SysML §9 semantic library mappings, abridged:
-/// only what inherited-member lookup needs). Targets that are not loaded in
-/// the workspace are silently skipped.
+/// A block comment's body as the sentences in it.
+///
+/// The margin comes off each line and the blank lines that a `/* ... */`
+/// begins and ends with come off the whole, so what is left is what was
+/// written. A single-line doc passes through untouched, which is most of
+/// them.
+fn prose(body: &str) -> String {
+    let lines: Vec<&str> = body
+        .lines()
+        .map(|line| line.trim().trim_start_matches('*').trim())
+        .collect();
+    lines.join("\n").trim().to_string()
+}
+
+/// How many letters apart two names are, given up on once they are more
+/// than `most` apart.
+///
+/// A name that resolved to nothing is usually a name that was nearly
+/// written: a letter doubled, one missed, two the other way round.
+/// Substring matching finds none of those -- `Wheeel` neither holds
+/// `Wheel` nor is held by it -- and this is what does, the way rustc's
+/// own suggestions do it.
+///
+/// A row is given up as soon as every way through it costs more than
+/// `most`, which is what keeps a walk over sixty thousand declared names
+/// worth doing: almost all of them are abandoned on their first letter.
+fn within(name: &str, wanted: &str, most: usize) -> Option<usize> {
+    let name: Vec<char> = name.chars().collect();
+    let wanted: Vec<char> = wanted.chars().collect();
+    if name.len().abs_diff(wanted.len()) > most {
+        return None;
+    }
+    // the row two above, which is where a pair the other way round is
+    // reached from
+    let mut earlier: Vec<usize> = Vec::new();
+    let mut before: Vec<usize> = (0..=wanted.len()).collect();
+    for (down, &here) in name.iter().enumerate() {
+        let mut row = Vec::with_capacity(wanted.len() + 1);
+        row.push(down + 1);
+        let mut best = down + 1;
+        for (across, &there) in wanted.iter().enumerate() {
+            let mut next = (before[across + 1] + 1)
+                .min(row[across] + 1)
+                .min(before[across] + usize::from(here != there));
+            // Two letters the other way round is one mistake and not
+            // two, which is the difference between offering `Wheel` for
+            // `Whele` and offering nothing: a swap is what a pair of
+            // fingers does, and it is as common as a letter missed.
+            if down > 0 && across > 0 && here == wanted[across - 1] && name[down - 1] == there {
+                next = next.min(earlier[across - 1] + 1);
+            }
+            best = best.min(next);
+            row.push(next);
+        }
+        if best > most {
+            return None;
+        }
+        earlier = std::mem::replace(&mut before, row);
+    }
+    let apart = before[wanted.len()];
+    (apart <= most).then_some(apart)
+}
+
 /// Does `elem` already specialize `base`, walking the reified
 /// specialization relationships the model holds -- the implied ones a
 /// materialization pass has written included?
-fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
+pub(crate) fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
     let mut queue = vec![elem];
     let mut visited = HashSet::new();
     while let Some(current) = queue.pop() {
@@ -4662,7 +1459,7 @@ fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
                 ElementKind::ReferenceSubsetting => "referencedFeature",
                 _ => continue,
             };
-            if let Some(Value::Ref(target)) = model.get(child, target) {
+            if let Some(Value::Ref(target)) = model.maybe(child, target) {
                 if *target == base {
                     return true;
                 }
@@ -4677,7 +1474,7 @@ fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
 /// semantic-library types the standard maps the metaclass to, and --
 /// for a feature -- the top-level `Base::things` every one of them
 /// subsets.
-fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
+pub(crate) fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
     let mut implied: Vec<&str> = implicit_supertype(kind).to_vec();
     if kind.is_a(ElementKind::Feature) && !implied.contains(&"Base::things") {
         implied.push("Base::things");
@@ -4694,7 +1491,7 @@ fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
 /// `validateAssociationBinarySpecialization` says the same of an
 /// association. Each of these is listed in front of what it narrows, so
 /// dropping it leaves the one an n-ary relationship reaches.
-const BINARY: [&str; 5] = [
+pub(crate) const BINARY: [&str; 5] = [
     "Links::BinaryLink",
     "Objects::BinaryLinkObject",
     "Connections::BinaryConnection",
@@ -4705,9 +1502,13 @@ const BINARY: [&str; 5] = [
 /// What is implied only of something that owns ends of its own, however
 /// many. `checkFlowUsageFlowSpecialization` asks for `notEmpty`, where
 /// the binary rules above ask for exactly two.
-const OWNING_ENDS: [&str; 1] = ["Flows::flows"];
+pub(crate) const OWNING_ENDS: [&str; 1] = ["Flows::flows"];
 
-fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
+/// The library types every definition/usage of a given metaclass
+/// implicitly specializes (KerML §7 / SysML §9 semantic library
+/// mappings, abridged: only what inherited-member lookup needs).
+/// Targets that are not loaded in the workspace are silently skipped.
+pub(crate) fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
     use ElementKind::*;
     match kind {
         PartDefinition | PartUsage => &["Parts::Part"],
@@ -4814,932 +1615,20 @@ fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
     }
 }
 
-/// The `TYPING`/`SUBSETTING`/`REDEFINITION`/`REFERENCES` parts of a
-/// definition or usage node, with the name segments and range of each target.
-#[allow(clippy::type_complexity)]
-struct Target {
-    segments: Vec<String>,
-    /// whole qualified-name range
-    range: TextRange,
-    /// range of the final name segment (what a rename must replace)
-    name_range: TextRange,
-    /// range of each segment, in order -- the earlier ones name
-    /// something too
-    at: Vec<TextRange>,
-    /// the segment depths a chained step ends at, in order
-    chain: Vec<usize>,
-}
-
-/// Whether a member of a connector's parenthesised list is one of the
-/// ends it relates.
-///
-/// `connect ( causeA, causeB )` writes each as a plain name;
-/// `connector ps : P ([1] myCart, [0..1] products)` counts what each
-/// relates in front of it, which the parser reads as a declaration. An
-/// end that says what it refers to with `::>` is the declaration
-/// itself, and is read where the connector's members are.
-fn listed_end(child: &SyntaxNode) -> bool {
-    matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
-        || child.kind() == SyntaxKind::USAGE
-            && !child
-                .children()
-                .any(|it| it.kind() == SyntaxKind::REFERENCES)
-}
-
-/// Whether the name after `connector` is the end it runs from.
-///
-/// KerML writes a connector's declaration only in front of a `from`, so
-/// `connector eng to tanks.main1;` names no connector: it relates `eng`
-/// to `tanks.main1`. The n-ary form writes its ends in parentheses and
-/// may be named without one, so the `to` is what tells them apart.
-fn names_an_end(node: &SyntaxNode) -> bool {
-    let has = |wanted| {
-        node.children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .any(|it| it.kind() == wanted)
-    };
-    has(SyntaxKind::CONNECTOR_KW) && has(SyntaxKind::TO_KW) && !has(SyntaxKind::FROM_KW)
-        || has(SyntaxKind::BINDING_KW)
-            && !has(SyntaxKind::BIND_KW)
-            && !has(SyntaxKind::OF_KW)
-            && node.children().any(|it| it.kind() == SyntaxKind::VALUE)
-}
-
-/// Whether the `=` in a statement writes a connector end rather than a
-/// value.
-fn binds_an_end(node: &SyntaxNode) -> bool {
-    node.children_with_tokens()
-        .filter_map(|it| it.into_token())
-        .any(|it| matches!(it.kind(), SyntaxKind::BINDING_KW | SyntaxKind::BIND_KW))
-}
-
-/// The two ends a `binding` binds.
-///
-/// SysML writes `binding [1] bind [0..*] base.edges = [0..*] be;` and
-/// KerML `binding ab of a = b;` or `binding a = b;`, and in every one of
-/// them a declaration stands only in front of the keyword that
-/// introduces the first end. So without a `bind` or an `of` the
-/// reference after `binding` is that end. The `=` takes the other,
-/// which the parser keeps inside the value clause where nothing follows
-/// it and beside the clause where a multiplicity does.
-fn binding_operands(node: &SyntaxNode) -> Vec<SyntaxNode> {
-    let is_end = |kind| {
-        matches!(
-            kind,
-            SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR | SyntaxKind::NAME | SyntaxKind::TYPE_REF
-        )
-    };
-    let mut out = Vec::new();
-    let mut taking = names_an_end(node);
-    for element in node.children_with_tokens() {
-        match element {
-            sysml_syntax::SyntaxElement::Token(token) => {
-                if matches!(token.kind(), SyntaxKind::BIND_KW | SyntaxKind::OF_KW) {
-                    taking = true;
-                }
-            }
-            sysml_syntax::SyntaxElement::Node(child) => match child.kind() {
-                // `bind [0..*] base.edges` counts the end before naming
-                // it, and the count is not what the keyword introduced
-                SyntaxKind::MULTIPLICITY => {}
-                SyntaxKind::VALUE => {
-                    out.extend(child.children().filter(|it| is_end(it.kind())));
-                    taking = true;
-                }
-                kind if taking && is_end(kind) => {
-                    out.push(child);
-                    taking = false;
-                }
-                _ => {}
-            },
-        }
-    }
-    out
-}
-
-/// Whether a declaration was written as a member of its owner rather
-/// than as a feature of it -- `member feature inCart;`, or the cross
-/// feature standing between an `end` and the declaration after it.
-fn written_as_member(node: &SyntaxNode) -> bool {
-    let tokens = || {
-        node.children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .map(|it| it.kind())
-    };
-    tokens().any(|kind| kind == SyntaxKind::MEMBER_KW)
-        || (tokens().any(|kind| kind == SyntaxKind::END_KW)
-            && node
-                .children()
-                .any(|it| matches!(it.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE)))
-}
-
-/// The segment depths at which a chained step ends.
-///
-/// `cart::product_account.inCart` names two features and not three:
-/// `::` qualifies one name, and `.` steps from one feature to the next.
-/// A name with no dot in it is one step, which is no chain at all --
-/// the standard gives a feature either no chaining features or more
-/// than one.
-fn chain_steps(qname: &SyntaxNode) -> Vec<usize> {
-    let mut steps = Vec::new();
-    let mut at = 0;
-    for token in qname.children_with_tokens().filter_map(|e| e.into_token()) {
-        match token.kind() {
-            SyntaxKind::IDENT
-            | SyntaxKind::UNRESTRICTED_NAME
-            | SyntaxKind::DOLLAR
-            | SyntaxKind::STAR
-            | SyntaxKind::STAR_STAR => at += 1,
-            SyntaxKind::DOT => steps.push(at),
-            _ => {}
-        }
-    }
-    steps.push(at);
-    steps
-}
-
-/// Where the `.`s fall in a reference operand, as depths into what
-/// [`operand_segments`] read off it.
-///
-/// `merge::TakePicture_snapshots.merge` is a chain of two -- the feature
-/// `merge::TakePicture_snapshots`, then `merge` within it -- while
-/// `a::b::c` is one name. Counted a segment at a time the chain gains a
-/// step the notation never wrote, and
-/// `validateFeatureChainingFeatureConformance` then asks whether the
-/// second is featured within a first that is only half a name.
-fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
-    let mut steps = Vec::new();
-    let mut at = 0;
-    for token in operand_name_tokens(operand) {
-        match token.kind() {
-            SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR => at += 1,
-            SyntaxKind::DOT => steps.push(at),
-            _ => {}
-        }
-    }
-    steps.push(at);
-    steps
-}
-
-/// The tokens of a connector operand that spell the name it writes.
-///
-/// An end may carry a multiplicity of its own -- `connector ps :
-/// ProductSelection ([0..*] myCart, ...)` -- and what is written inside
-/// the brackets is a bound and not a step of the name. Counted as one,
-/// the `*` of `[0..*]` made the steps say two where the name had one
-/// segment, and reading a prefix of that name went off the end of it.
-fn operand_name_tokens(operand: &SyntaxNode) -> impl Iterator<Item = sysml_syntax::SyntaxToken> {
-    operand
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|token| {
-            !token
-                .parent_ancestors()
-                .any(|up| up.kind() == SyntaxKind::MULTIPLICITY)
-        })
-}
-
-/// The function a trigger invokes, which its kind alone says.
-///
-/// "Return one of the Functions TriggerWhen, TriggerAt or TriggerAfter,
-/// from the Kernel Semantic Library Triggers package, depending on
-/// whether the kind of this TriggerInvocationExpression is when, at or
-/// after, respectively."
-fn triggered_function(kind: &str) -> Option<&'static str> {
-    match kind {
-        "when" => Some("Triggers::TriggerWhen"),
-        "at" => Some("Triggers::TriggerAt"),
-        "after" => Some("Triggers::TriggerAfter"),
-        _ => None,
-    }
-}
-
-/// The specification's own operator table, both columns of it: which
-/// function in the Kernel Function Library each symbol invokes, and
-/// whether that function can be evaluated at model level.
-///
-/// The library carries the second nowhere.
-/// `Function::isModelLevelEvaluable` is derived, the metamodel states no
-/// derivation for it, and no function in the library writes it -- so
-/// read off the model alone it is false of every function there is, and
-/// every constraint asking whether an expression can be evaluated says
-/// no. Tables 5 and 7 say it plainly, and only three cannot: `all` is a
-/// type extent, and `~` and `[` are undefined -- "no default definition
-/// is provided in the Kernel Functions Library".
-///
-/// The pilot implementation agrees symbol for symbol without stating
-/// the column at all: it asks whether a function's qualified name is in
-/// the registry of the ones it knows how to evaluate, and that registry
-/// holds exactly the thirty-six the tables mark "Yes" and none of the
-/// three they mark "No".
-///
-/// The library writes the names in quotes, and the model holds what they
-/// answer to. `^` and `**` are the one function, written two ways.
-const OPERATORS: [(&str, &str, bool); 39] = [
-    ("all", "BaseFunctions::all", false),
-    ("istype", "BaseFunctions::istype", true),
-    ("hastype", "BaseFunctions::hastype", true),
-    ("@", "BaseFunctions::@", true),
-    ("@@", "BaseFunctions::@@", true),
-    ("as", "BaseFunctions::as", true),
-    ("meta", "BaseFunctions::meta", true),
-    ("==", "BaseFunctions::==", true),
-    ("!=", "BaseFunctions::!=", true),
-    ("===", "BaseFunctions::===", true),
-    ("!==", "BaseFunctions::!==", true),
-    ("[", "BaseFunctions::[", false),
-    ("#", "BaseFunctions::#", true),
-    (",", "BaseFunctions::,", true),
-    (".", "ControlFunctions::.", true),
-    ("if", "ControlFunctions::if", true),
-    ("??", "ControlFunctions::??", true),
-    ("and", "ControlFunctions::and", true),
-    ("or", "ControlFunctions::or", true),
-    ("implies", "ControlFunctions::implies", true),
-    ("collect", "ControlFunctions::collect", true),
-    ("select", "ControlFunctions::select", true),
-    ("xor", "DataFunctions::xor", true),
-    ("not", "DataFunctions::not", true),
-    ("~", "DataFunctions::~", false),
-    ("|", "DataFunctions::|", true),
-    ("&", "DataFunctions::&", true),
-    ("<", "DataFunctions::<", true),
-    (">", "DataFunctions::>", true),
-    ("<=", "DataFunctions::<=", true),
-    (">=", "DataFunctions::>=", true),
-    ("+", "DataFunctions::+", true),
-    ("-", "DataFunctions::-", true),
-    ("*", "DataFunctions::*", true),
-    ("/", "DataFunctions::/", true),
-    ("%", "DataFunctions::%", true),
-    ("^", "DataFunctions::^", true),
-    ("**", "DataFunctions::^", true),
-    ("..", "DataFunctions::..", true),
-];
-
-/// The library function an operator symbol invokes.
-fn invoked_function(operator: &str) -> Option<&'static str> {
-    OPERATORS
-        .iter()
-        .find(|(symbol, ..)| *symbol == operator)
-        .map(|(_, named, _)| *named)
-}
-
-/// Whether the library function of that name can be evaluated at model
-/// level, where the specification's table says so.
-pub(crate) fn evaluable_at_model_level(qualified: &str) -> Option<bool> {
-    OPERATORS
-        .iter()
-        .find(|(_, named, _)| *named == qualified)
-        .map(|(.., evaluable)| *evaluable)
-}
-
-/// The name an invocation writes after an arrow.
-///
-/// `xs->minimize{ ... }` invokes `minimize` and hands it what stands in
-/// front of the arrow, so the name is a token of the expression rather
-/// than a node under it.
-fn invoked_through_arrow(node: &SyntaxNode) -> Option<String> {
-    if node.kind() != SyntaxKind::ARROW_EXPR {
-        return None;
-    }
-    node.children_with_tokens()
-        .filter_map(|it| it.into_token())
-        .find(|token| {
-            matches!(
-                token.kind(),
-                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME
-            )
-        })
-        .map(|token| token.text().to_string())
-}
-
-/// The name an invocation writes in front of its arguments.
-///
-/// `new Foo(1)` writes `new` in front of the name, and what it
-/// constructs is the name rather than the keyword.
-fn invoked_by_name(node: &SyntaxNode) -> Option<SyntaxNode> {
-    let callee = node.children().next()?;
-    match callee.kind() {
-        SyntaxKind::UNARY_EXPR => callee.children().next(),
-        _ => Some(callee),
-    }
-}
-
-/// The range of the last identifier in a reference operand -- what a
-/// rename of the thing it names rewrites, as opposed to the whole `a.b`.
-fn last_name_range(operand: &SyntaxNode) -> TextRange {
-    operand
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| matches!(t.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
-        .last()
-        .map(|t| t.text_range())
-        .unwrap_or_else(|| operand.text_range())
-}
-
-/// Is there a `from` in this statement that `operand` stands before?
-/// That name is the dependency's own, not one of its clients.
-fn before_from(node: &SyntaxNode, operand: &SyntaxNode) -> bool {
-    node.children_with_tokens()
-        .filter(|part| part.kind() == SyntaxKind::FROM_KW)
-        .any(|from| operand.text_range().end() <= from.text_range().start())
-}
-
-/// The metadata definition an `@name`/`#name` annotation names: the
-/// qualified name sitting directly under the annotation node.
-fn metadata_target(node: &SyntaxNode) -> Option<Target> {
-    if node.kind() != SyntaxKind::METADATA_ANNOTATION {
-        return None;
-    }
-    let qname = node
-        .children()
-        .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-    Some(Target {
-        segments: name_segments(&qname),
-        range: qname.text_range(),
-        name_range: last_name_range(&qname),
-        at: segment_ranges(&qname),
-        chain: chain_steps(&qname),
-    })
-}
-
-fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
-    // `connector a ::> a.x to b;` writes no `from`, so `a ::> a.x` is
-    // the end it runs from -- `ConnectorEnd : Feature = ...
-    // ( declaredName = NAME REFERENCES )? OwnedReferenceSubsetting` --
-    // and what the end refers to is not something the connector itself
-    // refers to.
-    let end_refers = names_an_end(node);
-    node.children()
-        .filter_map(|part| match part.kind() {
-            SyntaxKind::REFERENCES if end_refers => None,
-            SyntaxKind::TYPING
-            | SyntaxKind::SUBSETTING
-            | SyntaxKind::REDEFINITION
-            | SyntaxKind::REFERENCES => {
-                // `end cart : ShoppingCart crosses selectedProduct.inCart`
-                // is written in the same shape as `subsets`, and the
-                // standard makes a relationship of its own of it: a
-                // cross subsetting says which feature of the other end
-                // this one is reached across.
-                let crosses = part
-                    .children_with_tokens()
-                    .filter_map(|it| it.into_token())
-                    .map(|it| it.kind())
-                    .find(|it| !it.is_trivia())
-                    == Some(SyntaxKind::CROSSES_KW);
-                match crosses {
-                    true => Some((SyntaxKind::CROSSES_KW, part)),
-                    false => Some((part.kind(), part)),
-                }
-            }
-            // KerML writes `unions T`, `chains a.b`, `disjoint from T`
-            // and their kin as the one shape, told apart by the keyword
-            // leading it. Five of them relate a type or a feature to
-            // another; the rest say something else and are read, where
-            // they are read at all, elsewhere.
-            SyntaxKind::RELATION => {
-                let lead = part
-                    .children_with_tokens()
-                    .filter_map(|it| it.into_token())
-                    .map(|it| it.kind())
-                    .find(|it| !it.is_trivia())?;
-                matches!(
-                    lead,
-                    SyntaxKind::UNIONS_KW
-                        | SyntaxKind::INTERSECTS_KW
-                        | SyntaxKind::DIFFERENCES_KW
-                        | SyntaxKind::CHAINS_KW
-                        | SyntaxKind::CONJUGATES_KW
-                        | SyntaxKind::FEATURED_KW
-                        | SyntaxKind::DISJOINT_KW
-                )
-                .then_some((lead, part))
-            }
-            _ => None,
-        })
-        .map(|(kind, part)| {
-            let targets = part
-                .children()
-                .filter(|c| c.kind() == SyntaxKind::TYPE_REF)
-                .filter_map(|type_ref| {
-                    let qname = type_ref
-                        .children()
-                        .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-                    let mut segments = name_segments(&qname);
-                    // `port p : ~P` types the port by the conjugate of
-                    // `P`, which the port definition owns under that
-                    // name. Naming it is a step further down the same
-                    // path, so the walk that finds `P` finds it.
-                    let conjugated = type_ref
-                        .children_with_tokens()
-                        .filter_map(|it| it.into_token())
-                        .any(|it| it.kind() == SyntaxKind::TILDE);
-                    if conjugated {
-                        let last = segments.last()?.clone();
-                        segments.push(format!("~{last}"));
-                    }
-                    Some(Target {
-                        chain: chain_steps(&qname),
-                        segments,
-                        range: match conjugated {
-                            true => type_ref.text_range(),
-                            false => qname.text_range(),
-                        },
-                        name_range: last_name_range(&qname),
-                        at: segment_ranges(&qname),
-                    })
-                })
-                .collect();
-            (kind, targets)
-        })
-        .collect()
-}
-
-/// For a usage introduced by `perform`/`exhibit`/`event`/`include` with a
-/// direct reference operand (`perform a.b;`), the segments of that operand.
-fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> {
-    adapter_target(node).map(|operand| operand_segments(&operand))
-}
-
-/// The operand a `perform`/`exhibit`/`assert`/... usage adapts, when it
-/// names one rather than declaring it.
-fn adapter_target(node: &SyntaxNode) -> Option<SyntaxNode> {
-    if node.kind() != SyntaxKind::USAGE {
-        return None;
-    }
-    let leads_with_adapter = node
-        .children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .find(|t| !t.kind().is_trivia())
-        .is_some_and(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::PERFORM_KW
-                    | SyntaxKind::EXHIBIT_KW
-                    | SyntaxKind::EVENT_KW
-                    | SyntaxKind::INCLUDE_KW
-                    | SyntaxKind::SATISFY_KW
-                    | SyntaxKind::ASSERT_KW
-                    | SyntaxKind::ASSUME_KW
-                    | SyntaxKind::REQUIRE_KW
-                    | SyntaxKind::VERIFY_KW
-                    | SyntaxKind::FRAME_KW
-                    | SyntaxKind::RENDER_KW
-                    | SyntaxKind::NOT_KW
-            )
-        });
-    if !leads_with_adapter {
-        return None;
-    }
-    let operand = node
-        .children()
-        .find(|c| matches!(c.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))?;
-    (!operand_segments(&operand).is_empty()).then_some(operand)
-}
-
-/// All identifier segments within a reference operand (`a.b`, `A::B.c`).
-/// The names written in an expression, each as far as it can be
-/// followed.
-///
-/// A dotted name is taken whole -- `a.b.c` looks `a` up in scope and
-/// then each step among the members of the last one's type -- so a
-/// `PATH_EXPR` counts only when what it walks from is itself a name.
-/// `f(x).b` gives `f` and `x` and stops: nothing in the model says what
-/// `f` returns, so there is no namespace for `b` to be a member of.
-fn name_chains(node: &SyntaxNode, out: &mut Vec<SyntaxNode>) {
-    match node.kind() {
-        // `list->select { in i; i > 2 }` declares `i` inside a body that
-        // is not built into the model, so the names there have a scope
-        // nothing here can see. Reporting them would be a false alarm.
-        SyntaxKind::BODY_EXPR => return,
-        SyntaxKind::NAME_REF => {
-            out.push(node.clone());
-            return;
-        }
-        SyntaxKind::PATH_EXPR if is_name_chain(node) => {
-            out.push(node.clone());
-            return;
-        }
-        _ => {}
-    }
-    for child in node.children() {
-        // `f(b = 1)` names a parameter of `f`, not anything in scope here
-        if node.kind() == SyntaxKind::ARG_LIST && followed_by_eq(node, &child) {
-            continue;
-        }
-        name_chains(&child, out);
-    }
-}
-
-/// Whether `=` is the next thing after `child` -- the `b` of `f(b = 1)`.
-fn followed_by_eq(parent: &SyntaxNode, child: &SyntaxNode) -> bool {
-    let mut after = false;
-    for element in parent.children_with_tokens() {
-        if element.kind().is_trivia() {
-            continue;
-        }
-        if after {
-            return element.kind() == SyntaxKind::EQ;
-        }
-        after = element.as_node() == Some(child);
-    }
-    false
-}
-
-fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
-    operand_name_tokens(operand)
-        .filter(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR
-            )
-        })
-        // a name written from the root means the same thing in an
-        // expression as anywhere else, and the root is spelled as the
-        // segment a declared name cannot be
-        .map(|t| match t.kind() {
-            SyntaxKind::DOLLAR => String::new(),
-            _ => sysml_syntax::unquote(t.text()),
-        })
-        .collect()
-}
-
 /// Record `target` as a supertype of `elem`, ignoring a self-reference and
 /// a target another clause already contributed.
-fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementId) {
+pub(crate) fn push_supertype(supers: &mut Vec<ElementId>, elem: ElementId, target: ElementId) {
     if target != elem && !supers.contains(&target) {
         supers.push(target);
     }
 }
 
-/// Whether a declaration writing its own name may be answered with
-/// itself.
-///
-/// `part p4 :> p4;` says the feature is the one its type already
-/// declares, and the language reads it that way even where the type
-/// declares no such thing. Nothing else can mean that: `part v : v;`
-/// would make a feature its own type and `part def C :> C;` a
-/// definition its own supertype -- loops that say nothing, and that
-/// every reader of the model would have to know to stop at.
-fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
-    match part {
-        // `end cart : ShoppingCart crosses cart::product_account.inCart`
-        // -- what an end crosses to is reached through the ends of the
-        // association, this one included, so the path may start with
-        // the very name being declared
-        SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW => !is_definition,
-        SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES => true,
-        _ => false,
-    }
-}
-
-/// What a relationship written as a statement of its own says, for the
-/// kinds that write both ends as plain names: the keyword the first of
-/// them follows, and the properties the standard keeps the two on.
-///
-/// `disjoining d disjoint A from B;`, `conjugation c conjugate A ~ B;`
-/// and their kin write their ends in shapes of their own and are not
-/// read here.
-fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static str, &'static str)> {
-    let ends = match kind {
-        ElementKind::Specialization => (SyntaxKind::SUBTYPE_KW, "specific", "general"),
-        ElementKind::Subclassification => (
-            SyntaxKind::SUBCLASSIFIER_KW,
-            "subclassifier",
-            "superclassifier",
-        ),
-        ElementKind::Subsetting => (
-            SyntaxKind::SUBSET_KW,
-            "subsettingFeature",
-            "subsettedFeature",
-        ),
-        ElementKind::Redefinition => (
-            SyntaxKind::REDEFINITION_KW,
-            "redefiningFeature",
-            "redefinedFeature",
-        ),
-        ElementKind::FeatureTyping => (SyntaxKind::TYPING_KW, "typedFeature", "type"),
-        ElementKind::Disjoining => (SyntaxKind::DISJOINT_KW, "typeDisjoined", "disjoiningType"),
-        _ => return None,
-    };
-    Some(ends)
-}
-
-/// The reference written directly after `keyword`, if the next thing is one.
-fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
-    let mut seen = false;
-    for element in node.children_with_tokens() {
-        match element.as_token() {
-            Some(token) if token.kind().is_trivia() => {}
-            Some(token) => {
-                if seen {
-                    return None;
-                }
-                seen = token.kind() == keyword;
-            }
-            None => {
-                let child = element.into_node().expect("checked for a token above");
-                if seen {
-                    return matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
-                        .then_some(child);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Whether a statement writes a keyword of its own, rather than one
-/// nested in something it declares.
-fn has_leading(node: &SyntaxNode, keyword: SyntaxKind) -> bool {
-    node.children_with_tokens()
-        .filter_map(|part| part.into_token())
-        .any(|token| token.kind() == keyword)
-}
-
-/// The operands naming a connector's or transition's ends.
-///
-/// A connector relates every reference it holds. A transition writes an
-/// optional name of its own first (`transition off_to_on first off then
-/// on`), so only the references introduced by `first`/`then` are ends.
-///
-/// One statement can be two elements, and then the answer depends on
-/// which of them is asking -- so it is asked of the element's metaclass
-/// rather than of the syntax alone.
-fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode> {
-    let is_reference = |kind| matches!(kind, SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR);
-    let introduces_end = match node.kind() {
-        // A connector statement relates every reference it holds --
-        // `bind a.p = b.p;` among them, which writes its second end as
-        // a value clause rather than as another operand.
-        SyntaxKind::CONNECTOR_STMT => {
-            return node
-                .children()
-                .flat_map(|child| match child.kind() {
-                    kind if is_reference(kind) => vec![child],
-                    SyntaxKind::VALUE => child
-                        .children()
-                        .filter(|c| is_reference(c.kind()))
-                        .collect(),
-                    // `connect ( causeA, causeB, effectC, effectD )`
-                    // relates the whole list, and each of them may
-                    // count what it relates in front of its name
-                    SyntaxKind::PAREN_EXPR | SyntaxKind::PARAM_LIST => {
-                        child.children().filter(listed_end).collect()
-                    }
-                    _ => Vec::new(),
-                })
-                .collect();
-        }
-        // `then message m of T from a to b;` is the flow and the
-        // succession into it, and each has ends of its own: the flow
-        // runs from `a` to `b`, and the step runs into the flow from
-        // whatever was written above it. Among the elements a control
-        // statement builds, a flow is the only connector that is not
-        // itself a succession.
-        SyntaxKind::CONTROL_STMT
-            if of.is_a(ElementKind::ConnectorAsUsage)
-                && !of.is_a(ElementKind::SuccessionAsUsage) =>
-        {
-            &[SyntaxKind::FROM_KW, SyntaxKind::TO_KW][..]
-        }
-        // `transition t first a ... then b` writes a name of its own
-        // first, and `else A3;` writes where a guard that did not hold
-        // goes: `DefaultTargetSuccession : TransitionUsage = 'else'
-        // TransitionSuccessionMember`.
-        SyntaxKind::CONTROL_STMT => &[
-            SyntaxKind::FIRST_KW,
-            SyntaxKind::THEN_KW,
-            SyntaxKind::ELSE_KW,
-        ][..],
-        // a binding writes its two ends around an `=` rather than after
-        // a keyword each
-        _ if node
-            .children_with_tokens()
-            .filter_map(|it| it.into_token())
-            .any(|it| it.kind() == SyntaxKind::BINDING_KW) =>
-        {
-            return binding_operands(node)
-        }
-        // `connection c : L connect a to b;` and `flow f of T from a to b;`
-        // declare a name and a type before the ends arrive, and
-        // `succession a then b;` writes its ends around the keyword.
-        // `allocation a : L allocate x to y;` introduces its first end
-        // the same way `connect` does.
-        _ => &[
-            SyntaxKind::CONNECT_KW,
-            SyntaxKind::ALLOCATE_KW,
-            SyntaxKind::TO_KW,
-            SyntaxKind::FROM_KW,
-            SyntaxKind::FIRST_KW,
-            SyntaxKind::THEN_KW,
-        ][..],
-    };
-    // `a then b` and `interface a.p to b.p;` say where they start
-    // before the keyword, in the place a statement writing `first`,
-    // `from` or `connect` puts a name and a type instead. Only the very
-    // front of the statement is that place: a clause such as `accept rs
-    // : T` takes it for itself, and what such a clause declares is a
-    // name of its own rather than an end.
-    let says_where_first = |kind| {
-        matches!(
-            kind,
-            SyntaxKind::FIRST_KW | SyntaxKind::FROM_KW | SyntaxKind::CONNECT_KW
-        )
-    };
-    let leading_source = introduces_end
-        .iter()
-        .any(|kind| matches!(kind, SyntaxKind::THEN_KW | SyntaxKind::TO_KW))
-        && !node
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .any(|t| says_where_first(t.kind()));
-    // `connector eng to tanks.main1;` and `connector a ::> a.x to b;`
-    // write no `from`, and `BinaryConnectorDeclaration : Connector = (
-    // FeatureDeclaration? 'from' | isSufficient ?= 'all' 'from'? )?
-    // ConnectorEndMember 'to' ConnectorEndMember` allows a declaration
-    // only in front of one. So what stands between the keyword and the
-    // `to` is the end the connector runs from, named or not, and the
-    // connector has no name of its own. What the end refers to wins
-    // over the name it was given, which is why the last one before the
-    // `to` is the answer.
-    let front_of_a_connector = names_an_end(node)
-        .then(|| {
-            let mut found = None;
-            for element in node.children_with_tokens() {
-                if element
-                    .as_token()
-                    .is_some_and(|token| token.kind() == SyntaxKind::TO_KW)
-                {
-                    break;
-                }
-                if let Some(child) = element.into_node() {
-                    if is_reference(child.kind())
-                        || matches!(child.kind(), SyntaxKind::NAME | SyntaxKind::REFERENCES)
-                    {
-                        found = Some(child);
-                    }
-                }
-            }
-            found
-        })
-        .flatten();
-    let mut front = front_of_a_connector.or_else(|| {
-        node.children_with_tokens()
-            .take_while(|element| {
-                element.as_token().is_none_or(|token| {
-                    token.kind().is_trivia()
-                        || token.kind().is_modifier_kw()
-                        || token.kind().is_visibility_kw()
-                        || token.kind().is_def_kind_kw()
-                        || matches!(
-                            token.kind(),
-                            SyntaxKind::SUCCESSION_KW | SyntaxKind::TRANSITION_KW
-                        )
-                })
-            })
-            .filter_map(|element| element.into_node())
-            .find(|child| is_reference(child.kind()))
-    });
-    let mut out = Vec::new();
-    let mut after_keyword = false;
-    for element in node.children_with_tokens() {
-        match element.as_token() {
-            Some(token) if token.kind().is_trivia() => {}
-            // only a reference written directly after one of those keywords
-            // is an end. Any other keyword in between starts a declaration --
-            // `then accept sig after ...`, `flow of Fuel ...` -- whose name
-            // is not something to resolve.
-            Some(token) => {
-                if leading_source && matches!(token.kind(), SyntaxKind::THEN_KW | SyntaxKind::TO_KW)
-                {
-                    out.extend(front.take());
-                }
-                after_keyword = introduces_end.contains(&token.kind());
-            }
-            None => {
-                let child = element.into_node().expect("element is a node");
-                // `connect [1] myCart to [1] products` and `first [1]
-                // paint then [1] dry` count the end before naming it,
-                // and the count is not what the keyword introduced
-                if child.kind() == SyntaxKind::MULTIPLICITY {
-                    continue;
-                }
-                if after_keyword && is_reference(child.kind()) {
-                    out.push(child);
-                } else if matches!(
-                    child.kind(),
-                    SyntaxKind::PAREN_EXPR | SyntaxKind::PARAM_LIST
-                ) && (after_keyword || of.is_a(ElementKind::Connector))
-                {
-                    // `connect (d1, d2, d3)` relates the whole list, and
-                    // the parentheses hold it rather than the statement.
-                    // KerML writes the list with no keyword at all --
-                    // `NaryConnectorDeclaration : Connector =
-                    // FeatureDeclaration? '(' ConnectorEndMember ','
-                    // ConnectorEndMember ( ',' ConnectorEndMember )*
-                    // ')'` -- so a connector's parentheses hold its ends
-                    // wherever they stand.
-                    out.extend(child.children().filter(listed_end));
-                }
-                after_keyword = false;
-            }
-        }
-    }
-    // `transition first a accept s do action D then b;` -- `do` takes
-    // the rest of the statement with it, so the target parses inside the
-    // action the effect declares. It is the transition's target either
-    // way, and read only from the statement's own children the
-    // transition relates one thing.
-    if out.len() < 2 && of.is_a(ElementKind::TransitionUsage) {
-        let carried = node
-            .children()
-            .filter(|child| child.kind() == SyntaxKind::USAGE)
-            .find_map(|child| operand_after(&child, SyntaxKind::THEN_KW));
-        out.extend(carried);
-    }
-    out
-}
-
-/// Segments of each `#keyword` prefix on a definition/usage node.
-fn prefix_metadata_segments(node: &SyntaxNode) -> Vec<Vec<String>> {
-    node.children()
-        .filter(|c| c.kind() == SyntaxKind::PREFIX_METADATA)
-        .filter_map(|prefix| {
-            let qname = prefix
-                .children()
-                .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
-            let segments = name_segments(&qname);
-            (!segments.is_empty()).then_some(segments)
-        })
-        .collect()
-}
-
-/// Name segments of a `QUALIFIED_NAME` node (quotes stripped; `$` and
-/// wildcards kept as segments).
-/// Where each segment of a qualified name is written, in order.
-fn segment_ranges(qname: &SyntaxNode) -> Vec<TextRange> {
-    qname
-        .children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::IDENT
-                    | SyntaxKind::UNRESTRICTED_NAME
-                    | SyntaxKind::DOLLAR
-                    | SyntaxKind::STAR
-                    | SyntaxKind::STAR_STAR
-            )
-        })
-        .map(|t| t.text_range())
-        .collect()
-}
-
-/// Where each identifier of an operand is written, in order.
-fn operand_ranges(operand: &SyntaxNode) -> Vec<TextRange> {
-    operand
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        // one range per segment, the root marker included: what each
-        // step of the name landed on is paired off against these
-        .filter(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME | SyntaxKind::DOLLAR
-            )
-        })
-        .map(|t| t.text_range())
-        .collect()
-}
-
-fn name_segments(qname: &SyntaxNode) -> Vec<String> {
-    qname
-        .children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| {
-            matches!(
-                t.kind(),
-                SyntaxKind::IDENT
-                    | SyntaxKind::UNRESTRICTED_NAME
-                    | SyntaxKind::DOLLAR
-                    | SyntaxKind::STAR
-                    | SyntaxKind::STAR_STAR
-            )
-        })
-        .map(|t| {
-            // `$` is the root, and `'$'` is a package someone named `$`.
-            // Both unquote to the same three characters, so the root is
-            // spelled as a segment a declared name cannot be: an empty
-            // one. A NAME token always has text.
-            if t.kind() == SyntaxKind::DOLLAR {
-                return String::new();
-            }
-            sysml_syntax::unquote(t.text())
-        })
-        .collect()
+/// Whether a path names a model file: `.sysml` or `.kerml`.
+pub fn is_model_file(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|e| e.to_str()),
+        Some("sysml" | "kerml")
+    )
 }
 
 /// Every `.sysml`/`.kerml` file under `dir`, in a stable order.
@@ -5766,10 +1655,7 @@ fn collect_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
         if is_dir {
             collect_files(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sysml" | "kerml")
-        ) {
+        } else if is_model_file(&path) {
             out.push(path);
         }
     }
@@ -5813,7 +1699,8 @@ mod tests {
             ),
         ]);
         let report = format!("unresolved: {:?}", ws.unresolved());
-        assert_eq!((stats.resolved, stats.unresolved), (4, 0), "{report}");
+        // four relationship targets and the path `import Base::*` writes
+        assert_eq!((stats.resolved, stats.unresolved), (5, 0), "{report}");
         // relationships were reified
         let model = ws.model();
         let count = |k: ElementKind| model.ids().filter(|id| model.kind(*id) == k).count();
@@ -6027,7 +1914,7 @@ mod tests {
             ),
             ("c.sysml", "package C { part w : B::Widget; }"),
         ]);
-        assert_eq!(stats.resolved, 1); // inside : Widget
+        assert_eq!(stats.resolved, 2); // `import A::*` and `inside : Widget`
         assert_eq!(stats.unresolved, 1); // B::Widget
     }
 
@@ -6180,5 +2067,27 @@ mod tests {
             "package K {\n  classifier <B> Base;\n  classifier Derived :> B;\n  feature f : Derived;\n}",
         )]);
         assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+    }
+
+    /// A whole name is answered however many elements share its last
+    /// segment.
+    ///
+    /// The library types the standard implies are found by their whole
+    /// name, and the last segment of one is often what a model calls its
+    /// own features: `x` names two hundred and seventy elements of the
+    /// published corpus by itself. Taking only the first few hundred
+    /// candidates left the answer to how many other things happened to
+    /// be called the same.
+    #[test]
+    fn a_name_shared_by_a_crowd_still_answers() {
+        let crowd = (0..600)
+            .map(|at| format!("  package P{at} {{ classifier x; }}\n"))
+            .collect::<String>();
+        let model = format!("package Crowd {{\n{crowd}}}\npackage Deep {{\n  classifier x;\n}}\n");
+        let (mut ws, _) = resolved_workspace(&[("m.kerml", &model)]);
+        let found = ws.named_globally("Deep::x").expect("`Deep::x` is declared");
+        assert_eq!(ws.qualified_name_of(found), "Deep::x");
+        assert!(ws.named_globally("Crowd::P599::x").is_some());
+        assert!(ws.named_globally("Deep::nothing").is_none());
     }
 }

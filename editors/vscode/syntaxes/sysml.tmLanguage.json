@@ -4,6 +4,9 @@
   "scopeName": "source.sysml",
   "patterns": [
     {
+      "include": "#documentation"
+    },
+    {
       "include": "#comments"
     },
     {
@@ -11,6 +14,12 @@
     },
     {
       "include": "#annotations"
+    },
+    {
+      "include": "#declarations"
+    },
+    {
+      "include": "#types"
     },
     {
       "include": "#numbers"
@@ -22,11 +31,6 @@
   "repository": {
     "comments": {
       "patterns": [
-        {
-          "name": "comment.block.documentation.sysml",
-          "begin": "/\\*\\*",
-          "end": "\\*/"
-        },
         {
           "name": "comment.block.sysml",
           "begin": "/\\*",
@@ -61,7 +65,7 @@
       "patterns": [
         {
           "name": "entity.name.tag.metadata.sysml",
-          "match": "#[A-Za-z_][A-Za-z0-9_]*"
+          "match": "(?:#|@@?)\\s*(?:(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)"
         }
       ]
     },
@@ -98,6 +102,106 @@
         {
           "name": "keyword.operator.sysml",
           "match": ":>>|::>|:>|:=|::|\\.\\.|=|\\[|\\]|~|\\^"
+        }
+      ]
+    },
+    "documentation": {
+      "patterns": [
+        {
+          "name": "string.quoted.other.documentation.sysml",
+          "begin": "\\b(doc)\\b(?:[ \\t]+(?!locale\\b)([A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))?",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.sysml"
+            },
+            "2": {
+              "name": "entity.name.type.sysml"
+            }
+          },
+          "end": "\\*/"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(def|package)\\b\\s+(?:<\\s*([A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')\\s*>\\s*)?([A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.sysml"
+            },
+            "2": {
+              "name": "entity.name.type.sysml"
+            },
+            "3": {
+              "name": "entity.name.type.sysml"
+            }
+          }
+        },
+        {
+          "match": "\\b(import)\\b(?:\\s+(all)\\b)?\\s+((?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.sysml"
+            },
+            "2": {
+              "name": "storage.modifier.sysml"
+            },
+            "3": {
+              "name": "entity.name.namespace.sysml"
+            }
+          }
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "(:>>|::>|:>)\\s*((?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.sysml"
+            },
+            "2": {
+              "name": "entity.name.type.sysml"
+            }
+          }
+        },
+        {
+          "match": "(?<![:>])(:)(?!:)\\s*((?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.sysml"
+            },
+            "2": {
+              "name": "entity.name.type.sysml"
+            }
+          }
+        },
+        {
+          "match": "\\b(subsets|redefines|specializes|conjugates|references|crosses)\\b\\s+((?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.wordlike.sysml"
+            },
+            "2": {
+              "name": "entity.name.type.sysml"
+            }
+          }
+        },
+        {
+          "match": "\\b(typed|defined)\\s+(by)\\b\\s+((?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*')(?:\\s*::\\s*(?:[A-Za-z_][A-Za-z0-9_]*|'[^'\\n]*'))*)",
+          "captures": {
+            "1": {
+              "name": "keyword.operator.wordlike.sysml"
+            },
+            "2": {
+              "name": "keyword.operator.wordlike.sysml"
+            },
+            "3": {
+              "name": "entity.name.type.sysml"
+            }
+          }
         }
       ]
     }

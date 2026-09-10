@@ -8,22 +8,12 @@
 //!
 //! Skipped when the submodule is not checked out.
 
-use std::path::{Path, PathBuf};
-
+use sysml_corpus::vendor;
 use sysml_semantics::Workspace;
-
-fn corpus() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vendor/sysml-v2-release");
-    if root.join("sysml.library").is_dir() {
-        return Some(root);
-    }
-    eprintln!("skipping: {} not checked out", root.display());
-    None
-}
 
 #[test]
 fn no_constraint_fires_on_the_models_the_specification_publishes() {
-    let Some(root) = corpus() else { return };
+    let Some(root) = vendor() else { return };
     let mut ws = Workspace::new();
     let mut files = ws
         .load_dir(&root.join("sysml.library"))

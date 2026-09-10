@@ -1,0 +1,15 @@
+[package]
+name = "sysml-corpus"
+description = "Where the vendored SysML-v2-Release is, for the tests that read it"
+# Test support, never a dependency of anything published. Every crate
+# here takes it as a path dev-dependency, and a path dev-dependency
+# carries no version, so `cargo publish` drops it from the manifest it
+# uploads.
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]

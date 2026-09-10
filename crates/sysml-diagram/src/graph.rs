@@ -10,6 +10,7 @@ use sysml_model::{ElementId, ElementKind, Model, Role, Value};
 pub struct Feature {
     /// SysML keyword of the usage, e.g. `attribute` or `port`.
     pub keyword: String,
+    /// What the feature is called, which is what the compartment shows.
     pub name: String,
     /// Declared type, when the model reifies a `FeatureTyping` for it.
     pub ty: Option<String>,
@@ -107,7 +108,9 @@ fn shape_of(kind: ElementKind) -> Shape {
 /// One box: a named definition and the features it declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
+    /// The element the box stands for.
     pub id: ElementId,
+    /// Its name, as the box is labelled.
     pub name: String,
     /// SysML keyword shown in guillemets, e.g. `part def`.
     pub keyword: String,
@@ -122,6 +125,7 @@ pub struct Node {
     /// The notation rounds the corners of usages and leaves definitions
     /// square.
     pub rounded: bool,
+    /// The figure it is drawn as, where the notation gives it one other than a box.
     pub shape: Shape,
     /// The parts this box is itself assembled from, drawn inside it. Only
     /// an interconnection view fills this, and only one level deep.
@@ -130,6 +134,27 @@ pub struct Node {
     /// A view holding the parts but not what wires them together is
     /// half of `interconnection-view`, and the half that says less.
     pub links: Vec<Edge>,
+}
+
+/// The filled circle a flow starts from, standing for `element`.
+///
+/// A machine's first succession is drawn running out of a dot rather
+/// than out of a box, and so is the one an `entry` on its own declares:
+/// the action there is the start itself, and a box for it would say the
+/// machine does something before it begins. The dot carries no label, so
+/// everything a box would say is left empty.
+fn initial_node(element: ElementId) -> Node {
+    Node {
+        id: element,
+        name: String::new(),
+        keyword: String::new(),
+        compartments: Vec::new(),
+        is_abstract: false,
+        rounded: false,
+        shape: Shape::Initial,
+        children: Vec::new(),
+        links: Vec::new(),
+    }
 }
 
 /// Gather features into the compartments the standard stacks them in,
@@ -171,6 +196,7 @@ pub fn lines(node: &Node) -> impl Iterator<Item = &Feature> {
 pub struct Compartment {
     /// The word the standard writes in the compartment, e.g. `parts`.
     pub label: &'static str,
+    /// The features listed in it, in declaration order.
     pub lines: Vec<Feature>,
 }
 
@@ -200,7 +226,7 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
     let kind = model.kind(member);
     // `end [1] part bead : TireBead;` goes in `ends-compartment`, whatever
     // the feature it declares happens to be
-    if model.get(member, "isEnd") == Some(&Value::Bool(true)) {
+    if model.flag(member, "isEnd") {
         return "ends";
     }
     // A directed port is still a port: the standard keeps it in the ports
@@ -210,7 +236,7 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
     // The standard has two compartments for a directed feature and picks
     // by what owns it: a behaviour's are its `parameters`, and anything
     // else's are `directed features`.
-    if model.get(member, "direction").is_some() && !kind.is_a(ElementKind::PortUsage) {
+    if model.maybe(member, "direction").is_some() && !kind.is_a(ElementKind::PortUsage) {
         let behaviour = model
             .owner(member)
             .is_some_and(|owner| model.kind(owner).is_a(ElementKind::Behavior));
@@ -223,10 +249,12 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
     // `individuals-compartment` and the two portion compartments come
     // from the flags the notation writes, not from a metaclass of their
     // own: `individual`, `snapshot` and `timeslice` are all occurrences.
-    if model.get(member, "isIndividual") == Some(&Value::Bool(true)) {
+    if model.flag(member, "isIndividual") {
         return "individuals";
     }
-    match model.get(member, "portionKind") {
+    // a portion says which it is; everything else is not a portion,
+    // which is an answer and not a missing property
+    match model.maybe(member, "portionKind") {
         Some(Value::EnumLit("snapshot")) => return "snapshots",
         Some(Value::EnumLit("timeslice")) => return "timeslices",
         _ => {}
@@ -373,8 +401,11 @@ pub enum Relation {
 /// [`Diagram::nodes`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Edge {
+    /// Index into [`Diagram::nodes`] of the box the line leaves.
     pub from: usize,
+    /// And of the box it reaches.
     pub to: usize,
+    /// What the line between them means.
     pub relation: Relation,
     /// The `rolename` the standard writes at each end: the feature the
     /// line attaches to (`hub`, `mount`), which is what tells two
@@ -411,7 +442,9 @@ pub struct Group {
 /// The definitions to draw and the specializations between them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagram {
+    /// One box per definition drawn, in document order.
     pub nodes: Vec<Node>,
+    /// The lines between them.
     pub edges: Vec<Edge>,
     /// `package-node` per package that holds any of them, in document
     /// order and nested by `depth`. Empty where nothing is packaged.
@@ -471,7 +504,7 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
             if model.kind(rel) != ElementKind::Subclassification {
                 continue;
             }
-            let Some(Value::Ref(target)) = model.get(rel, "superclassifier") else {
+            let Some(Value::Ref(target)) = model.maybe(rel, "superclassifier") else {
                 continue;
             };
             // `part def C :> C;` parses and resolves, and a line from a
@@ -720,17 +753,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                 if let Some(&to) = index.get(&only.target) {
                     let from = previous.unwrap_or(nodes.len());
                     if previous.is_none() {
-                        nodes.push(Node {
-                            id: child,
-                            name: String::new(),
-                            keyword: String::new(),
-                            compartments: Vec::new(),
-                            is_abstract: false,
-                            rounded: false,
-                            shape: Shape::Initial,
-                            children: Vec::new(),
-                            links: Vec::new(),
-                        });
+                        nodes.push(initial_node(child));
                     }
                     if from != to {
                         edges.push(Edge {
@@ -769,17 +792,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             // on its own declares. That action is the filled circle a
             // machine starts at rather than a box of its own.
             None if model.member_role(first.target) == Some(Role::Entry) => {
-                nodes.push(Node {
-                    id: child,
-                    name: String::new(),
-                    keyword: String::new(),
-                    compartments: Vec::new(),
-                    is_abstract: false,
-                    rounded: false,
-                    shape: Shape::Initial,
-                    children: Vec::new(),
-                    links: Vec::new(),
-                });
+                nodes.push(initial_node(child));
                 nodes.len() - 1
             }
             None => continue,
@@ -1098,12 +1111,12 @@ fn guard_text(model: &Model, transition: ElementId) -> Option<String> {
     let guard = first_reference(model, transition, "guardExpression")?;
     // the representation is the only thing the reified guard owns
     let written = *model.owned(guard).first()?;
-    model.get(written, "body")?.as_str().map(str::to_string)
+    model.maybe(written, "body")?.as_str().map(str::to_string)
 }
 
 /// The first element a `RefList` property points at.
 fn first_reference(model: &Model, element: ElementId, property: &str) -> Option<ElementId> {
-    match model.get(element, property) {
+    match model.maybe(element, property) {
         Some(Value::RefList(items)) => items.first().copied(),
         _ => None,
     }
@@ -1124,7 +1137,7 @@ fn push_satisfaction(
     // `not satisfy r by p;` asserts that it does not. Drawing it the
     // same way as `satisfy r by p;` would put the opposite of the model
     // on the canvas, and there is no line here for "does not".
-    if model.get(assertion, "isNegated") == Some(&Value::Bool(true)) {
+    if model.flag(assertion, "isNegated") {
         return;
     }
     // the assertion has a box of its own only where nothing else on the
@@ -1153,7 +1166,7 @@ fn push_satisfaction(
 
 /// The element a single-valued reference property points at.
 fn single_reference(model: &Model, element: ElementId, property: &str) -> Option<ElementId> {
-    match model.get(element, property) {
+    match model.maybe(element, property) {
         Some(Value::Ref(target)) => Some(*target),
         _ => None,
     }
@@ -1163,7 +1176,7 @@ fn single_reference(model: &Model, element: ElementId, property: &str) -> Option
 /// Req1_Derivation { end #original r1 : Req1; }`. What it is typed by is
 /// the box it reaches; its own name goes on the line.
 fn typed_end(model: &Model, end: ElementId) -> Option<(ElementId, String)> {
-    if !matches!(model.get(end, "isEnd"), Some(Value::Bool(true))) {
+    if !model.flag(end, "isEnd") {
         return None;
     }
     // `end [1] part bead : TireBead` writes the multiplicity between the
@@ -1244,7 +1257,7 @@ fn connector_ends(model: &Model, connector: ElementId) -> Vec<End> {
     model
         .owned(connector)
         .iter()
-        .filter(|&&end| relates || model.get(end, "isEnd") == Some(&Value::Bool(true)))
+        .filter(|&&end| relates || model.flag(end, "isEnd"))
         .filter_map(|&end| {
             let (target, role) = chained_end(model, end).or_else(|| typed_end(model, end))?;
             Some(End {
@@ -1292,7 +1305,7 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
         ("isAbstract", "abstract"),
         ("isDerived", "derived"),
     ] {
-        if model.get(written_on, flag) == Some(&Value::Bool(true)) {
+        if model.maybe(written_on, flag) == Some(&Value::Bool(true)) {
             out.push_str(&format!(" {written}"));
         }
     }
@@ -1306,7 +1319,7 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
     // and a drawing saying so would be putting words in the author's
     // mouth
     let refinements = model.owned(end).iter().filter_map(|&rel| {
-        if model.get(rel, "isImplied") == Some(&Value::Bool(true)) {
+        if model.flag(rel, "isImplied") {
             return None;
         }
         let (written, property) = match model.kind(rel) {
@@ -1314,7 +1327,7 @@ fn end_adornment(model: &Model, end: ElementId) -> String {
             ElementKind::Redefinition => ("redefines", "redefinedFeature"),
             _ => return None,
         };
-        let name = model.name(model.get(rel, property)?.as_id()?)?;
+        let name = model.name(model.maybe(rel, property)?.as_id()?)?;
         Some(format!(" {written} {name}"))
     });
     out.extend(refinements);
@@ -1353,7 +1366,7 @@ fn dependencies_of(
         if model.kind(child) != ElementKind::Dependency {
             continue;
         }
-        let drawn = |property| match model.get(child, property) {
+        let drawn = |property| match model.maybe(child, property) {
             // a dependency whose names went unresolved has neither list
             Some(Value::RefList(ends)) => ends
                 .iter()
@@ -1531,7 +1544,7 @@ fn compositions_of(
         // constraint k : K` -- is left out for the same reason: the
         // «perform» line already says what a diamond would say again.
         if model.kind(child).is_a(ElementKind::ConnectorAsUsage)
-            || model.get(child, "isEnd") == Some(&Value::Bool(true))
+            || model.flag(child, "isEnd")
             || annotation_relation(model, child).is_some()
         {
             continue;
@@ -1540,9 +1553,14 @@ fn compositions_of(
         // differently: `portion-relationship` carries its own marker,
         // because a timeslice is part of an occurrence in a way a wheel
         // is not part of a car.
-        let relation = match model.get(child, "isPortion") {
-            Some(&Value::Bool(true)) => Relation::Portion,
-            _ => match model.get(child, "isComposite") {
+        // Asked of every member, so both of these are properties the
+        // member may not have at all -- a comment is neither a portion
+        // nor composite, and that is an answer rather than a gap.
+        // `isComposite` keeps three cases and not two: written false is
+        // a reference, and unwritten is nothing to draw.
+        let relation = match model.flag(child, "isPortion") {
+            true => Relation::Portion,
+            false => match model.maybe(child, "isComposite") {
                 Some(&Value::Bool(true)) => Relation::Composition,
                 Some(&Value::Bool(false)) => Relation::Reference,
                 _ => continue,
@@ -1598,7 +1616,7 @@ fn specializations_of(
                 ElementKind::Redefinition => (Relation::Redefinition, "redefinedFeature"),
                 _ => continue,
             };
-            let Some(&Value::Ref(target)) = model.get(rel, names) else {
+            let Some(&Value::Ref(target)) = model.maybe(rel, names) else {
                 continue;
             };
             let Some(&to) = index.get(&target) else {
@@ -1670,7 +1688,7 @@ fn itself_and_supertypes(model: &Model, ty: ElementId) -> Vec<ElementId> {
             if model.kind(rel) != ElementKind::Subclassification {
                 continue;
             }
-            if let Some(&Value::Ref(target)) = model.get(rel, "superclassifier") {
+            if let Some(&Value::Ref(target)) = model.maybe(rel, "superclassifier") {
                 queue.push_back(target);
             }
         }
@@ -1965,7 +1983,7 @@ fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Featu
         // carries no name of its own -- what it reaches lends it one --
         // so what tells it from a member written as a reference is that
         // it is an end.
-        if model.name(child).is_none() && model.get(child, "isEnd") == Some(&Value::Bool(true)) {
+        if model.name(child).is_none() && model.flag(child, "isEnd") {
             continue;
         }
         let Some(name) = model.effective_name(child) else {
@@ -2071,7 +2089,7 @@ fn note_of(model: &Model, element: ElementId) -> Option<Node> {
             //
             // A comment with no words in it is nothing to draw: an
             // empty box on a line to something it says nothing about.
-            let mut prose = wrapped(model.get(element, "body")?.as_str()?, PROSE).into_iter();
+            let mut prose = wrapped(model.maybe(element, "body")?.as_str()?, PROSE).into_iter();
             (
                 String::new(),
                 prose.next()?,
@@ -2121,7 +2139,7 @@ fn satisfiers(model: &Model) -> HashMap<ElementId, Vec<(ElementId, String)>> {
             .then_some(())?;
         // `not satisfy r by p;` asserts that it does not, and a list of
         // what satisfies a requirement is no place to say so
-        (model.get(id, "isNegated") != Some(&Value::Bool(true))).then_some(())?;
+        (!model.flag(id, "isNegated")).then_some(())?;
         let requirement = single_reference(model, id, "satisfiedRequirement")?;
         let by = single_reference(model, id, "satisfyingFeature")?;
         Some((requirement, by, model.effective_name(by)?))
@@ -2197,7 +2215,7 @@ fn unlisted_relationships(
             ElementKind::Subsetting => ("subsets", "subsettedFeature"),
             _ => continue,
         };
-        let Some(target) = model.get(rel, property).and_then(Value::as_id) else {
+        let Some(target) = model.maybe(rel, property).and_then(Value::as_id) else {
             continue;
         };
         let Some(name) = model.name(target).filter(|_| !index.contains_key(&target)) else {
@@ -2256,7 +2274,7 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
     // prose itself, which is kept whole here and broken by [`fill_prose`],
     // the only place that knows how wide the box holding it has become
     let named = model
-        .get(member, "body")
+        .maybe(member, "body")
         .and_then(Value::as_str)
         .map(str::to_string)
         .or_else(|| written_text(model, member))?;
@@ -2359,19 +2377,19 @@ fn written_text(model: &Model, element: ElementId) -> Option<String> {
                 .owned(holder)
                 .iter()
                 .filter(|&&rep| model.kind(rep) == ElementKind::TextualRepresentation)
-                .find_map(|&rep| model.get(rep, "body")?.as_str().map(str::to_string))
+                .find_map(|&rep| model.maybe(rep, "body")?.as_str().map(str::to_string))
         })
 }
 
 /// Was the element declared `abstract`? A definition that is has no
 /// instances of its own, which the drawing is expected to say.
 fn is_abstract(model: &Model, element: ElementId) -> bool {
-    model.get(element, "isAbstract") == Some(&Value::Bool(true))
+    model.flag(element, "isAbstract")
 }
 
 /// The direction a feature was declared with, when it declares one.
 fn direction_of(model: &Model, feature: ElementId) -> Option<&'static str> {
-    match model.get(feature, "direction") {
+    match model.maybe(feature, "direction") {
         Some(Value::EnumLit(direction)) => Some(direction),
         _ => None,
     }
@@ -2384,7 +2402,7 @@ fn multiplicity_of(model: &Model, usage: ElementId) -> Option<String> {
         return None;
     };
     let bound = |name: &str| -> Option<String> {
-        let Some(Value::Ref(bound)) = model.get(*range, name) else {
+        let Some(Value::Ref(bound)) = model.maybe(*range, name) else {
             return None;
         };
         Some(expression_text(model, *bound))
@@ -2404,10 +2422,10 @@ fn value_of(model: &Model, usage: ElementId) -> Option<String> {
         .iter()
         .copied()
         .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
-    let Some(Value::Ref(expression)) = model.get(membership, "value") else {
+    let Some(Value::Ref(expression)) = model.maybe(membership, "value") else {
         return None;
     };
-    let wrote = if model.get(membership, "isInitial") == Some(&Value::Bool(true)) {
+    let wrote = if model.flag(membership, "isInitial") {
         ":="
     } else {
         "="
@@ -2421,7 +2439,7 @@ fn expression_text(model: &Model, expression: ElementId) -> String {
     if model.kind(expression) == ElementKind::LiteralInfinity {
         return "*".to_string();
     }
-    match model.get(expression, "value") {
+    match model.maybe(expression, "value") {
         Some(Value::Int(int)) => return int.to_string(),
         Some(Value::Real(real)) => return format!("{real:?}"),
         Some(Value::Bool(bool)) => return bool.to_string(),
@@ -2434,7 +2452,7 @@ fn expression_text(model: &Model, expression: ElementId) -> String {
         .iter()
         .copied()
         .find(|&child| model.kind(child) == ElementKind::TextualRepresentation)
-        .and_then(|written| model.get(written, "body"))
+        .and_then(|written| model.maybe(written, "body"))
         .and_then(|body| body.as_str())
         .unwrap_or("...")
         .to_string()
@@ -2455,10 +2473,12 @@ fn type_name(model: &Model, usage: ElementId) -> Option<String> {
 /// references until a type turns up.
 ///
 /// A declared typing answers straight away. Otherwise `part big :> engine`
-/// is one of whatever `engine` is, and `flow f of carried :> Fuel` reaches
-/// a definition rather than another feature -- subsetting a definition is
-/// how KerML says a feature is one of those, so that definition is the
-/// type and not another feature to follow.
+/// is one of whatever `engine` is, so the walk carries on from `engine`
+/// and ends where a typing turns up or where nothing further is subset.
+/// It never has to decide what to do with something that is not a
+/// feature: what a feature subsets, redefines or references is a feature
+/// too, which is why a model writing `:> Fuel` for an `item def Fuel`
+/// leaves that name unresolved rather than arriving here.
 fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
     let mut visited = HashSet::new();
     let mut queue = std::collections::VecDeque::from([usage]);
@@ -2469,9 +2489,6 @@ fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
         if let Some(target) = model.type_of(current) {
             return Some(target);
         }
-        if current != usage && !model.kind(current).is_a(ElementKind::Feature) {
-            return Some(current);
-        }
         for &rel in model.owned(current) {
             let names = match model.kind(rel) {
                 ElementKind::Subsetting => "subsettedFeature",
@@ -2479,7 +2496,7 @@ fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
                 ElementKind::ReferenceSubsetting => "referencedFeature",
                 _ => continue,
             };
-            if let Some(&Value::Ref(target)) = model.get(rel, names) {
+            if let Some(&Value::Ref(target)) = model.maybe(rel, names) {
                 queue.push_back(target);
             }
         }
@@ -4262,8 +4279,9 @@ mod interconnection_tests {
              part def V {\n\
              \tpart a : A;\n\
              \tpart b : A;\n\
+             \titem fuel : Fuel;\n\
              \tflow one of Fuel[2] from a to b;\n\
-             \tflow two of carried :> Fuel from a to b;\n\
+             \tflow two of carried :> fuel from a to b;\n\
              \tflow three of named : Fuel from a to b;\n\
              \tflow four from a to b;\n\
              }\n",

@@ -8,38 +8,8 @@
 //! cannot tell that from the toolchain having no answer.
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
 
-fn vendor() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vendor/sysml-v2-release")
-        .canonicalize()
-        .ok()?;
-    root.join("sysml.library").is_dir().then_some(root)
-}
-
-fn files(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join("sysml/src"), root.join("kerml/src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
-    found.sort();
-    found
-}
+use sysml_corpus::{models, vendor};
 
 #[test]
 #[ignore = "two minutes of tool calls; run with --ignored"]
@@ -47,7 +17,7 @@ fn every_tool_over_the_corpus() {
     let Some(root) = vendor() else { return };
     let mut server = sysml_cli::mcp::Server::new(Some(&root.join("sysml.library")));
     let mut found: Vec<String> = Vec::new();
-    let all = files(&root);
+    let all = models(&root);
     eprintln!("{} files", all.len());
 
     let mut id = 0;

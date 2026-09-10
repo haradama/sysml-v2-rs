@@ -1,7 +1,9 @@
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use sysml_cli::report::{self, Said, Severity};
 use sysml_syntax::{Diagnostic, Dialect};
 
 mod api;
@@ -15,12 +17,40 @@ fn parse_file(path: &Path, text: &str) -> sysml_syntax::Parse {
     sysml_syntax::parse_dialect(text, dialect)
 }
 
+/// What `--version` prints.
+///
+/// The standard library moves with the specification, so which release a
+/// model was resolved against is part of what produced an answer. A
+/// version that names only this tool cannot be used to reproduce one.
+///
+/// Built once rather than `concat!`ed, because the release is a `const`
+/// in another crate and `concat!` takes literals.
+fn version() -> &'static str {
+    static IT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    IT.get_or_init(|| {
+        format!(
+            "{} (standard library {})",
+            env!("CARGO_PKG_VERSION"),
+            sysml_stdlib::RELEASE
+        )
+    })
+}
+
 #[derive(Parser)]
-#[command(name = "sysml", version, about = "SysML v2 command-line tools")]
+#[command(name = "sysml", version = version(), about = "SysML v2 command-line tools")]
 struct Cli {
     /// How findings are reported: for a person, or as JSON for a program
     #[arg(long, value_enum, default_value_t = Format::Text, global = true)]
     format: Format,
+    /// Resolve against no standard library at all, not even the copy
+    /// built in -- which is what a model looks like to a tool that
+    /// cannot find one
+    #[arg(long, global = true)]
+    no_library: bool,
+    /// Whether findings are coloured: by default when a terminal is
+    /// reading them and `NO_COLOR` is unset
+    #[arg(long, value_enum, default_value_t = Colour::Auto, global = true)]
+    color: Colour,
     #[command(subcommand)]
     command: Command,
 }
@@ -79,8 +109,8 @@ enum Command {
     },
     /// Load files (or directories) into one workspace, resolve all names and
     /// report unresolved references, then check what the specification
-    /// requires of a model whose names all resolve (which needs the standard
-    /// library among the paths)
+    /// requires of a model whose names all resolve (against the standard
+    /// library built in, or one named as a path)
     Check {
         /// Files or directories to load
         #[arg(required = true)]
@@ -88,6 +118,14 @@ enum Command {
         /// Show each unresolved reference (up to N; 0 = all)
         #[arg(long, default_value_t = 20)]
         show: usize,
+    },
+    /// What the model implies for code, in no language in particular:
+    /// every definition's shape, its features with their multiplicities
+    /// and what they bottom out in, and what happens in it
+    Plan {
+        /// Files or directories to plan
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
     },
     /// Load files (or directories), resolve names and render the definitions
     /// and their specializations as an SVG diagram
@@ -123,7 +161,7 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Import a Rust crate's public API as a SysML package with `@rust`
+    /// Import a Rust crate's public API as a SysML package with `@code`
     /// binding metadata, from the JSON `cargo +nightly rustdoc --
     /// -Zunstable-options --output-format json` writes
     ImportRust {
@@ -137,7 +175,7 @@ enum Command {
         output: Option<PathBuf>,
     },
     /// Generate Rust from a resolved model: parts become structs and the
-    /// `perform`ed actions of imported `@rust`-bound APIs become methods
+    /// `perform`ed actions of imported `@code`-bound APIs become methods
     Rustgen {
         /// Files or directories holding the model to generate for
         #[arg(required = true)]
@@ -244,9 +282,51 @@ enum ApiCommand {
     },
 }
 
+/// Whether findings are coloured, asked once.
+///
+/// `check`, `parse`, `export` and `api push` can all print a finding,
+/// and none of them is about display. Threading a bool down through
+/// four call chains to reach the one line that draws it is how a
+/// display decision ends up in the signature of everything, so it is
+/// settled from the command line, the environment and the terminal
+/// before any command runs, and read where it is used.
+static COLOUR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// When to colour what is said to a person.
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Colour {
+    /// When a terminal is reading, and `NO_COLOR` is unset.
+    Auto,
+    Always,
+    Never,
+}
+
+impl Colour {
+    /// Whether to colour, now, on this stream.
+    ///
+    /// Findings go to stderr, so that is the stream to ask: a person
+    /// watching a build has one terminal and a pipe, and colouring by
+    /// what stdout happens to be gives them escape codes in a log.
+    /// `NO_COLOR` is honoured because a reader who has said once that
+    /// they do not want colour should not have to say it per tool.
+    fn wanted(self) -> bool {
+        match self {
+            Colour::Always => true,
+            Colour::Never => false,
+            Colour::Auto => {
+                std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+            }
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let format = cli.format;
+    let bare = cli.no_library;
+    COLOUR
+        .set(cli.color.wanted())
+        .expect("set once, before any command");
     match cli.command {
         Command::Parse { files, tree } => parse_files(&files, tree, format),
         Command::Stats { files } => stats(&files, format),
@@ -254,13 +334,14 @@ fn main() -> ExitCode {
             files,
             library,
             output,
-        } => export(&files, &library, output.as_deref()),
+        } => export(&files, &library, output.as_deref(), bare),
         Command::Fmt {
             files,
             write,
             check,
         } => fmt(&files, write, check, format),
-        Command::Check { paths, show } => check(&paths, show, format),
+        Command::Check { paths, show } => check(&paths, show, format, bare),
+        Command::Plan { paths } => plan(&paths, format, bare),
         Command::Diagram {
             paths,
             library,
@@ -270,15 +351,25 @@ fn main() -> ExitCode {
             elk,
             elk_command,
             output,
-        } => diagram(
-            &paths,
-            &library,
-            internal.as_deref(),
-            browser,
-            sequence.as_deref(),
-            elk.then_some(elk_command.as_str()),
-            output.as_deref(),
-        ),
+        } => {
+            // the flags name one drawing between them; clap allows more
+            // than one to be given and the innermost wins, as it did
+            // when these were three arguments read in this order
+            let view = match (internal.as_deref(), browser, sequence.as_deref()) {
+                (_, true, _) => View::Browser,
+                (_, _, Some(name)) => View::Sequence(name),
+                (Some(name), _, _) => View::Internal(name),
+                _ => View::Definitions,
+            };
+            diagram(
+                &paths,
+                &library,
+                view,
+                elk.then_some(elk_command.as_str()),
+                output.as_deref(),
+                bare,
+            )
+        }
         Command::ImportRust {
             json,
             package,
@@ -288,7 +379,7 @@ fn main() -> ExitCode {
             paths,
             library,
             output,
-        } => rustgen(&paths, &library, output.as_deref()),
+        } => rustgen(&paths, &library, output.as_deref(), bare),
         Command::Mcp { library, project } => {
             // an agent's launcher often has nowhere to put a flag, so the
             // environment says it too -- the language server reads the
@@ -300,8 +391,14 @@ fn main() -> ExitCode {
             // there is nowhere to report a failure to write: the only
             // way this ends badly is the client going away mid-answer,
             // and the exit code is what its launcher reads
+            let mut server = match bare {
+                true => sysml_cli::mcp::Server::without_library(project.as_deref()),
+                false => {
+                    sysml_cli::mcp::Server::with_project(library.as_deref(), project.as_deref())
+                }
+            };
             sysml_cli::mcp::serve(
-                &mut sysml_cli::mcp::Server::with_project(library.as_deref(), project.as_deref()),
+                &mut server,
                 std::io::BufReader::new(std::io::stdin()),
                 std::io::stdout(),
             )
@@ -316,6 +413,7 @@ fn main() -> ExitCode {
             std::time::Duration::from_secs(timeout),
             &what,
             format,
+            bare,
         ),
         Command::Corpus {
             dir,
@@ -369,8 +467,8 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
     }
 }
 
-fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
-    let Some((json, elements)) = exported(files, library) else {
+fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: bool) -> ExitCode {
+    let Some((json, elements)) = exported(files, library, bare) else {
         return ExitCode::FAILURE;
     };
     let rendered = serde_json::to_string_pretty(&json).expect("serializable");
@@ -391,13 +489,18 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exit
 /// and the number of elements it came from. `sysml export` writes this
 /// out and `sysml api push` sends it, so both mean the same thing by a
 /// model.
-fn exported(files: &[PathBuf], library: &[PathBuf]) -> Option<(serde_json::Value, usize)> {
+fn exported(
+    files: &[PathBuf],
+    library: &[PathBuf],
+    bare: bool,
+) -> Option<(serde_json::Value, usize)> {
     // resolve before serializing: the reified typings and specializations
     // are what the interchange derives inheritance and types from
     let mut ws = sysml_semantics::Workspace::new();
     load_paths(&mut ws, files).map_err(|e| e.say()).ok()?;
     let own = ws.file_count();
     load_paths(&mut ws, library).map_err(|e| e.say()).ok()?;
+    ensure_library(&mut ws, bare).map_err(|e| e.say()).ok()?;
     // parse diagnostics still get printed while exporting
     let mut broken = false;
     for file in 0..own {
@@ -574,6 +677,115 @@ fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<
     Ok(())
 }
 
+/// Give `ws` a standard library, unless it already has one.
+///
+/// Almost nothing in a SysML model resolves without it -- `part def
+/// Vehicle;` specializes `Parts::Part`, every feature subsets
+/// `Base::things` -- so a tool that cannot find one reports every name in
+/// every model as unresolved. Until there was a copy built in, finding
+/// one meant cloning a repository whose history is two gigabytes to
+/// obtain one and a third megabytes of model.
+///
+/// What is already loaded wins. `sysml check model/ path/to/sysml.library`
+/// has named the library as a plain path since before there was anything
+/// to fall back on, and a second copy loaded over it would make every
+/// name in it answer twice. That is also why this runs after the paths
+/// are loaded rather than before: what the model brought is the question
+/// being asked.
+///
+/// Then `SYSML_LIBRARY_PATH`, which is how a launcher with nowhere to put
+/// a flag says it, and which the language server and the MCP server have
+/// always read. Then the copy built in.
+fn ensure_library(
+    ws: &mut sysml_semantics::Workspace,
+    without: bool,
+) -> Result<Answered, Unreadable> {
+    if without {
+        return Ok(Answered::None);
+    }
+    if ws.has_standard_library() {
+        return Ok(Answered::Given);
+    }
+    if let Some(path) = std::env::var_os("SYSML_LIBRARY_PATH") {
+        let named = PathBuf::from(path);
+        load_paths(ws, std::slice::from_ref(&named))?;
+        return Ok(Answered::At(named.display().to_string()));
+    }
+    for (name, text) in sysml_stdlib::FILES {
+        ws.add_file(*name, text);
+    }
+    Ok(Answered::BuiltIn)
+}
+
+/// Which standard library answered.
+///
+/// A program reading the JSON cannot tell otherwise, and what it decides
+/// on the strength of the answer depends on it: every reference into the
+/// library reads as unresolved without one, and the constraints the
+/// specification states are not put to a model that has none. The
+/// command line used to be the one front end that never said, back when
+/// naming a path was the only way to have a library at all.
+enum Answered {
+    /// One of the paths the caller named was it.
+    Given,
+    /// `SYSML_LIBRARY_PATH` said where.
+    At(String),
+    /// The copy built into this binary.
+    BuiltIn,
+    /// None: `--no-library`.
+    None,
+}
+
+impl Answered {
+    fn json(&self) -> serde_json::Value {
+        match self {
+            Answered::Given => serde_json::json!("given"),
+            Answered::At(path) => serde_json::json!(path),
+            Answered::BuiltIn => serde_json::json!(format!("built in ({})", sysml_stdlib::RELEASE)),
+            Answered::None => serde_json::Value::Null,
+        }
+    }
+}
+
+/// What the model implies for code, in no language in particular.
+///
+/// The library is loaded and resolved behind the model, since what a
+/// feature bottoms out in is a question about the library -- but only
+/// the model's own definitions are planned: nobody is generating the
+/// standard library.
+fn plan(paths: &[PathBuf], format: Format, bare: bool) -> ExitCode {
+    let mut ws = sysml_semantics::Workspace::new();
+    if let Err(unreadable) = load_paths(&mut ws, paths) {
+        unreadable.say();
+        return ExitCode::FAILURE;
+    }
+    let own: Vec<usize> = (0..ws.file_count()).collect();
+    if let Err(unreadable) = ensure_library(&mut ws, bare) {
+        unreadable.say();
+        return ExitCode::FAILURE;
+    }
+    ws.resolve_all();
+    let roots: Vec<sysml_model::ElementId> = own
+        .iter()
+        .flat_map(|&file| ws.file_roots(file).to_vec())
+        .collect();
+    let planned = sysml_cli::plan::of(&mut ws, &roots);
+    match format {
+        Format::Json => report(serde_json::to_value(&planned).expect("a built plan serializes")),
+        Format::Text => {
+            for definition in &planned.definitions {
+                println!(
+                    "{} -- {} ({} feature(s))",
+                    definition.of,
+                    definition.shape,
+                    definition.features.len()
+                );
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 /// The element a `--internal`/`--sequence` argument names, or a message
 /// saying there is none. `own` is what the modeller asked to draw, as
 /// against a library loaded behind it.
@@ -620,14 +832,33 @@ fn named(
     }
 }
 
+/// Which drawing was asked for.
+///
+/// `--internal`, `--browser` and `--sequence` name one drawing between
+/// them, and travelled as three arguments that could all be set at once
+/// and meant nothing together. One of these says the same thing and can
+/// only say one of them.
+enum View<'a> {
+    /// The definitions and the relationships that run between them,
+    /// which is what `diagram` draws when it is asked for nothing else.
+    Definitions,
+    /// The internal structure of one definition: the parts it is
+    /// assembled from and the connections between them.
+    Internal(&'a str),
+    /// The membership hierarchy as an indented tree.
+    Browser,
+    /// The interaction one definition declares, as lifelines and the
+    /// messages between them.
+    Sequence(&'a str),
+}
+
 fn diagram(
     paths: &[PathBuf],
     library: &[PathBuf],
-    internal: Option<&str>,
-    browser: bool,
-    sequence: Option<&str>,
+    view: View<'_>,
     elk: Option<&str>,
     output: Option<&Path>,
+    bare: bool,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if let Err(unreadable) = load_paths(&mut ws, paths) {
@@ -637,7 +868,9 @@ fn diagram(
     // everything loaded so far is drawn; the library that follows only has
     // to be resolvable, so its definitions never become boxes
     let drawn = ws.file_count();
-    if let Err(unreadable) = load_paths(&mut ws, library) {
+    if let Err(unreadable) =
+        load_paths(&mut ws, library).and_then(|()| ensure_library(&mut ws, bare))
+    {
         unreadable.say();
         return ExitCode::FAILURE;
     }
@@ -653,7 +886,7 @@ fn diagram(
         .iter()
         .flat_map(|&root| std::iter::once(root).chain(ws.model().descendants(root)))
         .collect();
-    if browser {
+    if let View::Browser = view {
         let view = sysml_diagram::browser_view(ws.model(), &roots);
         if view.rows.is_empty() {
             eprintln!("error: nothing to draw");
@@ -662,7 +895,7 @@ fn diagram(
         let svg = sysml_diagram::render_browser(&view, &sysml_diagram::Style::default());
         return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
     }
-    if let Some(name) = sequence {
+    if let View::Sequence(name) = view {
         let Some(target) = named(&ws, &own, name) else {
             return ExitCode::FAILURE;
         };
@@ -682,14 +915,14 @@ fn diagram(
             ),
         );
     }
-    let diagram = match internal {
-        Some(name) => {
+    let diagram = match view {
+        View::Internal(name) => {
             let Some(target) = named(&ws, &own, name) else {
                 return ExitCode::FAILURE;
             };
             sysml_diagram::interconnection_diagram(ws.model(), target)
         }
-        None => sysml_diagram::definition_diagram(ws.model(), &roots),
+        _ => sysml_diagram::definition_diagram(ws.model(), &roots),
     };
     if diagram.nodes.is_empty() {
         eprintln!("error: nothing to draw");
@@ -748,7 +981,7 @@ fn diagram(
 }
 
 /// Write a rendered view to `output`, or to stdout when there is none.
-fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> ExitCode {
+fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: bool) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if let Err(unreadable) = load_paths(&mut ws, paths) {
         unreadable.say();
@@ -756,7 +989,9 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>) -> Exi
     }
     // generation covers what was named; the library only resolves
     let own = ws.file_count();
-    if let Err(unreadable) = load_paths(&mut ws, library) {
+    if let Err(unreadable) =
+        load_paths(&mut ws, library).and_then(|()| ensure_library(&mut ws, bare))
+    {
         unreadable.say();
         return ExitCode::FAILURE;
     }
@@ -858,19 +1093,25 @@ fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
+fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
-    if let Err(unreadable) = load_paths(&mut ws, paths) {
-        unreadable.say();
-        if format == Format::Json {
-            report(serde_json::json!({
-                "command": "check",
-                "ok": false,
-                "unreadable": [unreadable.json()],
-            }));
+    // `check` has always taken the library as one of its paths --
+    // `sysml check model/ sysml.library` -- so what it was handed is
+    // loaded first and `ensure_library` only fills a gap.
+    let library = match load_paths(&mut ws, paths).and_then(|()| ensure_library(&mut ws, bare)) {
+        Ok(answered) => answered,
+        Err(unreadable) => {
+            unreadable.say();
+            if format == Format::Json {
+                report(serde_json::json!({
+                    "command": "check",
+                    "ok": false,
+                    "unreadable": [unreadable.json()],
+                }));
+            }
+            return ExitCode::FAILURE;
         }
-        return ExitCode::FAILURE;
-    }
+    };
     // A file that does not parse has no names to resolve, so resolution
     // finds nothing wrong with it and this used to answer `ok`. Anyone
     // running only `check` -- which is most of the reason it exists --
@@ -882,14 +1123,21 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     for finding in &syntax {
         let name = ws.file_name(finding.file);
         let text = &texts[&finding.file];
-        let offset = usize::from(finding.range.start());
         if format == Format::Text {
-            let (line, col) = sysml_syntax::line_col(text, offset.min(text.len()));
-            eprintln!("{name}:{line}:{col}: {}", finding.what);
+            say(&Said {
+                severity: Severity::Error,
+                title: finding.what.clone(),
+                id: None,
+                path: name,
+                text,
+                span: span(finding.range),
+                label: None,
+                helps: Vec::new(),
+            });
         }
         broken.push(sysml_cli::at(
             text,
-            offset,
+            finding.range,
             serde_json::json!({ "path": name, "message": finding.what }),
         ));
     }
@@ -922,50 +1170,69 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     };
     // the names are asked for after resolving, the syntax before it:
     // there is nothing to resolve in a file that did not parse
-    let found = ws.findings(&[]);
-    let names = found.names;
+    let diagnosed = ws.diagnose(&[]);
+    let found = &diagnosed.found;
+    let names = &found.names;
     let shown = &names[..limit.min(names.len())];
     let texts = held_texts(&ws, shown);
+    // What each of them might have meant. The workspace can see every
+    // name declared in it, so a name it could not find is either a right
+    // name nothing brought into scope or a wrong one with a right name
+    // beside it -- two different mistakes that resolution reports
+    // identically. Asked for all of them at once because the walk over
+    // every declared name is what costs.
+    let missed: Vec<String> = shown.iter().map(|u| u.what.clone()).collect();
+    let might = ws.suggestions(&missed);
     let mut unresolved = Vec::new();
-    for u in shown {
+    for (u, meant) in shown.iter().zip(&might) {
         let file = ws.file_name(u.file);
         let text = &texts[&u.file];
-        let offset = usize::from(u.range.start());
         match format {
-            Format::Text => {
-                let (line, col) = sysml_syntax::line_col(text, offset.min(text.len()));
-                eprintln!("{file}:{line}:{col}: unresolved `{}`", u.what);
-            }
-            Format::Json => unresolved.push(sysml_cli::at(
+            Format::Text => say(&Said {
+                severity: Severity::Error,
+                title: format!("`{}` resolves to nothing", u.what),
+                id: None,
+                path: file,
                 text,
-                offset,
-                serde_json::json!({ "path": file, "name": u.what.clone() }),
-            )),
+                span: span(u.range),
+                label: None,
+                helps: helps(meant),
+            }),
+            Format::Json => {
+                let mut entry = sysml_cli::at(
+                    text,
+                    u.range,
+                    serde_json::json!({ "path": file, "name": u.what.clone() }),
+                );
+                if !meant.elsewhere.is_empty() {
+                    entry["declaredAs"] = serde_json::json!(meant.elsewhere);
+                }
+                if !meant.near.is_empty() {
+                    entry["didYouMean"] = serde_json::json!(meant.near);
+                }
+                unresolved.push(entry);
+            }
         }
     }
     // What the specification itself requires, over and above every name
     // resolving. A model whose names all resolve can still be one the
     // standard rejects -- an objective on a part definition, a
-    // parameter passed the wrong way -- and until this was asked, only
-    // the MCP server ever asked it.
+    // parameter passed the wrong way. Whether it was worth asking --
+    // constraints come after names, as names come after syntax, and
+    // they are written against the standard library besides -- is
+    // `diagnose`'s to decide, so that this and the MCP server and the
+    // language server cannot drift apart on it.
     //
-    // `unevaluated` is not reported: it counts constraints this
-    // toolchain refuses to run, which says nothing about the model in
-    // front of the reader. What they act on is the violations.
-    //
-    // Constraints come after names, as names come after syntax. A
-    // constraint asked of a model with a dangling reference answers
-    // about the hole and not about the model: one undeclared type in a
-    // five-line file drew four complaints of its own, none of them a
-    // second thing to fix.
-    //
-    // They are written against the standard library too, so a workspace
-    // loaded without it is not asked them either.
-    let askable = stats.unresolved == 0 && ws.has_standard_library();
-    let checked = match askable {
-        true => ws.check_rules(&(0..ws.file_count()).collect::<Vec<_>>()),
-        false => sysml_semantics::rules::Checked::default(),
-    };
+    // `unevaluated` counts the constraints this toolchain refuses to
+    // run, which says something about the toolchain and nothing about
+    // the model in front of the reader -- so the text report leaves it
+    // out and tells a person the violations, while the JSON carries the
+    // count for a program that wants to know how much was asked.
+    let checked = &diagnosed.rules;
+    // A zero read out of a model nothing was asked of is a clean bill
+    // the check never gave, so the text report leaves the sentence out
+    // rather than printing one.
+    let askable = diagnosed.asked;
     // Every element a constraint is asked of is under one of the files
     // that were loaded, so it has somewhere to be shown. The one element
     // of a workspace that is under no file is its root, which no
@@ -989,15 +1256,23 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
         let named = ws.qualified_name_of(violation.element);
         let path = ws.file_name(*file);
         let text = &violated[file];
-        let offset = usize::from(range.start()).min(text.len());
         match format {
-            Format::Text => {
-                let (line, col) = sysml_syntax::line_col(text, offset);
-                eprintln!("{path}:{line}:{col}: `{named}` {}", violation.says);
-            }
+            Format::Text => say(&Said {
+                severity: Severity::Error,
+                title: violation.says.to_string(),
+                // the specification's own name for the constraint,
+                // in the slot rustc puts an error code: it is what
+                // somebody looking the rule up will search for
+                id: Some(violation.rule),
+                path,
+                text,
+                span: span(*range),
+                label: Some(format!("`{named}`")),
+                helps: Vec::new(),
+            }),
             Format::Json => violations.push(sysml_cli::at(
                 text,
-                offset,
+                *range,
                 serde_json::json!({
                     "path": path,
                     "rule": violation.rule,
@@ -1016,15 +1291,20 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
     for c in &found.collisions {
         let file = ws.file_name(c.file);
         let text = &clashing[&c.file];
-        let offset = usize::from(c.range.start()).min(text.len());
         match format {
-            Format::Text => {
-                let (line, col) = sysml_syntax::line_col(text, offset);
-                eprintln!("{file}:{line}:{col}: {}", c.what);
-            }
+            Format::Text => say(&Said {
+                severity: Severity::Warning,
+                title: c.what.clone(),
+                id: None,
+                path: file,
+                text,
+                span: span(c.range),
+                label: None,
+                helps: Vec::new(),
+            }),
             Format::Json => collisions.push(sysml_cli::at(
                 text,
-                offset,
+                c.range,
                 serde_json::json!({ "path": file, "message": c.what.clone() }),
             )),
         }
@@ -1034,6 +1314,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format) -> ExitCode {
         report(serde_json::json!({
             "command": "check",
             "ok": sound,
+            "library": library.json(),
             "unreadable": [],
             "elements": ws.model().len(),
             "parseErrors": [],
@@ -1218,7 +1499,7 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
                 "errors": parse
                     .errors()
                     .iter()
-                    .map(|d| sysml_cli::at(&text, usize::from(d.range.start()), serde_json::json!({
+                    .map(|d| sysml_cli::at(&text, d.range, serde_json::json!({
                         "message": d.message.clone(),
                     })))
                     .collect::<Vec<_>>(),
@@ -1250,24 +1531,75 @@ fn report(value: serde_json::Value) {
 }
 
 fn print_diagnostic(path: &Path, text: &str, diagnostic: &Diagnostic) {
-    let offset = usize::from(diagnostic.range.start());
-    let (line, col) = sysml_syntax::line_col(text, offset);
-    eprintln!(
-        "{}:{line}:{col}: error: {}",
-        path.display(),
-        diagnostic.message
-    );
-    if let Some(written) = text.lines().nth(line - 1) {
-        // `col` counts bytes, as an editor's offsets do, and the caret
-        // counts characters: a name written in Japanese is three bytes a
-        // letter, and the caret landed well past what it points at
-        let before = written
-            .char_indices()
-            .take_while(|(byte, _)| *byte < col - 1)
-            .count();
-        eprintln!("    | {written}");
-        eprintln!("    | {}^", " ".repeat(before));
+    say(&Said {
+        severity: Severity::Error,
+        title: diagnostic.message.clone(),
+        id: None,
+        path: &path.display().to_string(),
+        text,
+        span: span(diagnostic.range),
+        label: None,
+        helps: Vec::new(),
+    });
+}
+
+/// A finding, to whoever is watching the terminal.
+///
+/// Findings go to stderr so that `--format json` on stdout stays one
+/// document, and so that a person can watch them go by while a program
+/// reads the answer.
+fn say(said: &Said<'_>) {
+    eprintln!("{}", report::draw(said, *COLOUR.get().unwrap_or(&false)));
+}
+
+/// The bytes a finding is about.
+fn span(range: sysml_syntax::TextRange) -> std::ops::Range<usize> {
+    usize::from(range.start())..usize::from(range.end())
+}
+
+/// What is known about a name that resolved to nothing.
+///
+/// Two different mistakes, and only one of them is this name's. A name
+/// the workspace declares somewhere is a right name nothing brought into
+/// scope, and what it wants is an import -- so that is all that is said,
+/// even though there are also names near it: `MassValue` is answered by
+/// `ISQBase::MassValue`, and a list of every other name with `value` in
+/// it underneath makes the answer worse. A name nothing declares is a
+/// wrong one, and then the near ones are the whole of the answer.
+///
+/// A person acts on two or three of them and reads past the rest, so
+/// the sentence stops there; the JSON carries what was found, since a
+/// program is choosing rather than reading.
+fn helps(meant: &sysml_semantics::Suggestion) -> Vec<String> {
+    const ENOUGH: usize = 3;
+    if !meant.elsewhere.is_empty() {
+        return vec![format!(
+            "it is declared as {}, which nothing here brings into scope -- an import would",
+            listed(&meant.elsewhere, ENOUGH)
+        )];
     }
+    match meant.near.is_empty() {
+        true => Vec::new(),
+        false => vec![format!("did you mean {}?", listed(&meant.near, ENOUGH))],
+    }
+}
+
+/// Names, quoted, as a sentence says them, and no more of them than a
+/// reader will read.
+fn listed(names: &[String], most: usize) -> String {
+    let extra = names.len().saturating_sub(most);
+    let quoted: Vec<String> = names
+        .iter()
+        .take(most)
+        .map(|name| format!("`{name}`"))
+        .chain((extra > 0).then(|| format!("{extra} other(s)")))
+        .collect();
+    let mut sentence = quoted.join(", ");
+    // the last comma is an `or`, which is how a sentence says a list
+    if let Some(last) = sentence.rfind(", ") {
+        sentence.replace_range(last..last + 2, " or ");
+    }
+    sentence
 }
 
 /// Talk to a model server. Every answer is the server's own JSON, so
@@ -1278,6 +1610,7 @@ fn api_command(
     timeout: std::time::Duration,
     what: &ApiCommand,
     format: Format,
+    bare: bool,
 ) -> ExitCode {
     let client = api::Client::new(server, timeout);
     let answered = match what {
@@ -1310,7 +1643,7 @@ fn api_command(
             message,
             library,
         } => {
-            let Some((json, elements)) = exported(paths, library) else {
+            let Some((json, elements)) = exported(paths, library, bare) else {
                 return ExitCode::FAILURE;
             };
             let changes: Vec<serde_json::Value> = json.as_array().cloned().unwrap_or_default();

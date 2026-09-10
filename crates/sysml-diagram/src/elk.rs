@@ -24,11 +24,24 @@ use crate::{Diagram, Style};
 pub enum ElkError {
     /// The command could not be run at all -- most likely `elkrs` is
     /// not installed.
-    Spawn { command: String, error: String },
+    Spawn {
+        /// What was run.
+        command: String,
+        /// What the operating system said about running it.
+        error: String,
+    },
     /// The command ran and failed.
-    Failed { command: String, detail: String },
+    Failed {
+        /// What was run.
+        command: String,
+        /// What it said on the way out.
+        detail: String,
+    },
     /// The command answered something an ELK graph never says.
-    Unreadable { detail: String },
+    Unreadable {
+        /// What was wrong with the answer.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for ElkError {

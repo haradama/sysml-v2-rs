@@ -74,6 +74,14 @@
 //! Remaining simplification: derived properties beyond the ones named
 //! here are emitted at their defaults.
 
+// Nothing here needs `unsafe`, and saying so is what keeps it that way.
+#![forbid(unsafe_code)]
+// Every public item carries a line saying what it is for. The two
+// crates that do not turn this on are `sysml-syntax`, whose public
+// surface is two hundred and seventy-nine syntax kinds whose names are
+// the documentation, and `sysml-model`, whose is generated from the
+// metamodel and would want the generator to write it.
+#![warn(missing_docs)]
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value as Json};
@@ -83,14 +91,23 @@ use uuid::Uuid;
 /// Errors produced when reading interchange JSON.
 #[derive(Debug)]
 pub enum ImportError {
+    /// The document is not the array of elements the standard writes.
     NotAnArray,
+    /// An object at this position declares no `@type`.
     MissingType(usize),
+    /// A `@type` no metaclass answers to.
     UnknownType(String),
+    /// A `@type` naming a metaclass the standard declares abstract, which no element may be.
     AbstractType(String),
+    /// An object at this position declares no `@id`.
     MissingId(usize),
+    /// Two objects claim the same `@id`.
     DuplicateId(String),
+    /// A reference to an `@id` the document does not declare.
     UnknownReference(String),
+    /// Two owners claim the same element.
     SharedOwnership(String),
+    /// Ownership that runs in a circle, which no containment can.
     OwnershipCycle(String),
 }
 
@@ -404,7 +421,7 @@ impl<'a> Closures<'a> {
                     ElementKind::ReferenceSubsetting => "referencedFeature",
                     _ => return None,
                 };
-                match self.model.get(child, target) {
+                match self.model.maybe(child, target) {
                     Some(Value::Ref(target)) => Some(*target),
                     _ => None,
                 }
@@ -431,7 +448,7 @@ impl<'a> Closures<'a> {
             .iter()
             .flat_map(|&feature| self.model.owned(feature))
             .filter(|&&child| self.model.kind(child) == ElementKind::Redefinition)
-            .filter_map(|&child| match self.model.get(child, "redefinedFeature") {
+            .filter_map(|&child| match self.model.maybe(child, "redefinedFeature") {
                 Some(Value::Ref(target)) => Some(*target),
                 _ => None,
             })
@@ -455,7 +472,7 @@ impl<'a> Closures<'a> {
             .copied()
             .filter(|&feature| {
                 self.model
-                    .get(feature, "direction")
+                    .maybe(feature, "direction")
                     .and_then(Value::as_str)
                     .is_some_and(|direction| wanted.contains(&direction))
             })
@@ -599,201 +616,404 @@ pub fn to_json(model: &Model) -> Json {
     to_json_with(model, &Extras::default())
 }
 
-/// [`to_json`], with the resolver-derived facts filled in.
-pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
-    let Identities {
-        uuids,
-        bridges: bridge_uuids,
-        qualified,
-    } = identities(model);
-    let reference = |id: &ElementId| json!({ "@id": uuids[id].to_string() });
-    let membership = |id: ElementId| json!({ "@id": bridge_uuids[&id].to_string() });
-    let references = |ids: &[ElementId]| Json::Array(ids.iter().map(reference).collect());
-    let annotations = |id: ElementId, kind: ElementKind| {
+/// One model being written out, and everything worked out about it once.
+///
+/// This was eight closures stacked at the top of a five-hundred-line
+/// function, capturing seven things between them. A closure cannot be
+/// lifted out of the body that declares it, so the length was not
+/// incidental to the design -- it *was* the design. Named on a struct,
+/// each is a method that can be read on its own, and the two long bodies
+/// that used to trail behind them are methods too.
+struct Writing<'a> {
+    model: &'a Model,
+    extras: &'a Extras,
+    /// The identity every element is referred to by.
+    uuids: HashMap<ElementId, Uuid>,
+    /// And the identity of the membership standing between an owner and
+    /// what it owns, where the model bridges that ownership.
+    bridge_uuids: HashMap<ElementId, Uuid>,
+    qualified: HashMap<ElementId, String>,
+    /// The property set each metaclass declares. Working one out means
+    /// walking a whole inheritance chain, so it is done once per
+    /// metaclass rather than once per element.
+    features: HashMap<ElementKind, Vec<&'static sysml_model::FeatureMeta>>,
+    /// The inheritance closures the derived properties are read from.
+    closures: Closures<'a>,
+}
+
+impl Writing<'_> {
+    fn reference(&self, id: &ElementId) -> Json {
+        json!({ "@id": self.uuids[id].to_string() })
+    }
+
+    fn membership(&self, id: ElementId) -> Json {
+        json!({ "@id": self.bridge_uuids[&id].to_string() })
+    }
+
+    fn references(&self, ids: &[ElementId]) -> Json {
+        Json::Array(ids.iter().map(|id| self.reference(id)).collect())
+    }
+
+    fn annotations(&self, id: ElementId, kind: ElementKind) -> Json {
         Json::Array(
-            model
+            self.model
                 .owned(id)
                 .iter()
-                .filter(|&&child| model.kind(child).is_a(kind))
-                .map(reference)
+                .filter(|&&child| self.model.kind(child).is_a(kind))
+                .map(|child| self.reference(child))
                 .collect(),
         )
-    };
+    }
 
-    // the property set a metaclass declares is the same for every
-    // element of it, and working it out means walking the whole
-    // inheritance chain: once per metaclass, not once per element
-    let features: HashMap<ElementKind, Vec<&'static sysml_model::FeatureMeta>> =
-        sysml_model::generated::ELEMENT_KINDS
+    /// A membership reference for one element a namespace reaches: its
+    /// bridge where ownership is bridged, nothing where it is not.
+    fn membership_of(&self, id: ElementId) -> Option<Json> {
+        bridged(self.model, id).then(|| self.membership(id))
+    }
+
+    fn memberships(&self, ids: &[ElementId]) -> Json {
+        Json::Array(
+            ids.iter()
+                .copied()
+                .filter_map(|id| self.membership_of(id))
+                .collect(),
+        )
+    }
+
+    /// What a namespace holds, membership by membership: a membership it
+    /// owns outright stands for itself, and anything else is reached
+    /// through the bridge that owns it.
+    fn owned_memberships(&self, id: ElementId) -> Vec<Json> {
+        self.model
+            .owned(id)
             .iter()
-            .map(|&kind| (kind, all_features(kind)))
-            .collect();
+            .filter_map(
+                |&child| match self.model.kind(child).is_a(ElementKind::Membership) {
+                    true => Some(self.reference(&child)),
+                    false => self.membership_of(child),
+                },
+            )
+            .collect()
+    }
 
-    let closures = Closures::new(model);
-    // a membership reference for each element a namespace reaches: its
-    // bridge when ownership is bridged, nothing when it is not
-    let membership_of =
-        |id: ElementId| -> Option<Json> { bridged(model, id).then(|| membership(id)) };
-    let memberships = |ids: &[ElementId]| -> Json {
-        Json::Array(ids.iter().copied().filter_map(membership_of).collect())
-    };
-    let owned_of_kind = |id: ElementId, wanted: ElementKind| -> Json {
-        Json::Array(
-            model
-                .owned(id)
-                .iter()
-                .filter(|&&child| model.kind(child).is_a(wanted))
-                .map(reference)
-                .collect(),
-        )
-    };
+    /// Every element of the model, in arena order, each carrying the
+    /// whole property set its metaclass declares.
+    fn elements(&self) -> Vec<Json> {
+        self.model
+            .ids()
+            .map(|id| {
+                let stored: HashMap<&str, &Value> = self.model.props(id).collect();
+                let mut object = Map::new();
+                object.insert("@type".into(), self.model.kind(id).name().into());
+                object.insert("@id".into(), self.uuids[&id].to_string().into());
+                for meta in &self.features[&self.model.kind(id)] {
+                    let value = match stored.get(meta.name) {
+                        Some(value) => match value {
+                            Value::Bool(b) => Json::from(*b),
+                            Value::Int(i) => Json::from(*i),
+                            // JSON has no infinity: a number its syntax
+                            // cannot hold is written as the text of it, and
+                            // read back from that text
+                            Value::Real(r) if !r.is_finite() => Json::from(r.to_string()),
+                            Value::Real(r) => Json::from(*r),
+                            Value::String(text) => Json::from(text.clone()),
+                            Value::EnumLit(lit) => Json::from(*lit),
+                            Value::Ref(r) => self.reference(r),
+                            Value::RefList(rs) => self.references(rs),
+                        },
+                        None => self
+                            .derived(id, meta.name)
+                            .unwrap_or_else(|| default_for(meta)),
+                    };
+                    object.insert(meta.name.into(), value);
+                }
+                if self.model.kind(id).is_a(ElementKind::Relationship) {
+                    let owner = self
+                        .model
+                        .owner(id)
+                        .filter(|_| !bridged(self.model, id))
+                        .map(|owner| self.reference(&owner));
+                    let related: Vec<Json> = related_to(self.model, id)
+                        .iter()
+                        .map(|it| self.reference(it))
+                        .collect();
+                    fill_ends(&mut object, self.model.kind(id), owner, related);
+                }
+                Json::Object(object)
+            })
+            .collect()
+    }
 
-    // what a name-driven derived property holds, when the model can say
-    let derived = |id: ElementId, name: &str| -> Option<Json> {
-        let kind = model.kind(id);
+    /// And the memberships synthesized between each owner and what it
+    /// owns, in the order of what they bring in, carrying their whole
+    /// property set like any other element.
+    fn bridges(&self, elements: &mut Vec<Json>) {
+        // the memberships themselves, in the order of what they bring in,
+        // carrying their whole property set like any other element
+        for id in self.model.ids() {
+            let Some(owner) = self.model.owner(id) else {
+                continue;
+            };
+            if !bridged(self.model, id) {
+                continue;
+            }
+            let kind = sysml_model::membership_kind(self.model, id);
+            let uuid = self.bridge_uuids[&id].to_string();
+            let mut object = Map::new();
+            object.insert("@type".into(), kind.name().into());
+            object.insert("@id".into(), uuid.clone().into());
+            for meta in &self.features[&kind] {
+                let value = match meta.name {
+                    "elementId" => uuid.clone().into(),
+                    "owner" | "owningRelatedElement" | "membershipOwningNamespace" => {
+                        self.reference(&owner)
+                    }
+                    "ownedElement" | "ownedRelatedElement" => {
+                        Json::Array(vec![self.reference(&id)])
+                    }
+                    "relatedElement" => {
+                        Json::Array(vec![self.reference(&owner), self.reference(&id)])
+                    }
+                    "source" => Json::Array(vec![self.reference(&owner)]),
+                    "target" => Json::Array(vec![self.reference(&id)]),
+                    // each subtype names the member again in its own terms
+                    "memberElement"
+                    | "ownedMemberElement"
+                    | "ownedMemberFeature"
+                    | "ownedMemberParameter"
+                    | "ownedSubjectParameter"
+                    | "ownedActorParameter"
+                    | "ownedStakeholderParameter"
+                    | "ownedObjectiveRequirement"
+                    | "ownedVariantUsage"
+                    | "transitionFeature"
+                    | "action"
+                    | "ownedResultExpression"
+                    | "ownedConstraint"
+                    | "ownedRequirement"
+                    | "ownedConcern"
+                    | "ownedRendering" => self.reference(&id),
+                    // what the member refers to, rather than the member: a
+                    // required constraint, a framed concern, a verified
+                    // requirement and the rendering a view is drawn with
+                    // each name the element their member references, where
+                    // it references one
+                    "referencedConstraint"
+                    | "referencedConcern"
+                    | "verifiedRequirement"
+                    | "referencedRendering" => self
+                        .model
+                        .owned(id)
+                        .iter()
+                        .find(|&&child| self.model.kind(child) == ElementKind::ReferenceSubsetting)
+                        .and_then(|&child| self.model.get(child, "referencedFeature"))
+                        .and_then(Value::as_id)
+                        .map_or(Json::Null, |target| self.reference(&target)),
+                    "memberElementId" | "ownedMemberElementId" => {
+                        self.uuids[&id].to_string().into()
+                    }
+                    "memberName" | "ownedMemberName" => {
+                        self.model.effective_name(id).map_or(Json::Null, Json::from)
+                    }
+                    "memberShortName" | "ownedMemberShortName" => self
+                        .model
+                        .effective_short_name(id)
+                        .map_or(Json::Null, Json::from),
+                    "owningType" => self.reference(&owner),
+                    // the standard spells it out even where nothing was written
+                    "visibility" => self
+                        .model
+                        .member_visibility(id)
+                        .unwrap_or(Vis::Public)
+                        .keyword()
+                        .into(),
+                    // a transition feature's membership says which it is,
+                    // and so do a state's subactions and a requirement's
+                    // constraints, in their own vocabularies
+                    "kind" if kind == ElementKind::TransitionFeatureMembership => {
+                        sysml_model::transition_role(self.model, id).map_or(Json::Null, Json::from)
+                    }
+                    // the standard spells a state subaction's kind with the
+                    // keyword that declared it
+                    "kind" if kind == ElementKind::StateSubactionMembership => [
+                        (Role::Entry, "entry"),
+                        (Role::Do, "do"),
+                        (Role::Exit, "exit"),
+                    ]
+                    .iter()
+                    .find(|(role, _)| Some(*role) == self.model.member_role(id))
+                    .map_or(Json::Null, |(_, word)| Json::from(*word)),
+                    "kind" if kind.is_a(ElementKind::RequirementConstraintMembership) => {
+                        // an assumption says so; a required constraint and a
+                        // framed concern are both requirements
+                        if self.model.member_role(id) == Some(Role::Assume) {
+                            "assumption".into()
+                        } else {
+                            "requirement".into()
+                        }
+                    }
+                    _ => default_for(meta),
+                };
+                object.insert(meta.name.into(), value);
+            }
+            elements.push(Json::Object(object));
+        }
+    }
+
+    /// What a name-driven derived property holds, when the model can
+    /// say.
+    ///
+    /// The metamodel declares these and states no value for them: they
+    /// are what a reader is expected to work out from what the model
+    /// does keep. Everything the standard asks for and this model can
+    /// answer is answered here; what it cannot is left at the default,
+    /// which is the honest answer for a property this toolchain does not
+    /// build the abstract syntax for.
+    fn derived(&self, id: ElementId, name: &str) -> Option<Json> {
+        let kind = self.model.kind(id);
         let is_relationship = kind.is_a(ElementKind::Relationship);
         let is_type = kind.is_a(ElementKind::Type);
         match name {
             // the inheritance closure, from the reified specializations
-            "feature" if is_type => Some(references(&closures.features(id))),
-            "ownedFeature" if is_type => Some(references(&closures.owned_features(id))),
+            "feature" if is_type => Some(self.references(&self.closures.features(id))),
+            "ownedFeature" if is_type => Some(self.references(&self.closures.owned_features(id))),
             "inheritedFeature" if is_type => {
                 let owned: std::collections::HashSet<ElementId> =
-                    closures.owned_features(id).into_iter().collect();
-                Some(references(
-                    &closures
-                        .features(id)
-                        .iter()
-                        .copied()
-                        .filter(|feature| !owned.contains(feature))
-                        .collect::<Vec<_>>(),
-                ))
+                    self.closures.owned_features(id).into_iter().collect();
+                Some(
+                    self.references(
+                        &self
+                            .closures
+                            .features(id)
+                            .iter()
+                            .copied()
+                            .filter(|feature| !owned.contains(feature))
+                            .collect::<Vec<_>>(),
+                    ),
+                )
             }
             "inheritedMembership" if is_type => {
                 let owned: std::collections::HashSet<ElementId> =
-                    closures.owned_features(id).into_iter().collect();
-                let inherited: Vec<ElementId> = closures
+                    self.closures.owned_features(id).into_iter().collect();
+                let inherited: Vec<ElementId> = self
+                    .closures
                     .features(id)
                     .iter()
                     .copied()
                     .filter(|feature| !owned.contains(feature))
                     .collect();
-                Some(memberships(&inherited))
+                Some(self.memberships(&inherited))
             }
-            "endFeature" if is_type => Some(references(
-                &closures
-                    .features(id)
-                    .iter()
-                    .copied()
-                    .filter(|&feature| model.get(feature, "isEnd") == Some(&Value::Bool(true)))
-                    .collect::<Vec<_>>(),
-            )),
-            "ownedEndFeature" if is_type => Some(references(
-                &closures
-                    .owned_features(id)
-                    .into_iter()
-                    .filter(|&feature| model.get(feature, "isEnd") == Some(&Value::Bool(true)))
-                    .collect::<Vec<_>>(),
-            )),
-            "input" if is_type => Some(references(&closures.directed(id, &["in", "inout"]))),
-            "output" if is_type => Some(references(&closures.directed(id, &["out", "inout"]))),
+            "endFeature" if is_type => Some(
+                self.references(
+                    &self
+                        .closures
+                        .features(id)
+                        .iter()
+                        .copied()
+                        .filter(|&feature| self.model.flag(feature, "isEnd"))
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+            "ownedEndFeature" if is_type => Some(
+                self.references(
+                    &self
+                        .closures
+                        .owned_features(id)
+                        .into_iter()
+                        .filter(|&feature| self.model.flag(feature, "isEnd"))
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+            "input" if is_type => {
+                Some(self.references(&self.closures.directed(id, &["in", "inout"])))
+            }
+            "output" if is_type => {
+                Some(self.references(&self.closures.directed(id, &["out", "inout"])))
+            }
             "directedFeature" if is_type => {
-                Some(references(&closures.directed(id, &["in", "out", "inout"])))
+                Some(self.references(&self.closures.directed(id, &["in", "out", "inout"])))
             }
             "parameter" if is_type => {
-                Some(references(&closures.directed(id, &["in", "out", "inout"])))
+                Some(self.references(&self.closures.directed(id, &["in", "out", "inout"])))
             }
-            // what a namespace holds, membership by membership
-            "ownedMembership" => Some(Json::Array(
-                model
-                    .owned(id)
-                    .iter()
-                    .filter_map(|&child| {
-                        if model.kind(child).is_a(ElementKind::Membership) {
-                            Some(reference(&child))
-                        } else {
-                            membership_of(child)
-                        }
-                    })
-                    .collect(),
-            )),
+            "ownedMembership" => Some(Json::Array(self.owned_memberships(id))),
+            // everything `ownedMembership` holds, and then what the
+            // namespace reaches without owning it
             "membership" => {
-                let mut all: Vec<Json> = model
-                    .owned(id)
-                    .iter()
-                    .filter_map(|&child| {
-                        if model.kind(child).is_a(ElementKind::Membership) {
-                            Some(reference(&child))
-                        } else {
-                            membership_of(child)
-                        }
-                    })
-                    .collect();
-                for &imported in extras.imported.get(&id).into_iter().flatten() {
-                    all.extend(membership_of(imported));
+                let mut all = self.owned_memberships(id);
+                for &imported in self.extras.imported.get(&id).into_iter().flatten() {
+                    all.extend(self.membership_of(imported));
                 }
                 if is_type {
                     let owned: std::collections::HashSet<ElementId> =
-                        closures.owned_features(id).into_iter().collect();
-                    for &feature in closures.features(id).iter() {
+                        self.closures.owned_features(id).into_iter().collect();
+                    for &feature in self.closures.features(id).iter() {
                         if !owned.contains(&feature) {
-                            all.extend(membership_of(feature));
+                            all.extend(self.membership_of(feature));
                         }
                     }
                 }
                 Some(Json::Array(all))
             }
-            "ownedMember" => Some(references(
-                &model
-                    .owned(id)
-                    .iter()
-                    .filter(|&&child| bridged(model, child))
-                    .copied()
-                    .collect::<Vec<_>>(),
-            )),
+            "ownedMember" => Some(
+                self.references(
+                    &self
+                        .model
+                        .owned(id)
+                        .iter()
+                        .filter(|&&child| bridged(self.model, child))
+                        .copied()
+                        .collect::<Vec<_>>(),
+                ),
+            ),
             "member" => {
-                let mut members: Vec<ElementId> = model
+                let mut members: Vec<ElementId> = self
+                    .model
                     .owned(id)
                     .iter()
                     .copied()
-                    .filter(|&child| bridged(model, child))
+                    .filter(|&child| bridged(self.model, child))
                     .collect();
                 let mut seen: std::collections::HashSet<ElementId> =
                     members.iter().copied().collect();
-                for &imported in extras.imported.get(&id).into_iter().flatten() {
+                for &imported in self.extras.imported.get(&id).into_iter().flatten() {
                     if seen.insert(imported) {
                         members.push(imported);
                     }
                 }
                 if is_type {
                     members.extend(
-                        closures
+                        self.closures
                             .features(id)
                             .iter()
                             .copied()
                             .filter(|&feature| seen.insert(feature)),
                     );
                 }
-                Some(references(&members))
+                Some(self.references(&members))
             }
             "importedMembership" if kind == ElementKind::MembershipImport => Some(
-                extras
+                self.extras
                     .import_targets
                     .get(&id)
-                    .and_then(|&target| membership_of(target))
+                    .and_then(|&target| self.membership_of(target))
                     .unwrap_or(Json::Null),
             ),
-            "importedMembership" => Some(memberships(
-                extras.imported.get(&id).map_or(&[][..], Vec::as_slice),
-            )),
-            "importedNamespace" if kind == ElementKind::NamespaceImport => {
-                Some(extras.import_targets.get(&id).map_or(Json::Null, reference))
+            "importedMembership" => {
+                Some(self.memberships(self.extras.imported.get(&id).map_or(&[][..], Vec::as_slice)))
             }
-            "isLibraryElement" => Some(extras.library.contains(&id).into()),
+            "importedNamespace" if kind == ElementKind::NamespaceImport => Some(
+                self.extras
+                    .import_targets
+                    .get(&id)
+                    .map_or(Json::Null, |it| self.reference(it)),
+            ),
+            "isLibraryElement" => Some(self.extras.library.contains(&id).into()),
             // an import says how far what it brings in travels; written
             // without a keyword, the metamodel has it stop where it is
             "visibility" if kind.is_a(ElementKind::Import) => Some(
-                model
+                self.model
                     .member_visibility(id)
                     .unwrap_or(Vis::Private)
                     .keyword()
@@ -801,48 +1021,52 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             ),
             // the specializations an element owns, by their metaclass
             "ownedSpecialization" if is_type => {
-                Some(owned_of_kind(id, ElementKind::Specialization))
+                Some(self.owned_of_kind(id, ElementKind::Specialization))
             }
-            "ownedSubclassification" => Some(owned_of_kind(id, ElementKind::Subclassification)),
-            "ownedTyping" => Some(owned_of_kind(id, ElementKind::FeatureTyping)),
-            "ownedSubsetting" => Some(owned_of_kind(id, ElementKind::Subsetting)),
-            "ownedRedefinition" => Some(owned_of_kind(id, ElementKind::Redefinition)),
-            "ownedReferenceSubsetting" => model
+            "ownedSubclassification" => {
+                Some(self.owned_of_kind(id, ElementKind::Subclassification))
+            }
+            "ownedTyping" => Some(self.owned_of_kind(id, ElementKind::FeatureTyping)),
+            "ownedSubsetting" => Some(self.owned_of_kind(id, ElementKind::Subsetting)),
+            "ownedRedefinition" => Some(self.owned_of_kind(id, ElementKind::Redefinition)),
+            "ownedReferenceSubsetting" => self
+                .model
                 .owned(id)
                 .iter()
-                .find(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
-                .map(reference)
+                .find(|&&child| self.model.kind(child) == ElementKind::ReferenceSubsetting)
+                .map(|it| self.reference(it))
                 .or(Some(Json::Null)),
-            "ownedImport" => Some(owned_of_kind(id, ElementKind::Import)),
+            "ownedImport" => Some(self.owned_of_kind(id, ElementKind::Import)),
             // a feature is typed by what its reified typings resolved to
             "type" if kind.is_a(ElementKind::Feature) => Some(Json::Array(
-                model
+                self.model
                     .types_of(id)
-                    .map(|target| reference(&target))
+                    .map(|target| self.reference(&target))
                     .collect(),
             )),
             "owningType" if kind.is_a(ElementKind::Feature) => Some(
-                model
+                self.model
                     .owner(id)
-                    .filter(|&owner| model.kind(owner).is_a(ElementKind::Type))
-                    .map_or(Json::Null, |owner| reference(&owner)),
+                    .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Type))
+                    .map_or(Json::Null, |owner| self.reference(&owner)),
             ),
             // an owned feature is featured by -- and its membership is --
             // its owning type's
             "featuringType" if kind.is_a(ElementKind::Feature) => Some(Json::Array(
-                model
+                self.model
                     .owner(id)
-                    .filter(|&owner| model.kind(owner).is_a(ElementKind::Type))
+                    .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Type))
                     .iter()
-                    .map(reference)
+                    .map(|it| self.reference(it))
                     .collect(),
             )),
             "owningFeatureMembership" if kind.is_a(ElementKind::Feature) => {
-                let of_a_type = bridged(model, id)
-                    && model.owner(id).is_some()
-                    && sysml_model::membership_kind(model, id).is_a(ElementKind::FeatureMembership);
+                let of_a_type = bridged(self.model, id)
+                    && self.model.owner(id).is_some()
+                    && sysml_model::membership_kind(self.model, id)
+                        .is_a(ElementKind::FeatureMembership);
                 Some(if of_a_type {
-                    membership(id)
+                    self.membership(id)
                 } else {
                     Json::Null
                 })
@@ -857,8 +1081,8 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             | "owningAnnotatingElement"
                 if is_relationship =>
             {
-                Some(match model.owner(id) {
-                    Some(owner) if !bridged(model, id) => reference(&owner),
+                Some(match self.model.owner(id) {
+                    Some(owner) if !bridged(self.model, id) => self.reference(&owner),
                     _ => Json::Null,
                 })
             }
@@ -866,54 +1090,63 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             // one owned Annotation for each -- and, where it named
             // nothing, about the element it sits on
             "annotatedElement" if kind.is_a(ElementKind::AnnotatingElement) => {
-                let about = annotated(model, id);
-                Some(match model.get(id, "representedElement") {
-                    Some(Value::Ref(target)) => Json::Array(vec![reference(target)]),
-                    _ if !about.is_empty() => references(&about),
-                    _ => Json::Array(model.owner(id).iter().map(reference).collect()),
+                let about = annotated(self.model, id);
+                // `representedElement` belongs to a textual representation; a
+                // comment or a documentation is an annotating element without
+                // one
+                Some(match self.model.maybe(id, "representedElement") {
+                    Some(Value::Ref(target)) => Json::Array(vec![self.reference(target)]),
+                    _ if !about.is_empty() => self.references(&about),
+                    _ => Json::Array(
+                        self.model
+                            .owner(id)
+                            .iter()
+                            .map(|it| self.reference(it))
+                            .collect(),
+                    ),
                 })
             }
             "annotation" | "ownedAnnotatingRelationship"
                 if kind.is_a(ElementKind::AnnotatingElement) =>
             {
-                Some(owned_of_kind(id, ElementKind::Annotation))
+                Some(self.owned_of_kind(id, ElementKind::Annotation))
             }
             "nestedUsage" if kind.is_a(ElementKind::Usage) => {
-                Some(owned_of_kind(id, ElementKind::Usage))
+                Some(self.owned_of_kind(id, ElementKind::Usage))
             }
             "ownedUsage" if kind.is_a(ElementKind::Definition) => {
-                Some(owned_of_kind(id, ElementKind::Usage))
+                Some(self.owned_of_kind(id, ElementKind::Usage))
             }
-            "elementId" => Some(uuids[&id].to_string().into()),
-            "name" => Some(model.effective_name(id).map_or(Json::Null, Json::from)),
+            "elementId" => Some(self.uuids[&id].to_string().into()),
+            "name" => Some(self.model.effective_name(id).map_or(Json::Null, Json::from)),
             "shortName" => Some(
-                model
+                self.model
                     .effective_short_name(id)
                     .map_or(Json::Null, Json::from),
             ),
             "qualifiedName" => Some(
-                qualified
+                self.qualified
                     .get(&id)
                     .map_or(Json::Null, |name| Json::from(name.clone())),
             ),
             "owner" => Some(
-                model
+                self.model
                     .owner(id)
-                    .map_or(Json::Null, |owner| reference(&owner)),
+                    .map_or(Json::Null, |owner| self.reference(&owner)),
             ),
-            "ownedElement" => Some(references(model.owned(id))),
+            "ownedElement" => Some(self.references(self.model.owned(id))),
             // the reified shape: a membership bridges the way down to an
             // ordinary element, a relationship is owned as itself, and
             // what a relationship owns appears only as related elements
             "ownedRelationship" => Some(Json::Array(
-                model
+                self.model
                     .owned(id)
                     .iter()
                     .filter_map(|&child| {
-                        if bridged(model, child) {
-                            Some(membership(child))
-                        } else if model.kind(child).is_a(ElementKind::Relationship) {
-                            Some(reference(&child))
+                        if bridged(self.model, child) {
+                            Some(self.membership(child))
+                        } else if self.model.kind(child).is_a(ElementKind::Relationship) {
+                            Some(self.reference(&child))
                         } else {
                             None
                         }
@@ -921,212 +1154,122 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
                     .collect(),
             )),
             "owningRelationship" => {
-                let owner = model.owner(id)?;
-                Some(if bridged(model, id) {
-                    membership(id)
-                } else if model.kind(owner).is_a(ElementKind::Relationship) {
-                    reference(&owner)
+                let owner = self.model.owner(id)?;
+                Some(if bridged(self.model, id) {
+                    self.membership(id)
+                } else if self.model.kind(owner).is_a(ElementKind::Relationship) {
+                    self.reference(&owner)
                 } else {
                     Json::Null
                 })
             }
-            "owningMembership" => Some(if bridged(model, id) && model.owner(id).is_some() {
-                membership(id)
-            } else {
-                Json::Null
-            }),
-            "owningNamespace" => Some(if bridged(model, id) {
-                model
+            "owningMembership" => Some(
+                if bridged(self.model, id) && self.model.owner(id).is_some() {
+                    self.membership(id)
+                } else {
+                    Json::Null
+                },
+            ),
+            "owningNamespace" => Some(if bridged(self.model, id) {
+                self.model
                     .owner(id)
-                    .map_or(Json::Null, |owner| reference(&owner))
+                    .map_or(Json::Null, |owner| self.reference(&owner))
             } else {
                 Json::Null
             }),
-            "documentation" => Some(annotations(id, ElementKind::Documentation)),
-            "textualRepresentation" => Some(annotations(id, ElementKind::TextualRepresentation)),
+            "documentation" => Some(self.annotations(id, ElementKind::Documentation)),
+            "textualRepresentation" => {
+                Some(self.annotations(id, ElementKind::TextualRepresentation))
+            }
             // a relationship that is also a namespace holds its members
             // through memberships; only the rest is directly related
-            "ownedRelatedElement" if is_relationship => Some(references(&related_to(model, id))),
+            "ownedRelatedElement" if is_relationship => {
+                Some(self.references(&related_to(self.model, id)))
+            }
             // a bridged relationship is owned by its membership, which
             // is no end of it
-            "owningRelatedElement" if is_relationship => Some(match model.owner(id) {
-                Some(owner) if !bridged(model, id) => reference(&owner),
+            "owningRelatedElement" if is_relationship => Some(match self.model.owner(id) {
+                Some(owner) if !bridged(self.model, id) => self.reference(&owner),
                 _ => Json::Null,
             }),
             // an alias names what it brings in itself: `alias Q for P;`
             // is a membership through which P is known as Q. What it
             // stands for is the resolver's to say, and stays null here.
             "memberName" if kind == ElementKind::Membership => {
-                Some(model.name(id).map_or(Json::Null, Json::from))
+                Some(self.model.name(id).map_or(Json::Null, Json::from))
             }
             "memberShortName" if kind == ElementKind::Membership => Some(
-                model
+                self.model
                     .get(id, "declaredShortName")
                     .and_then(Value::as_str)
                     .map_or(Json::Null, Json::from),
             ),
             // a membership's member: for the owning kind, what it owns
             "memberElement" | "ownedMemberElement" if kind.is_a(ElementKind::OwningMembership) => {
-                Some(model.owned(id).first().map_or(Json::Null, &reference))
+                Some(
+                    self.model
+                        .owned(id)
+                        .first()
+                        .map_or(Json::Null, |it| self.reference(it)),
+                )
             }
             "memberName" | "ownedMemberName" if kind.is_a(ElementKind::OwningMembership) => Some(
-                model
+                self.model
                     .owned(id)
                     .first()
-                    .and_then(|&member| model.name(member))
+                    .and_then(|&member| self.model.name(member))
                     .map_or(Json::Null, Json::from),
             ),
             "memberElementId" | "ownedMemberElementId"
                 if kind.is_a(ElementKind::OwningMembership) =>
             {
                 Some(
-                    model
+                    self.model
                         .owned(id)
                         .first()
-                        .map_or(Json::Null, |member| uuids[member].to_string().into()),
+                        .map_or(Json::Null, |member| self.uuids[member].to_string().into()),
                 )
             }
             _ => None,
         }
-    };
-
-    let mut elements: Vec<Json> = model
-        .ids()
-        .map(|id| {
-            let stored: HashMap<&str, &Value> = model.props(id).collect();
-            let mut object = Map::new();
-            object.insert("@type".into(), model.kind(id).name().into());
-            object.insert("@id".into(), uuids[&id].to_string().into());
-            for meta in &features[&model.kind(id)] {
-                let value = match stored.get(meta.name) {
-                    Some(value) => match value {
-                        Value::Bool(b) => Json::from(*b),
-                        Value::Int(i) => Json::from(*i),
-                        // JSON has no infinity: a number its syntax
-                        // cannot hold is written as the text of it, and
-                        // read back from that text
-                        Value::Real(r) if !r.is_finite() => Json::from(r.to_string()),
-                        Value::Real(r) => Json::from(*r),
-                        Value::String(text) => Json::from(text.clone()),
-                        Value::EnumLit(lit) => Json::from(*lit),
-                        Value::Ref(r) => reference(r),
-                        Value::RefList(rs) => references(rs),
-                    },
-                    None => derived(id, meta.name).unwrap_or_else(|| default_for(meta)),
-                };
-                object.insert(meta.name.into(), value);
-            }
-            if model.kind(id).is_a(ElementKind::Relationship) {
-                let owner = model
-                    .owner(id)
-                    .filter(|_| !bridged(model, id))
-                    .map(|owner| reference(&owner));
-                let related: Vec<Json> = related_to(model, id).iter().map(reference).collect();
-                fill_ends(&mut object, model.kind(id), owner, related);
-            }
-            Json::Object(object)
-        })
-        .collect();
-
-    // the memberships themselves, in the order of what they bring in,
-    // carrying their whole property set like any other element
-    for id in model.ids() {
-        let Some(owner) = model.owner(id) else {
-            continue;
-        };
-        if !bridged(model, id) {
-            continue;
-        }
-        let kind = sysml_model::membership_kind(model, id);
-        let uuid = bridge_uuids[&id].to_string();
-        let mut object = Map::new();
-        object.insert("@type".into(), kind.name().into());
-        object.insert("@id".into(), uuid.clone().into());
-        for meta in &features[&kind] {
-            let value = match meta.name {
-                "elementId" => uuid.clone().into(),
-                "owner" | "owningRelatedElement" | "membershipOwningNamespace" => reference(&owner),
-                "ownedElement" | "ownedRelatedElement" => Json::Array(vec![reference(&id)]),
-                "relatedElement" => Json::Array(vec![reference(&owner), reference(&id)]),
-                "source" => Json::Array(vec![reference(&owner)]),
-                "target" => Json::Array(vec![reference(&id)]),
-                // each subtype names the member again in its own terms
-                "memberElement"
-                | "ownedMemberElement"
-                | "ownedMemberFeature"
-                | "ownedMemberParameter"
-                | "ownedSubjectParameter"
-                | "ownedActorParameter"
-                | "ownedStakeholderParameter"
-                | "ownedObjectiveRequirement"
-                | "ownedVariantUsage"
-                | "transitionFeature"
-                | "action"
-                | "ownedResultExpression"
-                | "ownedConstraint"
-                | "ownedRequirement"
-                | "ownedConcern"
-                | "ownedRendering" => reference(&id),
-                // what the member refers to, rather than the member: a
-                // required constraint, a framed concern, a verified
-                // requirement and the rendering a view is drawn with
-                // each name the element their member references, where
-                // it references one
-                "referencedConstraint"
-                | "referencedConcern"
-                | "verifiedRequirement"
-                | "referencedRendering" => model
-                    .owned(id)
-                    .iter()
-                    .find(|&&child| model.kind(child) == ElementKind::ReferenceSubsetting)
-                    .and_then(|&child| model.get(child, "referencedFeature"))
-                    .and_then(Value::as_id)
-                    .map_or(Json::Null, |target| reference(&target)),
-                "memberElementId" | "ownedMemberElementId" => uuids[&id].to_string().into(),
-                "memberName" | "ownedMemberName" => {
-                    model.effective_name(id).map_or(Json::Null, Json::from)
-                }
-                "memberShortName" | "ownedMemberShortName" => model
-                    .effective_short_name(id)
-                    .map_or(Json::Null, Json::from),
-                "owningType" => reference(&owner),
-                // the standard spells it out even where nothing was written
-                "visibility" => model
-                    .member_visibility(id)
-                    .unwrap_or(Vis::Public)
-                    .keyword()
-                    .into(),
-                // a transition feature's membership says which it is,
-                // and so do a state's subactions and a requirement's
-                // constraints, in their own vocabularies
-                "kind" if kind == ElementKind::TransitionFeatureMembership => {
-                    sysml_model::transition_role(model, id).map_or(Json::Null, Json::from)
-                }
-                // the standard spells a state subaction's kind with the
-                // keyword that declared it
-                "kind" if kind == ElementKind::StateSubactionMembership => [
-                    (Role::Entry, "entry"),
-                    (Role::Do, "do"),
-                    (Role::Exit, "exit"),
-                ]
-                .iter()
-                .find(|(role, _)| Some(*role) == model.member_role(id))
-                .map_or(Json::Null, |(_, word)| Json::from(*word)),
-                "kind" if kind.is_a(ElementKind::RequirementConstraintMembership) => {
-                    // an assumption says so; a required constraint and a
-                    // framed concern are both requirements
-                    if model.member_role(id) == Some(Role::Assume) {
-                        "assumption".into()
-                    } else {
-                        "requirement".into()
-                    }
-                }
-                _ => default_for(meta),
-            };
-            object.insert(meta.name.into(), value);
-        }
-        elements.push(Json::Object(object));
     }
+
+    fn owned_of_kind(&self, id: ElementId, wanted: ElementKind) -> Json {
+        Json::Array(
+            self.model
+                .owned(id)
+                .iter()
+                .filter(|&&child| self.model.kind(child).is_a(wanted))
+                .map(|child| self.reference(child))
+                .collect(),
+        )
+    }
+}
+
+/// [`to_json`], with the resolver-derived facts filled in from
+/// [`Extras`].
+pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
+    let Identities {
+        uuids,
+        bridges: bridge_uuids,
+        qualified,
+    } = identities(model);
+    let features: HashMap<ElementKind, Vec<&'static sysml_model::FeatureMeta>> =
+        sysml_model::generated::ELEMENT_KINDS
+            .iter()
+            .map(|&kind| (kind, all_features(kind)))
+            .collect();
+    let writing = Writing {
+        model,
+        extras,
+        uuids,
+        bridge_uuids,
+        qualified,
+        features,
+        closures: Closures::new(model),
+    };
+    let mut elements = writing.elements();
+    writing.bridges(&mut elements);
     Json::Array(elements)
 }
 
@@ -1733,8 +1876,8 @@ mod tests {
         let ra = rebuilt.owned(roots[0])[0];
         let rb = rebuilt.owned(roots[0])[1];
         let rm = rebuilt.owned(roots[0])[2];
-        assert_eq!(rebuilt.get(ra, "value"), Some(&Value::Int(42)));
-        assert_eq!(rebuilt.get(rb, "value"), Some(&Value::Real(2.5)));
+        assert_eq!(rebuilt.maybe(ra, "value"), Some(&Value::Int(42)));
+        assert_eq!(rebuilt.maybe(rb, "value"), Some(&Value::Real(2.5)));
         // enum literals come back as strings, and an import's
         // visibility comes back beside the element rather than among
         // its properties -- which is where the exporter reads it from,
@@ -2962,7 +3105,7 @@ mod tests {
         assert_eq!(json[0]["value"], "inf");
         let (rebuilt, roots) = from_json(&json).unwrap();
         assert_eq!(
-            rebuilt.get(roots[0], "value"),
+            rebuilt.maybe(roots[0], "value"),
             Some(&Value::Real(f64::INFINITY))
         );
         assert_eq!(to_json(&rebuilt), json);

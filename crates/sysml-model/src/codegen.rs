@@ -928,6 +928,12 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
         // telling that it is a name here
         let method = escape(&method);
         writeln!(w, "    /// `{name}`, as {declared_by} declares it.").unwrap();
+        // These read through `Model::maybe` rather than `Model::get`.
+        // Each is written on `Model` and takes any `ElementId`, so
+        // `direction` may fairly be asked of a package -- a package has
+        // no direction, and that is an answer. `get` refuses the
+        // question, because there a name the metaclass does not have
+        // cannot be told from one that is simply misspelled.
         match (kind, many) {
             ("Class", false) => {
                 writeln!(
@@ -937,7 +943,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 .unwrap();
                 writeln!(
                     w,
-                    "        match self.get(id, \"{name}\") {{ Some(Value::Ref(to)) => Some(*to), _ => None }}"
+                    "        match self.maybe(id, \"{name}\") {{ Some(Value::Ref(to)) => Some(*to), _ => None }}"
                 )
                 .unwrap();
             }
@@ -949,7 +955,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 .unwrap();
                 // the singular declaration of the same name answers as a
                 // slice of one, so both readings hold
-                writeln!(w, "        match self.get(id, \"{name}\") {{").unwrap();
+                writeln!(w, "        match self.maybe(id, \"{name}\") {{").unwrap();
                 writeln!(w, "            Some(Value::RefList(list)) => list,").unwrap();
                 writeln!(
                     w,
@@ -963,7 +969,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 writeln!(w, "    pub fn {method}(&self, id: ElementId) -> bool {{").unwrap();
                 writeln!(
                     w,
-                    "        matches!(self.get(id, \"{name}\"), Some(Value::Bool(true)))"
+                    "        matches!(self.maybe(id, \"{name}\"), Some(Value::Bool(true)))"
                 )
                 .unwrap();
             }
@@ -975,7 +981,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 .unwrap();
                 writeln!(
                     w,
-                    "        match self.get(id, \"{name}\") {{ Some(Value::Int(n)) => Some(*n), _ => None }}"
+                    "        match self.maybe(id, \"{name}\") {{ Some(Value::Int(n)) => Some(*n), _ => None }}"
                 )
                 .unwrap();
             }
@@ -987,7 +993,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                 .unwrap();
                 writeln!(
                     w,
-                    "        match self.get(id, \"{name}\") {{ Some(Value::Real(x)) => Some(*x), _ => None }}"
+                    "        match self.maybe(id, \"{name}\") {{ Some(Value::Real(x)) => Some(*x), _ => None }}"
                 )
                 .unwrap();
             }
@@ -999,7 +1005,7 @@ fn accessors(classes: &BTreeMap<String, Class>, enums: &BTreeMap<String, Enum>, 
                     "    pub fn {method}(&self, id: ElementId) -> Option<&str> {{"
                 )
                 .unwrap();
-                writeln!(w, "        self.get(id, \"{name}\")?.as_str()").unwrap();
+                writeln!(w, "        self.maybe(id, \"{name}\")?.as_str()").unwrap();
             }
         }
         writeln!(w, "    }}").unwrap();

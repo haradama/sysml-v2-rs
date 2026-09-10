@@ -15,10 +15,33 @@ const SWEEPS: usize = 4;
 pub struct Placed {
     /// Index into [`Diagram::nodes`].
     pub node: usize,
+    /// Left edge, in the canvas's coordinates.
     pub x: f64,
+    /// Top edge.
     pub y: f64,
+    /// How wide the box came out.
     pub width: f64,
+    /// How tall.
     pub height: f64,
+}
+
+/// One box per size, each still at the origin.
+///
+/// Every arrangement starts from the sizes the boxes were measured at and
+/// moves them; the entries are indexed by node, so they are made in the
+/// order the sizes come in and never sorted.
+fn unplaced(sizes: &[(f64, f64)]) -> Vec<Placed> {
+    sizes
+        .iter()
+        .enumerate()
+        .map(|(node, &(width, height))| Placed {
+            node,
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        })
+        .collect()
 }
 
 /// Placed boxes and the canvas they need.
@@ -26,7 +49,9 @@ pub struct Placed {
 pub struct Layout {
     /// One entry per diagram node, indexed by node.
     pub placed: Vec<Placed>,
+    /// How wide the whole drawing came out.
     pub width: f64,
+    /// How tall.
     pub height: f64,
     /// The path an engine chose for each edge, indexed by edge and
     /// running from the edge's `from` to its `to`. Empty where the
@@ -105,17 +130,7 @@ fn arranged_by_rank(diagram: &Diagram, style: &Style) -> Layout {
 /// inside the one above it. The frames are worked out here rather than
 /// derived from where the boxes landed, so two packages can never overlap.
 fn packages(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
-    let mut placed: Vec<Placed> = sizes
-        .iter()
-        .enumerate()
-        .map(|(node, &(width, height))| Placed {
-            node,
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        })
-        .collect();
+    let mut placed = unplaced(sizes);
     let mut frames = vec![Frame::default(); diagram.groups.len()];
 
     let mut down = style.margin;
@@ -291,17 +306,7 @@ pub(crate) fn enclosed(diagram: &Diagram, at: usize) -> Vec<usize> {
 /// row above the columns, which is where the standard's `action-flow-view`
 /// puts the elements its swimlanes do not cover.
 fn swimlanes(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
-    let mut placed: Vec<Placed> = sizes
-        .iter()
-        .enumerate()
-        .map(|(node, &(width, height))| Placed {
-            node,
-            x: 0.0,
-            y: 0.0,
-            width,
-            height,
-        })
-        .collect();
+    let mut placed = unplaced(sizes);
 
     // the loose nodes first: one row, left to right, above the columns
     let laned: HashSet<usize> = diagram

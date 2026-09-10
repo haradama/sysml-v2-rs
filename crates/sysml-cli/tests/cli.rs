@@ -4,6 +4,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use sysml_corpus::library;
+
 fn sysml(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sysml"))
         .args(args)
@@ -115,7 +117,11 @@ fn export_resolves_and_marks_the_library() {
         "model.sysml",
         "package M {\n\timport L::*;\n\tpart def Car :> Base;\n}\n",
     );
+    // `--library` here names a library of this test's own making, and
+    // what is asserted below is which elements it marked -- so the real
+    // one, which would mark sixty thousand more, stays out
     let out = sysml(&[
+        "--no-library",
         "export",
         model.to_str().unwrap(),
         "--library",
@@ -313,8 +319,9 @@ fn rustgen_generates_and_says_what_stopped_it() {
         "api.sysml",
         "package Api {\n\
          \tprivate import ScalarValues::*;\n\
-         \tmetadata def rust { attribute path : String; attribute takesSelf : String; }\n\
-         \taction def Orphan { @rust { :>> path = \"elsewhere::Api::orphan\"; :>> takesSelf = \"&self\"; } }\n\
+         \tmetadata def code { attribute writtenIn : String;\n\
+    \t\tattribute path : String; attribute takesSelf : String; }\n\
+         \taction def Orphan { @code { :>> writtenIn = \"rust\"; :>> path = \"elsewhere::Api::orphan\"; :>> takesSelf = \"&self\"; } }\n\
          }\n",
     );
     let system = write(
@@ -424,7 +431,15 @@ fn check_resolves_and_reports_unresolved() {
     let out = sysml(&["check", bad.to_str().unwrap()]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unresolved `Missing0`"), "{stderr}");
+    assert!(
+        stderr.contains("`Missing0` resolves to nothing"),
+        "{stderr}"
+    );
+    // and the line it is written on is quoted back, with the name
+    // underlined -- a place alone is a place the reader has to go and
+    // look at
+    assert!(stderr.contains("part p0 : Missing0;"), "{stderr}");
+    assert!(stderr.contains("^^^^^^^^"), "{stderr}");
     assert!(stderr.contains("and 5 more"), "{stderr}");
 
     // --show 0 lists everything
@@ -461,10 +476,7 @@ fn check_resolves_and_reports_unresolved() {
 /// library beside it.
 #[test]
 fn check_answers_for_the_constraints_the_specification_states() {
-    let library = std::path::Path::new("../../vendor/sysml-v2-release/sysml.library");
-    if !library.is_dir() {
-        return; // the corpus submodule is not checked out
-    }
+    let library = library();
     let library = library.to_str().unwrap();
     let dir = temp_dir("check-rules");
 
@@ -478,11 +490,17 @@ fn check_answers_for_the_constraints_the_specification_states() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("wrong.sysml:3:13:"),
+        stderr.contains("wrong.sysml:3:13"),
         "placed where it is written: {stderr}"
     );
     assert!(stderr.contains("P::Engine::misplaced"), "{stderr}");
     assert!(stderr.contains("must be a CaseDefinition"), "{stderr}");
+    // the constraint's own name, where rustc puts an error code: it is
+    // what somebody looking the rule up will search for
+    assert!(
+        stderr.contains("error[validateObjectiveMembershipOwningType]"),
+        "{stderr}"
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("1 violation(s)"), "{stdout}");
 
@@ -520,7 +538,7 @@ fn check_answers_for_the_constraints_the_specification_states() {
 
     // without the library the constraints are not asked at all, rather
     // than asked and answered about what is not there
-    let out = sysml(&["check", right.to_str().unwrap()]);
+    let out = sysml(&["--no-library", "check", right.to_str().unwrap()]);
     assert!(out.status.success());
     assert!(
         !String::from_utf8_lossy(&out.stdout).contains("constraint(s)"),
@@ -538,7 +556,10 @@ fn check_answers_for_the_constraints_the_specification_states() {
     let out = sysml(&["check", dangling.to_str().unwrap(), library]);
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("unresolved `NoSuchThing`"), "{stderr}");
+    assert!(
+        stderr.contains("`NoSuchThing` resolves to nothing"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("must be"), "no constraint noise: {stderr}");
 }
 
@@ -813,7 +834,10 @@ fn check_reports_unreadable_directories() {
 fn check_with_no_references_reports_100_percent() {
     let dir = temp_dir("check-empty");
     let ok = write(&dir, "empty.sysml", "package OnlyAPackage;\n");
-    let out = sysml(&["check", ok.to_str().unwrap()]);
+    // `--no-library`, because a model read against the copy built in
+    // has seventeen thousand references into it and this is about a
+    // model that has none
+    let out = sysml(&["--no-library", "check", ok.to_str().unwrap()]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("0/0"));
 }
@@ -1134,8 +1158,24 @@ fn api_talks_to_a_model_server() {
 
 /// A diagnostic points at what it is about, and a column counted in
 /// bytes puts the caret past it as soon as a name is not ASCII.
+///
+/// A terminal spends two columns on `あ` and one on `a`, and the model
+/// this toolchain is for carries documentation in whatever language it
+/// was written in.
 #[test]
 fn the_caret_lands_under_the_character_it_points_at() {
+    /// How many columns a terminal spends on this text. Crude -- the
+    /// wide ranges, and everything else one -- which is enough to tell a
+    /// caret that is placed by display column from one placed by byte.
+    fn columns(text: &str) -> usize {
+        text.chars()
+            .map(|c| match ('\u{1100}'..='\u{ffdc}').contains(&c) {
+                true => 2,
+                false => 1,
+            })
+            .sum()
+    }
+
     let dir = temp_dir("caret");
     let bad = write(&dir, "wide.sysml", "part def 'あいう' {{{\n");
     let out = sysml(&["parse", bad.to_str().unwrap()]);
@@ -1144,13 +1184,25 @@ fn the_caret_lands_under_the_character_it_points_at() {
     let (written, caret) = stderr
         .lines()
         .zip(stderr.lines().skip(1))
-        .find(|(_, next)| next.contains('^'))
+        .find(|(line, next)| line.contains("part def") && next.contains('^'))
         .expect("a caret under the line it is about");
-    let column = caret.find('^').unwrap() - "    | ".len();
-    assert!(
-        column < written.chars().count() - "    | ".len(),
-        "{stderr}"
-    );
+
+    // Both lines carry the same gutter, so what is left of each is the
+    // drawn source and the marks under it. Walking the source by the
+    // width a terminal spends on each character reaches whatever the
+    // caret is under -- a brace, since that is what the parser is
+    // complaining about. Counted in bytes it lands three columns past
+    // the line's end; counted in characters, on the quote before it.
+    let gutter = |line: &str| line.find("| ").expect("a gutter") + 2;
+    let source = &written[gutter(written)..];
+    let at = caret.find('^').unwrap() - gutter(caret);
+    let mut column = 0;
+    let pointed = source.chars().find(|c| {
+        let here = column;
+        column += columns(&c.to_string());
+        here == at
+    });
+    assert_eq!(pointed, Some('{'), "{stderr}");
 }
 
 /// A directory that is not there is unreadable, not empty: the walk
@@ -1339,7 +1391,9 @@ fn check_reports_a_package_named_after_a_library_one() {
         "mine.sysml",
         "package Requirements {\n    part def Safe;\n}\n",
     );
-    let out = sysml(&["check", dir.to_str().unwrap()]);
+    // this writes its own `standard library package Requirements` to
+    // collide with, so the real one must stay out of the way
+    let out = sysml(&["--no-library", "check", dir.to_str().unwrap()]);
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -1348,7 +1402,13 @@ fn check_reports_a_package_named_after_a_library_one() {
     );
     assert!(stderr.contains("mine.sysml:1:9"), "{stderr}");
 
-    let out = sysml(&["--format", "json", "check", dir.to_str().unwrap()]);
+    let out = sysml(&[
+        "--no-library",
+        "--format",
+        "json",
+        "check",
+        dir.to_str().unwrap(),
+    ]);
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["collisions"].as_array().unwrap().len(), 1);
     assert!(v["collisions"][0]["path"]

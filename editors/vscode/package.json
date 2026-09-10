@@ -74,12 +74,12 @@
             "type": "string"
           },
           "default": [],
-          "description": "Directories in the workspace whose models are not part of this project -- a vendored corpus, someone else's model. Their names do not resolve and are not offered in completion. Relative paths are taken from each workspace folder."
+          "description": "Directories in the workspace whose models are not part of this project -- a vendored corpus, someone else's model. Their names do not resolve and are not offered in completion. A file opened from inside one is still read together with the model files in its own directory and below, so that half a model does not report the other half as unresolved. Relative paths are taken from each workspace folder."
         },
         "sysml.preview.openAutomatically": {
           "type": "boolean",
-          "default": true,
-          "description": "Open the diagram preview beside the editor when a SysML or KerML file is opened. Closing the preview keeps it closed until it is asked for again (`SysML: Open Diagram Preview`)."
+          "default": false,
+          "description": "Open the diagram preview beside the editor whenever a SysML or KerML file is opened. Off by default: a panel that appears unasked takes half the window from the file you came to read. Ask for it with `SysML: Open Diagram Preview` or the button in the editor title bar."
         },
         "sysml.diagram.layout": {
           "type": "string",
@@ -164,7 +164,9 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
     "jsdom": "^30.0.1",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   },
   "activationEvents": [
     "onLanguage:sysml",

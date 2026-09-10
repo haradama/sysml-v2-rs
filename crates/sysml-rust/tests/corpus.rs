@@ -22,24 +22,8 @@ fn vendor() -> Option<PathBuf> {
 }
 
 fn models(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let mut stack = vec![root.join("sysml/src"), root.join("kerml/src")];
-    while let Some(at) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&at) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if matches!(
-                path.extension().and_then(|e| e.to_str()),
-                Some("sysml" | "kerml")
-            ) {
-                found.push(path);
-            }
-        }
-    }
+    let mut found = sysml_semantics::model_files(&root.join("sysml/src"));
+    found.extend(sysml_semantics::model_files(&root.join("kerml/src")));
     found.sort();
     found
 }

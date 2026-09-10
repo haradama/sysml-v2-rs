@@ -6,14 +6,27 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-readme.workspace = true
+# its own, not the workspace one: `readme` inherited from
+# `workspace.package` resolves against the workspace root, so every
+# crate published carried the whole project's README
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
 sysml-model.workspace = true
-serde_json = "1"
 unicode-width = "0.2"
 
+# What reads the graph the Eclipse Layout Kernel hands back. Laying a
+# diagram out through ELK means running `elkrs` and reading its JSON, and
+# neither spawning a process nor parsing JSON is any business of a crate
+# that draws SVG -- so both are behind a feature, and anyone depending on
+# this crate for the drawing gets neither.
+serde_json = { version = "1", optional = true }
+
+[features]
+elk = ["dep:serde_json"]
+
 [dev-dependencies]
+sysml-corpus.workspace = true
 sysml-semantics.workspace = true

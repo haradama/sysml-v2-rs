@@ -15,11 +15,13 @@ use crate::Style;
 /// One line of the tree: an element and how deep it sits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
+    /// The element this row stands for.
     pub id: ElementId,
     /// Indentation level, counting only the named elements above it.
     pub depth: usize,
     /// SysML keyword shown in guillemets, e.g. `part def`.
     pub keyword: String,
+    /// What it is called, as the tree shows it.
     pub name: String,
 }
 
@@ -33,6 +35,7 @@ impl Row {
 /// The rows of a browser view, in document order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Browser {
+    /// The rows, in the order the model declares them.
     pub rows: Vec<Row>,
 }
 
@@ -76,13 +79,17 @@ pub fn to_svg(browser: &Browser, style: &Style) -> String {
     let height = browser.rows.len() as f64 * style.line_height + 2.0 * style.margin;
 
     let mut body = String::new();
-    let ends = last_descendants(&browser.rows);
+    let ends = last_children(&browser.rows);
     for (index, row) in browser.rows.iter().enumerate() {
         let x = style.margin + row.depth as f64 * style.indent;
         let y = style.margin + (index as f64 + 0.5) * style.line_height;
 
         // a rule down the left of everything this row contains, so a deep
-        // tree still shows what belongs to what
+        // tree still shows what belongs to what. It stops at the last row
+        // that hangs off it: what the last of those holds is further in
+        // and hangs off a rule of its own, so a rule drawn down to the
+        // last of *those* would run past every tick joining it and end in
+        // mid-air.
         let last = ends[index];
         if last > index {
             writeln!(
@@ -116,28 +123,23 @@ pub fn to_svg(browser: &Browser, style: &Style) -> String {
     document(width, height, style, &body)
 }
 
-/// For each row, the index of the last row nested under it -- its own,
+/// For each row, the index of the last row directly under it -- its own,
 /// where it holds nothing.
 ///
-/// The rows are the ownership tree flattened in order, so one pass down
-/// them settles every row at once: a row is closed by the first row after
-/// it that is no deeper than it is, and by the end of the list otherwise.
-fn last_descendants(rows: &[Row]) -> Vec<usize> {
+/// The rows are the ownership tree flattened in order and a row is one
+/// deeper than the row that holds it, so one pass down them settles every
+/// row at once: the row a line hangs off is the last one above it that is
+/// one shallower, and every row that hangs off it says so as it passes.
+fn last_children(rows: &[Row]) -> Vec<usize> {
     let mut last: Vec<usize> = (0..rows.len()).collect();
-    // the rows still open, deepest last
-    let mut open: Vec<usize> = Vec::new();
+    // the row each depth is currently inside of, shallowest first
+    let mut above: Vec<usize> = Vec::new();
     for (at, row) in rows.iter().enumerate() {
-        while let Some(&holding) = open.last() {
-            if rows[holding].depth < row.depth {
-                break;
-            }
-            last[holding] = at - 1;
-            open.pop();
+        above.truncate(row.depth);
+        if let Some(&holding) = above.last() {
+            last[holding] = at;
         }
-        open.push(at);
-    }
-    for holding in open {
-        last[holding] = rows.len() - 1;
+        above.push(at);
     }
     last
 }
@@ -216,9 +218,9 @@ mod tests {
     }
 
     #[test]
-    fn a_leaf_has_no_descendants() {
+    fn a_leaf_holds_nothing() {
         let rows = tree("part def A;\n").rows;
-        assert_eq!(last_descendants(&rows), [0]);
+        assert_eq!(last_children(&rows), [0]);
     }
 
     #[test]
@@ -234,6 +236,36 @@ mod tests {
         )
         .rows;
         assert_eq!(rows.len(), 4);
-        assert_eq!(last_descendants(&rows), [3, 2, 2, 3]);
+        assert_eq!(last_children(&rows), [3, 2, 2, 3]);
+    }
+
+    #[test]
+    fn a_rule_stops_at_the_last_row_that_hangs_off_it() {
+        // What `Wheel` holds sits below it and is the last row of all,
+        // but it hangs off `Wheel`'s rule rather than `P`'s: a rule of
+        // `P`'s drawn down to it would pass every tick joining it and
+        // stop under the tree with nothing there.
+        let rows = tree(
+            "package P {\n\
+             \tpart def Car;\n\
+             \tpart def Wheel { port hub; }\n\
+             }\n",
+        )
+        .rows;
+        assert_eq!(rows.len(), 4);
+        assert_eq!(last_children(&rows), [2, 1, 3, 3]);
+
+        // and the drawing says the same, in the one line that is P's
+        // rule: from just below its own row to the row `Wheel` is on
+        let style = Style::default();
+        let svg = to_svg(&Browser { rows }, &style);
+        let middle = |at: usize| style.margin + (at as f64 + 0.5) * style.line_height;
+        let x = style.margin + 0.25 * style.indent;
+        let rule = format!(
+            "<line class=\"guide\" x1=\"{x:.1}\" y1=\"{:.1}\" x2=\"{x:.1}\" y2=\"{:.1}\"/>",
+            middle(0) + 0.35 * style.line_height,
+            middle(2),
+        );
+        assert!(svg.contains(&rule), "{svg}");
     }
 }

@@ -40,6 +40,7 @@ impl Lifeline {
 pub struct Moment {
     /// Indices into [`Sequence::lifelines`].
     pub from: usize,
+    /// Index into [`Sequence::lifelines`] of the one it reaches.
     pub to: usize,
     /// What the standard writes on the arrow: a message's payload, or a
     /// succession's name.
@@ -51,7 +52,9 @@ pub struct Moment {
 /// The participants of one interaction and what passes between them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Sequence {
+    /// One lifeline per occurrence taking part, left to right.
     pub lifelines: Vec<Lifeline>,
+    /// What passes between them, in the order it happens.
     pub moments: Vec<Moment>,
 }
 

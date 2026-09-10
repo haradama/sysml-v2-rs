@@ -33,7 +33,16 @@
 //! assert!(svg.starts_with("<svg xmlns="));
 //! ```
 
+// Nothing here needs `unsafe`, and saying so is what keeps it that way.
+#![forbid(unsafe_code)]
+// Every public item carries a line saying what it is for. The two
+// crates that do not turn this on are `sysml-syntax`, whose public
+// surface is two hundred and seventy-nine syntax kinds whose names are
+// the documentation, and `sysml-model`, whose is generated from the
+// metamodel and would want the generator to write it.
+#![warn(missing_docs)]
 mod browser;
+#[cfg(feature = "elk")]
 mod elk;
 mod graph;
 mod layout;
@@ -41,6 +50,7 @@ mod sequence;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
+#[cfg(feature = "elk")]
 pub use elk::{elk_layout, ElkError};
 pub use graph::{
     definition_diagram, interconnection_diagram, lines, Compartment, Diagram, Edge, Feature, Node,
@@ -120,8 +130,18 @@ impl Style {
 /// forms, the emoji drawn square -- and a list copied into this file would
 /// be a snapshot of one Unicode release with nothing in the repository to
 /// check it against.
+///
+/// What [`svg::escape`] drops on the way out is dropped here too, so that
+/// a box is measured on the text drawn in it rather than on characters
+/// `unicode-width` gives a width and XML will not carry.
+///
+/// [`svg::escape`]: crate::svg::escape
 pub(crate) fn columns(text: &str) -> usize {
-    unicode_width::UnicodeWidthStr::width(text)
+    if text.chars().all(svg::xml_carries) {
+        return unicode_width::UnicodeWidthStr::width(text);
+    }
+    let drawn: String = text.chars().filter(|&ch| svg::xml_carries(ch)).collect();
+    unicode_width::UnicodeWidthStr::width(drawn.as_str())
 }
 
 /// Lay `diagram` out and render it as a standalone SVG document.
@@ -133,6 +153,7 @@ pub fn render(diagram: &Diagram, style: &Style) -> String {
 /// the `elkrs` binary. Only the layout comes from ELK; boxes, edges and
 /// labels are still drawn here, so the two engines produce the same
 /// visual language.
+#[cfg(feature = "elk")]
 pub fn render_with_elk(
     diagram: &Diagram,
     style: &Style,

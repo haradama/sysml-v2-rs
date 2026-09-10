@@ -31,7 +31,7 @@ unbounded `Integer` becomes an `i64`, and sixty-four bits of arithmetic
 on an eight-bit microcontroller costs both flash and time, so the model
 names `u8` for a pin and `u16` for a duration rather than leaving the
 width to be assumed. Measured on the real target, the same arithmetic is
-464 bytes as `i64` and 226 as `u16`. Each definition carries a `@rust { ... }`
+464 bytes as `i64` and 226 as `u16`. Each definition carries a `@code { ... }`
 usage naming the item it stands for, so the generated code calls the
 real trait in `src/hal.rs` instead of a parallel one invented for it.
 This is the shape `sysml import-rust` writes from a crate's rustdoc
@@ -94,7 +94,7 @@ binds it to the Rust that runs it:
 
 ```sysml
 verification def <'T.3'> VerifyPerceptiblePeriod {
-    @rust { :>> path = "crate::verification::perceptible_period"; }
+    @code { :>> writtenIn = "rust"; :>> path = "crate::verification::perceptible_period"; }
     subject app : BlinkApp;
     objective { verify PerceptiblePeriod; }
 }
@@ -143,7 +143,7 @@ particular and traces nowhere.
 sysml rustgen model/blink.sysml model/requirements.sysml model/verification.sysml \
     --library model/hardware.sysml \
     --library model/middleware.sysml \
-    --library ../../vendor/sysml-v2-release/sysml.library \
+    --library ../../crates/sysml-stdlib/library \
     -o src/generated.rs
 ```
 
@@ -198,7 +198,7 @@ the parts that were left open do not.
 
 ```sh
 sysml diagram model/*.sysml \
-    --library ../../vendor/sysml-v2-release/sysml.library \
+    --library ../../crates/sysml-stdlib/library \
     --internal ArduinoCompatibleBoard -o board.svg
 ```
 

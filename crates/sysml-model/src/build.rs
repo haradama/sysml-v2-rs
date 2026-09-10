@@ -237,7 +237,7 @@ fn build_node(
         model.set(id, "isVariation", Value::Bool(true));
     }
     for (stated, implied) in [("isVariation", "isAbstract"), ("isConstant", "isVariable")] {
-        if model.get(id, stated) == Some(&Value::Bool(true)) && kind.feature(implied).is_some() {
+        if model.flag(id, stated) && kind.feature(implied).is_some() {
             model.set(id, implied, Value::Bool(true));
         }
     }
@@ -288,7 +288,7 @@ fn build_node(
         // `is_composite` reads the direction the source wrote; a
         // `subject` or a `return` is directed by the membership that
         // owns it instead, and is a parameter for the same reason.
-        let directed = model.get(id, "direction").is_some();
+        let directed = model.maybe(id, "direction").is_some();
         // Only a `FeatureMembership` features what it owns, and only
         // what is featured can be part of it. `variant action a1;` is
         // owned through a `VariantMembership`, so the variation is not
@@ -1325,23 +1325,13 @@ fn node_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 
 /// The reference a keyword introduces, where the statement writes one
 /// directly after it.
+///
+/// The node has to be the one right after the keyword: any other keyword
+/// closes the slot the reference sits in, so a node that is not a name
+/// is an answer of `None` rather than a reason to keep looking.
 fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
-    let mut after = false;
-    for element in node.children_with_tokens() {
-        match element.as_token() {
-            Some(token) if token.kind().is_trivia() => {}
-            // any other keyword closes the slot the reference sits in
-            Some(token) => after = token.kind() == keyword,
-            None => {
-                let child = element.into_node().expect("checked for a token above");
-                if after {
-                    return matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR)
-                        .then_some(child);
-                }
-            }
-        }
-    }
-    None
+    node_after(node, keyword)
+        .filter(|child| matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
 }
 
 /// Reify the condition a transition is guarded by.
@@ -2632,7 +2622,7 @@ mod tests {
             .find(|&it| model.kind(it) == ElementKind::TextualRepresentation)
             .expect("the text it was written as is kept");
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("count")
         );
     }
@@ -2664,7 +2654,7 @@ mod tests {
             let range = reference(&model, xs, "multiplicity").expect(written);
             let spelled = |name: &str| -> Option<String> {
                 let bound = reference(&model, range, name)?;
-                Some(match model.get(bound, "value") {
+                Some(match model.maybe(bound, "value") {
                     Some(Value::Int(int)) => int.to_string(),
                     // what it could not read is kept as written, and an
                     // empty answer here means "a bound, but not a number"
@@ -2974,7 +2964,7 @@ mod tests {
                 .owned(of)
                 .iter()
                 .copied()
-                .filter(|&it| model.get(it, "direction").is_some())
+                .filter(|&it| model.maybe(it, "direction").is_some())
                 .map(|it| (model.kind(it), model.name(it)))
                 .collect()
         };
@@ -3000,7 +2990,7 @@ mod tests {
             .owned(transition)
             .iter()
             .copied()
-            .filter(|&it| model.get(it, "direction").is_some())
+            .filter(|&it| model.maybe(it, "direction").is_some())
             .nth(1)
             .expect("the second parameter");
         let subsets = model.owned(accepted)[0];
@@ -3122,7 +3112,7 @@ mod tests {
                 .find(|&&it| model.kind(it) == ElementKind::Expression)?;
             let written = model.owned(*condition)[0];
             model
-                .get(written, "body")
+                .maybe(written, "body")
                 .and_then(Value::as_str)
                 .map(str::to_string)
         };
@@ -3297,7 +3287,7 @@ mod tests {
         let written = model.owned(result)[0];
         assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("mass * speed")
         );
 
@@ -3449,7 +3439,7 @@ mod tests {
             .find(|&it| model.kind(it) == ElementKind::TextualRepresentation)
             .expect("the text is kept");
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("2 + b")
         );
 
@@ -3457,7 +3447,7 @@ mod tests {
         let c = model.owned(roots[0])[1];
         let literal = reference(&model, model.owned(c)[0], "value").unwrap();
         assert_eq!(model.kind(literal), ElementKind::LiteralBoolean);
-        assert_eq!(model.get(literal, "value"), Some(&Value::Bool(false)));
+        assert_eq!(model.maybe(literal, "value"), Some(&Value::Bool(false)));
 
         // a literal no reification exists for stays an expression as text
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -3476,7 +3466,7 @@ mod tests {
         let value_of = |at: usize| {
             let attribute = model.owned(roots[0])[at];
             let literal = reference(&model, model.owned(attribute)[0], "value").unwrap();
-            (model.kind(literal), model.get(literal, "value").cloned())
+            (model.kind(literal), model.maybe(literal, "value").cloned())
         };
         assert_eq!(
             value_of(0),
@@ -3562,7 +3552,7 @@ mod tests {
         let written = model.owned(guard)[0];
         assert_eq!(model.kind(written), ElementKind::TextualRepresentation);
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("1 == 1")
         );
         assert_eq!(
@@ -3596,7 +3586,7 @@ mod tests {
         );
         let ieo = model.owned(roots[0])[1];
         assert_eq!(
-            model.get(ieo, "direction"),
+            model.maybe(ieo, "direction"),
             Some(&Value::EnumLit("in")),
             "the wrapper's direction belongs to what it wraps"
         );
@@ -3729,7 +3719,7 @@ mod tests {
         let guard = reference_list(&model, transition, "guardExpression")[0];
         let written = model.owned(guard)[0];
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("ready")
         );
         let effect = reference_list(&model, transition, "effectAction")[0];
@@ -3862,7 +3852,7 @@ mod tests {
         ));
         let loop_node = model.owned(roots[0])[0];
         assert_eq!(model.kind(loop_node), ElementKind::ForLoopActionUsage);
-        assert_eq!(model.get(loop_node, "direction"), None);
+        assert_eq!(model.maybe(loop_node, "direction"), None);
         let variable = model
             .owned(loop_node)
             .iter()
@@ -3877,7 +3867,7 @@ mod tests {
             .expect("the loop says what it iterates over");
         let written = model.owned(asked)[0];
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("1..3")
         );
     }
@@ -3901,7 +3891,7 @@ mod tests {
             .expect("the branch says what it asks");
         let written = model.owned(asked)[0];
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("x , y")
         );
     }
@@ -3930,7 +3920,7 @@ mod tests {
             .expect("the loop says what ends it");
         let written = model.owned(asked)[0];
         assert_eq!(
-            model.get(written, "body").and_then(Value::as_str),
+            model.maybe(written, "body").and_then(Value::as_str),
             Some("done")
         );
     }
@@ -3975,7 +3965,7 @@ mod tests {
         let literal = reference(&model, model.owned(greeting)[0], "value").unwrap();
         assert_eq!(model.kind(literal), ElementKind::LiteralString);
         assert_eq!(
-            model.get(literal, "value").and_then(Value::as_str),
+            model.maybe(literal, "value").and_then(Value::as_str),
             Some("say \"hi\"")
         );
     }
@@ -4012,7 +4002,7 @@ mod tests {
             .collect();
         assert_eq!(ends, [Some("src")]);
         let end = model.owned(roots[0])[0];
-        assert_eq!(model.get(end, "isEnd"), Some(&Value::Bool(true)));
+        assert_eq!(model.maybe(end, "isEnd"), Some(&Value::Bool(true)));
         // the cross feature is nameless here and is not an end itself
         let cross = model
             .owned(end)
@@ -4021,7 +4011,7 @@ mod tests {
             .find(|&it| model.kind(it).is_a(ElementKind::Feature))
             .expect("the `[1]` stands for a cross feature");
         assert_eq!(model.name(cross), None);
-        assert_eq!(model.get(cross, "isEnd"), None);
+        assert_eq!(model.maybe(cross, "isEnd"), None);
         assert_eq!(
             model
                 .owned(cross)
@@ -4073,7 +4063,7 @@ mod tests {
         assert_eq!(model.kind(owned[0]), ElementKind::NamespaceImport);
         assert_eq!(model.kind(owned[1]), ElementKind::Documentation);
         assert_eq!(
-            model.get(owned[1], "body").and_then(Value::as_str),
+            model.maybe(owned[1], "body").and_then(Value::as_str),
             Some("The vehicle model.")
         );
 

@@ -131,7 +131,7 @@ fn a_value_that_is_only_a_name_says_what_it_names() {
             .iter()
             .copied()
             .find(|&child| model.kind(child) == ElementKind::FeatureValue)
-            .and_then(|membership| model.get(membership, "value")?.as_id())
+            .and_then(|membership| model.maybe(membership, "value")?.as_id())
             .expect("a declared value")
     };
 
@@ -141,7 +141,7 @@ fn a_value_that_is_only_a_name_says_what_it_names() {
         ElementKind::FeatureReferenceExpression
     );
     assert_eq!(
-        model.get(reference, "referent"),
+        model.maybe(reference, "referent"),
         Some(&Value::Ref(named("pinNumber")))
     );
 
@@ -149,7 +149,7 @@ fn a_value_that_is_only_a_name_says_what_it_names() {
     // and names nothing itself
     let computed = value_of(named("computed"));
     assert_eq!(model.kind(computed), ElementKind::OperatorExpression);
-    assert_eq!(model.get(computed, "referent"), None);
+    assert_eq!(model.maybe(computed, "referent"), None);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn a_verification_case_says_what_it_verifies() {
     let case = named("V");
     assert_eq!(model.kind(case), ElementKind::VerificationCaseDefinition);
     assert_eq!(
-        model.get(case, "verifiedRequirement"),
+        model.maybe(case, "verifiedRequirement"),
         Some(&Value::RefList(vec![named("R"), named("R2")]))
     );
 }
@@ -267,7 +267,7 @@ fn an_operator_invokes_the_function_the_specification_names_for_it() {
             .iter()
             .copied()
             .find(|&child| ws.model().kind(child) == ElementKind::FeatureValue)
-            .and_then(|membership| ws.model().get(membership, "value")?.as_id())
+            .and_then(|membership| ws.model().maybe(membership, "value")?.as_id())
             .expect("a declared value")
     };
     let plus = value_of(&ws, "P::c");
@@ -295,7 +295,7 @@ fn an_operator_invokes_the_function_the_specification_names_for_it() {
             .iter()
             .copied()
             .find(|&it| ws.model().kind(it) == ElementKind::Redefinition)
-            .and_then(|it| ws.model().get(it, "redefinedFeature")?.as_id())
+            .and_then(|it| ws.model().maybe(it, "redefinedFeature")?.as_id())
             .map(|to| ws.qualified_name_of(to))
     };
     let arguments: Vec<sysml_model::ElementId> = ws
@@ -303,7 +303,7 @@ fn an_operator_invokes_the_function_the_specification_names_for_it() {
         .owned(plus)
         .iter()
         .copied()
-        .filter(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+        .filter(|&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("in")))
         .collect();
     assert_eq!(
         arguments
@@ -322,7 +322,7 @@ fn an_operator_invokes_the_function_the_specification_names_for_it() {
         .owned(plus)
         .iter()
         .copied()
-        .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+        .find(|&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("out")))
         .expect("the expression hands its value back");
     assert!(
         redefines(&ws, result).is_some(),
@@ -360,7 +360,7 @@ fn an_argument_that_names_its_parameter_is_read_by_the_name() {
             .iter()
             .copied()
             .find(|&child| ws.model().kind(child) == ElementKind::FeatureValue)
-            .and_then(|membership| ws.model().get(membership, "value")?.as_id())
+            .and_then(|membership| ws.model().maybe(membership, "value")?.as_id())
             .expect("a declared value")
     };
     let redefines = |ws: &Workspace, feature: sysml_model::ElementId| {
@@ -369,7 +369,7 @@ fn an_argument_that_names_its_parameter_is_read_by_the_name() {
             .iter()
             .copied()
             .find(|&it| ws.model().kind(it) == ElementKind::Redefinition)
-            .and_then(|it| ws.model().get(it, "redefinedFeature")?.as_id())
+            .and_then(|it| ws.model().maybe(it, "redefinedFeature")?.as_id())
             .map(|to| ws.qualified_name_of(to))
     };
 
@@ -381,7 +381,7 @@ fn an_argument_that_names_its_parameter_is_read_by_the_name() {
         .owned(call)
         .iter()
         .copied()
-        .filter(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+        .filter(|&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("in")))
         .collect();
     assert_eq!(
         arguments
@@ -403,7 +403,7 @@ fn an_argument_that_names_its_parameter_is_read_by_the_name() {
         .owned(construction)
         .iter()
         .copied()
-        .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+        .find(|&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("out")))
         .expect("a constructor hands back what it constructs");
     assert_eq!(
         ws.model()
@@ -462,7 +462,7 @@ fn an_accept_that_waits_invokes_the_trigger_its_keyword_names() {
         ws.model()
             .owned(trigger)
             .iter()
-            .filter(|&&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("in")))
+            .filter(|&&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("in")))
             .count(),
         1
     );
@@ -506,14 +506,14 @@ fn an_expression_comes_to_what_it_names() {
             .iter()
             .copied()
             .find(|&it| ws.model().kind(it) == ElementKind::FeatureValue)
-            .and_then(|it| ws.model().get(it, "value")?.as_id())
+            .and_then(|it| ws.model().maybe(it, "value")?.as_id())
             .expect("a declared value");
         let result = ws
             .model()
             .owned(expression)
             .iter()
             .copied()
-            .find(|&it| ws.model().get(it, "direction") == Some(&Value::EnumLit("out")))
+            .find(|&it| ws.model().maybe(it, "direction") == Some(&Value::EnumLit("out")))
             .expect("the expression hands its value back");
         ws.supertypes(result)
             .into_iter()

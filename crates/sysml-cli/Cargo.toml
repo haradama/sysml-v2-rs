@@ -6,7 +6,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-readme.workspace = true
+# its own, not the workspace one: `readme` inherited from
+# `workspace.package` resolves against the workspace root, so every
+# crate published carried the whole project's README
+readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
@@ -20,12 +23,20 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+annotate-snippets.workspace = true
 sysml-syntax.workspace = true
 sysml-model.workspace = true
 sysml-semantics.workspace = true
+# the standard library, so that `sysml check model/` resolves without
+# being handed a path first
+sysml-stdlib.workspace = true
 sysml-interchange.workspace = true
 sysml-rust.workspace = true
-sysml-diagram.workspace = true
+# both of these offer the ELK layout, which is what the feature is
+sysml-diagram = { workspace = true, features = ["elk"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
+
+[dev-dependencies]
+sysml-corpus.workspace = true

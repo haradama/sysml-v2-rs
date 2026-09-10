@@ -602,6 +602,12 @@ impl Parser<'_> {
     fn kw_usage(&mut self, cp: Checkpoint) {
         self.start_node_at(cp, USAGE);
         self.bump();
+        // `ActorUsage : PartUsage = 'actor' UsageExtensionKeyword* Usage`,
+        // and the same shape for `subject`, `stakeholder`, `objective`,
+        // `return` and `variant`: the keyword comes first and the
+        // user-defined keywords the model declares come after it, so
+        // `actor #safetyEngineer a;` is a member of a requirement.
+        self.opt_prefix_metadata();
         self.opt_short_name();
         self.opt_decl_name();
         self.element_tail();
@@ -756,7 +762,7 @@ impl Parser<'_> {
                 COLON_GT_GT | REDEFINES_KW => self.relationship_part(REDEFINITION),
                 COLON_COLON_GT | REFERENCES_KW => self.relationship_part(REFERENCES),
                 CHAINS_KW | UNIONS_KW | INTERSECTS_KW | DIFFERENCES_KW | DISJOINT_KW
-                | INVERSE_KW | FEATURED_KW | CONJUGATES_KW | CONJUGATE_KW => {
+                | INVERSE_KW | FEATURED_KW | CONJUGATES_KW | CONJUGATE_KW | TILDE => {
                     self.kerml_relation_part()
                 }
                 L_BRACKET => self.multiplicity(),
@@ -794,6 +800,18 @@ impl Parser<'_> {
                     self.opt_name();
                     self.relationship_part(REFERENCES);
                     self.finish_node();
+                }
+                // `end [0..1] #M feature x : X;` — a prefix metadata
+                // annotation may follow the multiplicity, since
+                // `FeaturePrefix` puts the `PrefixMetadataMember`s after
+                // the cross feature an `end` may carry. What it
+                // annotates is the feature the declaration goes on to
+                // name, so it opens the nested declaration rather than
+                // being read as part of the one already open.
+                HASH if self.nth_is_name(1) => {
+                    let nested = self.checkpoint();
+                    self.definition_or_usage(nested);
+                    return;
                 }
                 // `end x [1..*] feature y : T redefines z;` — a nested
                 // feature declaration ends the enclosing element, and so
@@ -954,7 +972,7 @@ impl Parser<'_> {
     }
 
     /// KerML: `chains a.b`, `disjoint from T`, `inverse of f`, `featured by T`,
-    /// `unions T`, `conjugates T`, ...
+    /// `unions T`, `conjugates T` and its spelling `~ T`, ...
     fn kerml_relation_part(&mut self) {
         self.start_node(RELATION);
         let lead = self.current();
@@ -1122,6 +1140,10 @@ impl Parser<'_> {
                     | FEATURED_KW
                     | CONJUGATES_KW
                     | CONJUGATE_KW
+                    // `ConjugationPart = ( 'conjugates' | '~' ) ...`:
+                    // `feature g ~ B::f;` conjugates the same way, and
+                    // read as an expression it declared no `g` at all
+                    | TILDE
                     // `connection k connect a to b;` -- the same trap: a
                     // named connector whose name is read as a reference
                     // is a connector nothing can name

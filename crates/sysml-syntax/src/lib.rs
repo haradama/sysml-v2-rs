@@ -20,6 +20,11 @@
 //! assert_eq!(def.name().unwrap().text(), "Vehicle");
 //! ```
 
+// This crate uses no `unsafe`, and the one place that did -- turning a
+// raw number back into a `SyntaxKind` -- rested on an invariant nothing
+// checked. It reads a table now, so the promise can be made to the
+// compiler rather than to the reader.
+#![forbid(unsafe_code)]
 pub mod ast;
 pub mod fmt;
 mod kind;

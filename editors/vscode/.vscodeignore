@@ -12,4 +12,6 @@ node_modules/**
 !node_modules/brace-expansion/**
 !node_modules/lru-cache/**
 !node_modules/yallist/**
-*.map
+# a pattern with no slash in it is matched against the whole relative
+# path, so `*.map` never reached the ones under `out/`
+**/*.map
