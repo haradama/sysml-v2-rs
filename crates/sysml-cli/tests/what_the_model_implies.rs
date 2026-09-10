@@ -28,9 +28,17 @@ package Every {
         attribute mass : Real;
     }
 
+    variation part def Drive {
+        variant part electric : Vehicle;
+        variant part petrol : Vehicle;
+    }
+
     part def Car :> Vehicle {
         attribute :>> mass = 1200.0;
+        attribute towing : Boolean = false;
         part wheels : Wheel[4];
+        attribute howMany : Integer = 2;
+        part spares : Wheel[howMany];
         ref part spare : Wheel;
         attribute notes : String[0..*] ordered nonunique;
         attribute gear : Gear = Gear::park;
@@ -57,6 +65,7 @@ package Every {
 
     item def Tick;
     state def Lighting {
+        first off then on;
         entry; then off;
         state off;
         state on;
@@ -65,6 +74,9 @@ package Every {
             accept tick : Tick
             if true
             then on;
+        transition darkening
+            first on
+            then off;
     }
 }
 "#;
@@ -106,6 +118,12 @@ fn a_multiplicity_is_two_numbers_and_not_a_container() {
     assert_eq!(wheels.multiplicity.lower, 4);
     assert_eq!(wheels.multiplicity.upper, Some(4));
 
+    // `[n]`, naming a feature: any number of them, since a plan that
+    // said one of them would be read as a model that said nothing
+    let spares = feature(car, "spares");
+    assert_eq!(spares.multiplicity.lower, 0);
+    assert_eq!(spares.multiplicity.upper, None);
+
     // `[0..*]`: any number
     let notes = feature(car, "notes");
     assert_eq!(notes.multiplicity.lower, 0);
@@ -121,9 +139,14 @@ fn a_multiplicity_is_two_numbers_and_not_a_container() {
         .unwrap()
         .iter()
         .find(|it| it["of"] == "Every::Car")
-        .map(|it| it["features"][4].clone())
-        .unwrap();
-    assert_eq!(gear["name"], "gear", "{gear}");
+        .and_then(|it| {
+            it["features"]
+                .as_array()?
+                .iter()
+                .find(|it| it["name"] == "gear")
+                .cloned()
+        })
+        .expect("a car has a gear");
     assert!(gear["multiplicity"].is_null(), "one of it: {gear}");
     assert!(
         gear["ordered"].is_null(),
@@ -280,15 +303,22 @@ fn a_state_machine_says_where_it_starts() {
     assert_eq!(lighting.states, ["off", "on"]);
     assert_eq!(lighting.initial.as_deref(), Some("off"));
 
-    let [only] = &lighting.transitions[..] else {
-        panic!("one transition, {}", lighting.transitions.len());
+    let [lighting_up, darkening] = &lighting.transitions[..] else {
+        panic!("two transitions, {}", lighting.transitions.len());
     };
-    assert_eq!(only.from, "off");
-    assert_eq!(only.to, "on");
-    assert_eq!(only.guard.as_deref(), Some("true"));
-    let waits = only.on.as_ref().expect("it accepts something");
+    assert_eq!(lighting_up.from, "off");
+    assert_eq!(lighting_up.to, "on");
+    assert_eq!(lighting_up.guard.as_deref(), Some("true"));
+    let waits = lighting_up.on.as_ref().expect("it accepts something");
     assert_eq!(waits.name, "tick");
     assert_eq!(waits.typed_by.as_deref(), Some("Every::Tick"));
+
+    // and one that waits for nothing and asks nothing, which is a
+    // transition a machine takes as soon as it can
+    assert_eq!(darkening.from, "on");
+    assert_eq!(darkening.to, "off");
+    assert!(darkening.on.is_none(), "it waits for nothing");
+    assert!(darkening.guard.is_none(), "it asks nothing");
 }
 
 /// An abstract definition is one to inherit from rather than to build,
@@ -358,6 +388,20 @@ fn the_command_line_hands_over_the_same_plan() {
     // a path that is not there is said so, rather than planned as
     // nothing at all
     let out = sysml(&["plan", "/nowhere/model.sysml"]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot read"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // and so is a library that is not there, which is a different path
+    // and used to be a plan answered as if the library had been read
+    let out = Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(["plan", at.to_str().unwrap()])
+        .env("SYSML_LIBRARY_PATH", "/nowhere/library")
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("cannot read"),
@@ -507,4 +551,39 @@ fn what_the_model_annotates_a_definition_with_is_handed_over() {
     // and which language it is about, which is what makes one notation
     // serve them all
     assert!(matches!(said.says.get("writtenIn"), Some(plan::Given::Literal(it)) if it == "rust"),);
+}
+
+/// A variation is a choice between its variants -- one of them, not all
+/// of them -- which is a sum type in every language that has one and a
+/// tagged union in the rest.
+#[test]
+fn a_variation_is_its_variants() {
+    let plan = planned();
+    let drive = about(&plan, "Every::Drive");
+    assert_eq!(drive.shape, "variation");
+    let named: Vec<&str> = drive.variants.iter().map(|it| it.name.as_str()).collect();
+    assert_eq!(named, ["electric", "petrol"]);
+    assert_eq!(
+        drive.variants[0].typed_by.as_deref(),
+        Some("Every::Vehicle")
+    );
+    // it is abstract by being a variation, so saying so again reads as
+    // "write an abstract base for this"
+    assert!(!drive.is_abstract);
+}
+
+/// Every kind of literal a model can declare arrives as itself rather
+/// than as the words for it.
+#[test]
+fn a_literal_of_any_kind_arrives_as_a_value() {
+    let plan = planned();
+    let car = about(&plan, "Every::Car");
+    assert!(
+        matches!(&feature(car, "towing").default, Some(plan::Given::Literal(it)) if it == false),
+        "a boolean",
+    );
+    assert!(
+        matches!(&feature(car, "mass").default, Some(plan::Given::Literal(it)) if it == 1200.0),
+        "a real",
+    );
 }

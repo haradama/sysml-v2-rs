@@ -444,12 +444,13 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
                 false => owned
                     .iter()
                     .copied()
-                    .filter(|&child| ws.model().member_role(child) == Some(Role::Variant))
+                    .filter(|&child| {
+                        ws.model().member_role(child) == Some(Role::Variant)
+                            && ws.model().name(child).is_some()
+                    })
                     .collect(),
             };
-            mine.into_iter()
-                .filter_map(|child| variant(ws, child))
-                .collect()
+            mine.into_iter().map(|child| variant(ws, child)).collect()
         },
         states: owned
             .iter()
@@ -602,9 +603,13 @@ fn bounds(ws: &Workspace, usage: ElementId) -> (i64, Option<i64>) {
         if model.kind(*bound) == ElementKind::LiteralInfinity {
             return Some(None);
         }
+        // A bound written as anything but a literal -- `[n]`, naming a
+        // feature -- says nothing this can put a number to, so it says
+        // any number of them rather than one, which is the reading that
+        // cannot be mistaken for a model that said nothing at all.
         match model.maybe(*bound, "value") {
             Some(Value::Int(int)) => Some(Some(*int)),
-            _ => None,
+            _ => Some(None),
         }
     };
     // `[4]` is a bound on its own, which is both ends at once
@@ -626,23 +631,26 @@ fn primitive_of(ws: &mut Workspace, ty: ElementId) -> Option<&'static str> {
         if !seen.insert(next) {
             continue;
         }
-        if let Some(name) = ws.model().name(next) {
-            let found = match name {
-                "Real" => Some("Real"),
-                "Integer" => Some("Integer"),
-                "Natural" => Some("Natural"),
-                "Positive" => Some("Positive"),
-                "Boolean" => Some("Boolean"),
-                "String" => Some("String"),
-                _ => None,
-            };
-            if found.is_some() {
-                return found;
-            }
+        if let Some(found) = ws.model().name(next).and_then(primitive_named) {
+            return Some(found);
         }
         queue.extend(ws.supertypes(next));
     }
     None
+}
+
+/// The standard library primitive that goes by this name, where one
+/// does.
+fn primitive_named(name: &str) -> Option<&'static str> {
+    match name {
+        "Real" => Some("Real"),
+        "Integer" => Some("Integer"),
+        "Natural" => Some("Natural"),
+        "Positive" => Some("Positive"),
+        "Boolean" => Some("Boolean"),
+        "String" => Some("String"),
+        _ => None,
+    }
 }
 
 /// The `= value` a usage was declared with.
@@ -653,15 +661,13 @@ fn given(ws: &Workspace, usage: ElementId) -> Option<Given> {
         .iter()
         .copied()
         .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
-    let Some(Value::Ref(expression)) = model.maybe(membership, "value") else {
-        return None;
-    };
-    let literal = match model.maybe(*expression, "value") {
+    let expression = model.maybe(membership, "value")?.as_id()?;
+    let literal = match model.maybe(expression, "value") {
         Some(Value::Real(real)) => serde_json::json!(real),
         Some(Value::Int(int)) => serde_json::json!(int),
         Some(Value::Bool(flag)) => serde_json::json!(flag),
         Some(Value::String(text)) => serde_json::json!(text),
-        _ => return written(model, *expression).map(Given::Expression),
+        _ => return written(model, expression).map(Given::Expression),
     };
     Some(Given::Literal(literal))
 }
@@ -687,11 +693,8 @@ fn declared_parents(ws: &mut Workspace, id: ElementId) -> Vec<String> {
         .iter()
         .copied()
         .filter(|&child| !model.flag(child, "isImplied"))
-        .filter_map(|child| match model.kind(child) {
-            ElementKind::Subclassification => model.maybe(child, "superclassifier")?.as_id(),
-            ElementKind::Subsetting => model.maybe(child, "subsettedFeature")?.as_id(),
-            _ => None,
-        })
+        .filter(|&child| model.kind(child) == ElementKind::Subclassification)
+        .filter_map(|child| model.maybe(child, "superclassifier")?.as_id())
         .collect();
     written
         .into_iter()
@@ -781,10 +784,11 @@ fn initial_state(ws: &Workspace, owned: &[ElementId]) -> Option<String> {
             .filter(|&&end| model.kind(end) == ElementKind::Feature)
             .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
             .collect();
-        match ends[..] {
-            [from, to] if from == entry => model.name(to).map(str::to_string),
-            _ => None,
-        }
+        let (from, to) = (*ends.first()?, *ends.get(1)?);
+        (from == entry)
+            .then(|| model.name(to))
+            .flatten()
+            .map(str::to_string)
     })
 }
 
@@ -830,13 +834,17 @@ fn written(model: &sysml_model::Model, expression: ElementId) -> Option<String> 
     })
 }
 
-fn variant(ws: &mut Workspace, child: ElementId) -> Option<Variant> {
+fn variant(ws: &mut Workspace, child: ElementId) -> Variant {
     let typed = ws.model().type_of(child);
-    Some(Variant {
-        name: ws.model().name(child)?.to_string(),
+    Variant {
+        name: ws
+            .model()
+            .name(child)
+            .expect("picked by having a name")
+            .to_string(),
         typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
         documentation: ws.documentation_of(child),
-    })
+    }
 }
 
 fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
@@ -893,26 +901,28 @@ fn step(ws: &mut Workspace, child: ElementId, beside: &[ElementId]) -> Option<St
     let name = ws.model().name(child)?.to_string();
     // `first a then b` is a succession the definition owns, so what a
     // step waits for is read off its neighbours rather than off itself
-    let mut after = Vec::new();
-    for &other in beside {
-        let model = ws.model();
-        if !model.kind(other).is_a(ElementKind::SuccessionAsUsage) {
-            continue;
-        }
-        let ends: Vec<ElementId> = model
-            .owned(other)
-            .iter()
-            .filter(|&&end| model.kind(end) == ElementKind::Feature)
-            .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
-            .collect();
-        if let [before, next] = ends[..] {
-            if next == child {
-                if let Some(earlier) = model.name(before) {
-                    after.push(earlier.to_string());
-                }
-            }
-        }
-    }
+    let successions: Vec<ElementId> = beside
+        .iter()
+        .copied()
+        .filter(|&other| ws.model().kind(other).is_a(ElementKind::SuccessionAsUsage))
+        .collect();
+    let model = ws.model();
+    let after: Vec<String> = successions
+        .into_iter()
+        .filter_map(|other| {
+            let ends: Vec<ElementId> = model
+                .owned(other)
+                .iter()
+                .filter(|&&end| model.kind(end) == ElementKind::Feature)
+                .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
+                .collect();
+            let (before, next) = (*ends.first()?, *ends.get(1)?);
+            (next == child)
+                .then(|| model.name(before))
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect();
     Some(Step {
         name,
         typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
