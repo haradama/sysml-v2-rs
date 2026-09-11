@@ -1,7 +1,10 @@
 [package]
 name = "sysmlv2-cli"
 description = "Command-line tools for SysML v2 models"
-version.workspace = true
+# its own, not the workspace's: the libraries under it are unchanged
+# since 0.1.0 and republishing them would say otherwise. It goes back to
+# `version.workspace = true` at the next release that moves them all.
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
