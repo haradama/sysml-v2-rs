@@ -18,6 +18,60 @@ use crate::{parse_dialect, shared_indent, Dialect, SyntaxKind, SyntaxKind::*, Sy
 
 const INDENT: &str = "    ";
 
+/// How wide a line may be before the formatter looks for somewhere to
+/// break it.
+///
+/// Nothing in the notation makes a line too long -- a newline is
+/// whitespace wherever it falls -- so this is about reading. A hundred
+/// columns is what fits beside a diagram preview on a laptop, which is
+/// where these files are read.
+const WIDTH: usize = 100;
+
+/// How wide `text` is on screen. A character an em across takes two
+/// columns, which is what makes a line of Japanese twice as long as its
+/// characters.
+fn columns(text: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(text)
+}
+
+/// Somewhere a line may be broken: the space before a token, and how
+/// readily it gives way.
+struct Joint {
+    /// Offset of that space in the output.
+    at: usize,
+    /// Lower gives way first, so that what lands on either side of a
+    /// break is a thought rather than a fragment: a whole `else` arm
+    /// before either operand of a sum.
+    rank: u8,
+    /// Whether the author broke the line here. Their break is kept
+    /// whether or not the line would have fitted: where a formula is
+    /// split says how it is meant to be read, and that is not something
+    /// to work out again from the width.
+    kept: bool,
+}
+
+/// How readily the space before `next` gives way, if at all.
+fn joint_rank(prev: &SyntaxToken, next: &SyntaxToken) -> Option<u8> {
+    // after these rather than before them: what follows a comma or an
+    // `=` is the next thing, and what follows an operator is its operand
+    match prev.kind() {
+        COMMA => return Some(4),
+        EQ | COLON_EQ => return Some(1),
+        _ => {}
+    }
+    Some(match next.kind() {
+        ELSE_KW => 0,
+        IMPLIES_KW => 2,
+        OR_KW | XOR_KW | PIPE => 3,
+        AND_KW | AMP => 3,
+        EQ_EQ | EQ_EQ_EQ | NOT_EQ | NOT_EQ_EQ | LT | LT_EQ | GT | GT_EQ => 5,
+        PLUS | MINUS => 6,
+        STAR | SLASH | PERCENT | STAR_STAR | CARET => 7,
+        QUESTION | QUESTION_QUESTION => 8,
+        _ => return None,
+    })
+}
+
 /// Format a whole source file.
 pub fn format(text: &str, dialect: Dialect) -> String {
     format_parsed(&parse_dialect(text, dialect))
@@ -46,6 +100,10 @@ pub fn format_parsed(parse: &crate::Parse) -> String {
         line_empty: true,
         pending_newlines: 0,
         prev: None,
+        line_start: 0,
+        line_indent: 0,
+        joints: Vec::new(),
+        line_breakable: true,
     }
     .run(&all_tokens);
     if marked {
@@ -68,6 +126,15 @@ struct Formatter {
     /// newlines to emit before the next token
     pending_newlines: usize,
     prev: Option<SyntaxToken>,
+    /// where the line being written starts, and how wide its indent is
+    line_start: usize,
+    line_indent: usize,
+    /// where that line could be broken, in the order the spaces appear
+    joints: Vec<Joint>,
+    /// A line holding a comment that spans lines is already more than
+    /// one line, and the offsets a break is spliced in at do not survive
+    /// that, so it is left alone.
+    line_breakable: bool,
 }
 
 impl Formatter {
@@ -117,11 +184,19 @@ impl Formatter {
             } else if !self.line_empty {
                 let prev = self.prev.clone().expect("non-empty line has a token");
                 if space_between(&prev, token) {
+                    if let Some(rank) = joint_rank(&prev, token) {
+                        self.joints.push(Joint {
+                            at: self.out.len(),
+                            rank,
+                            kept: gap >= 1,
+                        });
+                    }
                     self.out.push(' ');
                 }
             }
             if kind == COMMENT_BODY && token.text().contains('\n') {
                 self.write_comment(token.text());
+                self.line_breakable = false;
             } else {
                 self.out.push_str(token.text());
             }
@@ -160,6 +235,7 @@ impl Formatter {
             self.prev = Some((*token).clone());
         }
 
+        self.lay_out_line();
         while self.out.ends_with(['\n', ' ', '\t']) {
             self.out.pop();
         }
@@ -237,6 +313,7 @@ impl Formatter {
             self.pending_newlines = 0;
             return; // start of file
         }
+        self.lay_out_line();
         let newlines = if original_gap >= 2 {
             2
         } else {
@@ -250,6 +327,85 @@ impl Formatter {
         }
         self.pending_newlines = 0;
         self.line_empty = true;
+        self.line_start = self.out.len();
+        self.line_indent = self.depth * INDENT.len();
+        self.joints.clear();
+        self.line_breakable = true;
+    }
+
+    /// Break the line just written where it is too wide to read, and
+    /// where its author broke it.
+    ///
+    /// Nothing decides this while the line is being written: whether it
+    /// is too long is not known until it ends, and which joint should
+    /// give way depends on what the rest of the line turned out to be.
+    /// So the line is written flat and opened up here, at the spaces
+    /// that were noted as it went by.
+    fn lay_out_line(&mut self) {
+        if !self.line_breakable || self.joints.is_empty() {
+            return;
+        }
+        let mut chosen: Vec<usize> = self
+            .joints
+            .iter()
+            .filter(|joint| joint.kept)
+            .map(|joint| joint.at)
+            .collect();
+        // Then as many more as the width asks for: the widest stretch
+        // that is still too long gives way at its readiest joint, and
+        // the two halves are measured in their turn.
+        while let Some((from, to)) = self.widest_over(&chosen) {
+            let within = || {
+                self.joints
+                    .iter()
+                    .filter(|joint| joint.at > from && joint.at < to)
+                    .filter(|joint| !chosen.contains(&joint.at))
+            };
+            let Some(readiest) = within().map(|joint| joint.rank).min() else {
+                break; // nothing left to give: a long name is a long line
+            };
+            // every joint of that kind, not just the one that would do:
+            // an `else` arm on a line of its own and the next one
+            // trailing the line above reads as two different things
+            let giving: Vec<usize> = within()
+                .filter(|joint| joint.rank == readiest)
+                .map(|joint| joint.at)
+                .collect();
+            chosen.extend(giving);
+        }
+        chosen.sort_unstable();
+        // from the end, so that each splice leaves the earlier offsets
+        // where they were
+        let indent = " ".repeat(self.line_indent + INDENT.len());
+        for at in chosen.into_iter().rev() {
+            self.out.replace_range(at..at + 1, &format!("\n{indent}"));
+        }
+    }
+
+    /// The stretch of the line between two breaks that is over the
+    /// width, widest first, or nothing when they all fit.
+    fn widest_over(&self, chosen: &[usize]) -> Option<(usize, usize)> {
+        let mut edges: Vec<usize> = chosen.to_vec();
+        edges.sort_unstable();
+        let mut stretches: Vec<(usize, usize)> = Vec::new();
+        let mut from = self.line_start;
+        for &at in &edges {
+            stretches.push((from, at));
+            from = at + 1;
+        }
+        stretches.push((from, self.out.len()));
+        stretches
+            .into_iter()
+            .enumerate()
+            .map(|(at, (from, to))| {
+                // the first stretch carries the line's own indent; every
+                // one after it carries that and a step more
+                let indent = self.line_indent + usize::from(at > 0) * INDENT.len();
+                (indent + columns(&self.out[from..to]), (from, to))
+            })
+            .filter(|(width, _)| *width > WIDTH)
+            .max_by_key(|(width, _)| *width)
+            .map(|(_, stretch)| stretch)
     }
 
     /// Newlines in the original text between the previous visible token and
@@ -463,6 +619,54 @@ mod tests {
         let out = fmt(&input);
         assert_eq!(out, input);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    /// A formula too wide to read is opened at its outermost joints,
+    /// and at every one of them, so that what is on each line is one
+    /// arm of the same choice.
+    #[test]
+    fn a_line_too_wide_gives_way_at_its_readiest_joints() {
+        let input = "calc def D { in c : Integer; return u : String = if c == 1 ? \"first say this\" else if c == 2 ? \"or else say this\" else if c == 3 ? \"or this instead\" else \"\"; }";
+        let out = fmt(input);
+        let arms: Vec<&str> = out.lines().filter(|line| line.contains("else")).collect();
+        assert_eq!(arms.len(), 3, "{out}");
+        for arm in &arms {
+            assert!(arm.starts_with("        else"), "{out}");
+        }
+        assert!(
+            out.lines().all(|line| super::columns(line) <= WIDTH),
+            "{out}"
+        );
+        assert_eq!(fmt(&out), out);
+    }
+
+    /// Width is columns, not characters: a line of Japanese is twice as
+    /// wide as it is long, and a formatter that counted characters would
+    /// leave it running off the page.
+    #[test]
+    fn a_wide_script_is_measured_in_what_it_takes_up() {
+        assert_eq!(columns("ab"), 2);
+        assert_eq!(columns("\u{6ce8}\u{610f}"), 4);
+        let input = "part def P { attribute a = \"\u{6ce8}\u{610f}\u{3057}\u{3066}\u{304f}\u{3060}\u{3055}\u{3044}\" + \"\u{3082}\u{3046}\u{4e00}\u{5ea6}\u{8a00}\u{3044}\u{307e}\u{3059}\" + \"\u{305d}\u{308c}\u{304b}\u{3089}\u{3053}\u{3046}\u{3057}\u{307e}\u{3059}\" + \"\u{6700}\u{5f8c}\u{306b}\u{3053}\u{3046}\u{3057}\u{307e}\u{3059}\"; }";
+        let out = fmt(input);
+        assert!(out.lines().count() > 3, "{out}");
+        assert!(
+            out.lines().all(|line| super::columns(line) <= WIDTH),
+            "{out}"
+        );
+    }
+
+    /// Where the author broke the line is where it stays, fitting or
+    /// not: how a formula is split says how it is meant to be read.
+    #[test]
+    fn a_break_the_author_wrote_is_kept() {
+        let input = "part def P {\n    attribute a =\n        b + c;\n}\n";
+        assert_eq!(fmt(input), input);
+        // and one written flat that fits is left flat
+        assert_eq!(
+            fmt("part def P { attribute a = b + c; }"),
+            "part def P {\n    attribute a = b + c;\n}\n"
+        );
     }
 
     #[test]

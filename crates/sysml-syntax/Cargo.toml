@@ -19,6 +19,9 @@ categories.workspace = true
 name = "sysml_syntax"
 
 [dependencies]
+# how wide a line is, for deciding when one has to be broken: a string of
+# Japanese is half as many characters as it is columns
+unicode-width = "0.2"
 logos.workspace = true
 rowan.workspace = true
 

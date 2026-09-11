@@ -56,7 +56,7 @@ nearly spelt as.
 | --- | --- |
 | `sysml parse <files>` | does it parse (`--tree` dumps the syntax tree) |
 | `sysml check <paths>` | parse, resolve, and check the specification's constraints |
-| `sysml fmt <files>` | format (four spaces, idempotent, token-preserving) |
+| `sysml fmt <files>` | format (four spaces, wrapped at 100 columns, idempotent) |
 | `sysml diagram <file>` | SVG: definitions, `--internal`, `--sequence`, `--browser` |
 | `sysml plan <paths>` | what the model implies for code, in no language in particular |
 | `sysml export <files>` | standard JSON interchange |
