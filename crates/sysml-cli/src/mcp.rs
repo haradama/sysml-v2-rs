@@ -28,6 +28,34 @@ use serde_json::{json, Value};
 use sysml_model::ElementId;
 use sysml_semantics::Workspace;
 
+/// What the client is told this server is for, at `initialize`.
+///
+/// The protocol hands this straight to the model on the other side, and
+/// it is the only thing here that reaches one that has not called a tool
+/// yet. SysML v2 was adopted in 2025 and there is little of it in any
+/// model's training data, so what a model writes unaided looks right and
+/// names things that do not exist -- which is the failure this server is
+/// here to stop, and it stops nothing if it is never asked.
+const INSTRUCTIONS: &str = "\
+SysML v2 and KerML are newer than most of what you were trained on, and \
+the names -- and which of them are visible where -- are what a model \
+gets wrong. This server answers from the language's own standard \
+library rather than from memory, so ask it instead of guessing.
+
+Before you write a `.sysml` or `.kerml` file, and again after every edit \
+to one, call `check` on what you are about to write: it takes the source \
+as `text`, so nothing has to be on disk. Do not report a model as \
+finished until `check` answers with nothing unresolved and no \
+violations. A finding carries what the name might have meant -- \
+`declared_as` where something answers to it elsewhere and an import is \
+what is missing, `did_you_mean` where the name itself is wrong.
+
+`visible_names` says what may legally be written at a point, `notation` \
+shows how each construct is written with an example this toolchain has \
+checked, and `library_search` finds what the standard library already \
+declares. A model that spans several files resolves only when they are \
+given together, so pass the others as `alongside`.";
+
 /// What this server speaks when the client asks for something else.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -190,6 +218,7 @@ impl Server {
                     .unwrap_or(PROTOCOL_VERSION),
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "sysml-mcp", "version": env!("CARGO_PKG_VERSION") },
+                "instructions": INSTRUCTIONS,
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),

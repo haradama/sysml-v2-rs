@@ -101,6 +101,15 @@ fn a_client_handshakes_lists_and_calls() {
     assert_eq!(answers[0]["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(answers[0]["result"]["serverInfo"]["name"], "sysml-mcp");
     assert!(answers[0]["result"]["capabilities"]["tools"].is_object());
+    // What reaches a model that has not called anything yet. A server
+    // whose whole point is that the answer comes from the library rather
+    // than from memory is worth nothing to a client that writes first
+    // and asks later, so this is where it is told not to.
+    let said = answers[0]["result"]["instructions"]
+        .as_str()
+        .expect("the client is told what the server is for");
+    assert!(said.contains("`check`"), "{said}");
+    assert!(said.contains("Before you write"), "{said}");
     assert_eq!(answers[1]["result"], json!({}));
 
     let tools: Vec<&str> = answers[2]["result"]["tools"]
