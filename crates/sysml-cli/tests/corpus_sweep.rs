@@ -195,7 +195,9 @@ fn sweep() {
 }
 
 /// The non-trivia tokens, as text. Formatting may move them; it may not
-/// add, drop or change one.
+/// add, drop or change one. A comment counts as what it says: its
+/// interior is redrawn against the column its `/*` lands in, and that
+/// margin is not part of the text.
 fn words(text: &str) -> Vec<String> {
     use sysml_syntax::SyntaxKind;
     sysml_syntax::lex(text)
@@ -210,7 +212,13 @@ fn words(text: &str) -> Vec<String> {
                     | SyntaxKind::ERROR
             )
         })
-        .map(|t| text[t.range.clone()].to_string())
+        .map(|t| {
+            let word = &text[t.range.clone()];
+            match t.kind {
+                SyntaxKind::COMMENT_BODY => sysml_syntax::comment_text(word),
+                _ => word.to_string(),
+            }
+        })
         .collect()
 }
 

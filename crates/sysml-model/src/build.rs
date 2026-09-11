@@ -2505,12 +2505,7 @@ fn comment_body(node: &SyntaxNode) -> Option<String> {
         .children_with_tokens()
         .filter_map(|e| e.into_token())
         .find(|t| t.kind() == SyntaxKind::COMMENT_BODY)?;
-    let text = token.text();
-    let text = text
-        .strip_prefix("/*")
-        .and_then(|t| t.strip_suffix("*/"))
-        .unwrap_or(text);
-    Some(text.trim().to_string())
+    Some(sysml_syntax::comment_text(token.text()))
 }
 
 fn string_token(node: &SyntaxNode) -> Option<String> {

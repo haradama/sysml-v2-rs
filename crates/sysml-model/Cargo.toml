@@ -1,7 +1,8 @@
 [package]
 name = "sysmlv2-model"
 description = "In-memory element model (abstract syntax) for SysML v2 / KerML, generated from the official metamodel"
-version.workspace = true
+# its own: it reads a comment's body through `sysmlv2-syntax` 0.1.1
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

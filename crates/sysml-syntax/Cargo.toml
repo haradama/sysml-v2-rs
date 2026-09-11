@@ -1,7 +1,9 @@
 [package]
 name = "sysmlv2-syntax"
 description = "Lexer, parser and lossless syntax tree for the SysML v2 / KerML textual notation"
-version.workspace = true
+# its own: the crates here move when what is in them moves, and what
+# moved is the formatter and the reading of a comment's margin
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

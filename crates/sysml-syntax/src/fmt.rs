@@ -4,15 +4,17 @@
 //! brace depth, one member per line, single blank lines are preserved,
 //! comments keep their own-line/trailing position, and spacing is decided
 //! from token kinds plus the parent node (so `a < b` gets spaces while
-//! `<shortName>` does not). Comment interiors are emitted verbatim, line
-//! endings included -- they are one token's text and are what the author
-//! wrote.
+//! `<shortName>` does not). A block comment's interior is brought under
+//! the column its `/*` ends up in, since it is one token's text and
+//! nothing else here reaches it.
 //!
 //! Guarantees, regression-tested against the whole official corpus:
-//! formatting never changes the non-trivia token stream, and is
-//! idempotent.
+//! formatting never changes the non-trivia token stream except for the
+//! indentation of a comment's own interior, which is not part of what
+//! the comment says -- `Model` reads the body with that margin taken
+//! off -- and is idempotent.
 
-use crate::{parse_dialect, Dialect, SyntaxKind, SyntaxKind::*, SyntaxToken};
+use crate::{parse_dialect, shared_indent, Dialect, SyntaxKind, SyntaxKind::*, SyntaxToken};
 
 const INDENT: &str = "    ";
 
@@ -105,10 +107,8 @@ impl Formatter {
                     self.pending_newlines = self.pending_newlines.max(1);
                 }
             }
-            // A block comment spanning lines keeps a line of its own. Its
-            // interior is part of one token's text, which re-indenting
-            // never reaches, so pulling `/*` up after `doc` leaves the
-            // body standing in a column that no longer means anything.
+            // A block comment spanning lines keeps a line of its own, so
+            // that its interior has a column of its own to be brought to.
             if kind == COMMENT_BODY && token.text().contains('\n') {
                 self.pending_newlines = self.pending_newlines.max(1);
             }
@@ -120,7 +120,11 @@ impl Formatter {
                     self.out.push(' ');
                 }
             }
-            self.out.push_str(token.text());
+            if kind == COMMENT_BODY && token.text().contains('\n') {
+                self.write_comment(token.text());
+            } else {
+                self.out.push_str(token.text());
+            }
             self.line_empty = false;
 
             match kind {
@@ -163,6 +167,67 @@ impl Formatter {
             self.out.push('\n');
         }
         self.out
+    }
+
+    /// A block comment that spans lines, its interior brought under the
+    /// column the `/*` now sits in.
+    ///
+    /// The interior is part of the same token as the `/*`, so moving the
+    /// one used to leave the other standing in a column that meant
+    /// something in the file it was written in and nothing in the file
+    /// that came out. What the comment says is unchanged: a body is read
+    /// with this margin taken off.
+    fn write_comment(&mut self, text: &str) {
+        let indent = INDENT.repeat(self.depth);
+        let mut lines = text.lines();
+        self.out.push_str(lines.next().unwrap_or_default());
+        let mut rest: Vec<&str> = lines.collect();
+        // A line that only closes the comment is part of the drawing and
+        // not of what is written inside it: left in, an author who put
+        // `*/` hard against the left margin would have said that the
+        // margin is nothing, and every line under it would keep the
+        // indentation it had.
+        let closes = rest.last().is_some_and(|line| line.trim() == "*/");
+        if closes {
+            rest.pop();
+        }
+        // The `*` down the side is a margin and is redrawn against the
+        // new column; anything else is prose, whose own indentation says
+        // something, so only the margin it shares is replaced.
+        let said: Vec<&str> = rest
+            .iter()
+            .copied()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        let starred =
+            !said.is_empty() && said.iter().all(|line| line.trim_start().starts_with('*'));
+        let margin = if starred {
+            String::new()
+        } else {
+            shared_indent(&said)
+        };
+        for line in rest {
+            self.out.push('\n');
+            if line.trim().is_empty() {
+                continue; // a blank line stays blank rather than padded
+            }
+            self.out.push_str(&indent);
+            if starred {
+                // one space, so the `*` stands under the one in `/*`
+                self.out.push(' ');
+                self.out.push_str(line.trim_start());
+            } else {
+                // every line written here shares the margin, by the way
+                // the margin was arrived at
+                self.out.push_str(&line[margin.len()..]);
+            }
+        }
+        if closes {
+            self.out.push('\n');
+            self.out.push_str(&indent);
+            // under the `*` it has been standing under all the way down
+            self.out.push_str(if starred { " */" } else { "*/" });
+        }
     }
 
     /// Emit the pending newline(s) — preserving at most one original blank
@@ -306,10 +371,37 @@ mod tests {
 
     #[test]
     fn a_doc_spanning_lines_keeps_its_own_line() {
-        // its interior lines are one token's text, so moving where the
-        // `/*` sits moves the body out from under itself
         let input = "package P {\n    doc\n    /*\n     * about P\n     */\n}\n";
         assert_eq!(fmt(input), input);
+    }
+
+    /// The interior is part of the same token as the `/*`, so moving one
+    /// without the other used to leave the body standing in a column
+    /// that meant nothing -- which is what a reader saw whenever their
+    /// editor formatted a file whose indentation was not already right.
+    #[test]
+    fn a_doc_that_moves_takes_its_body_with_it() {
+        let input = "package P {\npart def V {\ndoc\n/*\n * first\n *\n * second\n */\nattribute mass;\n}\n}\n";
+        let expected = "package P {\n    part def V {\n        doc\n        /*\n         * first\n         *\n         * second\n         */\n        attribute mass;\n    }\n}\n";
+        assert_eq!(fmt(input), expected);
+        // and again, which is the same file
+        assert_eq!(fmt(expected), expected);
+        // what it says is what it said, which is what lets it be moved
+        assert_eq!(
+            crate::comment_text("/*\n * first\n *\n * second\n */"),
+            crate::comment_text("/*\n         * first\n         *\n         * second\n         */")
+        );
+    }
+
+    /// A body drawn with no `*` down it keeps the shape it was written
+    /// in: what is indented inside it stays indented inside it.
+    #[test]
+    fn a_body_with_no_margin_keeps_its_own_shape() {
+        let input = "package P {\npart def V {\ndoc\n/*\n  first\n    indented\n*/\n}\n}\n";
+        let expected =
+            "package P {\n    part def V {\n        doc\n        /*\n        first\n          indented\n        */\n    }\n}\n";
+        assert_eq!(fmt(input), expected);
+        assert_eq!(fmt(expected), expected);
     }
 
     #[test]

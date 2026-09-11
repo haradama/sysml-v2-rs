@@ -1,6 +1,11 @@
 //! Formatter guarantees over the whole official corpus: reparse
 //! equivalence (identical non-trivia token streams, no new errors) and
 //! idempotency. Skipped when the submodule is not checked out.
+//!
+//! A comment is compared by what it says rather than by how it was
+//! drawn: the formatter brings its interior under the column its `/*`
+//! ends up in, and the margin it redraws is not part of the text -- the
+//! model reads a body with that margin taken off.
 
 use sysml_corpus::{model_files, vendor};
 use sysml_syntax::{fmt::format, parse_dialect, Dialect, SyntaxKind};
@@ -11,7 +16,13 @@ fn tokens(parse: &sysml_syntax::Parse) -> Vec<(SyntaxKind, String)> {
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
         .filter(|t| !t.kind().is_trivia())
-        .map(|t| (t.kind(), t.text().to_string()))
+        .map(|t| {
+            let text = match t.kind() {
+                SyntaxKind::COMMENT_BODY => sysml_syntax::comment_text(t.text()),
+                _ => t.text().to_string(),
+            };
+            (t.kind(), text)
+        })
         .collect()
 }
 

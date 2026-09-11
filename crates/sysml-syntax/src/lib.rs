@@ -94,6 +94,75 @@ pub fn unquote(text: &str) -> String {
     unquote_with(text, '\'')
 }
 
+/// What a comment says, with the margin it is drawn down taken off.
+///
+/// A body written across lines carries whatever runs down its left --
+/// a column of `*`, or the indentation of whatever it sits inside --
+/// and neither is part of what it says. Reading it this way is what
+/// lets the formatter bring a comment's interior under the column its
+/// `/*` ends up in without changing the model: the same paragraph one
+/// level further in is the same paragraph.
+///
+/// Takes the token's own text, delimiters and all.
+pub fn comment_text(raw: &str) -> String {
+    // each end on its own: a file being typed into holds a comment that
+    // has been opened and not yet closed, and what it says so far is
+    // still what it says
+    let text = raw.strip_prefix("/*").unwrap_or(raw);
+    let text = text.strip_suffix("*/").unwrap_or(text);
+    let mut lines: Vec<&str> = text.lines().collect();
+    while lines.first().is_some_and(|line| line.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    // What runs down the left of the lines under the first one is what
+    // decides the margin. The first line sits after `/*` and shares
+    // neither, so it is taken as it comes.
+    let under: Vec<&str> = lines
+        .iter()
+        .skip(1)
+        .copied()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let starred = !under.is_empty() && under.iter().all(|line| line.trim_start().starts_with('*'));
+    let margin = if starred {
+        String::new()
+    } else {
+        shared_indent(&under)
+    };
+    lines
+        .iter()
+        .map(|line| {
+            if starred {
+                let rest = line.trim_start();
+                match rest.strip_prefix('*') {
+                    Some(said) => said.strip_prefix(' ').unwrap_or(said).to_string(),
+                    None => rest.to_string(),
+                }
+            } else {
+                line.strip_prefix(&margin)
+                    .unwrap_or_else(|| line.trim_start())
+                    .to_string()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// The whitespace every one of `lines` begins with.
+pub(crate) fn shared_indent(lines: &[&str]) -> String {
+    let indent = |line: &str| line.len() - line.trim_start().len();
+    let shortest = lines.iter().map(|line| indent(line)).min().unwrap_or(0);
+    lines
+        .first()
+        .map(|line| line[..shortest].to_string())
+        .unwrap_or_default()
+}
+
 /// The text a string literal denotes.
 ///
 /// The same rule as [`unquote`], with double quotes: `"say \"hi\""` is
@@ -193,6 +262,53 @@ mod line_col_tests {
     fn an_offset_inside_a_character_still_answers() {
         assert_eq!(super::line_col("あい", 1), (1, 2));
         assert_eq!(super::line_col("a\nあ", 3), (2, 2));
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::comment_text;
+
+    #[test]
+    fn a_margin_is_not_what_the_comment_says() {
+        // the same paragraph, drawn at two indentations
+        let close = "/*\n * first\n * second\n */";
+        let far = "/*\n         * first\n         * second\n         */";
+        assert_eq!(comment_text(close), "first\nsecond");
+        assert_eq!(comment_text(far), comment_text(close));
+    }
+
+    #[test]
+    fn a_body_with_no_stars_keeps_the_shape_under_its_own_indentation() {
+        assert_eq!(
+            comment_text("/*\n    first\n      indented\n    last\n*/"),
+            "first\n  indented\nlast"
+        );
+    }
+
+    #[test]
+    fn what_follows_the_opening_delimiter_carries_no_margin() {
+        // `first` sits after `/*` and shares nothing with the lines
+        // under it, whether those are starred or merely indented
+        assert_eq!(comment_text("/* first\n * second */"), "first\nsecond");
+        assert_eq!(comment_text("/* first\n    second */"), "first\nsecond");
+    }
+
+    #[test]
+    fn one_line_and_nothing_at_all() {
+        assert_eq!(comment_text("/* said */"), "said");
+        assert_eq!(comment_text("/**/"), "");
+        assert_eq!(comment_text("/*\n\n*/"), "");
+        // an unterminated body is what a half-written file holds
+        assert_eq!(comment_text("/* open"), "open");
+    }
+
+    #[test]
+    fn a_blank_line_inside_is_a_paragraph_break() {
+        assert_eq!(
+            comment_text("/*\n * first\n *\n * second\n */"),
+            "first\n\nsecond"
+        );
     }
 }
 
