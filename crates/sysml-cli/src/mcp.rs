@@ -54,7 +54,13 @@ what is missing, `did_you_mean` where the name itself is wrong.
 shows how each construct is written with an example this toolchain has \
 checked, and `library_search` finds what the standard library already \
 declares. A model that spans several files resolves only when they are \
-given together, so pass the others as `alongside`.";
+given together, so pass the others as `alongside`.
+
+This holds for what you say as much as for what you write. Before \
+telling anyone that SysML v2 has something, or has not got it, ask: \
+`notation` with no argument lists every construct there is, and with \
+one shows how that construct is written. The language was adopted in \
+2025 and what you remember of it is older than that.";
 
 /// What this server speaks when the client asks for something else.
 const PROTOCOL_VERSION: &str = "2025-06-18";

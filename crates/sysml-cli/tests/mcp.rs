@@ -110,6 +110,10 @@ fn a_client_handshakes_lists_and_calls() {
         .expect("the client is told what the server is for");
     assert!(said.contains("`check`"), "{said}");
     assert!(said.contains("Before you write"), "{said}");
+    // and the other half of the same failure: a model that answers a
+    // question about the language from memory rather than from here
+    assert!(said.contains("`notation`"), "{said}");
+    assert!(said.contains("has not got it"), "{said}");
     assert_eq!(answers[1]["result"], json!({}));
 
     let tools: Vec<&str> = answers[2]["result"]["tools"]
