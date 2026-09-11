@@ -22,7 +22,7 @@ specialization.
 ## Install
 
 ```sh
-cargo install sysml-cli
+cargo install sysmlv2-cli
 ```
 
 The standard library is built into the binary, so this resolves models
@@ -81,17 +81,22 @@ ws.resolve_all();
 
 ## Crates
 
+Published as `sysmlv2-*`, one directory up from what the directories
+are called: `sysml-model` and `sysml-cli` on crates.io are other
+people's crates. Each keeps its library name, so `use sysml_model::…`
+is what the code reads either way.
+
 | Crate | |
 | --- | --- |
-| [`sysml-syntax`](crates/sysml-syntax) | Lexer, recursive-descent parser, lossless CST and typed AST. Parsing never fails: bad input still reproduces the source, with diagnostics beside it |
-| [`sysml-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one |
-| [`sysml-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation |
-| [`sysml-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library |
-| [`sysml-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) |
-| [`sysml-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write |
-| [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, navigation, rename, completion, hover, symbols, formatting, and a live diagram preview |
-| [`sysml-cli`](crates/sysml-cli) | The `sysml` tool, including the MCP server |
-| [`sysml-stdlib`](crates/sysml-stdlib) | The KerML and SysML v2 standard libraries as text, built into every binary that resolves names (EPL-2.0) |
+| [`sysmlv2-syntax`](crates/sysml-syntax) | Lexer, recursive-descent parser, lossless CST and typed AST. Parsing never fails: bad input still reproduces the source, with diagnostics beside it |
+| [`sysmlv2-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one |
+| [`sysmlv2-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation |
+| [`sysmlv2-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library |
+| [`sysmlv2-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) |
+| [`sysmlv2-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write |
+| [`sysmlv2-lsp`](crates/sysml-lsp) | Language server: diagnostics, navigation, rename, completion, hover, symbols, formatting, and a live diagram preview |
+| [`sysmlv2-cli`](crates/sysml-cli) | The `sysml` tool, including the MCP server |
+| [`sysmlv2-stdlib`](crates/sysml-stdlib) | The KerML and SysML v2 standard libraries as text, built into every binary that resolves names (EPL-2.0) |
 
 ## For an AI agent
 

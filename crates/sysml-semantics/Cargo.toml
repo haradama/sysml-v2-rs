@@ -1,5 +1,5 @@
 [package]
-name = "sysml-semantics"
+name = "sysmlv2-semantics"
 description = "Name resolution and relationship reification for SysML v2 / KerML models"
 version.workspace = true
 edition.workspace = true
@@ -13,9 +13,12 @@ readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_semantics"
+
 [dependencies]
-sysml-syntax.workspace = true
-sysml-model.workspace = true
+sysmlv2-syntax.workspace = true
+sysmlv2-model.workspace = true
 
 [dev-dependencies]
-sysml-corpus.workspace = true
+sysmlv2-corpus.workspace = true

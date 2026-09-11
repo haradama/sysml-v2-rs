@@ -1,5 +1,5 @@
 [package]
-name = "sysml-interchange"
+name = "sysmlv2-interchange"
 description = "Standard JSON interchange (SysML v2 API & Services serialization) for sysml-model"
 version.workspace = true
 edition.workspace = true
@@ -13,11 +13,14 @@ readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_interchange"
+
 [dependencies]
-sysml-model.workspace = true
-sysml-syntax.workspace = true
+sysmlv2-model.workspace = true
+sysmlv2-syntax.workspace = true
 serde_json = "1"
 uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
-sysml-semantics.workspace = true
+sysmlv2-semantics.workspace = true

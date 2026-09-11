@@ -1,5 +1,5 @@
 [package]
-name = "sysml-diagram"
+name = "sysmlv2-diagram"
 description = "Definition/specialization diagrams rendered to SVG from sysml-model"
 version.workspace = true
 edition.workspace = true
@@ -13,8 +13,11 @@ readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_diagram"
+
 [dependencies]
-sysml-model.workspace = true
+sysmlv2-model.workspace = true
 unicode-width = "0.2"
 
 # The Eclipse Layout Kernel's own algorithms, ported to Rust. Where every
@@ -24,5 +27,5 @@ unicode-width = "0.2"
 elkrs = "0.1"
 
 [dev-dependencies]
-sysml-corpus.workspace = true
-sysml-semantics.workspace = true
+sysmlv2-corpus.workspace = true
+sysmlv2-semantics.workspace = true

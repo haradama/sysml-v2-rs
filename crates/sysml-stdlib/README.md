@@ -1,4 +1,4 @@
-# sysml-stdlib
+# sysmlv2-stdlib
 
 The KerML and SysML v2 standard model libraries, as text a program can
 load.

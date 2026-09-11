@@ -1,5 +1,5 @@
 [package]
-name = "sysml-cli"
+name = "sysmlv2-cli"
 description = "Command-line tools for SysML v2 models"
 version.workspace = true
 edition.workspace = true
@@ -24,18 +24,18 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 annotate-snippets.workspace = true
-sysml-syntax.workspace = true
-sysml-model.workspace = true
-sysml-semantics.workspace = true
+sysmlv2-syntax.workspace = true
+sysmlv2-model.workspace = true
+sysmlv2-semantics.workspace = true
 # the standard library, so that `sysml check model/` resolves without
 # being handed a path first
-sysml-stdlib.workspace = true
-sysml-interchange.workspace = true
-sysml-rust.workspace = true
-sysml-diagram.workspace = true
+sysmlv2-stdlib.workspace = true
+sysmlv2-interchange.workspace = true
+sysmlv2-rust.workspace = true
+sysmlv2-diagram.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 
 [dev-dependencies]
-sysml-corpus.workspace = true
+sysmlv2-corpus.workspace = true

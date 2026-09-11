@@ -1,4 +1,4 @@
-# sysml-rust
+# sysmlv2-rust
 
 The Rust side of a model, both ways. `import` reads an existing crate's
 rustdoc JSON as a SysML package whose definitions carry `@code` binding

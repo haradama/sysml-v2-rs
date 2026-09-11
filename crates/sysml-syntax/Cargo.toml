@@ -1,5 +1,5 @@
 [package]
-name = "sysml-syntax"
+name = "sysmlv2-syntax"
 description = "Lexer, parser and lossless syntax tree for the SysML v2 / KerML textual notation"
 version.workspace = true
 edition.workspace = true
@@ -13,9 +13,12 @@ readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_syntax"
+
 [dependencies]
 logos.workspace = true
 rowan.workspace = true
 
 [dev-dependencies]
-sysml-corpus.workspace = true
+sysmlv2-corpus.workspace = true

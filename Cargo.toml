@@ -48,20 +48,26 @@ clap = { version = "4", features = ["derive"] }
 # on any file with a wide character in it.
 annotate-snippets = "0.12"
 
+# These are `sysmlv2-*` on crates.io and `sysml-*` here: `sysml-model`
+# and `sysml-cli` are somebody else's crates, published before this one
+# existed, so the whole family took a name it could have all of rather
+# than two of ten being odd. Each keeps its library name, so a `use
+# sysml_model::…` reads the same either way.
+
 # Test support, and the only workspace dependency with no version: a
 # path dev-dependency without one is dropped from what `cargo publish`
 # uploads, which is what keeps an unpublished crate out of a published
 # one's manifest.
-sysml-corpus = { path = "crates/sysml-corpus" }
+sysmlv2-corpus = { path = "crates/sysml-corpus" }
 
 # The standard library, as text. Under EPL-2.0 rather than this
 # workspace's MIT/Apache, which is the whole reason it is a crate of its
 # own: whoever takes it on knows exactly what they are taking on.
-sysml-stdlib = { path = "crates/sysml-stdlib", version = "0.1.0" }
+sysmlv2-stdlib = { path = "crates/sysml-stdlib", version = "0.1.0" }
 
-sysml-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
-sysml-model = { path = "crates/sysml-model", version = "0.1.0" }
-sysml-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
-sysml-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
-sysml-rust = { path = "crates/sysml-rust", version = "0.1.0" }
-sysml-diagram = { path = "crates/sysml-diagram", version = "0.1.0" }
+sysmlv2-syntax = { path = "crates/sysml-syntax", version = "0.1.0" }
+sysmlv2-model = { path = "crates/sysml-model", version = "0.1.0" }
+sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
+sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
+sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.0" }
+sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.1.0" }

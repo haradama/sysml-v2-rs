@@ -1,4 +1,4 @@
-# sysml-model
+# sysmlv2-model
 
 Element model: 175 metaclasses generated from the official Ecore
 metamodel, arena storage, AST→model builder; the generator that writes

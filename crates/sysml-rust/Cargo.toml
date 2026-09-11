@@ -1,5 +1,5 @@
 [package]
-name = "sysml-rust"
+name = "sysmlv2-rust"
 description = "The Rust side of a SysML model, both ways: an existing Rust API surface imported as a SysML package, and Rust generated from a resolved model"
 version.workspace = true
 edition.workspace = true
@@ -13,10 +13,13 @@ readme = "README.md"
 keywords.workspace = true
 categories.workspace = true
 
+[lib]
+name = "sysml_rust"
+
 [dependencies]
-sysml-model.workspace = true
-sysml-syntax.workspace = true
+sysmlv2-model.workspace = true
+sysmlv2-syntax.workspace = true
 serde_json = "1"
 
 [dev-dependencies]
-sysml-semantics.workspace = true
+sysmlv2-semantics.workspace = true

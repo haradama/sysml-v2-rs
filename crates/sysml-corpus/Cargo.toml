@@ -1,5 +1,5 @@
 [package]
-name = "sysml-corpus"
+name = "sysmlv2-corpus"
 description = "Where the vendored SysML-v2-Release is, for the tests that read it"
 # Test support, never a dependency of anything published. Every crate
 # here takes it as a path dev-dependency, and a path dev-dependency
@@ -11,5 +11,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+
+[lib]
+name = "sysml_corpus"
 
 [dependencies]

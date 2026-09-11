@@ -1,4 +1,4 @@
-# sysml-interchange
+# sysmlv2-interchange
 
 Standard JSON interchange: the complete property set of every metaclass,
 derived ownership/naming/inheritance-closure/import properties, reified

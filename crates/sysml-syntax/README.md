@@ -1,4 +1,4 @@
-# sysml-syntax
+# sysmlv2-syntax
 
 Lexer (logos) + recursive-descent parser + lossless CST (rowan) + typed
 AST.

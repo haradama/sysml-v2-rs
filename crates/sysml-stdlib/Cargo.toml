@@ -1,5 +1,5 @@
 [package]
-name = "sysml-stdlib"
+name = "sysmlv2-stdlib"
 description = "The KerML and SysML v2 standard model libraries, as text a program can load"
 # Not the workspace's licence. Everything under `library/` is the OMG
 # release's, unchanged, and is under the Eclipse Public License 2.0; this
@@ -17,6 +17,9 @@ categories = ["development-tools", "science"]
 # does, so nothing else needs to travel.
 include = ["src/**", "library/**", "build.rs", "README.md", "LICENSE", "NOTICE"]
 
+[lib]
+name = "sysml_stdlib"
+
 [dependencies]
 
 # Nothing. This crate is data, and a data crate that drags a toolchain
@@ -26,4 +29,4 @@ include = ["src/**", "library/**", "build.rs", "README.md", "LICENSE", "NOTICE"]
 # compiled rather than asserted. A dev-dependency reaches no further
 # than `cargo test` here: nothing that depends on this crate builds it.
 [dev-dependencies]
-sysml-semantics.workspace = true
+sysmlv2-semantics.workspace = true

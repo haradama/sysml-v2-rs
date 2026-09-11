@@ -1,4 +1,4 @@
-# sysml-semantics
+# sysmlv2-semantics
 
 Name resolution (imports, aliases, inheritance, implicit library
 specializations, connector ends, the names inside expressions),

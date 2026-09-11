@@ -1,4 +1,4 @@
-# sysml-lsp
+# sysmlv2-lsp
 
 Language server: diagnostics, go-to-definition, find-references, rename,
 completion, hover, symbols, formatting — with a [VSCode

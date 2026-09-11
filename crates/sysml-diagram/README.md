@@ -1,4 +1,4 @@
-# sysml-diagram
+# sysmlv2-diagram
 
 Definition/interconnection diagrams in the standard's own notation —
 labelled compartment stacks, ports on the border, composite and

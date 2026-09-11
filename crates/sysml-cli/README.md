@@ -1,4 +1,4 @@
-# sysml-cli
+# sysmlv2-cli
 
 `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`,
 `diagram`, `import-rust`, `rustgen`, `api`, `mcp`, `corpus`); `mcp`
