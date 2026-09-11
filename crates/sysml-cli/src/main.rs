@@ -87,10 +87,15 @@ enum Command {
         /// Files to export
         #[arg(required = true)]
         files: Vec<PathBuf>,
-        /// Resolve names against these files or directories too and
-        /// export them along, marked `isLibraryElement`
+        /// Resolve names against these files or directories too
         #[arg(long)]
         library: Vec<PathBuf>,
+        /// Write the library into the document as well, marked
+        /// `isLibraryElement` -- a document that stands on its own,
+        /// rather than one whose references into the library are for the
+        /// reader to resolve
+        #[arg(long)]
+        include_library: bool,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -279,6 +284,11 @@ enum ApiCommand {
         /// Resolve names against these files or directories too
         #[arg(long)]
         library: Vec<PathBuf>,
+        /// Send the library along as well, marked `isLibraryElement`.
+        /// Without this the commit is the model, and its references into
+        /// the library are for the server to resolve
+        #[arg(long)]
+        include_library: bool,
     },
 }
 
@@ -333,8 +343,9 @@ fn main() -> ExitCode {
         Command::Export {
             files,
             library,
+            include_library,
             output,
-        } => export(&files, &library, output.as_deref(), bare),
+        } => export(&files, &library, output.as_deref(), bare, include_library),
         Command::Fmt {
             files,
             write,
@@ -467,8 +478,14 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
     }
 }
 
-fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: bool) -> ExitCode {
-    let Some((json, elements)) = exported(files, library, bare) else {
+fn export(
+    files: &[PathBuf],
+    library: &[PathBuf],
+    output: Option<&Path>,
+    bare: bool,
+    whole: bool,
+) -> ExitCode {
+    let Some((json, elements, borrowed)) = exported(files, library, bare, whole) else {
         return ExitCode::FAILURE;
     };
     let rendered = serde_json::to_string_pretty(&json).expect("serializable");
@@ -479,6 +496,9 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: b
                 return ExitCode::FAILURE;
             }
             eprintln!("wrote {elements} element(s) to {}", path.display());
+            if let Some(note) = library_share(borrowed) {
+                eprintln!("{note}");
+            }
         }
         None => println!("{rendered}"),
     }
@@ -489,11 +509,15 @@ fn export(files: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: b
 /// and the number of elements it came from. `sysml export` writes this
 /// out and `sysml api push` sends it, so both mean the same thing by a
 /// model.
+/// The count is the whole document and the count beside it the part of
+/// it that is a library's rather than the model's, which the standard
+/// interchanges alongside the model and marks `isLibraryElement`.
 fn exported(
     files: &[PathBuf],
     library: &[PathBuf],
     bare: bool,
-) -> Option<(serde_json::Value, usize)> {
+    whole: bool,
+) -> Option<(serde_json::Value, usize, usize)> {
     // resolve before serializing: the reified typings and specializations
     // are what the interchange derives inheritance and types from
     let mut ws = sysml_semantics::Workspace::new();
@@ -543,9 +567,32 @@ fn exported(
             extras.library.extend(ws.model().descendants(root));
         }
     }
+    // A model is resolved against a library and is not made of one. Six
+    // elements exported with the standard library beside them wrote
+    // ninety-six thousand, and `sysml api push` sent every one of them
+    // to somebody's server -- which nobody asked for and which happened
+    // only because the library stopped having to be named to be loaded.
+    //
+    // What the model refers to across that line stays the `@id` it
+    // always was. Those are UUIDv5 over the ownership path, so anybody
+    // holding the same library computes the same ones: it is how the
+    // standard refers to an element another project holds. A document
+    // that has to stand on its own asks for the library with
+    // `--include-library`.
+    if !whole {
+        extras.omitted = extras.library.clone();
+    }
 
     let model = ws.model();
-    Some((sysml_interchange::to_json_with(model, &extras), model.len()))
+    let borrowed = match whole {
+        true => extras.library.len(),
+        false => 0,
+    };
+    // what was written, rather than what was loaded: the library the
+    // model resolved against is in the second and not the first
+    let json = sysml_interchange::to_json_with(model, &extras);
+    let written = json.as_array().map_or(0, Vec::len);
+    Some((json, written, borrowed))
 }
 
 fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> ExitCode {
@@ -781,9 +828,45 @@ fn plan(paths: &[PathBuf], format: Format, bare: bool) -> ExitCode {
                     definition.features.len()
                 );
             }
+            // Silence reads as "there is nothing here to write", which
+            // is a wrong answer where the truth is that the files hold
+            // no definition at all -- a package of imports, a model
+            // whose declarations are all in the file next to it.
+            if planned.definitions.is_empty() {
+                println!("no definitions: nothing here implies any code");
+            }
         }
     }
+    // A plan is only as good as the model behind it: a feature whose
+    // type resolved to nothing is planned with no type at all. The plan
+    // is still handed over -- somebody writing a model is entitled to
+    // see what it implies so far -- and the exit code says not to build
+    // from it yet.
+    if !planned.checked.ok {
+        if format == Format::Text {
+            for broken in &planned.checked.syntax {
+                eprintln!("does not parse: {broken}");
+            }
+            if !planned.checked.unresolved.is_empty() {
+                eprintln!(
+                    "warning: {} name(s) in this model resolve to nothing, so what they \
+                     type is missing from the plan; `sysml check` says where they are",
+                    planned.checked.unresolved.len()
+                );
+            }
+        }
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
+}
+
+/// How much of an export is a library's rather than the model's.
+///
+/// Only `--include-library` puts a library in the document, so this is
+/// what somebody who asked for one gets told they got: the size of the
+/// request is the other way to find out.
+fn library_share(borrowed: usize) -> Option<String> {
+    (borrowed > 0).then(|| format!("note: {borrowed} of them are the library's"))
 }
 
 /// The element a `--internal`/`--sequence` argument names, or a message
@@ -1642,14 +1725,23 @@ fn api_command(
             project,
             message,
             library,
+            include_library,
         } => {
-            let Some((json, elements)) = exported(paths, library, bare) else {
+            let Some((json, elements, borrowed)) = exported(paths, library, bare, *include_library)
+            else {
                 return ExitCode::FAILURE;
             };
             let changes: Vec<serde_json::Value> = json.as_array().cloned().unwrap_or_default();
             client.create_commit(project, message, &changes).map(|c| {
                 (
-                    vec![format!("{} element(s) as commit {}", elements, c.id)],
+                    // the count of what was sent on its own line, so
+                    // the sentence a script reads is the one it always
+                    // read and the warning is beside it rather than
+                    // inside it
+                    [format!("{} element(s) as commit {}", elements, c.id)]
+                        .into_iter()
+                        .chain(library_share(borrowed))
+                        .collect(),
                     serde_json::to_value(&c).expect("serializable"),
                 )
             })

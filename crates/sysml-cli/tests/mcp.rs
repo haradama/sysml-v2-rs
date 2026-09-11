@@ -1477,3 +1477,17 @@ fn generation_plan_can_be_asked_about_one_definition() {
         .collect();
     assert_eq!(named, ["P::B"], "{plan}");
 }
+
+/// The plan the server hands over says whether the model behind it
+/// resolves, since a feature whose type resolved to nothing arrives
+/// with no type at all.
+#[test]
+fn a_plan_over_the_protocol_says_whether_the_model_resolves() {
+    let answers = session(&[call(
+        "generation_plan",
+        json!({ "text": "package P { part def Tank { attribute fuel : MassValu; } }\n" }),
+    )]);
+    let plan = answered(&answers[0]);
+    assert_eq!(plan["checked"]["ok"], false, "{plan}");
+    assert_eq!(plan["checked"]["unresolved"][0], "MassValu", "{plan}");
+}

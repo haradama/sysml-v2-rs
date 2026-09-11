@@ -602,6 +602,16 @@ pub struct Extras {
     pub import_targets: HashMap<ElementId, ElementId>,
     /// Elements that belong to a library model (`isLibraryElement`).
     pub library: std::collections::HashSet<ElementId>,
+    /// Elements to leave out of the document altogether.
+    ///
+    /// A model is resolved against a library and is not made of one: a
+    /// six-element model exported with the standard library beside it
+    /// writes ninety-six thousand elements, and `sysml api push` sends
+    /// them. What the model refers to across that line is written as the
+    /// `@id` it always was -- these are UUIDv5 over the ownership path,
+    /// so anybody holding the same library computes the same ones, which
+    /// is how the standard refers to an element another project holds.
+    pub omitted: std::collections::HashSet<ElementId>,
 }
 
 /// Serialize the whole model as an array of element objects (stable order):
@@ -701,6 +711,7 @@ impl Writing<'_> {
     fn elements(&self) -> Vec<Json> {
         self.model
             .ids()
+            .filter(|id| !self.extras.omitted.contains(id))
             .map(|id| {
                 let stored: HashMap<&str, &Value> = self.model.props(id).collect();
                 let mut object = Map::new();
@@ -755,6 +766,11 @@ impl Writing<'_> {
                 continue;
             };
             if !bridged(self.model, id) {
+                continue;
+            }
+            // a membership of an element that is not in the document
+            // brings nothing into it
+            if self.extras.omitted.contains(&id) {
                 continue;
             }
             let kind = sysml_model::membership_kind(self.model, id);

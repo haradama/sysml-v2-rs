@@ -83,6 +83,33 @@ package Every {
 
 /// The model, planned against the standard library -- which is where the
 /// answer to "what does this bottom out in" lives.
+/// The binary, for the tests that are about what it hands over.
+fn sysml(args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// A model on disk, under a directory of its own.
+fn written(dir: &str, name: &str, text: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = dir.join(name);
+    std::fs::write(&at, text).unwrap();
+    at
+}
+
+/// What the plan says about one definition, or a failure naming it.
+fn said<'a>(plan: &'a serde_json::Value, of: &str) -> &'a serde_json::Value {
+    plan["definitions"]
+        .as_array()
+        .expect("a plan has definitions")
+        .iter()
+        .find(|it| it["of"] == of)
+        .unwrap_or_else(|| panic!("`{of}` is planned: {plan}"))
+}
+
 fn planned() -> Plan {
     let mut ws = Workspace::new();
     for (name, text) in sysml_stdlib::FILES {
@@ -357,17 +384,7 @@ fn the_library_is_answered_from_and_not_planned() {
 /// the protocol: JSON to work from, and a line each to read.
 #[test]
 fn the_command_line_hands_over_the_same_plan() {
-    let dir = std::env::temp_dir().join("sysml-cli-plan");
-    std::fs::create_dir_all(&dir).unwrap();
-    let at = dir.join("every.sysml");
-    std::fs::write(&at, MODEL).unwrap();
-
-    let sysml = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_sysml"))
-            .args(args)
-            .output()
-            .unwrap()
-    };
+    let at = written("sysml-cli-plan", "every.sysml", MODEL);
 
     let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
     assert!(out.status.success());
@@ -586,4 +603,265 @@ fn a_literal_of_any_kind_arrives_as_a_value() {
         matches!(&feature(car, "mass").default, Some(plan::Given::Literal(it)) if it == 1200.0),
         "a real",
     );
+}
+
+/// KerML declares the same things in its own words, and a model written
+/// in it used to plan as nothing at all.
+///
+/// An empty answer reads as "there is nothing here to write", which is
+/// a wrong answer rather than a missing one -- and half the standard
+/// library, along with anything written below the systems layer, is
+/// KerML.
+#[test]
+fn kerml_is_planned_in_the_same_words_as_sysml() {
+    let at = written(
+        "sysml-cli-plan-kerml",
+        "shapes.kerml",
+        "package Shapes {\n\
+         \tabstract class Shape {\n\
+         \t\tfeature name : ScalarValues::String;\n\
+         \t}\n\
+         \tstruct Circle :> Shape {\n\
+         \t\tfeature radius : ScalarValues::Real;\n\
+         \t}\n\
+         \tassoc Touching {\n\
+         \t\tend feature one : Circle;\n\
+         \t\tend feature other : Circle;\n\
+         \t}\n\
+         }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+
+    let shape = said(&plan, "Shapes::Shape");
+    assert_eq!(shape["kind"], "Class");
+    assert_eq!(shape["shape"], "abstract", "{shape}");
+    assert_eq!(shape["features"][0]["name"], "name");
+    assert_eq!(shape["features"][0]["primitive"], "String");
+
+    let circle = said(&plan, "Shapes::Circle");
+    assert_eq!(circle["shape"], "record");
+    assert_eq!(circle["specializes"][0], "Shapes::Shape");
+
+    // an association's ends are what it holds -- it relates its two
+    // sides and has nothing else -- and each says that it is an end, so
+    // a reader writes a pair of references rather than a record with a
+    // copy of each side inside it
+    let touching = said(&plan, "Shapes::Touching");
+    let ends = touching["features"].as_array().expect("two ends");
+    assert_eq!(ends.len(), 2, "{touching}");
+    assert!(ends.iter().all(|it| it["end"] == true), "{touching}");
+    assert_eq!(ends[0]["type"], "Shapes::Circle");
+}
+
+/// What a definition performs is what makes it something that *does*
+/// anything, and it used to go missing: a part with three performed
+/// actions planned as three fields and no way to use them.
+#[test]
+fn what_a_definition_performs_is_said() {
+    let at = written(
+        "sysml-cli-plan-performs",
+        "does.sysml",
+        "package Doing {\n\
+         \taction def Wait { in millis : ScalarValues::Integer; }\n\
+         \tpart def Clock {\n\
+         \t\tperform action pause : Wait {\n\
+         \t\t\tdoc /* until the next tick */\n\
+         \t\t}\n\
+         \t}\n\
+         }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let clock = said(&plan, "Doing::Clock");
+    let [performs] = clock["performs"].as_array().unwrap().as_slice() else {
+        panic!("one performed action: {clock}");
+    };
+    assert_eq!(performs["name"], "pause");
+    assert_eq!(
+        performs["of"], "Doing::Wait",
+        "so its parameters can be read"
+    );
+    assert_eq!(performs["documentation"], "until the next tick");
+}
+
+/// A plan is only as good as the model behind it, and says so.
+///
+/// A feature whose type resolved to nothing is planned with no type at
+/// all. `generate_rust` refuses such a model outright; the plan hands
+/// over what it has -- somebody writing a model is entitled to see what
+/// it implies so far -- and says what is missing rather than letting a
+/// reader write an untyped field and never learn the model was
+/// misspelt.
+#[test]
+fn a_plan_says_whether_the_model_behind_it_resolves() {
+    let at = written(
+        "sysml-cli-plan-typo",
+        "typo.sysml",
+        "package P { part def Tank { attribute fuel : MassValu; } }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(plan["checked"]["ok"], false, "{plan}");
+    assert_eq!(plan["checked"]["unresolved"][0], "MassValu", "{plan}");
+    // the feature is there, and what types it is not
+    let tank = said(&plan, "P::Tank");
+    assert_eq!(tank["features"][0]["name"], "fuel");
+    assert!(tank["features"][0]["type"].is_null(), "{tank}");
+    // and the exit code says not to build from it yet
+    assert!(!out.status.success());
+
+    // and a file that does not parse is a different failure and a worse
+    // one: it is missing whole declarations rather than one type, so a
+    // plan that called it sound would be claiming the model contains
+    // what the parser never read
+    let unclosed = written(
+        "sysml-cli-plan-typo",
+        "unclosed.sysml",
+        "package R { part def Tank;\n",
+    );
+    let out = sysml(&["--format", "json", "plan", unclosed.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(plan["checked"]["ok"], false, "{plan}");
+    assert!(
+        plan["checked"]["syntax"][0]
+            .as_str()
+            .is_some_and(|it| it.contains("unclosed.sysml")),
+        "{plan}"
+    );
+    assert!(!out.status.success());
+
+    // a model that resolves says so, and says nothing else about it
+    let sound = written(
+        "sysml-cli-plan-typo",
+        "sound.sysml",
+        "package Q { part def Tank { attribute fuel : ISQ::MassValue; } }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", sound.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(plan["checked"]["ok"], true, "{plan}");
+    assert!(plan["checked"]["unresolved"].is_null(), "{plan}");
+    assert!(plan["checked"]["syntax"].is_null(), "{plan}");
+    assert!(out.status.success());
+}
+
+/// Files that hold no definition say so rather than printing nothing.
+///
+/// Silence reads as "there is nothing here to write", which is a wrong
+/// answer where the truth is that the model has no definitions -- a
+/// package of imports, or a file whose declarations are all next door.
+#[test]
+fn a_model_that_implies_no_code_says_so() {
+    let at = written("sysml-cli-plan-empty", "empty.sysml", "package Empty;\n");
+    let out = sysml(&["plan", at.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("no definitions"),
+        "{:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// A connection is a thing between two others, and its ends are what it
+/// holds.
+///
+/// Dropping them as "not fields" left `connection def Pipe { end source
+/// : Pump; end target : Tank; }` planned as an empty record -- a pipe
+/// between nothing and nothing.
+#[test]
+fn a_connection_carries_the_two_sides_it_relates() {
+    let at = written(
+        "sysml-cli-plan-connection",
+        "plumbing.sysml",
+        "package Plumbing {\n\
+         \tpart def Pump;\n\
+         \tpart def Tank;\n\
+         \tconnection def Pipe {\n\
+         \t\tend source : Pump;\n\
+         \t\tend target : Tank;\n\
+         \t}\n\
+         }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let pipe = said(&plan, "Plumbing::Pipe");
+    let ends = pipe["features"].as_array().expect("two ends");
+    assert_eq!(ends.len(), 2, "{pipe}");
+    assert_eq!(ends[0]["name"], "source");
+    assert_eq!(ends[0]["type"], "Plumbing::Pump");
+    assert_eq!(ends[0]["end"], true, "not something the pipe is made of");
+    assert_eq!(ends[1]["type"], "Plumbing::Tank");
+}
+
+/// What is joined to what inside a definition.
+///
+/// A definition's parts are not a bag: `connect pump to tank;` is the
+/// whole of why the two are there together, and a reader given the parts
+/// and not the wiring writes a record whose fields have nothing to do
+/// with each other.
+#[test]
+fn what_is_joined_to_what_is_said() {
+    let at = written(
+        "sysml-cli-plan-wiring",
+        "works.sysml",
+        "package Works {\n\
+         \tpart def Pump;\n\
+         \tpart def Tank;\n\
+         \tconnection def Pipe { end source : Pump; end target : Tank; }\n\
+         \tpart def Plant {\n\
+         \t\tpart pump : Pump;\n\
+         \t\tpart tank : Tank;\n\
+         \t\tconnect pump to tank;\n\
+         \t\tconnection feed : Pipe connect pump to tank;\n\
+         \t}\n\
+         }\n",
+    );
+    let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
+    let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let plant = said(&plan, "Works::Plant");
+    let [plain, named] = plant["connections"].as_array().unwrap().as_slice() else {
+        panic!("two connections: {plant}");
+    };
+
+    // `connect a to b;` names nothing, and the joining is the point
+    assert_eq!(plain["from"], "pump");
+    assert_eq!(plain["to"], "tank");
+    assert!(plain["name"].is_null(), "{plain}");
+    assert!(plain["of"].is_null(), "{plain}");
+
+    // and one that says what kind of joining it is says so
+    assert_eq!(named["name"], "feed");
+    assert_eq!(named["of"], "Works::Pipe");
+    assert_eq!(named["from"], "pump");
+    assert_eq!(named["to"], "tank");
+}
+
+/// To a person, the same two failures are said in words, since a plan
+/// read off a terminal has no `checked` block to look at.
+#[test]
+fn a_person_is_told_why_a_plan_is_not_to_be_built_from() {
+    let typo = written(
+        "sysml-cli-plan-said",
+        "typo.sysml",
+        "package P { part def Tank { attribute fuel : MassValu; } }\n",
+    );
+    let out = sysml(&["plan", typo.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("1 name(s) in this model resolve to nothing"),
+        "{said}"
+    );
+    assert!(said.contains("`sysml check` says where"), "{said}");
+
+    let unclosed = written(
+        "sysml-cli-plan-said",
+        "unclosed.sysml",
+        "package R { part def Tank;\n",
+    );
+    let out = sysml(&["plan", unclosed.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("does not parse: "), "{said}");
+    assert!(said.contains("unclosed.sysml"), "{said}");
 }

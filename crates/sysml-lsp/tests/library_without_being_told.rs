@@ -55,3 +55,46 @@ fn no_library_is_the_way_to_say_otherwise() {
         "{found:?}"
     );
 }
+
+/// A library path that will not load falls back to the copy built in,
+/// rather than to no library at all.
+///
+/// One mistyped `sysml.library.path` used to underline every name in
+/// every file, silently: the server degraded to an empty library and
+/// nothing anywhere said why. The command line and the MCP server had
+/// both stopped doing that; this was the front end left.
+#[test]
+fn a_library_that_will_not_load_falls_back_to_the_one_built_in() {
+    let found = diagnostics_for(json!({ "libraryPath": "/nowhere/at/all" }), REACHES);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// And so does one that is there and holds no model at all, which is
+/// what a path pointed at the wrong directory looks like.
+#[test]
+fn a_library_directory_with_nothing_in_it_falls_back_too() {
+    let empty = std::env::temp_dir().join("sysml-lsp-empty-library");
+    std::fs::create_dir_all(&empty).unwrap();
+    let found = diagnostics_for(json!({ "libraryPath": empty.to_str().unwrap() }), REACHES);
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// A library that is there and cannot be read is the other way one
+/// fails to load, and falls back the same way.
+///
+/// The walk over a directory swallows what it cannot enter and reaches
+/// nothing; what errs is a file it found and cannot open. So the file
+/// is there, and unreadable.
+#[cfg(unix)]
+#[test]
+fn a_library_that_cannot_be_read_falls_back_too() {
+    use std::os::unix::fs::PermissionsExt;
+    let shut = std::env::temp_dir().join("sysml-lsp-library-shut");
+    std::fs::create_dir_all(&shut).unwrap();
+    let hidden = shut.join("hidden.sysml");
+    std::fs::write(&hidden, "package Hidden;\n").unwrap();
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let found = diagnostics_for(json!({ "libraryPath": shut.to_str().unwrap() }), REACHES);
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(found.is_empty(), "{found:?}");
+}

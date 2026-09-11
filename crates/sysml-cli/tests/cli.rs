@@ -126,6 +126,7 @@ fn export_resolves_and_marks_the_library() {
         model.to_str().unwrap(),
         "--library",
         lib.to_str().unwrap(),
+        "--include-library",
     ]);
     assert!(out.status.success());
     let json: serde_json::Value =
@@ -456,6 +457,66 @@ fn check_resolves_and_reports_unresolved() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("expected"), "{stderr}");
+}
+
+/// An export is the model, and the library is what it was resolved
+/// against.
+///
+/// The two used to be one document. Since the library stopped having to
+/// be named to be loaded, `sysml export model.sysml` wrote a hundred and
+/// twenty-eight thousand elements where the model has three, and `sysml
+/// api push` sent every one of them to somebody's server -- seven
+/// hundred and ninety megabytes of standard library that nobody asked
+/// for. What the model refers to across that line is written as the
+/// `@id` it always was, and those are UUIDv5 over the ownership path:
+/// anybody holding the same library computes the same ones, which is how
+/// the standard refers to an element another project holds.
+#[test]
+fn an_export_is_the_model_and_not_the_library_it_resolved_against() {
+    let dir = temp_dir("export-share");
+    let model = write(
+        &dir,
+        "m.sysml",
+        "package M {\n\tprivate import ISQ::*;\n\tpart def Car {\n\t\tattribute mass : MassValue;\n\t}\n}\n",
+    );
+    let out = sysml(&["export", model.to_str().unwrap()]);
+    assert!(out.status.success());
+    let json: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
+    let objects = json.as_array().unwrap();
+    assert!(
+        objects.len() < 50,
+        "the model, not the library: {}",
+        objects.len()
+    );
+    assert!(
+        objects.iter().all(|it| it["isLibraryElement"] != true),
+        "nothing of the library's is written"
+    );
+
+    // and what the model says about a library type is still said: the
+    // typing is the model's own element, and what it points at is an id
+    // the reader resolves against the library it already has
+    let here: std::collections::HashSet<&str> =
+        objects.iter().filter_map(|it| it["@id"].as_str()).collect();
+    let typing = objects
+        .iter()
+        .find(|it| it["@type"] == "FeatureTyping")
+        .expect("the model types its attribute");
+    let target = typing["type"]["@id"].as_str().expect("by id");
+    assert!(!here.contains(target), "and the library is not in here");
+
+    // asked for, it comes along, and the answer says how much of it
+    // there is
+    let out = sysml(&[
+        "export",
+        model.to_str().unwrap(),
+        "--include-library",
+        "-o",
+        "/dev/null",
+    ]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("of them are the library's"), "{said:?}");
 }
 
 /// `check` answers for what the specification requires, and not only
@@ -1103,6 +1164,10 @@ fn api_talks_to_a_model_server() {
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("element(s) as commit c2"), "{said}");
+    // what was sent is the model. It used to be the model and the
+    // standard library behind it -- ninety-six thousand elements to
+    // somebody's server, for a model of three.
+    assert!(!said.contains("library"), "{said}");
 
     // a model that cannot be read is reported before anything is sent
     let out = sysml(&[

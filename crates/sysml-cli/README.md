@@ -11,7 +11,11 @@ stated as SysML, and the Rust a model implies together with the list of
 what the model left for a person to write. `--project` holds the model
 being worked on, so a call names no files and cannot leave one out;
 `api` is the client for the SysML v2 API & Services REST standard, and
-`api push` sends what `export` writes.
+`api push` sends what `export` writes -- the model, and not the library
+it was resolved against: what the model refers to across that line is an
+`@id`, and those are derived from the ownership path, so anybody holding
+the same library computes the same ones. `--include-library` writes a
+document that stands on its own instead.
 
 ```console
 $ sysml parse vehicle.sysml

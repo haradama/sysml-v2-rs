@@ -47,17 +47,44 @@ impl Server {
             Library::At(dir) => Some(dir.clone()),
             _ => None,
         };
+        let built_in = |library: &mut Workspace| {
+            for (name, text) in sysml_stdlib::FILES {
+                library.add_file(*name, text);
+            }
+        };
         match &wanted {
-            // a missing or unreadable library directory degrades
-            // gracefully to an empty library
-            Library::At(dir) => {
-                let _ = library.load_dir(dir);
-            }
-            Library::BuiltIn => {
-                for (name, text) in sysml_stdlib::FILES {
-                    library.add_file(*name, text);
+            // A named directory that will not load falls back to the
+            // copy built in, and says so where the launcher can read it.
+            //
+            // It used to degrade to an *empty* library, silently: one
+            // mistyped `sysml.library.path` and every name in every file
+            // underlined as unresolved, with nothing anywhere saying
+            // why. The command line and the MCP server had both stopped
+            // doing that; this was the one front end left where a wrong
+            // path cost the editor every name in the model rather than
+            // the library the client meant.
+            Library::At(dir) => match library.load_dir(dir) {
+                // the walk takes what it can reach, so a path that is
+                // not there is a directory with nothing under it
+                Ok(0) => {
+                    eprintln!(
+                        "sysml-lsp: no .sysml/.kerml files under the library at {}; \
+                         using the copy built in",
+                        dir.display()
+                    );
+                    built_in(&mut library);
                 }
-            }
+                Ok(_) => {}
+                Err(err) => {
+                    eprintln!(
+                        "sysml-lsp: cannot load the standard library at {}: {err}; \
+                         using the copy built in",
+                        dir.display()
+                    );
+                    built_in(&mut library);
+                }
+            },
+            Library::BuiltIn => built_in(&mut library),
             Library::None => {}
         }
         // resolve the library once; the caches are cloned into every

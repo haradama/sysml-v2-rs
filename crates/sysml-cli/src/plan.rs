@@ -27,6 +27,16 @@ use sysml_semantics::Workspace;
 /// Everything a generator would have to write.
 #[derive(Serialize)]
 pub struct Plan {
+    /// Whether the model this was read off resolves.
+    ///
+    /// A plan is only as good as the model behind it: a feature whose
+    /// type resolved to nothing arrives with no type at all, and a
+    /// reader that was not told writes an untyped field and never learns
+    /// the model was misspelt. `generate_rust` refuses such a model
+    /// outright for exactly that reason; this hands the plan over and
+    /// says what is missing, since somebody writing a model is entitled
+    /// to see what it implies so far.
+    pub checked: Checked,
     /// Each definition the model declares, in declaration order.
     pub definitions: Vec<Definition>,
     /// What a package declares outright rather than inside a definition:
@@ -36,6 +46,22 @@ pub struct Plan {
     /// not contain, and whoever read it had to invent the number.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub constants: Vec<Feature>,
+}
+
+/// Whether the model resolves, and what did not.
+#[derive(Serialize)]
+pub struct Checked {
+    /// Whether every name in the planned files found something, and
+    /// every one of them parsed.
+    pub ok: bool,
+    /// What the parser could not read. A file that does not parse is
+    /// missing whole declarations rather than one type, so a plan built
+    /// from it says nothing about what is not there.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub syntax: Vec<String>,
+    /// The names that did not, as the model wrote them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unresolved: Vec<String>,
 }
 
 /// One definition, and what shape it has in code.
@@ -135,12 +161,25 @@ pub struct Definition {
     /// pretend to have done it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
+    /// The behaviours it carries out, which is what makes a definition
+    /// something that *does* anything: a part that performs an action
+    /// is written, in a language with methods, as a method.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub performs: Vec<Performed>,
     /// The steps of an action, in the order the model puts them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
     /// What passes between them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Flow>,
+    /// What is joined to what inside it.
+    ///
+    /// A definition's parts are not a bag: `connect pump to tank;` is
+    /// the whole of why the two are there together, and a reader given
+    /// the parts and not the wiring writes a record whose fields have
+    /// nothing to do with each other.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<Connection>,
 }
 
 /// One feature of a definition, with everything a generator must ask
@@ -159,6 +198,12 @@ pub struct Feature {
     /// What types it, qualified.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
+    /// Whether it is one of the two sides a connection relates rather
+    /// than something the definition holds. `connection def Pipe { end
+    /// source : Pump; end target : Tank; }` is a pipe between a pump and
+    /// a tank, not a pipe with a pump inside it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub end: bool,
     /// What that type bottoms out in, where it bottoms out in one of the
     /// standard library's primitives: `Real`, `Integer`, `Natural`,
     /// `Positive`, `Boolean`, `String`. `ISQ::MassValue` is a `Real`,
@@ -283,6 +328,23 @@ pub struct Trigger {
     pub typed_by: Option<String>,
 }
 
+/// One behaviour a definition carries out.
+///
+/// What it performs is named rather than described again: the behaviour
+/// is a definition of its own, with its parameters, wherever the model
+/// declares it.
+#[derive(Serialize)]
+pub struct Performed {
+    /// What the model calls it here.
+    pub name: String,
+    /// The behaviour performed, qualified.
+    #[serde(rename = "of", skip_serializing_if = "Option::is_none")]
+    pub performed: Option<String>,
+    /// What the model says it is for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+}
+
 /// One step of an action.
 #[derive(Serialize)]
 pub struct Step {
@@ -294,6 +356,25 @@ pub struct Step {
     /// The steps that must finish before it starts.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+}
+
+/// Two of a definition's parts, joined.
+#[derive(Serialize)]
+pub struct Connection {
+    /// What the model calls it, where it calls it anything: `connect a
+    /// to b;` names nothing, and the joining is the point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// What kind of connection it is, qualified, where the model says.
+    #[serde(rename = "of", skip_serializing_if = "Option::is_none")]
+    pub connected_by: Option<String>,
+    /// The two sides, as dotted paths from the definition.
+    pub from: String,
+    /// The other side.
+    pub to: String,
+    /// What the model says it is for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
 }
 
 /// One thing passing from one place to another.
@@ -326,7 +407,33 @@ pub fn of(ws: &mut Workspace, roots: &[ElementId]) -> Plan {
             }
         }
     }
+    // Only the files the plan is about: a model checked without its
+    // library reports every reference into the library as unresolved,
+    // and none of those is a hole in what was planned.
+    let planned: std::collections::HashSet<usize> = roots
+        .iter()
+        .filter_map(|&root| ws.element_file(root))
+        .collect();
+    let mut missed: Vec<String> = ws
+        .unresolved()
+        .iter()
+        .filter(|it| planned.contains(&it.file))
+        .map(|it| it.name.clone())
+        .collect();
+    missed.dedup();
+    let broken: Vec<String> = ws
+        .findings(&[])
+        .syntax
+        .iter()
+        .filter(|it| planned.contains(&it.file))
+        .map(|it| format!("{}: {}", ws.file_name(it.file), it.what))
+        .collect();
     Plan {
+        checked: Checked {
+            ok: missed.is_empty() && broken.is_empty(),
+            syntax: broken,
+            unresolved: missed,
+        },
         definitions,
         constants,
     }
@@ -389,6 +496,23 @@ fn shape_of(ws: &mut Workspace, id: ElementId) -> Option<&'static str> {
                 _ => "record",
             }
         }
+        // KerML declares the same things in its own words, and a model
+        // written in it used to plan as nothing at all -- an empty
+        // answer, which reads as "there is nothing here to write" rather
+        // than "this half of the language was not looked at". Half the
+        // standard library is written this way, and so is anything a
+        // modeller writes below the systems layer.
+        //
+        // Asked after the SysML kinds above and not instead of them: a
+        // `part def` is a `Structure` too, and it has more to say for
+        // itself than one.
+        kind if kind.is_a(ElementKind::Function) => "function",
+        kind if kind.is_a(ElementKind::Behavior) => "behaviour",
+        kind if kind.is_a(ElementKind::DataType) && under && bare => "value",
+        kind if kind.is_a(ElementKind::Classifier) => match model.is_abstract(id) {
+            true => "abstract",
+            false => "record",
+        },
         _ => return None,
     })
 }
@@ -473,6 +597,17 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
             result.map(|child| feature(ws, child))
         },
         expression: expression_of(ws, id),
+        performs: {
+            let mine: Vec<ElementId> = owned
+                .iter()
+                .copied()
+                .filter(|&child| {
+                    ws.model().kind(child) == ElementKind::PerformActionUsage
+                        && ws.model().name(child).is_some()
+                })
+                .collect();
+            mine.into_iter().map(|child| performed(ws, child)).collect()
+        },
         steps: {
             // an entry, do or exit action is the machinery of a state
             // machine rather than a step of a behaviour, and is said
@@ -493,6 +628,19 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
                 .collect()
         },
         flows: owned.iter().filter_map(|&child| flow(ws, child)).collect(),
+        connections: {
+            let mine: Vec<ElementId> = owned
+                .iter()
+                .copied()
+                .filter(|&child| {
+                    ws.model().kind(child).is_a(ElementKind::ConnectionUsage)
+                        && !ws.model().kind(child).is_a(ElementKind::FlowUsage)
+                })
+                .collect();
+            mine.into_iter()
+                .filter_map(|child| connection(ws, child))
+                .collect()
+        },
     }
 }
 
@@ -552,6 +700,8 @@ fn is_feature_kind(kind: ElementKind) -> bool {
             | ElementKind::PortUsage
             | ElementKind::ReferenceUsage
             | ElementKind::OccurrenceUsage
+            // KerML's own word for all of those: `feature radius : Real;`
+            | ElementKind::Feature
     )
 }
 
@@ -578,6 +728,12 @@ fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
         // it is one the specification answers for -- and a generator
         // that reads `unique: false` off silence writes a list where the
         // model meant a set.
+        // An end is one of the two sides a connection relates, and
+        // dropping it as "not a field" left `connection def Pipe { end
+        // source : Pump; end target : Tank; }` planned as an empty
+        // record -- a pipe between nothing and nothing. It is a feature
+        // and it says that it is an end.
+        end: ws.model().declared_flag(child, "isEnd"),
         composite: ownable(ws.model().kind(child))
             .then(|| ws.model().declared_flag(child, "isComposite")),
         ordered: (upper != Some(1)).then(|| ws.model().declared_flag(child, "isOrdered")),
@@ -834,6 +990,22 @@ fn written(model: &sysml_model::Model, expression: ElementId) -> Option<String> 
     })
 }
 
+fn performed(ws: &mut Workspace, child: ElementId) -> Performed {
+    let of = ws
+        .model()
+        .type_of(child)
+        .or_else(|| redefined(ws.model(), child).and_then(|it| ws.model().type_of(it)));
+    Performed {
+        name: ws
+            .model()
+            .name(child)
+            .expect("picked by having a name")
+            .to_string(),
+        performed: of.map(|it| ws.qualified_name_of(it)),
+        documentation: ws.documentation_of(child),
+    }
+}
+
 fn variant(ws: &mut Workspace, child: ElementId) -> Variant {
     let typed = ws.model().type_of(child);
     Variant {
@@ -930,14 +1102,30 @@ fn step(ws: &mut Workspace, child: ElementId, beside: &[ElementId]) -> Option<St
     })
 }
 
-fn flow(ws: &Workspace, child: ElementId) -> Option<Flow> {
+/// The two sides a connection joins, and what it is called.
+///
+/// A flow is a connection too, and is carried on its own as what passes
+/// rather than as what is joined, so it is left out here.
+fn connection(ws: &mut Workspace, child: ElementId) -> Option<Connection> {
+    let of = ws.model().type_of(child);
     let model = ws.model();
-    if !model.kind(child).is_a(ElementKind::FlowUsage) {
-        return None;
-    }
-    // The ends of a flow are the members it marks as ends, which is not
-    // the same as the plain features it owns: `flow a.b to c.d` owns
-    // two, and reading them by metaclass finds neither.
+    let ends = joined(model, child)?;
+    let name = model.name(child).map(str::to_string);
+    Some(Connection {
+        name,
+        connected_by: of.map(|it| ws.qualified_name_of(it)),
+        from: ends.0,
+        to: ends.1,
+        documentation: ws.documentation_of(child),
+    })
+}
+
+/// The two ends of a connector, as the model names them.
+///
+/// The ends of a connector are the members it marks as ends, which is
+/// not the same as the plain features it owns: `connect a.b to c.d`
+/// owns two, and reading them by metaclass finds neither.
+fn joined(model: &sysml_model::Model, child: ElementId) -> Option<(String, String)> {
     let ends: Vec<String> = model
         .owned(child)
         .iter()
@@ -949,8 +1137,14 @@ fn flow(ws: &Workspace, child: ElementId) -> Option<Flow> {
         })
         .collect();
     let [from, to] = &ends[..] else { return None };
-    Some(Flow {
-        from: from.clone(),
-        to: to.clone(),
-    })
+    Some((from.clone(), to.clone()))
+}
+
+fn flow(ws: &Workspace, child: ElementId) -> Option<Flow> {
+    let model = ws.model();
+    if !model.kind(child).is_a(ElementKind::FlowUsage) {
+        return None;
+    }
+    let (from, to) = joined(model, child)?;
+    Some(Flow { from, to })
 }
