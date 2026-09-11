@@ -462,15 +462,13 @@ fn check_resolves_and_reports_unresolved() {
 /// An export is the model, and the library is what it was resolved
 /// against.
 ///
-/// The two used to be one document. Since the library stopped having to
-/// be named to be loaded, `sysml export model.sysml` wrote a hundred and
+/// The two used to be one document. Since the library stopped having to be
+/// named to be loaded, `sysml export model.sysml` wrote a hundred and
 /// twenty-eight thousand elements where the model has three, and `sysml
-/// api push` sent every one of them to somebody's server -- seven
-/// hundred and ninety megabytes of standard library that nobody asked
-/// for. What the model refers to across that line is written as the
-/// `@id` it always was, and those are UUIDv5 over the ownership path:
-/// anybody holding the same library computes the same ones, which is how
-/// the standard refers to an element another project holds.
+/// api push` sent every one -- seven hundred and ninety megabytes nobody
+/// asked for. What the model refers to across that line is written as the
+/// `@id` it always was, and those are UUIDv5 over the ownership path: any
+/// holder of the same library computes the same ones.
 #[test]
 fn an_export_is_the_model_and_not_the_library_it_resolved_against() {
     let dir = temp_dir("export-share");
@@ -519,22 +517,19 @@ fn an_export_is_the_model_and_not_the_library_it_resolved_against() {
     assert!(said.contains("of them are the library's"), "{said:?}");
 }
 
-/// `check` answers for what the specification requires, and not only
-/// for what resolves.
+/// `check` answers for what the specification requires, and not only for
+/// what resolves.
 ///
 /// A model whose every name resolves can still be one the standard
 /// rejects, and until this was asked only the MCP server ever asked it:
-/// running `check` -- which is most of the reason the command exists --
-/// called such a model sound.
+/// running `check` called such a model sound.
 ///
-/// Two things are asked first. Constraints come after names, as names
-/// come after syntax: asked of a model with a dangling reference they
-/// answer about the hole, and one undeclared type in a five-line file
-/// drew four complaints of its own, none of them a second thing to fix.
-/// And they are written against the standard library, so without it
-/// they report what is missing rather than what is wrong -- `case def
-/// Trip { objective placed; }` draws four on its own and none with the
-/// library beside it.
+/// Two things are asked first. Constraints come after names, as names come
+/// after syntax: asked of a model with a dangling reference they answer
+/// about the hole, and one undeclared type in a five-line file drew four
+/// complaints of its own. And they are written against the standard
+/// library, so without it they report what is missing rather than what is
+/// wrong.
 #[test]
 fn check_answers_for_the_constraints_the_specification_states() {
     let library = library();

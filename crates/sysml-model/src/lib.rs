@@ -116,19 +116,17 @@ pub enum Role {
 
 /// The membership an owned element is owned through.
 ///
-/// The standard's abstract syntax picks a metaclass by what the member is
-/// to its owner: a declared role names it outright, a connector end gets an
-/// `EndFeatureMembership`, a directed feature of a behavior is a parameter,
-/// a trigger/guard/effect of a transition is a transition feature, any
-/// other feature of a type sits behind a `FeatureMembership`, and anything
-/// else behind a plain `OwningMembership`.
+/// The standard picks a metaclass by what the member is to its owner: a
+/// declared role names it outright, a connector end gets an
+/// `EndFeatureMembership`, a directed feature of a behavior is a
+/// parameter, a trigger/guard/effect of a transition is a transition
+/// feature, any other feature of a type sits behind a
+/// `FeatureMembership`, and anything else behind an `OwningMembership`.
 ///
-/// The model holds ownership directly and keeps the membership's own
-/// facts on the member ([`MemberSide`]), so whatever needs the standard's
-/// view of it -- an interchange writer, the constraint checker -- puts
-/// the membership back together from here rather than each its own way.
-/// The membership the standard names for a member written in one of
-/// the roles the notation has a keyword for.
+/// The model holds ownership directly and keeps the membership's own facts
+/// on the member ([`MemberSide`]), so whatever needs the standard's view
+/// -- an interchange writer, the constraint checker -- puts it back
+/// together from here rather than each its own way.
 pub fn membership_of(role: Role) -> ElementKind {
     // no catch-all: a role added to the model is a compile error here
     // until it says which membership the standard names for it
@@ -218,15 +216,13 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
 
 /// The cross feature an end feature owns, where the notation wrote one.
 ///
-/// `ownedCrossFeature()` is "the first ownedMember of the Feature that
-/// is a Feature, but not a Multiplicity or a MetadataFeature, and whose
-/// owningMembership is not a FeatureMembership". This model keeps
-/// ownership and works the memberships out from shape, so the last of
-/// those three tests has nothing to read -- but it does not need to:
+/// `ownedCrossFeature()` is "the first ownedMember of the Feature that is
+/// a Feature, but not a Multiplicity or a MetadataFeature, and whose
+/// owningMembership is not a FeatureMembership". This model works the
+/// memberships out from shape, so the last test has nothing to read -- but
 /// `end [1] part bead : TireBead;` writes the cross feature between the
 /// `end` and the declaration, so where one was written it is always the
-/// first member owned. An end that owns a feature written in its body
-/// and no cross feature reads the first of those instead.
+/// first member owned.
 pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
     if !model.flag(end, "isEnd") {
         return None;
@@ -272,6 +268,158 @@ pub fn transition_role(model: &Model, owned: ElementId) -> Option<&'static str> 
     } else {
         None
     }
+}
+
+/// What an unnamed redefining usage redefines, so it can borrow the name.
+///
+/// `attribute :>> mass = 1200.0;` is written with no name of its own and
+/// means the inherited `mass`; read as nameless it is dropped, and what
+/// the model says a car's mass is goes unsaid.
+pub fn redefined(model: &Model, usage: ElementId) -> Option<ElementId> {
+    model.owned(usage).iter().copied().find_map(|child| {
+        (model.kind(child) == ElementKind::Redefinition)
+            .then(|| model.redefined_feature(child))
+            .flatten()
+    })
+}
+
+/// The written text of an expression element, off the textual
+/// representation the builder keeps for what it does not evaluate.
+pub fn expression_text(model: &Model, expression: ElementId) -> Option<String> {
+    model.owned(expression).iter().find_map(|&written| {
+        (model.kind(written) == ElementKind::TextualRepresentation)
+            .then(|| model.maybe(written, "body"))
+            .flatten()?
+            .as_str()
+            .map(str::to_string)
+    })
+}
+
+/// The trailing result expression of a calculation body, as written --
+/// the last one wins, as the specification has it.
+pub fn result_expression_text(model: &Model, element: ElementId) -> Option<String> {
+    let mut text = None;
+    for &child in model.owned(element) {
+        if model.kind(child) == ElementKind::Expression
+            && model.member_role(child) == Some(Role::Result)
+        {
+            if let Some(written) = expression_text(model, child) {
+                text = Some(written);
+            }
+        }
+    }
+    text
+}
+
+/// The `= value` a usage declared: a literal as the model holds it, or
+/// anything else as the model wrote it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Declared {
+    /// A value the builder evaluated.
+    Literal(Literal),
+    /// An expression it did not, as text.
+    Text(String),
+}
+
+/// The four kinds of literal a declaration can hold. Narrower than
+/// [`Value`] on purpose: a reader matching on this has no fifth arm to
+/// write for a reference, and so no branch that can never run.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Literal {
+    /// `1.5`
+    Real(f64),
+    /// `3`
+    Int(i64),
+    /// `true`
+    Bool(bool),
+    /// `"text"`
+    String(String),
+}
+
+/// The `= value` clause of a usage, where one was written.
+pub fn declared_value(model: &Model, usage: ElementId) -> Option<Declared> {
+    let membership = model
+        .owned(usage)
+        .iter()
+        .copied()
+        .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
+    let expression = model.maybe(membership, "value")?.as_id()?;
+    let literal = match model.maybe(expression, "value") {
+        Some(Value::Real(real)) => Literal::Real(*real),
+        Some(Value::Int(int)) => Literal::Int(*int),
+        Some(Value::Bool(flag)) => Literal::Bool(*flag),
+        Some(Value::String(text)) => Literal::String(text.clone()),
+        _ => return expression_text(model, expression).map(Declared::Text),
+    };
+    Some(Declared::Literal(literal))
+}
+
+/// One end of a declared multiplicity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bound {
+    /// A literal integer.
+    Exactly(i64),
+    /// `*`.
+    Many,
+    /// Written as something this cannot put a number to: `[n]`, naming
+    /// a feature.
+    Unknown,
+}
+
+/// A multiplicity as the model wrote it: `[4]` is a `bound` on its own,
+/// `[0..*]` a `lower` and an `upper`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Multiplicity {
+    /// The one bound of `[n]`, which is both ends at once.
+    pub bound: Option<Bound>,
+    /// The lower end of `[a..b]`.
+    pub lower: Option<Bound>,
+    /// The upper end.
+    pub upper: Option<Bound>,
+}
+
+/// The declared multiplicity of a usage, or nothing where none was
+/// written -- which the specification reads as one of the thing.
+///
+/// Every generator asks this and each used to walk it for itself, and
+/// what a bound that is not a literal means was decided differently in
+/// each. It is read once here and interpreted by whoever asks.
+pub fn declared_multiplicity(model: &Model, usage: ElementId) -> Option<Multiplicity> {
+    let Some(Value::Ref(range)) = model.get(usage, "multiplicity") else {
+        return None;
+    };
+    let end = |name: &str| -> Option<Bound> {
+        let Some(Value::Ref(bound)) = model.maybe(*range, name) else {
+            return None;
+        };
+        if model.kind(*bound) == ElementKind::LiteralInfinity {
+            return Some(Bound::Many);
+        }
+        match model.maybe(*bound, "value") {
+            Some(Value::Int(int)) => Some(Bound::Exactly(*int)),
+            _ => Some(Bound::Unknown),
+        }
+    };
+    Some(Multiplicity {
+        bound: end("bound"),
+        lower: end("lowerBound"),
+        upper: end("upperBound"),
+    })
+}
+
+/// The standard library primitive that goes by this name, where one
+/// does. One list, so that what a type bottoms out in cannot be a
+/// primitive to one reader and a record to another.
+pub fn primitive(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Real" => "Real",
+        "Integer" => "Integer",
+        "Natural" => "Natural",
+        "Positive" => "Positive",
+        "Boolean" => "Boolean",
+        "String" => "String",
+        _ => return None,
+    })
 }
 
 /// What a connector end reaches, in the order it reaches it.
@@ -536,16 +684,15 @@ impl Model {
 
     /// Read a property the metaclass declares.
     ///
-    /// The name is checked against the metamodel, as [`Model::set`]
-    /// checks it -- and for the same reason. `set` has always refused a
-    /// property the metaclass does not have, so every writer guards
-    /// itself with `kind.feature(..).is_some()`; `get` answered `None`
-    /// and no reader ever did, which made a misspelled name an element
-    /// that quietly has no such property. `None` here means the model
-    /// does not say, and nothing else.
+    /// The name is checked against the metamodel, as [`Model::set`] checks it,
+    /// and for the same reason: `set` has always refused a property the
+    /// metaclass does not have, so every writer guards itself, while `get`
+    /// answered `None` and no reader did -- which made a misspelled name an
+    /// element that quietly has no such property. `None` here means the model
+    /// does not say.
     ///
-    /// A flag that may not apply to this metaclass at all is
-    /// [`Model::flag`]'s question, not this one's.
+    /// A flag that may not apply to this metaclass is [`Model::flag`]'s
+    /// question.
     pub fn get(&self, id: ElementId, prop: &str) -> Option<&Value> {
         let kind = self.kind(id);
         debug_assert!(
@@ -561,16 +708,14 @@ impl Model {
 
     /// A property this metaclass may not have at all.
     ///
-    /// `None` both when the model does not say and when there is nothing
-    /// for it to say -- which is a fair question wherever one walk meets
-    /// several metaclasses. What a transition triggers on, asked of
-    /// every element that might be a transition, is not a misspelling
-    /// when the element turns out to be an accept node; what kind of
-    /// trigger an expression is, asked of every expression, is not one
-    /// when the expression turns out to be an operator.
+    /// `None` both when the model does not say and when there is nothing for
+    /// it to say -- a fair question wherever one walk meets several
+    /// metaclasses. What a transition triggers on, asked of every element that
+    /// might be a transition, is not a misspelling when the element turns out
+    /// to be an accept node.
     ///
-    /// [`get`] refuses that question, because there it cannot be told
-    /// from a name that is simply wrong. Here it is the question.
+    /// [`get`] refuses that question, because there it cannot be told from a
+    /// name that is simply wrong. Here it is the question.
     ///
     /// [`get`]: Model::get
     pub fn maybe(&self, id: ElementId, prop: &str) -> Option<&Value> {
@@ -587,19 +732,18 @@ impl Model {
         self.maybe(id, prop) == Some(&Value::Bool(true))
     }
 
-    /// The same, with the answer the specification gives where the
-    /// source said nothing.
+    /// The same, with the answer the specification gives where the source said
+    /// nothing.
     ///
-    /// [`flag`] reads what the model holds, and holding nothing is not
-    /// the same as being false: this builder writes every flag in
-    /// [`BUILT_FLAGS`] wherever a declaration carries it, so one of
-    /// those missing is a declaration that said nothing -- and what the
-    /// metamodel declares beside the property is then the answer.
-    /// `attribute label : String;` is unique, and nothing in the text of
-    /// it says so.
+    /// [`flag`] reads what the model holds, and holding nothing is not the
+    /// same as being false: this builder writes every flag in [`BUILT_FLAGS`]
+    /// wherever a declaration carries it, so one of those missing is a
+    /// declaration that said nothing -- and the metamodel's default is then
+    /// the answer. `attribute label : String;` is unique, and nothing in the
+    /// text says so.
     ///
-    /// Any other property missing is this builder not building it, which
-    /// says nothing about the model, so those answer false as before.
+    /// Any other property missing is this builder not building it, which says
+    /// nothing about the model.
     ///
     /// [`flag`]: Model::flag
     pub fn declared_flag(&self, id: ElementId, prop: &str) -> bool {
@@ -648,26 +792,22 @@ impl Model {
 
     /// The name an element answers to.
     ///
-    /// Its `declaredName`; or, for a feature that declares neither a name
-    /// nor a short name, the name of the feature it is named after --
-    /// KerML's `effectiveName()`, by which `attribute :>> mass;` is a
-    /// feature named `mass`. Declaring only a short name is still
-    /// declaring: such a feature borrows nothing and has no name. The
-    /// rule follows a chain of borrowed names to the one that finally
-    /// declares something, and a chain that comes back round to where it
-    /// began -- illegal, but representable -- names nothing.
+    /// Its `declaredName`; or, for a feature that declares neither a name nor
+    /// a short name, the name of the feature it is named after -- KerML's
+    /// `effectiveName()`, by which `attribute :>> mass;` is a feature named
+    /// `mass`. Declaring only a short name is still declaring. The rule
+    /// follows a chain of borrowed names to the one that finally declares
+    /// something, and a chain that comes back round names nothing.
     ///
     /// KerML names a feature after what it redefines; SysML adds what it
-    /// references, for a variant, a requirement's `assume`/`require`, and
-    /// a `perform`. This follows any reference subsetting rather than
-    /// those three cases, which is what the resolver has always done and
-    /// what the whole corpus resolves under -- `part ::> v;` answers to
-    /// `v` wherever it is written.
+    /// references, for a variant, a requirement's `assume`/`require`, and a
+    /// `perform`. This follows any reference subsetting rather than those
+    /// three cases, which is what the whole corpus resolves under.
     ///
-    /// It reads the reified `Redefinition` and `ReferenceSubsetting`
-    /// elements, so it answers only once those have been resolved. The
-    /// interchange, the diagram and the Rust generator each kept a copy
-    /// of this rule, and no two of them agreed on the reference case.
+    /// It reads the reified `Redefinition` and `ReferenceSubsetting`, so it
+    /// answers only once those are resolved. The interchange, the diagram and
+    /// the Rust generator each kept a copy of this rule, and no two agreed on
+    /// the reference case.
     pub fn effective_name(&self, id: ElementId) -> Option<&str> {
         self.named_after(id, "declaredName")
     }

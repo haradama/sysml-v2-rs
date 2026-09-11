@@ -1,8 +1,6 @@
 //! Client for the [SysML v2 API & Services](https://www.omg.org/spec/SystemsModelingAPI/)
-//! REST standard (projects / commits / elements).
-//!
-//! Works against any conforming model server (e.g. the reference
-//! implementation used by the pilot tooling). Blocking I/O via `ureq`.
+//! REST standard (projects / commits / elements), against any conforming
+//! model server. Blocking I/O via `ureq`.
 //!
 //! ```no_run
 //! let client = Client::new("http://localhost:9000", std::time::Duration::from_secs(30));

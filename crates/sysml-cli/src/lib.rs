@@ -1,11 +1,10 @@
 //! What the `sysml` tool does that something other than a person drives.
 //!
-//! The Model Context Protocol server is here rather than in a crate of
-//! its own because it is a front end like the command line itself: both
-//! load a workspace and report what is wrong with it, and everything
-//! they have in common already lives in `sysml-semantics`. It is a
-//! library as well as a subcommand so that its tests can drive it
-//! directly, which is how a protocol is worth testing.
+//! The MCP server is here rather than in a crate of its own because it is
+//! a front end like the command line: both load a workspace and report
+//! what is wrong with it, and what they share already lives in
+//! `sysml-semantics`. A library as well as a subcommand, so its tests can
+//! drive it directly.
 
 // Nothing here needs `unsafe`, and saying so is what keeps it that way.
 #![forbid(unsafe_code)]
@@ -24,17 +23,13 @@ pub mod report;
 /// ends, as the byte offset the model sees and as the line and column an
 /// editor counts, both from one.
 ///
-/// The command line and the MCP server place their findings the same
-/// way, so a program that reads one reads the other. An offset past the
-/// end of the text -- a parser complaining that the file stopped -- is
-/// placed at the end rather than off it.
+/// The command line and the MCP server place findings the same way, so a
+/// program that reads one reads the other. An offset past the end of the
+/// text is placed at the end rather than off it.
 ///
-/// The end is here because the finding has always known it and only the
-/// start was ever said. A reader given a point has to work out what the
-/// finding is about by lexing the line again, and guesses wrong on
-/// anything a lexer would not split the way it does; given the span it
-/// can underline exactly what the tool meant, which is what the text
-/// report does with the same two numbers.
+/// The end is said because the finding has always known it: a reader given
+/// a point has to lex the line again to see what the finding is about, and
+/// gets it wrong wherever its idea of a name differs from this one's.
 pub fn at(
     text: &str,
     range: sysml_syntax::TextRange,

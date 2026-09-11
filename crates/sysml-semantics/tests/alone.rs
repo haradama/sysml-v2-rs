@@ -1,29 +1,25 @@
 //! Every corpus file resolved on its own, without the standard library.
 //!
-//! This is what an editor does before anyone points it at the library,
-//! and what `sysml check <file>` does. Almost nothing resolves — every
-//! name in these files comes from the library — so it exercises the path
-//! that the other corpus tests never take: the one where the answer is
-//! no. A search that does not remember its failures re-runs itself once
-//! per reference, and a file with ten unresolved wildcard imports took
-//! thirty-three seconds before it did.
+//! This is what an editor does before anyone points it at the library, and
+//! what `sysml check <file>` does. Almost nothing resolves, so it
+//! exercises the path the other corpus tests never take: the one where the
+//! answer is no. A search that does not remember its failures re-runs
+//! itself once per reference, and a file with ten unresolved wildcard
+//! imports took thirty-three seconds before it did.
 
 use sysml_corpus::{models, vendor};
 
 /// What the resolver may do per reference before something is wrong.
 ///
-/// Answering one reference may cost a look at each of the file's
-/// imports, so this tracks how many imports a file has, not how many
-/// names it uses: the worst of the 309 is thirteen, in a model that
-/// imports fifty-eight things and resolves none of them. What must not
-/// happen is the cost growing with the references as well, which is
-/// what an unremembered failure does -- fifty is the alarm going off,
-/// not a budget to spend.
+/// Answering one reference may cost a look at each of the file's imports,
+/// so this tracks how many imports a file has, not how many names it uses:
+/// the worst of the 309 is thirteen. What must not happen is the cost
+/// growing with the references as well, which is what an unremembered
+/// failure does -- fifty is the alarm going off, not a budget to spend.
 ///
-/// Counting the work rather than the seconds is deliberate. Under
-/// coverage instrumentation everything here runs fourteen times slower,
-/// so a stopwatch would have to be set so loosely that it would sleep
-/// through the next regression.
+/// Counting the work rather than the seconds is deliberate: under coverage
+/// instrumentation everything here runs fourteen times slower, so a
+/// stopwatch would sleep through the next regression.
 const PER_REFERENCE: u64 = 50;
 
 #[test]

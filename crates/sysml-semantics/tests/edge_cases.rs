@@ -2246,16 +2246,14 @@ fn a_message_says_where_it_runs_as_well_as_what_it_follows() {
     assert_eq!(ends("SuccessionAsUsage"), ["e", "m"]);
 }
 
-/// `send new S() via p to b;` says which port a message leaves by and
-/// who receives it, `accept s via p;` where one arrives, and `assign v
-/// := 1;` which feature it sets. None of those names was being looked
-/// up at all, so each stood for nothing -- and a name that stands for
-/// nothing was not reported either, which is worse than reporting it.
+/// `send new S() via p to b;` says which port a message leaves by and who
+/// receives it, `accept s via p;` where one arrives, and `assign v := 1;`
+/// which feature it sets. None was looked up at all, so each stood for
+/// nothing -- and was not reported either, which is worse.
 ///
-/// The standard keeps the first two as arguments of the action, in the
-/// input parameters it declares in order and reads back by position
-/// (`senderArgument = argument(2)`, `receiverArgument = argument(3)`),
-/// and the last as the one membership an assignment does not own.
+/// The standard keeps the first two as arguments of the action, read back
+/// by position, and the last as the one membership an assignment does not
+/// own.
 #[test]
 fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
     let mut ws = sysml_semantics::Workspace::new();
@@ -2337,17 +2335,14 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
     );
 }
 
-/// `abstract function LiteralEvaluation specializes Evaluation { return
-/// : ScalarValue[1]; }` -- the library writes no `redefines`, and the
-/// standard says it does not have to: a result parameter of a function
-/// that specializes another redefines that one's.
+/// The library writes no `redefines`, and the standard says it does not
+/// have to: a result parameter of a function that specializes another
+/// redefines that one's.
 ///
-/// Without the redefinition, the specializing function has two result
-/// parameters -- its own and the one it inherits -- and "a function has
-/// exactly one" is true of none of the five hundred in the corpus that
-/// declare one. The walk carries on past a general type that declares
-/// no result of its own, since one may be inherited in turn, and past a
-/// general type it has already looked through.
+/// Without it the specializing function has two result parameters, and "a
+/// function has exactly one" is true of none of the five hundred in the
+/// corpus that declare one. The walk carries on past a general type that
+/// declares no result of its own, since one may be inherited in turn.
 #[test]
 fn a_result_parameter_redefines_the_one_the_general_function_declares() {
     let mut ws = Workspace::new();
@@ -2472,12 +2467,10 @@ fn a_conjugated_port_is_typed_by_the_conjugate_and_has_what_it_conjugates() {
 /// feature of the other end this one is reached across, and the standard
 /// makes a `CrossSubsetting` of it. Written in the same shape as
 /// `subsets`, it was arriving as a plain subsetting -- so no model built
-/// here had a cross subsetting anywhere, and the constraint about
-/// owning at most one could not be asked.
-///
-/// What an end crosses to is reached through the ends of the
-/// association, this one included, so the path may start with the very
-/// name being declared.
+/// here had one, and the constraint about owning at most one could not be
+/// asked. What an end crosses to is reached through the ends of the
+/// association, this one included, so the path may start with the name
+/// being declared.
 #[test]
 fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
     let mut ws = Workspace::new();
@@ -2634,19 +2627,16 @@ fn a_succession_that_names_one_end_reifies_both() {
 ///
 /// `validateConnectorBinarySpecialization` -- "if a Connector has more
 /// than two connectorEnds, then it must not specialize, directly or
-/// indirectly, the Association BinaryLink" -- and
-/// `validateAssociationBinarySpecialization` says the same of an
+/// indirectly, the Association BinaryLink" -- and the same of an
 /// association. What a type implicitly specializes is not read off its
-/// metaclass alone: the pilot implementation writes `numEnds != 2 ?
-/// base : binary` for every one of them, counted over the ends the type
-/// owns. A definition that declares none -- `abstract connection def
-/// Multicausation` -- is not binary either, and everything built on it
-/// was.
+/// metaclass alone: the pilot writes `numEnds != 2 ? base : binary`,
+/// counted over the ends the type owns. A definition that declares none is
+/// not binary either, and everything built on it was.
 ///
 /// And `Connections::Connection` is a connection definition like any
-/// other, so the base its metaclass names is `BinaryConnection` --
-/// which specializes it: implied that way round, the library's own base
-/// for every connection was binary.
+/// other, so the base its metaclass names is `BinaryConnection` -- which
+/// specializes it: implied that way round, the library's own base for
+/// every connection was binary.
 #[test]
 fn what_relates_exactly_two_things_is_binary() {
     let mut ws = Workspace::new();
@@ -2824,12 +2814,10 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
 /// connect writes each of its ends in the list.
 ///
 /// "A TransitionUsage is not a Connector: what it relates it relates
-/// through a Succession of its own", so that is where its two ends
-/// belong -- read as the transition's, the succession it owns related
-/// nothing and the constraints that count what a control node is joined
-/// by had no ends to read. And `connect ( cause1 ::> causer1, cause2
-/// ::> causer2 )` writes each end in the list, named and referring, the
-/// same way a binary one writes two.
+/// through a Succession of its own" -- read as the transition's, the
+/// succession related nothing and the constraints counting what a control
+/// node is joined by had no ends to read. And `connect ( cause1 ::>
+/// causer1, ... )` writes each end in the list, named and referring.
 #[test]
 fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
     let mut ws = Workspace::new();
@@ -2904,13 +2892,10 @@ fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
 
 /// A named declaration with a reference is the end itself.
 ///
-/// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to
-/// [1] shankPort ::> hub.shankPort;` -- `ConnectorEnd : Feature = (
-/// OwnedCrossMultiplicityMember )? ( declaredName = NAME REFERENCES )?
-/// OwnedReferenceSubsetting`, so what stands after `connect` is the end
-/// and what it refers to is what the connector relates. Read as a
-/// member of the interface, twenty-one of the corpus related nothing at
-/// all.
+/// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to ...`
+/// -- what stands after `connect` is the end, and what it refers to is
+/// what the connector relates. Read as a member of the interface,
+/// twenty-one of the corpus related nothing at all.
 #[test]
 fn a_named_declaration_with_a_reference_is_the_end() {
     let mut ws = Workspace::new();
@@ -2983,19 +2968,15 @@ fn a_named_declaration_with_a_reference_is_the_end() {
 ///
 /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true,
 /// then it must have multiplicity 1..1" -- and the notation writes it
-/// nowhere: what stands before an end in `first [0..1] decide then
-/// [0..1] merge` is the cross multiplicity, how many things at the far
-/// end go with one at this one. Without the range, the four constraints
-/// that count what a control node is joined by have nothing to read.
-/// An end may carry a multiplicity, and what is inside the brackets is
-/// not part of the name beside it.
+/// nowhere: what stands before an end in `first [0..1] decide then [0..1]
+/// merge` is the cross multiplicity. Without the range, the four
+/// constraints counting what a control node is joined by have nothing to
+/// read.
 ///
-/// `connector ps : P ([0..*] myCart, ...)` writes a bound and then a
-/// name. The `*` of the bound was counted as a step of that name, so
-/// the steps said two where the segments said one, and reading a prefix
-/// of the name ran off the end of it -- a panic, on a model that parses
-/// and resolves. `ProductSelection_N_ary.kerml` writes exactly this
-/// with `[1]`, where a bound of one token happened to agree.
+/// `connector ps : P ([0..*] myCart, ...)` writes a bound and then a name.
+/// The `*` was counted as a step of that name, so the steps said two where
+/// the segments said one, and reading a prefix ran off the end of it -- a
+/// panic, on a model that parses and resolves.
 #[test]
 fn a_bound_written_before_an_end_is_not_part_of_its_name() {
     let mut ws = Workspace::new();

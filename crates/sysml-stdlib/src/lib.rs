@@ -1,16 +1,15 @@
 //! The KerML and SysML v2 standard model libraries, as text a program can
 //! load.
 //!
-//! Almost nothing in a SysML model resolves without these. `part def
+//! Almost nothing in a SysML model resolves without these: `part def
 //! Vehicle;` specializes `Parts::Part`, every feature subsets
-//! `Base::things`, and a `calc` reaches into the Kernel Function Library
-//! -- so a toolchain that cannot find the standard library reports every
-//! name in every model as unresolved, which is a lot of noise for a
-//! missing path.
+//! `Base::things`, and a `calc` reaches into the Kernel Function Library.
+//! A toolchain that cannot find them reports every name in every model as
+//! unresolved.
 //!
 //! Until this crate the path had to be given, and getting one meant
-//! cloning a repository whose history is two gigabytes to obtain one and
-//! a third megabytes of model. Here they are instead, in the binary:
+//! cloning a repository whose history is two gigabytes for one and a third
+//! megabytes of model. Here they are instead, in the binary:
 //!
 //! ```
 //! let mut ws = sysml_semantics::Workspace::new();
@@ -22,14 +21,13 @@
 //! # What this crate is, and is not
 //!
 //! It is data. It depends on nothing, parses nothing and knows nothing
-//! about the rest of sysml-v2-rs -- which is what lets it be a
-//! dependency of whatever wants it without dragging a toolchain along,
-//! and what lets it carry its own licence.
+//! about the rest of sysml-v2-rs -- which is what lets it be a dependency
+//! of whatever wants it, and what lets it carry its own licence.
 //!
-//! The files under `library/` are the OMG release's, unchanged, under
-//! the Eclipse Public License 2.0. The rest of sysml-v2-rs is MIT or
-//! Apache-2.0. They are separate crates so that which files are under
-//! which licence is a question with a one-word answer. See `NOTICE`.
+//! The files under `library/` are the OMG release's, unchanged, under the
+//! Eclipse Public License 2.0; the rest of sysml-v2-rs is MIT or
+//! Apache-2.0. Separate crates, so which files are under which licence is
+//! a question with a one-word answer. See `NOTICE`.
 
 // Nothing here needs `unsafe`, and saying so is what keeps it that way.
 #![forbid(unsafe_code)]

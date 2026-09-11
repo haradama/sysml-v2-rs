@@ -1,20 +1,18 @@
 //! Definition diagrams for [`sysml_model::Model`], rendered as SVG.
 //!
 //! Collects the definitions of a resolved model together with the
-//! specializations between them (`part def Engine :> PowerSource`), lays the
-//! result out as a layered graph with supertypes above their subtypes, and
-//! serializes it as a standalone SVG document.
+//! specializations between them, lays the result out as a layered graph
+//! with supertypes above their subtypes, and serializes it as a standalone
+//! SVG document.
 //!
 //! No layout engine and no font engine are involved: layering, crossing
 //! reduction, text metrics and the SVG itself are all produced here, so a
-//! model always renders to the same bytes and the result needs no viewer
-//! beyond a browser. Only how many columns a character takes is read from
-//! Unicode's own table, through `unicode-width`.
+//! model always renders to the same bytes. Only how many columns a
+//! character takes is read from Unicode's own table.
 //!
-//! Only specializations the model reifies are drawn. `sysml-semantics`
-//! reifies the ones written in the source but not the implicit library
-//! supertypes every definition inherits, so a diagram does not collapse into
-//! a hub of edges into `Parts::Part`.
+//! Only specializations the model reifies are drawn -- not the implicit
+//! library supertypes every definition inherits, or a diagram would
+//! collapse into a hub of edges into `Parts::Part`.
 //!
 //! ```
 //! use sysml_semantics::Workspace;
@@ -115,25 +113,21 @@ impl Style {
     }
 }
 
-/// How many columns `text` takes, counting a character an em across as two.
+/// How many columns `text` takes, counting a character an em across as
+/// two.
 ///
 /// The 0.6 em an ASCII letter is estimated at is about right for Latin and
-/// about half of what a Chinese, Japanese or Korean character takes, so a
-/// `doc` written in one of them would be measured at half its width and run
-/// out of the box it set the size of. Two columns overstates such a
+/// about half of what a CJK character takes, so a `doc` written in one of
+/// them would be measured at half its width. Two columns overstates such a
 /// character slightly, which leaves a box wider than it needs to be rather
 /// than prose wider than its box.
 ///
-/// Which characters those are is UAX #11's East Asian Width, and it is read
-/// from `unicode-width` rather than written out here: the property covers
-/// far more than the CJK blocks -- the Yi syllables, the vertical and small
-/// forms, the emoji drawn square -- and a list copied into this file would
-/// be a snapshot of one Unicode release with nothing in the repository to
-/// check it against.
+/// Which characters those are is UAX #11's East Asian Width, read from
+/// `unicode-width`: the property covers far more than the CJK blocks, and
+/// a list copied into this file would be a snapshot of one Unicode release
+/// with nothing to check it against.
 ///
-/// What [`svg::escape`] drops on the way out is dropped here too, so that
-/// a box is measured on the text drawn in it rather than on characters
-/// `unicode-width` gives a width and XML will not carry.
+/// What [`svg::escape`] drops on the way out is dropped here too.
 ///
 /// [`svg::escape`]: crate::svg::escape
 pub(crate) fn columns(text: &str) -> usize {

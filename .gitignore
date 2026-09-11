@@ -80,4 +80,8 @@ Cargo.lock
 # nothing here is needed to build, test or release this.
 /CLAUDE.md
 /.claude/
+
+# how to publish is the maintainer's own runbook, not part of what is
+# published
+/RELEASING.md
 docs/*.pdf

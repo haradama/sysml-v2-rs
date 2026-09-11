@@ -1,17 +1,14 @@
 //! What the notation writes, read off the syntax tree.
 //!
 //! Every function here takes a syntax node and answers a question about
-//! what was written: which parts of a declaration name a target and
-//! where each segment of that name is, which operands of a `connect`
-//! are the ends it relates, which library function an operator stands
-//! for, whether a declaration that writes its own name may be answered
-//! with itself. None of them touches the model.
+//! what was written: which parts of a declaration name a target and where
+//! each segment is, which operands of a `connect` are its ends, which
+//! library function an operator stands for. None of them touches the
+//! model.
 //!
-//! They were written beside the resolver, which is who calls them, and
-//! that left one file holding both the reading of the notation and the
-//! working out of what it means -- six thousand lines in which the two
-//! were only ever told apart by whether the first argument was a
-//! `SyntaxNode`. Apart, each half can be read on its own.
+//! They were written beside the resolver, which left one file holding both
+//! the reading of the notation and the working out of what it means, the
+//! two told apart only by whether the first argument was a `SyntaxNode`.
 
 use sysml_model::ElementKind;
 use sysml_syntax::{is_name_chain, SyntaxKind, SyntaxNode, TextRange};
@@ -218,27 +215,22 @@ pub(crate) fn triggered_function(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// The specification's own operator table, both columns of it: which
-/// function in the Kernel Function Library each symbol invokes, and
-/// whether that function can be evaluated at model level.
+/// The specification's own operator table, both columns: which Kernel
+/// Function Library function each symbol invokes, and whether that
+/// function can be evaluated at model level.
 ///
 /// The library carries the second nowhere.
 /// `Function::isModelLevelEvaluable` is derived, the metamodel states no
-/// derivation for it, and no function in the library writes it -- so
-/// read off the model alone it is false of every function there is, and
-/// every constraint asking whether an expression can be evaluated says
-/// no. Tables 5 and 7 say it plainly, and only three cannot: `all` is a
-/// type extent, and `~` and `[` are undefined -- "no default definition
-/// is provided in the Kernel Functions Library".
+/// derivation, and no library function writes it -- so read off the model
+/// it is false of every function, and every constraint asking whether an
+/// expression can be evaluated says no. Tables 5 and 7 say it plainly, and
+/// only three cannot: `all` is a type extent, and `~` and `[` are
+/// undefined.
 ///
-/// The pilot implementation agrees symbol for symbol without stating
-/// the column at all: it asks whether a function's qualified name is in
-/// the registry of the ones it knows how to evaluate, and that registry
-/// holds exactly the thirty-six the tables mark "Yes" and none of the
-/// three they mark "No".
-///
-/// The library writes the names in quotes, and the model holds what they
-/// answer to. `^` and `**` are the one function, written two ways.
+/// The pilot implementation agrees symbol for symbol without stating the
+/// column: its registry holds exactly the thirty-six the tables mark
+/// "Yes". The library writes the names in quotes, and the model holds what
+/// they answer to; `^` and `**` are one function written two ways.
 pub(crate) const OPERATORS: [(&str, &str, bool); 39] = [
     ("all", "BaseFunctions::all", false),
     ("istype", "BaseFunctions::istype", true),
@@ -581,15 +573,13 @@ pub(crate) fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
 ///
 /// `Subsetting::subsettedFeature`, `Redefinition::redefinedFeature` and
 /// `ReferenceSubsetting::referencedFeature` are each declared `Feature`,
-/// so a name that lands on anything else has not resolved -- which is
-/// what tells `feature aa subsets non;` apart from a model that means
-/// it, when `non` is a classifier declared next door.
+/// so a name landing on anything else has not resolved -- which tells
+/// `feature aa subsets non;` apart from a model that means it, when `non`
+/// is a classifier declared next door.
 ///
-/// Only what a feature relates is narrowed here. What a definition
-/// specializes is a `Classifier` for a `Subclassification` and a `Type`
-/// for the `Specialization` a plain type writes, and this parser hands
-/// both the same node, so requiring either would be requiring the wrong
-/// one half the time.
+/// Only what a feature relates is narrowed. What a definition specializes
+/// is a `Classifier` for a `Subclassification` and a `Type` for a plain
+/// `Specialization`, and this parser hands both the same node.
 pub(crate) fn expected_kind(part: SyntaxKind, is_definition: bool) -> Option<ElementKind> {
     match part {
         SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW if is_definition => None,

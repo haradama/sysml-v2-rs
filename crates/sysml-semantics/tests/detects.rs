@@ -2,36 +2,31 @@
 //!
 //! The official corpus is the ground truth for the other direction: every
 //! file the OMG publishes is well-formed, so a constraint that fires on
-//! one is this checker being wrong. What that proves is that the checker
-//! does not cry wolf. It proves nothing at all about whether it barks --
-//! a constraint that can never fire passes the corpus perfectly.
+//! one is this checker being wrong. That proves the checker does not cry
+//! wolf; it proves nothing about whether it barks -- a constraint that can
+//! never fire passes the corpus perfectly.
 //!
 //! So each model below is meant to be rejected, and the test is which
-//! constraints notice. Every one of them was checked against the
-//! specification before it was written down: `verify` belongs inside an
-//! `objective`, as `VerificationTest.sysml` writes it, and an `enum def`
-//! is a variation, so what it owns must be variants.
+//! constraints notice. Every one was checked against the specification
+//! first: `verify` belongs inside an `objective`, as
+//! `VerificationTest.sysml` writes it, and an `enum def` is a variation,
+//! so what it owns must be variants.
 //!
-//! Breaking the corpus, next door, reaches far more of them than
-//! writing models by hand does -- but not all. A constraint the corpus
-//! asks of three elements has nothing much to break, and counting how
-//! many elements each one answers says which those are: of the hundred
-//! and eight that no break had reached, nine were answered of fewer
-//! than ten elements and thirty-eight of more than a thousand without
-//! ever being false. The first nine are worth aiming at by hand, and
-//! six of the models here came of doing that.
+//! Breaking the corpus, next door, reaches far more of them than writing
+//! models by hand -- but not all. A constraint the corpus asks of three
+//! elements has nothing much to break: of the hundred and eight that no
+//! break had reached, nine were answered of fewer than ten elements. Six
+//! of the models here came of aiming at those.
 //!
 //! A seventh came of asking why an aimed model did not work.
-//! `validateSubjectMembershipOwningType` was answered of eighteen
-//! subjects and could not have been false of any: it asks whether the
-//! owning type is one of four and writes the second as a metaclass that
-//! does not exist, so anything but the first left the question unknown.
-//! Read as the constraint's own words say -- `RequirementUsage` -- a
-//! subject under an action definition is reported.
+//! `validateSubjectMembershipOwningType` was answered of eighteen subjects
+//! and could not have been false of any: it asks whether the owning type
+//! is one of four and writes the second as a metaclass that does not
+//! exist. Read as the constraint's own words say, a subject under an
+//! action definition is reported.
 //!
-//! Skipped when the submodule is not checked out: the constraints are
-//! written against the standard library, and without it they report what
-//! is missing rather than what is wrong.
+//! Skipped when the submodule is not checked out: without the library the
+//! constraints report what is missing rather than what is wrong.
 
 use std::collections::BTreeSet;
 
@@ -201,34 +196,29 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
 /// The same question asked of the corpus, by breaking it on purpose.
 ///
 /// Writing a wrong model by hand reaches the constraints one at a time,
-/// and it reaches only the ones whose shape is already understood. The
-/// corpus is 403 files of rich, correct SysML: change one thing in one
-/// of them and it is still a model, still parses, still resolves -- and
-/// is now wrong in a way somebody's editor could be wrong.
+/// and only the ones whose shape is already understood. The corpus is 403
+/// files of rich, correct SysML: change one thing in one of them and it is
+/// still a model, still parses, still resolves -- and is now wrong in a
+/// way somebody's editor could be wrong.
 ///
-/// Three sweeps got here. Fifty keyword swaps over every file left 1674
-/// such models and tripped twenty-six constraints, and found a panic:
-/// `connector ps : P ([0..*] myCart, ...)` counted the `*` of the bound
-/// as a step of the name beside it. A second widened the swaps past the
-/// definition keywords to expressions, multiplicity, visibility, time
-/// structure and the KerML relationship words -- 4257 models, and
-/// thirty-nine constraints. A third broke one place at a time rather
-/// than every place at once, and took whole lines out and put them in
-/// twice: 12040 models, and fourteen more. A fourth put neighbouring
-/// lines in the other order and broke two places at once, and found
-/// nothing at all -- 3914 models, no constraint that was not already
-/// noticed. Only the first sweep found a panic.
+/// Four sweeps got here. Fifty keyword swaps over every file left 1674
+/// models, tripped twenty-six constraints, and found a panic: `connector
+/// ps : P ([0..*] myCart, ...)` counted the `*` of the bound as a step of
+/// the name beside it. A second widened the swaps past the definition
+/// keywords -- 4257 models, thirty-nine constraints. A third broke one
+/// place at a time and took whole lines out and put them in twice: 12040
+/// models, fourteen more. A fourth reordered neighbouring lines and broke
+/// two places at once, and found nothing new. Only the first found a
+/// panic.
 ///
-/// What the fourth sweep did find was elsewhere: breaking the standard
-/// library rather than a model reaches four more, and those are next
-/// door. Sixty-two of the hundred and seventy answered constraints are
-/// demonstrated to fire, counting the five that only a hand-written
-/// model reaches.
+/// What the fourth did find was elsewhere: breaking the standard library
+/// rather than a model reaches four more, next door. Sixty-two of the
+/// hundred and seventy answered constraints are demonstrated to fire.
 ///
 /// Each row is one break, the file it is made in, and constraints that
-/// must notice. Other constraints may notice too -- one keyword can be
-/// wrong in several ways at once -- so the named ones must be among
-/// what fires rather than all of it.
+/// must notice. Others may notice too -- one keyword can be wrong several
+/// ways at once -- so the named ones must be among what fires rather than
+/// all of it.
 #[derive(Clone, Copy)]
 enum Break {
     /// every occurrence of the first, written as the second
@@ -623,16 +613,14 @@ fn a_corpus_file_broken_on_purpose_is_reported_as_broken() {
 /// some of them.
 ///
 /// `validatePartUsagePartDefinition` asks that at least one of a part's
-/// definitions be a `PartDefinition`, and no model of its own can fail
-/// it: `deriveFeatureType` says the types of a feature are those of its
-/// typings *and of its subsettings*, so the implicit `Parts::parts`
-/// always brings `Parts::Part` in. Make `Parts::Part` an item
-/// definition instead and the constraint fires at once -- which is what
-/// it is for.
+/// definitions be a `PartDefinition`, and no model of its own can fail it:
+/// `deriveFeatureType` says the types of a feature are those of its
+/// typings *and of its subsettings*, so the implicit `Parts::parts` always
+/// brings `Parts::Part` in. Make `Parts::Part` an item definition and the
+/// constraint fires at once.
 ///
-/// A break here means loading the library again with one of its files
-/// changed, so these cost about a second each rather than a hundredth
-/// of one. There are four.
+/// A break here means loading the library again with one file changed, so
+/// these cost about a second each. There are four.
 const LIBRARY_BROKEN: &[(&str, Break, &[&str])] = &[
     (
         "Parts.sysml",

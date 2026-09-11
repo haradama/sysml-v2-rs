@@ -5,44 +5,36 @@
 //! **Data and structure.** A `part def`, `item def`, `attribute def` or
 //! `port def` becomes a struct: attributes and composed parts become
 //! fields (multiplicities as containers -- `[*]` a `Vec`, `[0..1]` an
-//! `Option`, `[n]` an array), inherited features are flattened in along
-//! the reified specializations with redefinitions shadowing what they
-//! redefine, and a composition cycle is broken with a `Box` at the edge
-//! that closes it. Declared values become a `Default` implementation
-//! where every field has one. An `enum def` -- and a variation with
-//! `variant` members -- becomes an enum. An `abstract` definition
-//! contributes its features to its subtypes but gets no struct of its
-//! own.
+//! `Option`, `[n]` an array), inherited features are flattened in with
+//! redefinitions shadowing what they redefine, and a composition cycle is
+//! broken with a `Box` at the edge that closes it. Declared values become
+//! a `Default` implementation where every field has one. An `enum def` --
+//! and a variation with `variant` members -- becomes an enum. An
+//! `abstract` definition contributes its features to its subtypes but gets
+//! no struct of its own.
 //!
 //! **Calculations.** A `calc def` becomes a function over its `in`
 //! parameters and a `calc` usage of a struct a method over its fields.
-//! Result expressions in the simple subset -- literals, references,
-//! arithmetic, comparisons, logic, `if c ? a else b` -- translate as
-//! written (numeric literals keep their spelling, so mixed-type
-//! arithmetic surfaces as a Rust type error, not a coercion); anything
-//! richer keeps its SysML text behind a `todo!`. An `abstract calc def`
-//! declares no formula at all, so it becomes a trait with one method
-//! and no default body: what the model leaves open the compiler asks
-//! for, rather than a `todo!` waiting to be reached. The same translation
-//! gives state-machine guards over their event payload a real default
-//! body, and closed expressions (`= 2.0 * 3.0`) their place in
-//! `Default`.
+//! Result expressions in the simple subset translate as written (numeric
+//! literals keep their spelling, so mixed-type arithmetic surfaces as a
+//! Rust type error, not a coercion); anything richer keeps its SysML text
+//! behind a `todo!`. An `abstract calc def` declares no formula, so it
+//! becomes a trait with one method and no default body: what the model
+//! leaves open the compiler asks for.
 //!
 //! **Behaviour against existing APIs.** A port typed by a `port def`
-//! carrying a `@code { ... }` binding (what [`crate::import`] writes)
-//! becomes a generic parameter bound to the real Rust trait, and each
-//! `perform`ed bound action becomes a method delegating through that
-//! port, with the API's own signature: `async`, `Result` and the
-//! receiver the binding states. A `state def` becomes a state machine:
-//! an enum of states, an enum of the events its transitions accept, a
-//! hooks trait carrying guards (their SysML text in the docs), effects
-//! and entry/exit notifications, and a `step` function walking the
-//! transition table.
+//! carrying a `@code { ... }` binding becomes a generic parameter bound to
+//! the real Rust trait, and each `perform`ed bound action a method
+//! delegating through that port with the API's own signature: `async`,
+//! `Result` and the receiver the binding states. A `state def` becomes a
+//! state machine: an enum of states, an enum of the events its transitions
+//! accept, a hooks trait carrying guards, effects and entry/exit
+//! notifications, and a `step` function over the transition table.
 //!
 //! What has no generated shape is written into the output as a comment
-//! rather than dropped. The output is deterministic -- declaration order
-//! in, declaration order out -- and intended to be committed next to the
-//! model; regenerating and diffing is the drift check.
+//! rather than dropped. The output is deterministic and intended to be
+//! committed next to the model; regenerating and diffing is the drift
+//! check.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -246,16 +238,15 @@ impl Generator<'_> {
         });
     }
 
-    /// The body a calculation's formula becomes, and whether the model's
-    /// own words had to be left inside a `todo!` because they are past
-    /// the translated subset.
+    /// The body a calculation's formula becomes, and whether the model's own
+    /// words had to be left inside a `todo!` because they are past the
+    /// translated subset.
     ///
-    /// A calculation is written twice -- as a free function for a
-    /// definition and as a method on the type that owns one -- and this
-    /// is the part that does not differ. What the model did not say is
-    /// recorded as an opening at the same moment, so the list of what a
-    /// person still has to write cannot fall out of step with the
-    /// `todo!`s that say it.
+    /// A calculation is written twice -- as a free function and as a method on
+    /// the type that owns one -- and this is the part that does not differ.
+    /// What the model did not say is recorded as an opening at the same
+    /// moment, so the list of what a person still has to write cannot fall out
+    /// of step with the `todo!`s.
     fn formula_body(
         &self,
         clause: &Option<ValueClause>,
@@ -478,43 +469,22 @@ fn contained(base: String, container: Container) -> String {
 
 /// The declared multiplicity of a usage, as the container it implies.
 fn multiplicity(model: &Model, usage: ElementId) -> Container {
-    let Some(Value::Ref(range)) = model.get(usage, "multiplicity") else {
+    use sysml_model::Bound;
+    let Some(declared) = sysml_model::declared_multiplicity(model, usage) else {
         return Container::One;
     };
-    let bound_value = |name: &str| -> Option<BoundKind> {
-        let Some(Value::Ref(bound)) = model.maybe(*range, name) else {
-            return None;
-        };
-        if model.kind(*bound) == ElementKind::LiteralInfinity {
-            return Some(BoundKind::Many);
-        }
-        match model.maybe(*bound, "value") {
-            Some(Value::Int(int)) => Some(BoundKind::Exactly(*int)),
-            _ => Some(BoundKind::Unknown),
-        }
-    };
-    match (
-        bound_value("bound"),
-        bound_value("lowerBound"),
-        bound_value("upperBound"),
-    ) {
-        (Some(BoundKind::Many), _, _) => Container::Many,
+    match (declared.bound, declared.lower, declared.upper) {
+        (Some(Bound::Many), _, _) => Container::Many,
         // `[0]` is a multiplicity of nothing, which Rust spells as an
         // array of nothing; a `Vec` would claim it can hold more
-        (Some(BoundKind::Exactly(n)), _, _) if n >= 0 => Container::Array(n),
-        (None, Some(BoundKind::Exactly(0)), Some(BoundKind::Exactly(1))) => Container::Optional,
+        (Some(Bound::Exactly(n)), _, _) if n >= 0 => Container::Array(n),
+        (None, Some(Bound::Exactly(0)), Some(Bound::Exactly(1))) => Container::Optional,
         // `[1..1]` is the multiplicity everything has by default, said
         // out loud -- one of the thing, not a collection of them
-        (None, Some(BoundKind::Exactly(1)), Some(BoundKind::Exactly(1))) => Container::One,
+        (None, Some(Bound::Exactly(1)), Some(Bound::Exactly(1))) => Container::One,
         (None, Some(_), Some(_)) => Container::Many,
         _ => Container::Many,
     }
-}
-
-enum BoundKind {
-    Many,
-    Exactly(i64),
-    Unknown,
 }
 
 /// The `= value` a usage declared, as far as Rust can start from it: a
@@ -548,14 +518,13 @@ fn default_of(model: &Model, usage: ElementId) -> Option<String> {
     }
 }
 
-/// The numbers a requirement states about itself, in the order it
-/// states them -- the bounds of `attribute lowerBound : Millis = 100;`
-/// and its like.
+/// The numbers a requirement states about itself, in the order it states
+/// them -- the bounds of `attribute lowerBound : Millis = 100;` and its
+/// like.
 ///
-/// A verification is handed these rather than repeating them, so that
-/// the requirement stays the only place they are written. Changing one
-/// in the model changes the call, and a verification that no longer
-/// fits it stops compiling, which is the point.
+/// A verification is handed these rather than repeating them, so the
+/// requirement stays the only place they are written: changing one changes
+/// the call, and a verification that no longer fits stops compiling.
 fn declared_values(model: &Model, requirement: ElementId) -> Vec<String> {
     model
         .owned(requirement)
@@ -578,34 +547,23 @@ fn referent_of(model: &Model, usage: ElementId) -> Option<ElementId> {
 }
 
 /// The trailing result expression of a calculation body, where one was
-/// written -- the last one wins, as the spec has it.
+/// written, still to translate.
 fn result_clause(model: &Model, element: ElementId) -> Option<ValueClause> {
-    let mut clause = None;
-    for &child in model.owned(element) {
-        if model.kind(child) == ElementKind::Expression
-            && model.member_role(child) == Some(Role::Result)
-        {
-            if let Some(text) = expression_text(model, child) {
-                clause = Some(ValueClause::Text(text));
-            }
-        }
-    }
-    clause
+    sysml_model::result_expression_text(model, element).map(ValueClause::Text)
 }
 
 /// The Rust scalar a SysML type stands for, where it stands for one.
 /// Fields and parameters both ask this, so that one model type cannot
 /// be a `f64` in a struct and something else in a signature.
 fn scalar_of(name: &str) -> Option<&'static str> {
-    Some(match name {
+    Some(match sysml_model::primitive(name)? {
         "Real" => "f64",
         "Integer" => "i64",
         // `Positive` is a `Natural` the model has ruled zero out of;
         // Rust has no such integer that is also `Default`
         "Natural" | "Positive" => "u64",
         "Boolean" => "bool",
-        "String" => "String",
-        _ => return None,
+        _ => "String",
     })
 }
 
@@ -648,45 +606,22 @@ fn numbers_of(spelled: Option<&str>) -> Numbers {
 
 /// The `= value` clause of a usage, ready for translation.
 fn value_clause(model: &Model, usage: ElementId) -> Option<ValueClause> {
-    let membership = model
-        .owned(usage)
-        .iter()
-        .copied()
-        .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
-    let Some(Value::Ref(expression)) = model.maybe(membership, "value") else {
-        return None;
-    };
-    let rust = match model.maybe(*expression, "value") {
-        Some(Value::Real(real)) => real_literal(*real),
-        Some(Value::Int(int)) if wants_float(model, usage) => format!("{int}.0"),
-        Some(Value::Int(int)) => format!("{int}"),
-        Some(Value::Bool(flag)) => format!("{flag}"),
-        Some(Value::String(text)) => format!("{text:?}.to_string()"),
-        _ => return expression_text(model, *expression).map(ValueClause::Text),
+    use sysml_model::{Declared, Literal};
+    let rust = match sysml_model::declared_value(model, usage)? {
+        Declared::Text(text) => return Some(ValueClause::Text(text)),
+        Declared::Literal(Literal::Real(real)) => real_literal(real),
+        Declared::Literal(Literal::Int(int)) if wants_float(model, usage) => format!("{int}.0"),
+        Declared::Literal(Literal::Int(int)) => format!("{int}"),
+        Declared::Literal(Literal::Bool(flag)) => format!("{flag}"),
+        Declared::Literal(Literal::String(text)) => format!("{text:?}.to_string()"),
     };
     Some(ValueClause::Literal(rust))
 }
 
-/// The written text of an expression element, off the textual
-/// representation the builder keeps for what it does not evaluate.
-fn expression_text(model: &Model, expression: ElementId) -> Option<String> {
-    model.owned(expression).iter().find_map(|&written| {
-        (model.kind(written) == ElementKind::TextualRepresentation)
-            .then(|| model.maybe(written, "body"))
-            .flatten()?
-            .as_str()
-            .map(str::to_string)
-    })
-}
-
-/// What an unnamed redefining usage redefines, so it can borrow the name.
-fn redefined(model: &Model, usage: ElementId) -> Option<ElementId> {
-    model.owned(usage).iter().find_map(|&child| {
-        (model.kind(child) == ElementKind::Redefinition)
-            .then(|| model.redefined_feature(child))
-            .flatten()
-    })
-}
+// Read from `sysml-model`, where every generator's model walks live;
+// re-exported so the modules of this one keep reading them through
+// `super::*`.
+pub(crate) use sysml_model::{expression_text, redefined};
 
 /// The `@code { :>> name = value; ... }` pairs of one element, if it
 /// carries a binding.

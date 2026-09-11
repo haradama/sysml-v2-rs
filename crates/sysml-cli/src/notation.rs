@@ -1,23 +1,18 @@
 //! How each construct is written, with an example that has been checked.
 //!
-//! SysML v2 was adopted in 2025, and there is very little of it in what
-//! any language model was trained on. What an agent asked to transcribe
-//! a specification gets wrong is not the systems engineering -- it is
-//! the notation: whether a requirement's condition goes in `require
-//! constraint { }` or after `assert`, whether a transition is written
-//! `first ... then ...` or `transition ... to ...`, what a port
-//! declares.
+//! SysML v2 was adopted in 2025 and there is very little of it in what any
+//! language model was trained on. What an agent transcribing a
+//! specification gets wrong is not the systems engineering -- it is the
+//! notation: whether a requirement's condition goes in `require constraint
+//! { }` or after `assert`, what a port declares.
 //!
-//! It cannot be told from the standard library, which is bundled and
-//! which an agent can read: the library declares the *types* a model
-//! reaches for and almost none of the constructs a model is written
-//! with. There is no `requirement def` in it, no `state def`, no
-//! `connect`.
+//! The standard library cannot tell it either: the library declares the
+//! *types* a model reaches for and almost none of the constructs a model
+//! is written with. There is no `requirement def` in it, no `state def`,
+//! no `connect`.
 //!
-//! So the examples are here. Each one is real SysML that parses,
-//! resolves against the standard library and holds the constraints the
-//! specification states -- `every_example_is_checked` is what makes that
-//! true rather than intended.
+//! So the examples are here, and `every_example_is_checked` holds each to
+//! parsing, resolving and obeying the specification's constraints.
 
 /// One construct, and how it is written.
 pub struct Notation {

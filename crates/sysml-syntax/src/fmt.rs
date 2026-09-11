@@ -1,16 +1,16 @@
 //! Canonical formatter for the KerML / SysML v2 textual notation.
 //!
-//! Token-stream based, driven by the lossless CST: indentation follows brace
-//! depth, one member per line, single blank lines are preserved, comments
-//! keep their own-line/trailing position, and spacing is decided from token
-//! kinds plus the parent node (so `a < b` gets spaces while `<shortName>`
-//! does not). Comment and note interiors are emitted verbatim, line
-//! endings included: they are one token's text and are what the author
-//! wrote, so a CRLF comment body keeps its `\r\n`.
+//! Token-stream based, driven by the lossless CST: indentation follows
+//! brace depth, one member per line, single blank lines are preserved,
+//! comments keep their own-line/trailing position, and spacing is decided
+//! from token kinds plus the parent node (so `a < b` gets spaces while
+//! `<shortName>` does not). Comment interiors are emitted verbatim, line
+//! endings included -- they are one token's text and are what the author
+//! wrote.
 //!
-//! Guarantees (regression-tested against the whole official corpus):
-//! formatting never changes the non-trivia token stream (reparse
-//! equivalence) and is idempotent.
+//! Guarantees, regression-tested against the whole official corpus:
+//! formatting never changes the non-trivia token stream, and is
+//! idempotent.
 
 use crate::{parse_dialect, Dialect, SyntaxKind, SyntaxKind::*, SyntaxToken};
 

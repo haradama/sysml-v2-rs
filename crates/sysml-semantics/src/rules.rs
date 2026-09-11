@@ -110,22 +110,18 @@ const TYPED_BY: [&str; 5] = [
 /// The names a membership metaclass gives to the one thing it owns.
 ///
 /// `SubjectMembership::ownedSubjectParameter`,
-/// `StateSubactionMembership::action`,
-/// `ElementFilterMembership::condition` and their kin: each is the
-/// member, under whichever name the metaclass declares. Their
-/// `referenced` counterparts -- `referencedConcern`,
-/// `verifiedRequirement` -- name something the membership does not own,
-/// and are left alone.
-/// `ParameterMembership::ownedMemberParameter` is among them, and was
-/// not always. While an expression was kept as the text it was written
-/// as rather than as the parameters the specification counts, reading
-/// it as the member made `result` a definite nothing rather than an
-/// unanswered question, and 2847 of a sound corpus were reported as
-/// violations. An expression is now built as the tree of parameters and
-/// results the abstract syntax states, and of the four constraints this
-/// name reaches, `validateFeatureReferenceExpressionResult` and
-/// `validateParameterMembershipParameterDirection` hold of the whole
-/// corpus. The other two are refused for reasons of their own.
+/// `StateSubactionMembership::action` and their kin: each is the member,
+/// under whichever name the metaclass declares. Their `referenced`
+/// counterparts name something the membership does not own, and are left
+/// alone.
+///
+/// `ParameterMembership::ownedMemberParameter` was not always among them.
+/// While an expression was kept as text rather than as the parameters the
+/// specification counts, reading it as the member made `result` a definite
+/// nothing rather than an unanswered question, and 2847 of a sound corpus
+/// were reported as violations. An expression is now built as that tree,
+/// and two of the four constraints this name reaches hold of the whole
+/// corpus; the other two are refused for reasons of their own.
 const OWNED_MEMBER: [&str; 14] = [
     "action",
     "condition",
@@ -152,68 +148,46 @@ const OWNED_MEMBER: [&str; 14] = [
 /// the metamodel declares the default to be.
 const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
 
-/// Where the specification's own OCL names something it does not
-/// declare, and what it plainly means.
+/// Where the specification's own OCL names something it does not declare,
+/// and what it plainly means.
 ///
-/// `Type::inheritableMemberships` takes `excludedTypes` and its body
-/// reads `excludedType`. There is no other reading: no metaclass has a
-/// property of that name, the operation has no other parameter it could
-/// be, and the two are one letter apart. Twenty constraints reach the
-/// memberships a type inherits through that operation, so the choice is
+/// `Type::inheritableMemberships` takes `excludedTypes` and its body reads
+/// `excludedType`. There is no other reading: no metaclass has a property
+/// of that name and the operation has no other parameter. Twenty
+/// constraints reach inherited memberships through it, so the choice is
 /// between reading what it means and answering none of them.
 ///
 /// `validateAssertConstraintUsageReference` calls
-/// `referencedFeaureTarget()`, and the metamodel declares no operation
-/// of that name. Its two siblings -- the same constraint about a
-/// requirement and about a state -- are written out in the same file
-/// with `referencedFeatureTarget()`, and so is the second call in this
-/// one. Read as written the guard cannot be answered, and the rule
-/// stops on `oclIsKindOf` of the null it was guarding against.
-///
-/// This is not the same as the two below. Those say something other than
-/// what the constraint says in words, and running them would report a
-/// violation of a model that is sound; the corpus is what says whether
-/// reading these as they are meant is right.
-/// `ControlNode::multiplicityHasBounds` calls `oclisKindOf`, which is
-/// spelled `oclIsKindOf` everywhere else in the metamodel and twice in
-/// the very body that misspells it once.
-///
-/// Each of these is read as meant where the body calls it, which is the
-/// only place a name that belongs to nothing can appear.
-/// `deriveFeatureType` calls `exist(`, and OCL spells the operation
-/// `exists`; the same body writes `reject` and `closure` correctly, and
-/// nothing anywhere declares an `exist`. It is the derivation every
-/// constraint about the types of a feature reads.
+/// `referencedFeaureTarget()`, which the metamodel does not declare. Its
+/// two siblings in the same file, and the second call in this one, write
+/// `referencedFeatureTarget()`. `ControlNode::multiplicityHasBounds` calls
+/// `oclisKindOf`, spelt `oclIsKindOf` everywhere else and twice in the
+/// body that misspells it once. `deriveFeatureType` calls `exist(` where
+/// OCL spells it `exists`.
 ///
 /// `deriveMetadataFeatureMetaclass` binds `metaclassTypes` and reads
-/// `metaClassTypes` back on the next line but one, and
-/// `validateRedefinitionFeaturingTypes` binds `redefinedFeaturingTypes`
-/// and reads `redefinedFeaturingType` back on the line after. Nothing
-/// binds the name either of them reads, the name each bound is read
-/// nowhere, and both are written correctly beside the slip -- the
-/// second reads `redefiningFeaturingTypes` in the very comparison that
-/// misspells its other half. `InstantiationExpression::instantiatedType`
-/// is a third of the same shape: it binds `members` and reads
-/// `typeMembers` two lines later, and nothing binds that.
+/// `metaClassTypes`; `validateRedefinitionFeaturingTypes` binds
+/// `redefinedFeaturingTypes` and reads `redefinedFeaturingType`;
+/// `InstantiationExpression::instantiatedType` binds `members` and reads
+/// `typeMembers`. Nothing binds the name any of them reads.
+/// `Feature::isCompatibleWith(otherType)` reads `supertype`, which nothing
+/// binds either -- the pilot implementation writes that guard as
+/// `supertype instanceof Feature`, of the other type.
 ///
-/// `Feature::isCompatibleWith(otherType)` reads `supertype`, which
-/// nothing binds either -- the parameter is `otherType`, and the guard
-/// it stands in is what keeps the rest of the body from being asked of
-/// something that is not a feature. The pilot implementation writes the
-/// same guard as `supertype instanceof Feature`, of the other type.
-///
-/// Five more were found by scanning every identifier the generated OCL
-/// writes and keeping the ones no metaclass declares, no operation
-/// answers to, and nothing in the body binds. Each is written correctly
-/// beside the slip, most of them in the very same body:
+/// Five more came of scanning every identifier the generated OCL writes
+/// and keeping those no metaclass declares, no operation answers to and
+/// nothing binds. Each is written correctly beside the slip:
 /// `deriveRequirementConstraintMembershipReferencedConstraint` binds
-/// `referencedFeature`, tests it, and reads `refrencedFeature` back;
+/// `referencedFeature` and reads `refrencedFeature` back;
 /// `Namespace::resolveLocal` guards on `owningNamespace` and recurses
-/// through `owningNamspace`. `featureMembersip` and `featureMemberhsip`
-/// are two different manglings of `featureMembership`, in a result
-/// expression and a viewpoint stakeholder, and both say
-/// "featureMemberships" in words. `Feature::modelLevelEvaluable` calls
-/// `isOclKindOf`, which OCL spells the other way round.
+/// through `owningNamspace`; `featureMembersip` and `featureMemberhsip`
+/// are two manglings of `featureMembership`; `Feature::modelLevelEvaluable`
+/// calls `isOclKindOf`.
+///
+/// This is not the same as [`MISWRITTEN`]: those say something other than
+/// the constraint's own words, and running them would report a sound model
+/// as violating. Each of these is read as meant where the body calls it,
+/// which is the only place a name belonging to nothing can appear.
 const MISSPELLED: [(&str, &str); 13] = [
     ("excludedType", "excludedTypes"),
     ("referencedFeaureTarget", "referencedFeatureTarget"),
@@ -232,34 +206,28 @@ const MISSPELLED: [(&str, &str); 13] = [
 
 /// Metaclasses the specification's OCL names and neither metamodel has.
 ///
-/// A name that stands for no metaclass cannot be answered, and a
-/// question that cannot be answered is not false: every one of these
-/// silently turns a constraint or a derivation into one that holds of
-/// whatever it is asked about. `validateSubjectMembershipOwningType`
-/// was answered eighteen times over the corpus and could not have been
-/// false in any of them.
+/// A name that stands for no metaclass cannot be answered, and a question
+/// that cannot be answered is not false: each of these silently turns a
+/// constraint into one that holds of whatever it is asked about.
+/// `validateSubjectMembershipOwningType` was answered eighteen times over
+/// the corpus and could not have been false in any of them.
 ///
-/// All six read one way only, and each is written correctly in the
-/// words beside it. The last hid behind a misspelt operation:
-/// `Feature::modelLevelEvaluable` reads `MetaClass` where the metaclass
-/// is a `Metaclass`, spelt that way nineteen times elsewhere and this
-/// way once, and the call it stands in is spelt `isOclKindOf` so the
-/// name was never looked up at all. The subject membership's four owning types are "a
-/// RequirementDefinition, RequirementUsage, CaseDefinition, or
-/// CaseUsage", and the second is written
+/// All six read one way only, and each is written correctly in the words
+/// beside it. `Feature::modelLevelEvaluable` reads `MetaClass` where the
+/// metaclass is `Metaclass` -- spelt that way nineteen times elsewhere --
+/// and its call is spelt `isOclKindOf`, so the name was never looked up at
+/// all. The subject membership's owning types are "a RequirementDefinition,
+/// RequirementUsage, CaseDefinition, or CaseUsage", the second written
 /// `RequiremenCaseRequirementDefinition`. The stakeholder parameter is
-/// "the ownedStakeholderParameters of the StakeholderMemberships",
-/// spelt `StakholderMembership` where a definition owns it and
-/// `AStakholderMembership` where a usage does. `LoopActionUsage::
-/// bodyAction` is declared an `ActionUsage` and read as an `Action`,
-/// which is a metaclass of neither language. `Usage::nestedFlow` is
-/// declared a `FlowUsage` and read as a `FlowConnectionUsage`, which is
-/// what that metaclass was called before it was renamed.
+/// spelt `StakholderMembership` and `AStakholderMembership`.
+/// `LoopActionUsage::bodyAction` is declared an `ActionUsage` and read as
+/// an `Action`; `Usage::nestedFlow` is declared a `FlowUsage` and read as
+/// a `FlowConnectionUsage`, what that metaclass was called before it was
+/// renamed.
 ///
-/// These are kept apart from the names above because they are looked up
-/// somewhere else: `Action` is an ordinary enough word that repairing
-/// it wherever a body binds or calls one would be a different and much
-/// broader claim.
+/// Kept apart from the names above because they are looked up somewhere
+/// else: `Action` is an ordinary enough word that repairing it wherever a
+/// body binds one would be a much broader claim.
 const MISNAMED: [(&str, &str); 6] = [
     ("RequiremenCaseRequirementDefinition", "RequirementUsage"),
     ("StakholderMembership", "StakeholderMembership"),
@@ -269,8 +237,8 @@ const MISNAMED: [(&str, &str); 6] = [
     ("MetaClass", "Metaclass"),
 ];
 
-/// Where the specification's own OCL does not close what it opens, and
-/// the one place the closing can go.
+/// Where the specification's own OCL does not close what it opens, and the
+/// one place the closing can go.
 ///
 /// `deriveFeatureCrossFeature` writes two `if`s and one `endif`:
 ///
@@ -286,30 +254,21 @@ const MISNAMED: [(&str, &str); 6] = [
 /// ```
 ///
 /// A `let` runs to the end of what follows it, so the inner `if` is the
-/// whole of the outer one's `else` and the single `endif` written can
-/// only close the inner. The outer is left open, and there is no other
-/// point in the text where inserting an `endif` makes it parse: the
-/// grammar leaves one position, not a choice of them.
+/// whole of the outer one's `else` and the single `endif` can only close
+/// the inner. The grammar leaves one position for the other, not a choice.
 ///
-/// `validateFeatureEndNoDirection` is written `isEnd implied direction
-/// = null`, where `implied` is no OCL operator at all. Choosing one
-/// would be choosing among readings, which is not what closing an open
-/// bracket is -- so it was left unread until something other than this
-/// parser said which. The pilot implementation says: `checkFeature`
-/// writes `if (f.isEnd && f.direction !== null) error(...)`, which is
-/// `implies` and nothing else.
+/// `validateFeatureEndNoDirection` is written `isEnd implied direction =
+/// null`, and `implied` is no OCL operator. Choosing one would be choosing
+/// among readings rather than closing a bracket, so it was left unread
+/// until the pilot implementation said which: `checkFeature` writes `if
+/// (f.isEnd && f.direction !== null) error(...)`, which is `implies`.
 ///
-/// Nor is it the same as [`MISWRITTEN`] below, where the OCL parses and
-/// says something other than the constraint's own words.
-///
-/// Closing what is open only helps where what the body then goes on to
-/// evaluate can be answered. `Type::multiplicities` is left out for
-/// that reason: closed, it parses, and
-/// `validateFeatureEndMultiplicity` then reports twelve hundred
-/// violations of a sound corpus, because the `allSuperTypes()` and
-/// `hasBounds(1, 1)` it goes on to call answer nothing and an
-/// `exists` over nothing is a definite `false`. Unreadable is the
-/// better answer there.
+/// Closing what is open only helps where the body can then be answered.
+/// `Type::multiplicities` is left out for that reason: closed, it parses,
+/// and `validateFeatureEndMultiplicity` reports twelve hundred violations
+/// of a sound corpus, because the `allSuperTypes()` and `hasBounds(1, 1)`
+/// it goes on to call answer nothing and an `exists` over nothing is
+/// `false`.
 const UNCLOSED: [(&str, &str, &str); 5] = [
     (
         "validateFeatureEndNoDirection",
@@ -357,108 +316,83 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// Constraints whose OCL parses and says something other than what the
 /// constraint says in words.
 ///
-/// `Specialization::specific` is the more specific of the two types a
-/// specialization relates -- the one doing the specializing, which is
-/// the element the constraint is being asked of. So
+/// `Specialization::specific` is the type doing the specializing -- the
+/// element the constraint is asked of -- so
 /// `ownedSpecialization.specific->exists(isVariation)` asks whether a
-/// variation is a variation, which it is, and the rule reports every
-/// well-formed variation in the corpus: 17 usages and 16 definitions.
-/// What it says in words -- "a variation may not specialize any
-/// variation" -- is about `general`, and read that way all 33 hold.
-/// The pilot implementation does not run either of them.
+/// variation is a variation, and the rule reports every well-formed
+/// variation in the corpus: 17 usages and 16 definitions. The words -- "a
+/// variation may not specialize any variation" -- are about `general`, and
+/// read that way all 33 hold. The pilot implementation runs neither.
 ///
 /// `validateMergeNodeIncomingSuccessions` and
 /// `validateDecisionNodeOutgoingSuccessions` hand a connector *end* to
-/// `multiplicityHasBounds`, whose parameter is a `Multiplicity`, and
-/// bind it as `sourceMult` and `targetMult`. A connector end is not a
-/// `MultiplicityRange`, so both fall to that operation's `else` branch,
-/// which reads `allSuperTypes()` -- an operation this model does not
-/// implement -- and neither is answered of anything. Their two
-/// siblings
-/// in the same file -- `validateControlNodeIncomingSuccessions` and
-/// `validateControlNodeOutgoingSuccessions` -- are written the same way
-/// down to the line breaks and say `connectorEnd->at(2).multiplicity`,
-/// so what was left out is not in doubt.
+/// `multiplicityHasBounds`, whose parameter is a `Multiplicity`. An end is
+/// not a `MultiplicityRange`, so both fall to that operation's `else`,
+/// which reads `allSuperTypes()` -- unimplemented here -- and neither is
+/// answered of anything. Their two siblings in the same file are written
+/// the same way down to the line breaks and say
+/// `connectorEnd->at(2).multiplicity`, so what was left out is not in
+/// doubt.
 ///
-/// Reading it in does not help, because the four cannot all hold. The
-/// specification is explicit that these multiplicities are enforced "in
-/// the abstract syntax, even if not shown explicitly in the concrete
-/// syntax notation", and `ActionTest.sysml` writes `then decide; if
-/// true then m;` with `m` a merge node. That one succession must have
-/// its target end 0..1 (out of a decision) and 1..1 (into a control
-/// node), and its source end 0..1 (into a merge) and 1..1 (out of a
-/// control node). The corpus is what says which pair to keep. Read with
-/// the `.multiplicity` its siblings write, the mended pair is false of
-/// all six decision nodes and all eight merge nodes there are, and the
-/// ControlNode two hold of every one of the fourteen. The pilot
-/// implementation runs none of the four, and records an issue of its
-/// own against the decision node's other constraint -- SYSML21-306.
+/// Reading it in does not help, because the four cannot all hold. These
+/// multiplicities are enforced "in the abstract syntax, even if not shown
+/// explicitly in the concrete syntax notation", and `ActionTest.sysml`
+/// writes `then decide; if true then m;` with `m` a merge node: that one
+/// succession must have its target end both 0..1 and 1..1, and its source
+/// end both 0..1 and 1..1. The corpus says which pair to keep -- with the
+/// `.multiplicity` its siblings write, the mended pair is false of all six
+/// decision nodes and all eight merge nodes, and the ControlNode two hold
+/// of every one of the fourteen. The pilot implementation runs none of the
+/// four and records an issue of its own, SYSML21-306.
 ///
-/// `validateSubsettingFeaturingTypes` is `subsettingFeature.canAccess(
-/// subsettedFeature)`, and `canAccess` holds the subsetted feature to
-/// being featured within one of the featuring types the subsetting one
-/// reaches -- walking *up* from it, never down. Read as the metamodel
-/// states it, 8653 of the corpus's 20569 subsettings are rejected.
+/// `validateSubsettingFeaturingTypes` is
+/// `subsettingFeature.canAccess(subsettedFeature)`, and `canAccess` holds
+/// the subsetted feature to being featured within one of the featuring
+/// types the subsetting one reaches -- walking *up*, never down. Read as
+/// the metamodel states it, 8653 of the corpus's 20569 subsettings are
+/// rejected.
 ///
-/// The pilot implementation does run this constraint, and does two
-/// things the metamodel does not state. It only asks at all where the
-/// subsetted feature has a featuring type -- which exempts 956 of the
-/// 8653 outright -- and it answers one step more widely: `TypeUtil.
-/// isCompatible` also holds two features compatible where neither owns
-/// features of its own, they redefine something in common, and the one
-/// is featured where the other is. Neither is what the remaining 7697
-/// turn on. What they turn on is the direction: `accept a : A`
-/// gives a transition
-/// an `accepted` featured by the transition and a payload featured by
-/// the trigger the transition owns, and no walk upwards from the one
-/// reaches the other.
+/// The pilot does run it, and does two things the metamodel does not
+/// state: it asks only where the subsetted feature has a featuring type,
+/// which exempts 956 outright, and `TypeUtil.isCompatible` answers one
+/// step more widely. Neither is what the remaining 7697 turn on. They turn
+/// on direction: `accept a : A` gives a transition an `accepted` featured
+/// by the transition and a payload featured by the trigger it owns, and no
+/// upward walk from one reaches the other.
 ///
-/// `validateRedefinitionFeaturingTypes` says in words that the
-/// redefining feature "must have at least one featuringType that is not
-/// also a featuringType of the redefinedFeature", and in OCL that the
-/// two sets are unequal, which is not the same thing. Neither holds of
-/// `FeatureChains.kerml`, where `redefinition b.f redefines b.a;`
-/// redefines one feature of `B` by another: both are featured by `B`
-/// alone, so the sets are equal and there is no featuring type the one
-/// has and the other has not. The pilot implementation reads the OCL
-/// the same way -- `checkRedefinition` errors where the two sets are
-/// equal -- and is saved from reporting this one by a guard the
-/// metamodel does not state: it skips a redefinition that owns the
-/// feature it redefines. That guard is exactly this case, because in
-/// the abstract syntax the OMG publishes a dotted operand is an
-/// anonymous `Feature` owned by the relationship, carrying the steps as
-/// `FeatureChaining` -- `Occurrences.kermlx` shows it for `subset
-/// laterOccurrence.successors subsets earlierOccurrence.successors;`.
-/// This model stands the chain up the same way, so both ends here are
-/// owned by the redefinition and featured by nothing, and the guard's
-/// condition is met exactly. The OCL as written has no such guard, and
-/// reports this one redefinition of the corpus's 12941.
+/// `validateRedefinitionFeaturingTypes` says in words that the redefining
+/// feature "must have at least one featuringType that is not also a
+/// featuringType of the redefinedFeature", and in OCL that the two sets
+/// are unequal, which is not the same thing. Neither holds of
+/// `FeatureChains.kerml`, where `redefinition b.f redefines b.a;` has both
+/// featured by `B` alone. The pilot reads the OCL the same way and is
+/// saved by a guard the metamodel does not state -- it skips a
+/// redefinition owning the feature it redefines -- which is exactly this
+/// case: in the published abstract syntax a dotted operand is an anonymous
+/// `Feature` owned by the relationship, carrying the steps as
+/// `FeatureChaining`. This model stands the chain up the same way, so both
+/// ends are owned by the redefinition and featured by nothing. The OCL as
+/// written has no such guard, and reports this one of the corpus's 12941.
 ///
-/// Running one of these would report a violation of a model that is
-/// sound, so what they are is said instead. The two the OCL subset
-/// cannot even parse are pinned in `ocl.rs` alongside.
-/// `validateMultiplicityRangeBoundResultTypes` holds every bound to
-/// coming to a `ScalarValues::Integer`, and `[nCauses]` counts with an
-/// attribute the notation gives no type -- `attribute nCauses =
-/// size(causes);`. Nineteen of the corpus's 6376 multiplicity ranges
-/// are written that way, the standard library's own `[` among them: `in
-/// elements: Number[1..n]` beside `private attribute n =
-/// mRef.flattenedSize;`.
-/// The pilot implementation does not run the OCL at
-/// all: `checkMultiplicityRange` carries "TODO: Correct
-/// validateMultiplicityBoundResults OCL from KERML-199" and asks
-/// instead whether the bound evaluates to an integer.
+/// `validateMultiplicityRangeBoundResultTypes` holds every bound to coming
+/// to a `ScalarValues::Integer`, and `[nCauses]` counts with an attribute
+/// the notation gives no type. Nineteen of the corpus's 6376 ranges are
+/// written that way, the standard library's own among them. The pilot does
+/// not run the OCL at all: `checkMultiplicityRange` carries "TODO: Correct
+/// validateMultiplicityBoundResults OCL from KERML-199" and asks instead
+/// whether the bound evaluates to an integer.
 ///
 /// `validateElementFilterMembershipConditionIsBoolean` holds a filter's
-/// condition to coming to a boolean, and the specification's own
-/// operator table maps `|` to `DataFunctions::'|'`, which returns a
-/// `DataValue`. One of the corpus's eighteen filters is written that
-/// way -- `filter @Safety | @Security;` -- and is reported. The pilot implementation says
-/// so in as many words --
-/// "Non-conditional 'Boolean' operations in DataFunctions actually have
-/// result DataValue. This infers that they are actually BooleanFunctions
-/// if their arguments are Boolean" -- and infers what the specification
-/// does not state.
+/// condition to coming to a boolean, and the operator table maps `|` to
+/// `DataFunctions::'|'`, which returns a `DataValue`. One of the corpus's
+/// eighteen filters is written that way -- `filter @Safety | @Security;`.
+/// The pilot says so in as many words -- "Non-conditional 'Boolean'
+/// operations in DataFunctions actually have result DataValue" -- and
+/// infers what the specification does not state.
+///
+/// Running any of these would report a violation of a sound model, so what
+/// they are is said instead. The two the OCL subset cannot parse are
+/// pinned in `ocl.rs` alongside.
 const MISWRITTEN: [(&str, &str); 8] = [
     (
         "validateMultiplicityRangeBoundResultTypes",
@@ -508,28 +442,22 @@ const MISWRITTEN: [(&str, &str); 8] = [
     ),
 ];
 
-/// The one constraint this model cannot answer, because answering it
-/// means working out what an expression comes to.
+/// The one constraint this model cannot answer, because answering it means
+/// working out what an expression comes to.
 ///
 /// `validateTriggerInvocationExpressionAfterArgument` holds `after
-/// 10[SI::s]` to coming to a scalar quantity measured in a duration
-/// unit. The specification's own operator table sends `[` to
-/// `BaseFunctions::'['`, which is abstract and whose `return` is typed
-/// by `Anything`. The library does declare a `[` that returns a
-/// `Quantities::ScalarQuantityValue` -- `QuantityCalculations::'['`,
-/// specializing the abstract one -- but nothing selects it: the table
-/// names the base function alone, and the pilot implementation looks
-/// for an operator's function in `BaseFunctions`, `DataFunctions` and
-/// `ControlFunctions` and nowhere else. Three of the corpus's
-/// twenty-one trigger invocations wait that way, and all three come out
-/// alike: an `OperatorExpression` with operator `[`, typed by
-/// `BaseFunctions::[`, whose result is typed by `Base::Anything`. Answering this would take working out the quantity
-/// from the unit, which no part of the specification states, and the
-/// pilot does not check the constraint at all.
+/// 10[SI::s]` to coming to a scalar quantity measured in a duration unit.
+/// The operator table sends `[` to `BaseFunctions::'['`, which is abstract
+/// and returns `Anything`. The library does declare a `[` returning a
+/// `ScalarQuantityValue`, but nothing selects it: the table names the base
+/// function alone, and the pilot implementation looks in `BaseFunctions`,
+/// `DataFunctions` and `ControlFunctions` and nowhere else. All three of
+/// the corpus's trigger invocations come out typed by `Base::Anything`.
+/// Answering would take working out the quantity from the unit, which no
+/// part of the specification states.
 ///
-/// This is not the specification getting something wrong. It is this
-/// model not carrying what it would take to answer it, which is a
-/// different thing to say and is said separately.
+/// This is not the specification getting something wrong; it is this model
+/// not carrying what it would take to answer.
 const UNANSWERED: [(&str, &str); 1] = [(
     "validateTriggerInvocationExpressionAfterArgument",
     "what an `after` waits for must come to a scalar quantity measured in a duration unit, \
@@ -555,28 +483,22 @@ fn named_after(rule: &sysml_model::Rule) -> String {
 
 /// How many derivations and operations deep one evaluation may go.
 ///
-/// The specification writes them in terms of one another -- an
-/// annotating element's annotated element is its annotation's -- so
-/// something has to stop a chain that comes back round to where it
-/// started. A bound stops it by construction; watching for the return
-/// needs a guard no model can be shown to reach, which is a guard
-/// nothing checks.
+/// The specification writes them in terms of one another, so something has
+/// to stop a chain that comes back round. A bound stops it by
+/// construction; watching for the return needs a guard no model can be
+/// shown to reach.
 ///
 /// Six is what this can answer for. Past it the walk reaches
 /// `Type::directionOfExcluding`, which climbs the supertypes of every
-/// feature of every type, and the constraints it opens up are ones the
-/// model cannot yet meet: at eight one, at ten a hundred, at twelve
-/// four hundred and sixty of the corpus are reported as violations --
-/// an `accept` node's payload and receiver, a `send` node's three
-/// parameters, a requirement's subject. Those are the model missing
-/// what the specification counts, not the bound being too low, and
-/// raising it turns a truthful "cannot say" into a false finding.
+/// feature of every type, and opens constraints the model cannot yet meet:
+/// at eight one, at ten a hundred, at twelve four hundred and sixty of the
+/// corpus are reported as violations. Those are the model missing what the
+/// specification counts, not the bound being too low.
 ///
-/// The bound also only buys work. The memberships a type inherits are
-/// worked out through five operations that call one another over every
-/// supertype, and no depth completes them: at twelve they were two
-/// thirds of every operation the check invoked, and a third of the
-/// time it took, all of it spent arriving at the same "cannot say".
+/// The bound also only buys work: inherited memberships go through five
+/// operations that call one another over every supertype, and no depth
+/// completes them -- at twelve, two thirds of every operation invoked and
+/// a third of the time, all spent arriving at the same "cannot say".
 const DEPTH: usize = 6;
 
 /// One constraint that does not hold, and of what.
@@ -628,16 +550,13 @@ impl Workspace {
             });
             parsed.push((rule, expr, defect.map(|(_, why)| why.to_string())));
         }
-        // Grouped by metaclass once. Asked element by element, every
-        // rule walks the whole model to find the few it is about, and
-        // the whole model is where this is meant to be run.
-        // Every element under those files, not only the ones a syntax
-        // node stands for. Name resolution reifies the relationships the
-        // notation leaves implicit -- a typing, a subsetting, the ends of
-        // a connector -- and the constraints are about those as much as
-        // about what the source wrote. Asking only what was written left
-        // every rule about a `Subsetting` asked of nothing, with two
-        // thousand of them in the model.
+        // Grouped by metaclass once: asked element by element, every rule walks
+        // the whole model to find the few it is about.
+        // Every element under those files, not only the ones a syntax node stands
+        // for. Name resolution reifies what the notation leaves implicit -- a
+        // typing, a subsetting, the ends of a connector -- and the constraints
+        // are about those too. Asking only what was written left every rule about
+        // a `Subsetting` asked of nothing, with two thousand in the model.
         let mut under: Vec<ElementId> = Vec::new();
         let mut seen: HashSet<ElementId> = HashSet::new();
         for &file in files {
@@ -665,16 +584,13 @@ impl Workspace {
                 .entry(self.model().kind(elem))
                 .or_default()
                 .push((elem, Val::Elem(elem)));
-            // Every member of a namespace is held under a membership,
-            // and this model keeps the containment the membership
-            // stands for rather than the membership itself. Twenty-two
-            // constraints are about one -- what a `SubjectMembership`
-            // may own, which way a `ParameterMembership` passes it --
-            // and asked only of elements they were asked of nothing.
-            // Put back together, they are asked of what the model does
-            // hold, the way an interchange writer puts them back.
-            // A relationship is owned outright rather than through a
-            // membership, and the root is owned by nothing.
+            // Every member of a namespace is held under a membership, and this model
+            // keeps the containment rather than the membership itself. Twenty-two
+            // constraints are about one -- what a `SubjectMembership` may own, which
+            // way a `ParameterMembership` passes it -- and were asked of nothing. Put
+            // back together, they are asked of what the model holds, the way an
+            // interchange writer puts them back. A relationship is owned outright
+            // rather than through a membership, and the root is owned by nothing.
             let held = self
                 .model()
                 .owner(elem)
@@ -1074,26 +990,20 @@ impl Scope<'_> {
         }
     }
 
-    /// What features `elem`: what a `featured by` writes, else the type
-    /// that owns it as a feature -- and where nothing does either, what
-    /// features the feature it is written inside.
+    /// What features `elem`: what a `featured by` writes, else the type that
+    /// owns it as a feature -- and where nothing does either, what features
+    /// the feature it is written inside.
     ///
-    /// That last step is what tells a multiplicity apart from a feature.
-    /// A type owns its multiplicity through an `OwningMembership` and
-    /// not a `FeatureMembership`, so a multiplicity has no `owningType`
-    /// and is featured wherever the feature carrying it is -- which is
-    /// what `validateFeatureMultiplicityDomain` asks for ("the
-    /// featuringTypes of the multiplicity must be the same as those of
-    /// the Feature itself") and what
-    /// `validateClassifierMultiplicityDomain` asks for from the other
-    /// side, a classifier's multiplicity having none at all.
+    /// That last step tells a multiplicity apart from a feature. A type owns
+    /// its multiplicity through an `OwningMembership` and not a
+    /// `FeatureMembership`, so a multiplicity has no `owningType` and is
+    /// featured wherever its feature is -- which is what
+    /// `validateFeatureMultiplicityDomain` asks for, and
+    /// `validateClassifierMultiplicityDomain` from the other side.
     ///
-    /// A chain is featured where its first step is, which is the one
-    /// part of the unreadable derivation that is written plainly.
-    ///
-    /// Both walks end: the first climbs the ownership tree, and the
-    /// second reads a `chainingFeature`, which only a connector end
-    /// carries and whose steps are the features the source named.
+    /// A chain is featured where its first step is. Both walks end: the first
+    /// climbs the ownership tree, the second reads a `chainingFeature`, which
+    /// only a connector end carries.
     fn collect_featuring_types(&mut self, elem: ElementId, into: &mut Vec<ElementId>) {
         let model = self.ws.model();
         let written: Vec<ElementId> = model
@@ -1190,14 +1100,11 @@ impl Scope<'_> {
         // is an X, and an owning Y the owner where the owner is a Y.
         // Both are the containment the model does keep.
         if let Some(kind) = owned_kind(name) {
-            // A relationship that is not itself a feature -- a typing,
-            // a subsetting, an import -- is an owned relationship
-            // outright. Everything else is a *member*, owned through a
-            // membership the model keeps as the containment itself, so
-            // the membership is put back together here rather than
-            // being absent from an answer the standard says it belongs
-            // in. A connector is both a relationship and a feature, and
-            // it is the feature half that says how it is owned.
+            // A relationship that is not itself a feature -- a typing, a subsetting,
+            // an import -- is an owned relationship outright. Everything else is a
+            // *member*, owned through a membership the model keeps as the containment
+            // itself, so the membership is put back together here. A connector is
+            // both, and it is the feature half that says how it is owned.
             let owned: Vec<Val> = model
                 .owned(elem)
                 .iter()
@@ -1223,23 +1130,14 @@ impl Scope<'_> {
                         .then_some(member)
                 })
                 .collect();
-            // Owning none of them used to be answered "cannot say"
-            // here, on the grounds that the builder reifies some of the
-            // relationships the abstract syntax has and not others, so
-            // an empty answer might be one it does not build rather
-            // than one the element does not have. That cost 188818
-            // answers over the corpus -- more than any other reason
-            // there was -- and the abstract syntax the OMG publishes
-            // says it was wrong: a literal is written
-            // `<ownedRelatedElement xsi:type="sysml:LiteralInteger"/>`,
-            // closed on itself, owning nothing at all. An element of
-            // this model that owns nothing owns no relationship, and
-            // says so.
-            // What the metamodel declares single-valued answers with
-            // the value rather than with a collection of one:
-            // `ownedPortConjugator` is `[0..1]`, and
-            // `ownedPortConjugator.originalPortDefinition =
-            // originalPortDefinition` compares one against one.
+            // Owning none of them used to be answered "cannot say", on the grounds
+            // that the builder reifies some of the abstract syntax's relationships
+            // and not others. That cost 188818 answers over the corpus, and the
+            // published abstract syntax says it was wrong: a literal is written
+            // closed on itself, owning nothing.
+            //
+            // What the metamodel declares single-valued answers with the value rather
+            // than a collection of one.
             if model
                 .kind(elem)
                 .feature(name)
@@ -1274,14 +1172,11 @@ impl Scope<'_> {
                 false => Val::Null,
             };
         }
-        // `Usage::definition` -- "the Definitions that are types of this
-        // Usage" -- and the narrower names beside it: an occurrence
-        // usage's `occurrenceDefinition`, a part usage's
-        // `partDefinition`. The metamodel states each in prose and
-        // states none of them in OCL, so nothing the evaluation reads
-        // can work them out; each is the usage's types of the kind its
-        // own metaclass declares for it, whether the source wrote the
-        // type or the standard implied it.
+        // `Usage::definition` -- "the Definitions that are types of this Usage"
+        // -- and the narrower names beside it. The metamodel states each in prose
+        // and none in OCL, so nothing the evaluation reads can work them out;
+        // each is the usage's types of the kind its own metaclass declares,
+        // whether the source wrote the type or the standard implied it.
         let typed_by = TYPED_BY
             .contains(&name)
             .then(|| model.kind(elem).feature(name).map(|meta| meta.ty))
@@ -1408,14 +1303,12 @@ impl Scope<'_> {
             }
             return Val::Set(once_each(all));
         }
-        // The memberships a type inherits. The metamodel works this
-        // out through five operations that call one another over every
-        // supertype -- `removeRedefinedFeatures(inheritableMemberships(
-        // ...))` -- and no depth of evaluation completes them: two
-        // thirds of every operation the check invoked went on that
-        // chain, to arrive at "cannot say". The resolver walks the same
-        // specializations to find a name, so that walk is the answer,
-        // and what it finds is what the standard describes.
+        // The memberships a type inherits. The metamodel works this out through
+        // five operations that call one another over every supertype, and no
+        // depth of evaluation completes them: two thirds of every operation the
+        // check invoked went on that chain, to arrive at "cannot say". The
+        // resolver walks the same specializations to find a name, so that walk is
+        // the answer.
         if name == "inheritedMembership" && model.kind(elem).is_a(ElementKind::Type) {
             return Val::Set(self.inherited(elem));
         }
@@ -1450,19 +1343,14 @@ impl Scope<'_> {
             return Val::Str(visibility.keyword().to_string());
         }
         // A property that redefines another is the one a model holds:
-        // `Subsetting::subsettedFeature` redefines
-        // `Specialization::general`, and a constraint written of the
-        // general one is asking about the same thing under the name the
-        // metaclass it is being asked of gives it.
+        // `Subsetting::subsettedFeature` redefines `Specialization::general`, and
+        // a constraint written of the general one asks about the same thing.
         //
-        // `maybe` rather than `get`, because this is the one place in
-        // the toolchain where any property may fairly be asked of any
-        // element: a constraint is put to every element of the
-        // metaclass it is about, subtypes included, and the abstract
-        // syntax it reaches through is the specification's rather than
-        // this model's. Six hundred and thirteen pairs of metaclass and
-        // property go through here that the metaclass does not have,
-        // and none of them is a misspelling.
+        // `maybe` rather than `get`, because this is the one place where any
+        // property may fairly be asked of any element: the abstract syntax a
+        // constraint reaches through is the specification's rather than this
+        // model's. Six hundred and thirteen pairs go through here that the
+        // metaclass does not have, and none is a misspelling.
         let held = model.maybe(elem, name).or_else(|| {
             redefining(model.kind(elem), name).and_then(|under| model.maybe(elem, under))
         });
@@ -1505,15 +1393,11 @@ impl Scope<'_> {
             None if name == "direction" && model.kind(elem).feature(name).is_some() => Val::Null,
             None => match self.derive(elem, name) {
                 Some(value) => value,
-                // A property the metaclass does not declare at all is
-                // not one this model fails to build. Some are the
-                // specification's own text asking for something that is
-                // not there -- `connectorEnds` where the metamodel
-                // declares `connectorEnd` -- and some are navigations
-                // the metamodel writes as an end owned by an
-                // association rather than as an attribute of the class,
-                // which is not among what the metaclasses declare.
-                // Either way the fault is not here.
+                // A property the metaclass does not declare at all is not one this model
+                // fails to build. Some are the specification asking for something that is
+                // not there -- `connectorEnds` where the metamodel declares `connectorEnd`
+                // -- and some are navigations it writes as an association end rather than
+                // an attribute. Either way the fault is not here.
                 None if self.ws.model().kind(elem).feature(name).is_none() => {
                     Val::Unknown(format!(
                         "the metamodel declares no `{name}` on `{}`",
@@ -1534,14 +1418,12 @@ impl Scope<'_> {
         }
     }
 
-    /// Every membership a type inherits: those of everything it
-    /// specializes, and of everything those specialize in turn, less
-    /// what is private to them and less what a redefinition has
-    /// replaced.
+    /// Every membership a type inherits: those of everything it specializes,
+    /// and of everything those specialize in turn, less what is private to
+    /// them and less what a redefinition has replaced.
     ///
-    /// A supertype's imports are inherited with its own memberships --
-    /// `membershipsOfVisibility` unions the two -- and the resolver
-    /// works out what an import brings in for name lookup already.
+    /// A supertype's imports are inherited with its own memberships, and the
+    /// resolver works out what an import brings in already.
     fn inherited(&mut self, elem: ElementId) -> Vec<Val> {
         let mut queue = self.ws.supertypes(elem);
         let mut seen = vec![elem];
@@ -1876,19 +1758,12 @@ impl Scope<'_> {
                 Val::Set(kept)
             }
             "closure" => {
-                // The transitive closure: the body read of each
-                // element, then of everything that comes back, until
-                // nothing new turns up, with the ones already found
-                // what stops it going round.
+                // The transitive closure: the body read of each element, then of
+                // everything that comes back, until nothing new turns up.
                 //
-                // What it started from is in the answer too.
-                // `allRedefinedFeatures()` is written
-                // `ownedRedefinition.redefinedFeature->
-                // closure(ownedRedefinition.redefinedFeature)`, and read
-                // without them it says nothing a feature redefines
-                // directly -- which is all that nearly every feature
-                // redefines, and the operation is then a no-op that
-                // takes `removeRedefinedFeatures` down with it.
+                // What it started from is in the answer too. `allRedefinedFeatures()`
+                // ends `->prepend(self)`, and without it says nothing a feature redefines
+                // directly -- which is all that nearly every feature redefines.
                 let mut found: Vec<Val> = items.clone();
                 let mut queue = items;
                 while let Some(item) = queue.pop() {
@@ -1965,15 +1840,12 @@ impl Scope<'_> {
     /// An operation on one thing rather than on a collection of them.
     fn operation(&mut self, target: &Val, name: &str, args: &[Expr]) -> Val {
         match name {
-            // `oclIsType` is the metamodel's own spelling, used in three
-            // constraints and nowhere defined; `oclIsTypeOf`, the exact
-            // question, it never writes at all. What it means is the
-            // kind question: `validateObjectiveMembershipOwningType`
-            // asks that the owning type "be a CaseDefinition or
-            // CaseUsage", and every objective in the corpus is owned by
-            // an `AnalysisCaseDefinition`, a `UseCaseDefinition` or a
-            // `VerificationCaseDefinition` -- twenty-nine of them, none
-            // of which is exactly a `CaseDefinition`.
+            // `oclIsType` is the metamodel's own spelling, used in three constraints
+            // and nowhere defined; `oclIsTypeOf`, the exact question, it never writes
+            // at all. What it means is the kind question:
+            // `validateObjectiveMembershipOwningType` asks that the owning type "be a
+            // CaseDefinition or CaseUsage", and all twenty-nine objectives in the
+            // corpus are owned by a subtype, none of them exactly a `CaseDefinition`.
             "oclIsKindOf" | "oclIsTypeOf" | "oclIsType" => {
                 let (Some(kind), Some(actual)) =
                     (args.first().and_then(metaclass_named), self.kind_of(target))
@@ -2052,14 +1924,12 @@ impl Scope<'_> {
                     None => Val::Unknown(format!("`{qualified}` is not in this workspace")),
                 }
             }
-            // Which way a feature is passed, as seen from a type.
-            // `Type::directionOf(feature)` and its
-            // `directionOfExcluding`, and `Feature::directionFor(type)`
-            // from the other side. The specification defines it by
-            // recursion over every supertype of every feature of every
-            // type, which the bound on derivation depth stops short of
-            // -- and it stands between every constraint that counts
-            // what a behaviour is handed and an answer.
+            // Which way a feature is passed, as seen from a type:
+            // `Type::directionOf(feature)` and `Feature::directionFor(type)`. The
+            // specification defines it by recursion over every supertype of every
+            // feature of every type, which the depth bound stops short of -- and it
+            // stands between every constraint counting what a behaviour is handed and
+            // an answer.
             "directionOf" | "directionOfExcluding" => match (target, self.argument(args)) {
                 (Val::Elem(of), Val::Elem(feature)) => self.direction_of(*of, feature),
                 (_, other) => {
@@ -2086,14 +1956,12 @@ impl Scope<'_> {
                     .and_then(|named| self.global(named))
                     .map_or(Val::Null, Val::Elem)
             }
-            // What a type specializes. The specification writes
-            // `Feature::supertypes` in terms of `Type::supertypes`
-            // through an `oclAsType`, which an operation looked up by
-            // the metaclass of its target cannot tell apart from the
-            // call it is written inside. This workspace works the same
-            // question out for inherited-member lookup, so that is the
-            // answer -- with what the standard implies included, which
-            // is what every rule asking for them asks for.
+            // What a type specializes. The specification writes `Feature::supertypes`
+            // in terms of `Type::supertypes` through an `oclAsType`, which an
+            // operation looked up by the metaclass of its target cannot tell apart
+            // from the call it is written inside. This workspace works the same
+            // question out for inherited-member lookup, so that is the answer -- with
+            // what the standard implies included.
             "supertypes" => match (target, self.argument(args)) {
                 (Val::Elem(elem), Val::Bool(false)) => Val::Set(
                     self.ws
@@ -2274,13 +2142,11 @@ fn unknown_from(value: &Val, what: &str) -> Val {
 
 /// The same collection with nothing in it twice.
 ///
-/// The memberships a type inherits arrive by as many routes as its
-/// supertypes have in common: a literal reaches `Base::things::that`
-/// five times over, and every feature of `Occurrences::Occurrence`
-/// three times. An OCL `Set` and `OrderedSet` hold each value once, so
-/// counting the duplicates makes "exactly one return parameter" true of
-/// nothing at all -- and makes the walk that finds them several times
-/// the work it is.
+/// Inherited memberships arrive by as many routes as a type's supertypes
+/// have in common -- a literal reaches `Base::things::that` five times. An
+/// OCL `Set` holds each value once, so counting duplicates makes "exactly
+/// one return parameter" true of nothing, and the walk several times the
+/// work.
 fn once_each(items: Vec<Val>) -> Vec<Val> {
     let mut seen = HashSet::new();
     items
@@ -2399,15 +2265,13 @@ fn redefining(kind: ElementKind, name: &str) -> Option<&'static str> {
 /// metaclass does not declare, read as the one it does.
 ///
 /// `featuringTypes`, `associationEnds`, `connectorEnds`,
-/// `featureMemberships` and `subsettedFeatures` are all written that
-/// way, and the metaclasses declare all five in the singular. There is
-/// no other reading: the written name belongs to no metaclass at all,
-/// and the two are one letter apart. The alternative is answering none
-/// of the six constraints that navigate through them.
+/// `featureMemberships` and `subsettedFeatures` are written that way and
+/// declared in the singular. There is no other reading, and the
+/// alternative is answering none of the six constraints that navigate
+/// through them.
 ///
-/// This only speaks where the written name is declared nowhere on the
-/// metaclass, so a property the model simply does not build still says
-/// so rather than being answered under another name.
+/// Only where the written name is declared nowhere on the metaclass, so a
+/// property the model does not build still says so.
 fn written_as_meant(kind: ElementKind, name: &str) -> &str {
     if kind.feature(name).is_some() {
         return name;
@@ -2698,19 +2562,13 @@ mod tests {
         assert_eq!(ws.judge("featuringType->isEmpty()", v), Some(true));
     }
 
-    /// A metaclass the specification names and neither metamodel has
-    /// answers nothing, and nothing is not false.
+    /// A metaclass the specification names and neither metamodel has answers
+    /// nothing, and nothing is not false.
     ///
-    /// `RequirementDefinition::stakeholderParameter` is read through
-    /// `selectByKind(StakholderMembership)`, and the metaclass is a
-    /// `StakeholderMembership`. Read as written the select keeps
-    /// nothing, and the property is empty of every model there is
-    /// rather than of the ones it should be empty of.
-    ///
-    /// Two more manglings of one property name sit beside it --
-    /// `featureMembersip` in an analysis case's result expression and
-    /// `featureMemberhsip` in a viewpoint's stakeholders -- and both of
-    /// those bodies say "featureMemberships" in words.
+    /// `RequirementDefinition::stakeholderParameter` selects by
+    /// `StakholderMembership` where the metaclass is a `StakeholderMembership`,
+    /// so the select keeps nothing and the property is empty of every model.
+    /// Two manglings of `featureMembership` sit beside it.
     #[test]
     fn a_metaclass_named_by_a_name_nothing_has_is_read_as_meant() {
         let (mut ws, requirement) = about(
@@ -3253,19 +3111,16 @@ mod tests {
         let (mut ws, w) = about("part def Car {\n\tattribute a;\n\tpart w;\n}\n", "w");
         assert_eq!(ws.judge("isReference", w), Some(false));
 
-        // A derivation reaching for what the model does not build is
-        // answered by neither, and one reaching for what it does is
-        // answered outright. `ownedMember` is read off the memberships,
-        // and a membership stands for each member the containment
-        // holds -- so a definition that owns nothing owns no member,
-        // and there is nothing an empty answer could be hiding.
+        // A derivation reaching for what the model does not build is answered by
+        // neither; one reaching for what it does is answered outright.
+        // `ownedMember` is read off the memberships, and a membership stands for
+        // each member the containment holds -- so nothing an empty answer could
+        // be hiding.
         //
-        // Relationships at large answer the same way, and once did not:
-        // an empty answer was called ambiguous, on the grounds that the
-        // builder writes some of the ones the abstract syntax has and
-        // not others. The abstract syntax the OMG publishes says
-        // otherwise -- a literal is written closed on itself, owning
-        // nothing -- and the doubt cost 188818 answers over the corpus.
+        // Relationships answer the same way and once did not: an empty answer was
+        // called ambiguous, and the doubt cost 188818 answers over the corpus.
+        // The published abstract syntax settles it -- a literal is written closed
+        // on itself, owning nothing.
         let (mut ws, car) = about("part def Car;\n", "Car");
         assert_eq!(ws.judge("ownedMember->isEmpty()", car), Some(true));
         assert_eq!(ws.judge("ownedSpecialization->isEmpty()", car), Some(true));
@@ -3368,13 +3223,10 @@ mod tests {
 
     /// A transitive closure answers with what it started from as well.
     ///
-    /// `Feature::allRedefinedFeatures()` is written
-    /// `ownedRedefinition.redefinedFeature->
-    /// closure(ownedRedefinition.redefinedFeature)->asOrderedSet()->
-    /// prepend(self)`. Read without the source it says only `self`,
-    /// since nearly every feature redefines directly and nothing
-    /// further -- and `removeRedefinedFeatures`, which is how a type
-    /// stops inheriting what it has redefined, goes down with it.
+    /// `Feature::allRedefinedFeatures()` ends `->prepend(self)`. Read without
+    /// the source it says only `self`, since nearly every feature redefines
+    /// directly and nothing further -- and `removeRedefinedFeatures`, which is
+    /// how a type stops inheriting what it has redefined, goes down with it.
     #[test]
     fn a_closure_answers_with_what_it_started_from() {
         const CHAIN: &str = "part def Car {\n\tpart u;\n\tpart v :>> u;\n\tpart w :>> v;\n}\n";
@@ -3389,14 +3241,12 @@ mod tests {
         assert_eq!(ws.judge(&format!("{WALK}->isEmpty()"), u), Some(true));
     }
 
-    /// What the metamodel declares single-valued answers with the
-    /// value, not with a collection holding it.
+    /// What the metamodel declares single-valued answers with the value, not
+    /// with a collection holding it.
     ///
-    /// `Type::ownedConjugator` is `[0..1]` and
-    /// `ConjugatedPortDefinition::ownedPortConjugator` is `[1..1]`, and
-    /// `ownedPortConjugator.originalPortDefinition =
-    /// originalPortDefinition` compares one against one -- a collection
-    /// of one is equal to neither side of it.
+    /// `ownedPortConjugator.originalPortDefinition = originalPortDefinition`
+    /// compares one against one, and a collection of one is equal to neither
+    /// side of it.
     #[test]
     fn what_the_metamodel_declares_one_of_is_answered_as_one() {
         let (mut ws, b) = about_kerml("package K {\n\tclass A;\n\tclass B conjugates A;\n}\n", "B");
@@ -3542,14 +3392,13 @@ mod tests {
         assert_eq!(ws.judge("operator = \'.\'", w), None);
     }
 
-    /// What a usage is typed by, under the name its own metaclass
-    /// gives it.
+    /// What a usage is typed by, under the name its own metaclass gives it.
     ///
-    /// `Usage::definition` -- "the Definitions that are types of this
-    /// Usage" -- and `occurrenceDefinition`, `partDefinition` and their
-    /// kin beside it. The metamodel states each in prose and none of
-    /// them in OCL. `individual def IO1;` is an occurrence definition
-    /// that names no kind, which is what `isIndividual` is declared on.
+    /// `Usage::definition` -- "the Definitions that are types of this Usage"
+    /// -- and `occurrenceDefinition`, `partDefinition` and their kin, each
+    /// stated in prose and none in OCL. `individual def IO1;` is an occurrence
+    /// definition that names no kind, which is what `isIndividual` is declared
+    /// on.
     #[test]
     fn a_usage_is_typed_by_the_definitions_it_names() {
         let source = "package K {\n\
@@ -3648,15 +3497,12 @@ mod tests {
         );
     }
 
-    /// A parameter membership fixes the direction of what it owns, and
-    /// each membership names that one thing under a name of its own.
+    /// A parameter membership fixes the direction of what it owns, and each
+    /// names that one thing under a name of its own.
     ///
-    /// `ParameterMembership::parameterDirection = FeatureDirectionKind::
-    /// _'in'`, so a `subject` is what a requirement takes in --
-    /// `input->first() = subjectParameter` asks for a subject that is an
-    /// input, and none of them was one. And
-    /// `SubjectMembership::ownedSubjectParameter` is that subject, under
-    /// the name the membership metaclass gives it.
+    /// `ParameterMembership::parameterDirection = FeatureDirectionKind::_'in'`,
+    /// so a `subject` is what a requirement takes in -- `input->first() =
+    /// subjectParameter` asks for a subject that is an input, and none was.
     #[test]
     fn a_parameter_membership_directs_and_names_what_it_owns() {
         let (mut ws, req) = about("requirement def R {\n\tsubject s;\n\tactor a;\n}\n", "R");

@@ -1,15 +1,14 @@
 //! Turning a resolved name into the relationship the model keeps.
 //!
 //! `part eng : Engine;` writes a typing, and the model holds it as an
-//! owned `FeatureTyping` whose `type` is the element `Engine` resolved
-//! to. Every declaration clause works that way, and so do the statements
-//! that write their ends as plain names: `connect a to b`, `bind x = y`,
-//! `first a then b`, `satisfy r by p`, `allocate one to other`.
+//! owned `FeatureTyping` whose `type` is the element `Engine` resolved to.
+//! Every declaration clause works that way, and so do the statements that
+//! write their ends as plain names: `connect a to b`, `bind x = y`, `first
+//! a then b`, `satisfy r by p`, `allocate one to other`.
 //!
-//! What is hard here is not the reification but the ends: which operands
-//! of a statement are its ends at all, which of them the notation left
-//! for the neighbour to supply, and what an end reached through a chain
-//! of features participates in.
+//! What is hard is not the reification but the ends: which operands are
+//! ends at all, which the notation left for the neighbour to supply, and
+//! what an end reached through a chain participates in.
 
 use sysml_model::{ElementId, ElementKind, Value};
 use sysml_syntax::{SyntaxKind, SyntaxNode};
@@ -51,17 +50,14 @@ impl Workspace {
             }
         }
     }
-    /// Put an element of `kind` with `props` under `owner`, taking the
-    /// one an earlier pass made rather than making a second.
+    /// Put an element of `kind` with `props` under `owner`, taking the one an
+    /// earlier pass made rather than making a second.
     ///
-    /// Resolving the same file again is a thing callers do -- asking
-    /// what is wrong with a model resolves it -- and it does the same
-    /// work over again: the same declarations, the same targets, the
-    /// same relationships. Made afresh each time, a feature would come
-    /// to hold its type twice and everything reading the model would
-    /// see it twice. What this pass has already taken is passed over,
-    /// so `connect a to a`, which really does write one end twice,
-    /// still gets two.
+    /// Resolving the same file again is a thing callers do, and it does the
+    /// same work over: made afresh each time, a feature would come to hold its
+    /// type twice and everything reading the model would see it twice. What
+    /// this pass has already taken is passed over, so `connect a to a`, which
+    /// really does write one end twice, still gets two.
     pub(crate) fn reified(
         &mut self,
         owner: ElementId,
@@ -181,19 +177,15 @@ impl Workspace {
             ],
         );
     }
-    /// What a dotted operand names: the chain, and not the feature at
-    /// the end of it.
+    /// What a dotted operand names: the chain, not the feature at the end.
     ///
-    /// The abstract syntax the OMG publishes stands a `Feature` of its
-    /// own for it, carrying each step as a `FeatureChaining` --
-    /// `Occurrences.kermlx` does exactly that for `subset
-    /// laterOccurrence.successors subsets earlierOccurrence.successors;`
-    /// -- because `b.f` is `f` of that `b` and not `f` wherever it is
-    /// found. What features it is read off the chain, which is what
+    /// The published abstract syntax stands a `Feature` of its own for it,
+    /// carrying each step as a `FeatureChaining` -- `Occurrences.kermlx` does
+    /// exactly that -- because `b.f` is `f` of that `b` and not `f` wherever
+    /// it is found. What features it is read off the chain, which is what
     /// makes the two ends of such a relationship differ at all.
     ///
-    /// A single name is no chain: that is the feature the name reached,
-    /// and nothing stands between it and the relationship.
+    /// A single name is no chain: that is the feature the name reached.
     pub(crate) fn chained(
         &mut self,
         owner: ElementId,
@@ -217,19 +209,13 @@ impl Workspace {
     }
     /// The two types a relationship written as its own statement relates.
     ///
-    /// `feature g :> f;` reifies a `Subsetting` under `g` and gives it
-    /// both ends from the declaration it hangs off. `subset g subsets
-    /// f;` says the same thing with no declaration to hang off: the
-    /// `Subsetting` is what was written, and it reaches the model with
-    /// neither end until the name before the clause and the name inside
-    /// it are read here.
-    /// Resolve one operand a statement wrote and keep what it landed on
-    /// under `property`, or record that it landed on nothing.
-    ///
-    /// `first x;` and `specialization s subtype A :> B;` both write a
-    /// name where the abstract syntax keeps a reference, and what has
-    /// to happen either way is the same: resolve it, record it so a
-    /// rename can find it, and set the property.
+    /// `feature g :> f;` reifies a `Subsetting` under `g` and gives it both
+    /// ends from the declaration it hangs off. `subset g subsets f;` says the
+    /// same with no declaration to hang off: the `Subsetting` is what was
+    /// written, and it reaches the model with neither end until the name
+    /// before the clause and the name inside it are read here.
+    /// Resolve one operand a statement wrote and keep what it landed on under
+    /// `property`, or record that it landed on nothing.
     pub(crate) fn resolve_operand_into(
         &mut self,
         id: ElementId,
@@ -357,14 +343,11 @@ impl Workspace {
                 reached.push(Reached::Beside(target));
             }
         }
-        // A succession relates two things and the notation lets one of
-        // them go unwritten. `then b;` says where the flow goes and not
-        // where it comes from; `first start;` says the other. Which one
-        // is missing is what the statement wrote, and the answer is its
-        // neighbour in the same body. Without it the model says a step
-        // follows nothing, and `validateConnectorRelatedFeatures` -- "a
-        // concrete Connector must have at least two relatedFeatures" --
-        // is the specification saying so.
+        // A succession relates two things and the notation lets one go unwritten.
+        // `then b;` says where the flow goes and not where it comes from; `first
+        // start;` says the other. The answer is its neighbour in the same body.
+        // Without it the model says a step follows nothing, and
+        // `validateConnectorRelatedFeatures` is the specification saying so.
         if related.len() == 1 && self.model.kind(id).is_a(ElementKind::SuccessionAsUsage) {
             let written = |wanted: &[SyntaxKind]| {
                 node.children_with_tokens()
@@ -443,14 +426,12 @@ impl Workspace {
         // anything asked earlier.
         self.supertypes.remove(&id);
     }
-    /// What a succession runs from, where the statement left it
-    /// unwritten: the nearest member of the same body before it that a
-    /// succession can join.
+    /// What a succession runs from, where the statement left it unwritten: the
+    /// nearest member of the same body before it that a succession can join.
     ///
     /// A step or an occurrence, since a sequence model writes `event
-    /// occurrence e; then f;`. Where the nearest one is another
-    /// succession the answer is the end of it facing this one: `then a;
-    /// then b;` runs a to b, not the first succession to b.
+    /// occurrence e; then f;`. Where the nearest one is another succession the
+    /// answer is the end of it facing this one: `then a; then b;` runs a to b.
     fn step_before(&self, succession: ElementId) -> Option<ElementId> {
         let owner = self.model.owner(succession)?;
         let members = self.model.owned(owner);
@@ -633,18 +614,14 @@ impl Workspace {
     }
     /// What a `send`, an `accept` or an `assign` names.
     ///
-    /// `send new S() via displayPort to screen;` says which port the
-    /// message leaves by and who receives it, and `assign v := 1;` which
-    /// feature it sets. None of the three was being looked up at all, so
-    /// the names stood for nothing -- and a name that stands for nothing
-    /// was not reported either, which is worse than reporting it.
+    /// `send new S() via displayPort to screen;` says which port the message
+    /// leaves by and who receives it, and `assign v := 1;` which feature it
+    /// sets. None of the three was looked up at all, so the names stood for
+    /// nothing -- and were not reported either, which is worse.
     ///
-    /// The standard keeps the first two as arguments of the action, in
-    /// the input parameters the builder laid out in the order the
-    /// specification declares them, and the last as a membership the
-    /// assignment does not own: `deriveAssignmentActionUsageReferent`
-    /// reads back the first member of one, and
-    /// `validateAssignmentActionUsageReferent` says there must be one.
+    /// The standard keeps the first two as arguments of the action, in the
+    /// input parameters the builder laid out, and the last as a membership the
+    /// assignment does not own.
     pub(crate) fn resolve_action_arguments(
         &mut self,
         id: ElementId,
@@ -716,11 +693,9 @@ impl Workspace {
     /// Record what a `FeatureReferenceExpression` stands for.
     ///
     /// `= ledPinNumber` refers to a feature without owning it, and the
-    /// standard reads the referent back off the membership that says so
-    /// -- `deriveFeatureReferenceExpressionReferent` takes the first
-    /// owned membership that is not a parameter's. Holding the answer
-    /// and not the membership leaves the expression referring to
-    /// something by a route the specification does not have.
+    /// standard reads the referent back off the membership that says so.
+    /// Holding the answer and not the membership leaves the expression
+    /// referring to something by a route the specification does not have.
     pub(crate) fn refers_to(&mut self, reference: ElementId, target: ElementId) {
         self.try_set(reference, "referent", Value::Ref(target));
         // The builder stood the membership there ahead of the text the
@@ -748,10 +723,9 @@ impl Workspace {
     /// What a feature reference comes to is what it names.
     ///
     /// `checkFeatureReferenceExpressionResultSpecialization` --
-    /// "result.owningType() = self and result.specializes(referent)".
-    /// The builder gives the expression the parameter it hands its value
-    /// back through; what that parameter stands for is only known once
-    /// the name is looked up, and without it `[n]` says nothing about
+    /// "result.owningType() = self and result.specializes(referent)". What the
+    /// parameter the builder gives the expression stands for is only known
+    /// once the name is looked up, and without it `[n]` says nothing about
     /// what kind of thing `n` counts.
     fn results_in_what_it_names(&mut self, reference: ElementId, referent: ElementId) {
         let result = self
@@ -779,12 +753,10 @@ impl Workspace {
     }
     /// What the statement a succession was built from declares.
     ///
-    /// `then merge continue;` writes the node and the succession into it
-    /// as one statement, so the two elements share the one syntax node
-    /// and the declaration is the sibling that node also became. A
-    /// `then message m of T;` writes a flow that way, which is a
-    /// connector itself -- so what is looked for is what the statement
-    /// declared, never the succession beside it.
+    /// `then merge continue;` writes the node and the succession as one
+    /// statement, so the two elements share the one syntax node and the
+    /// declaration is the sibling that node also became. So what is looked for
+    /// is what the statement declared, never the succession beside it.
     fn declared_beside(&self, succession: ElementId, node: &SyntaxNode) -> Option<ElementId> {
         let owner = self.model.owner(succession)?;
         self.model.owned(owner).iter().copied().find(|&member| {
@@ -817,19 +789,14 @@ impl Workspace {
     /// instead. Read either way by [`sysml_model::end_reaches`].
     fn end_reaching(&mut self, connector: ElementId, chain: Vec<ElementId>) {
         // What a connector relates it relates through ends of its own:
-        // `EndFeatureMembership` is how the standard owns one, and
-        // saying so is also what tells such a feature from a member the
-        // source wrote as a reference.
-        // An end, and only an end: a connector may own a feature the
-        // source wrote -- `connector ps : P ([1] myCart, ...)` counts
-        // what each end relates in front of its name -- and taking one
-        // of those for an end reified here would give it a second
-        // multiplicity and the connector a third thing to relate.
-        // A flow relates its ends through `FlowEnd`s, and the last step
-        // of what one names is not part of the path to it but the thing
-        // that flows: `FlowEnd = ( OwnedReferenceSubsetting '.' )?
-        // FlowFeatureMember`, where the member is the one feature a
-        // flow end owns.
+        // `EndFeatureMembership` is how the standard owns one, which is also what
+        // tells such a feature from a member the source wrote as a reference.
+        // An end, and only an end: a connector may own a feature the source wrote
+        // -- `connector ps : P ([1] myCart, ...)` -- and taking one of those for
+        // an end would give it a second multiplicity and the connector a third
+        // thing to relate.
+        // A flow relates its ends through `FlowEnd`s, where the last step of what
+        // one names is not part of the path but the thing that flows.
         let flowing = self.model.kind(connector).is_a(ElementKind::Flow);
         let end = self.reified(
             connector,
@@ -869,13 +836,12 @@ impl Workspace {
             _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
         }
     }
-    /// Stand the last step of what a flow end names up as the feature
-    /// that flows through it.
+    /// Stand the last step of what a flow end names up as the feature that
+    /// flows through it.
     ///
-    /// `flow from tank.fuelOut to engine.fuelIn` runs from `tank`, and
-    /// what flows is `fuelOut`. The standard keeps them apart -- the
-    /// path is what the end refers to, the feature is the one thing it
-    /// owns -- and three constraints about a flow end read that shape.
+    /// `flow from tank.fuelOut to engine.fuelIn` runs from `tank`, and what
+    /// flows is `fuelOut`. The standard keeps them apart -- the path is what
+    /// the end refers to, the feature is the one thing it owns -- and
     /// [`sysml_model::end_reaches`] puts the two back together.
     fn flowing_feature(&mut self, end: ElementId, flows: ElementId) {
         let feature = self.reified(end, ElementKind::Feature, &[]);
@@ -900,14 +866,12 @@ impl Workspace {
     }
     /// An end is one thing.
     ///
-    /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd =
-    /// true, then it must have multiplicity 1..1" -- and the notation
-    /// writes it nowhere. What stands before an end in `first [0..1]
-    /// decide then [0..1] merge` is the cross multiplicity, how many
-    /// things at the far end go with one at this one; the end itself is
-    /// a participant, and there is one of it. Without the range, the
-    /// four constraints that count what a control node is joined by
-    /// have nothing to read.
+    /// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true,
+    /// then it must have multiplicity 1..1" -- and the notation writes it
+    /// nowhere. What stands before an end in `first [0..1] decide then [0..1]
+    /// merge` is the cross multiplicity: how many at the far end go with one
+    /// here. Without the range, the four constraints counting what a control
+    /// node is joined by have nothing to read.
     fn counts_one(&mut self, end: ElementId) {
         let range = self.reified(end, ElementKind::MultiplicityRange, &[]);
         if self.model.get(range, "upperBound").is_none() {
@@ -984,12 +948,10 @@ impl Workspace {
     /// Resolve what `satisfy r by p;` relates: the requirement named after
     /// `satisfy` and the feature named after `by`.
     ///
-    /// `satisfy requirement r : R by p;` declares the requirement inline
-    /// instead of naming one, so only the `by` side is a reference there --
-    /// the usage is the requirement.
-    /// Resolve an operand that may be the implicit `self` or `that`
-    /// rather than a declared name -- `satisfy requirement r by that;`
-    /// means the type the assertion is written in satisfies it.
+    /// `satisfy requirement r : R by p;` declares the requirement inline, so
+    /// only the `by` side is a reference there.
+    /// Resolve an operand that may be the implicit `self` or `that` rather
+    /// than a declared name.
     pub(crate) fn resolve_satisfaction(
         &mut self,
         id: ElementId,

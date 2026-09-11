@@ -2,20 +2,17 @@
 //!
 //! Every crate here tests against the official SysML-v2-Release, which
 //! arrives as a git submodule and may not be checked out. Asking whether
-//! it is there is one question, and it was being answered five times --
-//! once per crate -- by five copies that had already drifted apart. Some
-//! canonicalised the path and some did not; some probed the release
-//! directory and some the standard library inside it, so a submodule
-//! checked out but empty was a skip for four of them and a failure for
-//! the fifth; some said out loud that they were skipping and some went
-//! quiet, which is the difference between a test that was skipped and a
-//! test that was never written. One of them walked the tree with
-//! `Path::is_dir`, which follows a link to a directory and so goes round
-//! in circles -- a hazard the resolver's own walk documents avoiding.
+//! it is there is one question, and it was being answered five times by
+//! five copies that had drifted apart: some canonicalised the path and
+//! some did not; some probed the release directory and some the library
+//! inside it, so a submodule checked out but empty was a skip for four and
+//! a failure for the fifth; some said out loud that they were skipping and
+//! some went quiet. One walked the tree with `Path::is_dir`, which follows
+//! a link and so goes round in circles.
 //!
-//! So it is answered here, once. This crate is `publish = false` and is
-//! only ever a dev-dependency, and a path dev-dependency carries no
-//! version, so `cargo publish` drops it from what it uploads.
+//! So it is answered here, once. This crate is `publish = false` and only
+//! ever a dev-dependency, and a path dev-dependency carries no version, so
+//! `cargo publish` drops it.
 
 // Nothing here needs `unsafe`, and saying so is what keeps it that way.
 #![forbid(unsafe_code)]
@@ -68,18 +65,15 @@ pub fn checked_out(root: &Path) -> Option<PathBuf> {
 /// The standard library.
 ///
 /// Not the release's copy, but `sysml-stdlib`'s: that is the one that
-/// ships, the one a user of the tool has, and the one the tool falls
-/// back on when nothing says where a library is. A test that resolved
-/// against a different copy would be a test about something nobody
-/// runs.
+/// ships, the one a user has, and the one the tool falls back on. A test
+/// resolving against a different copy would be a test about something
+/// nobody runs.
 ///
-/// It is checked in, so it is always there -- which is why this is not
-/// an `Option`, and why a test that needs only the library no longer
-/// skips in a checkout with no submodule.
-///
-/// Canonical, for the same reason [`vendor`] is: a test that hands the
-/// path to a subprocess and then reads paths back out of the answer has
-/// to be given the spelling the subprocess will use.
+/// It is checked in, so it is always there -- which is why this is not an
+/// `Option`, and why a test needing only the library no longer skips in a
+/// checkout with no submodule. Canonical, for the same reason [`vendor`]
+/// is: a test that hands the path to a subprocess has to be given the
+/// spelling the subprocess will use.
 pub fn library() -> PathBuf {
     let at = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sysml-stdlib/library");
     at.canonicalize()

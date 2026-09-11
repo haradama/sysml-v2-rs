@@ -99,18 +99,14 @@ fn build_node(
         DOCUMENTATION => Some(ElementKind::Documentation),
         COMMENT_ELEM => Some(ElementKind::Comment),
         REP => Some(ElementKind::TextualRepresentation),
-        // `#Safety part def Boiler;` -- `PrefixMetadataUsage :
-        // MetadataUsage = ownedRelationship += OwnedFeatureTyping`, so
-        // the prefix is a usage of its own and not a spelling of the
-        // element it stands before.
+        // `#Safety part def Boiler;` -- the prefix is a usage of its own and not
+        // a spelling of the element it stands before.
         //
-        // KerML writes the same thing and calls it a `MetadataFeature`,
-        // which is what `MetadataUsage` specializes. Read as the usage,
-        // `#atom classifier MyBike;` of `A-2-ModelingInstances.kerml`
-        // was given the base the library states for a usage --
-        // "metadataItems is the base feature of all MetadataUsages" --
-        // and so had a second metaclass among its types beside the one
-        // it names, since a `MetadataDefinition` is a `Metaclass`.
+        // KerML writes the same thing and calls it a `MetadataFeature`, which is
+        // what `MetadataUsage` specializes. Read as the usage, `#atom classifier
+        // MyBike;` was given the base the library states for a usage and so had a
+        // second metaclass among its types beside the one it names, since a
+        // `MetadataDefinition` is a `Metaclass`.
         METADATA_ANNOTATION | PREFIX_METADATA => Some(match built.dialect {
             sysml_syntax::Dialect::KerML => ElementKind::MetadataFeature,
             sysml_syntax::Dialect::SysML => ElementKind::MetadataUsage,
@@ -146,16 +142,15 @@ fn build_node(
     // the `enum` keyword.
     let enumerated = kind.is_a(ElementKind::EnumerationUsage)
         && owner.is_some_and(|owner| model.kind(owner).is_a(ElementKind::EnumerationDefinition));
-    // `then merge continue;` and `then send new S() to b;` are one
-    // statement that the abstract syntax makes two elements of: the node
-    // or action the statement declares, and the succession its leading
-    // `then` writes into it. `control_kind` answers with the declaration,
-    // because that is what the rest of the flow refers to by name -- so
-    // the succession is built here beside it, ahead of it in the body,
-    // where what it continues from is the step written above.
+    // `then merge continue;` is one statement the abstract syntax makes two
+    // elements of: the node the statement declares, and the succession its
+    // leading `then` writes into it. `control_kind` answers with the
+    // declaration, because that is what the rest of the flow refers to by
+    // name -- so the succession is built here beside it, ahead of it in the
+    // body.
     //
-    // A leading `first` writes none: `first x;` names which step comes
-    // first and nothing flows into it.
+    // A leading `first` writes none: it names which step comes first and
+    // nothing flows into it.
     if let Some(owner) = owner {
         if kind != ElementKind::SuccessionAsUsage && matches!(tokens(node).next(), Some(THEN_KW)) {
             let flow = model.create(ElementKind::SuccessionAsUsage);
@@ -163,16 +158,13 @@ fn build_node(
             built.source.push((flow, node.clone()));
         }
     }
-    // `end owningEntities[1..*] feature owner : LegalEntity;` declares
-    // the end `owner`, not the end `owningEntities`: `EndFeaturePrefix
-    // ( ownedRelationship += OwnedCrossFeatureMember )?
-    // FeatureDeclaration` puts the cross feature between the `end` and
-    // the declaration, and the standard says where it lands -- "owned
-    // cross features are in the namespace of the owning association
+    // `end owningEntities[1..*] feature owner : LegalEntity;` declares the
+    // end `owner`, not `owningEntities`: the cross feature goes between the
+    // `end` and the declaration, and the standard says where it lands --
+    // "owned cross features are in the namespace of the owning association
     // ends, so their names are qualified by the name of the association
-    // ends, e.g. `LegalAssetOwnership::owner::owningEntities`". So this
-    // element is the cross feature, and where it goes is not known
-    // until the end it belongs to has been built.
+    // ends". So this element is the cross feature, and where it goes is not
+    // known until the end it belongs to has been built.
     let crossed = crossing_declaration(node);
     let id = model.create(kind);
     built.source.push((id, node.clone()));
@@ -223,14 +215,12 @@ fn build_node(
         }
     }
     // Flags the specification states outright rather than leaving to a
-    // keyword. A model that carries one of a pair without the other is
-    // one the specification's own constraints reject, and the source
-    // said both:
+    // keyword. A model carrying one of a pair without the other is one the
+    // specification's own constraints reject:
     //
     // - `validateEnumerationDefinitionIsVariation` -- an enumeration
     //   definition is a variation, written `enum def` or not
-    // - `validateDefinitionVariationIsAbstract` and its `Usage`
-    //   counterpart -- a variation is abstract
+    // - `validateDefinitionVariationIsAbstract` -- a variation is abstract
     // - `validateFeatureConstantIsVariable` -- a constant feature is a
     //   variable one whose value cannot change
     if kind.is_a(ElementKind::EnumerationDefinition) && kind.feature("isVariation").is_some() {
@@ -395,22 +385,14 @@ fn build_node(
         }
     }
     if kind == ElementKind::TransitionUsage {
-        // `TriggerActionMember : TransitionFeatureMembership = ... kind
-        // = 'trigger' ownedRelatedElement += TriggerAction` and
-        // `TriggerAction : AcceptActionUsage = AcceptParameterPart`:
-        // what a transition waits for is an accept action of its own,
-        // and the payload written after the keyword is that action's
-        // first parameter rather than the trigger itself.
+        // What a transition waits for is an accept action of its own, and the
+        // payload written after the keyword is that action's first parameter.
         //
-        // `validateTransitionUsageParameters` -- "a TransitionUsage must
-        // have at least one owned input parameter and, if it has a
-        // triggerAction, it must have at least two". The first is the
-        // occurrence it transitions from; the second is what the
-        // trigger accepted, which `checkTransitionUsagePayloadSpecialization`
-        // has subset the trigger's own payload parameter. The library
-        // names that one from the transition -- `bind payload =
-        // aState.aTransition.apayload;` -- and the standard says how:
-        // its naming feature is the trigger's payload parameter.
+        // `validateTransitionUsageParameters` -- "a TransitionUsage must have at
+        // least one owned input parameter and, if it has a triggerAction, it must
+        // have at least two". The first is the occurrence it transitions from;
+        // the second is what the trigger accepted, which subsets the trigger's
+        // own payload parameter.
         let occurrence = model.create(ElementKind::ReferenceUsage);
         model.add_owned(id, occurrence);
         model.set(occurrence, "direction", Value::EnumLit("in"));
@@ -450,14 +432,11 @@ fn build_node(
         .then(|| reify_accept_payload(model, node, id))
         .flatten();
     reify_action_arguments(model, node, id, kind, payload, built);
-    // `IfNode : IfActionUsage = ... 'if' ownedRelationship +=
-    // ExpressionParameterMember ...` and the two loops the same way: the
-    // condition is what the node is about, and it was being read and
-    // dropped.
-    // `ForLoopNode : ForLoopActionUsage = 'for' LoopVariableMember 'in'
-    // ExpressionParameterMember ...` -- the variable is written first and
-    // is the first feature the loop owns, which is what
-    // `validateForLoopActionUsageLoopVariable` asks of it.
+    // The condition is what an `if` or a loop node is about, and it was being
+    // read and dropped.
+    // A `for` loop's variable is written first and is the first feature the
+    // loop owns, which is what `validateForLoopActionUsageLoopVariable` asks
+    // of it.
     if kind == ElementKind::ForLoopActionUsage {
         reify_loop_variable(model, node, id);
     }
@@ -483,25 +462,17 @@ fn build_node(
     for child in node.children() {
         match child.kind() {
             BODY | PARAM_LIST => {
-                // `IfNode = 'if' ExpressionParameterMember
-                // ActionBodyParameterMember ( 'else' ... )?`, and
-                // `ActionBodyParameter : ActionUsage = ... '{'
-                // ActionBodyItem* '}'`. What a structured control node
-                // writes in braces is one parameter handed to it, not
-                // members of the node itself: `inputParameters()->size()
-                // = 2` counts a `for` loop's sequence and its body,
-                // however many statements the body is written with.
+                // What a structured control node writes in braces is one parameter handed
+                // to it, not members of the node itself: `inputParameters()->size() = 2`
+                // counts a `for` loop's sequence and its body, however many statements
+                // the body is written with.
                 let under = body_parameter(model, id, &child).unwrap_or(id);
                 for member in child.children() {
-                    // `loop { ... } until c;` is one node written as two
-                    // statements: `WhileLoopNode : WhileLoopActionUsage =
-                    // ... ( 'until' ExpressionParameterMember ';' )?`.
-                    // What it asks belongs to the loop before it, and a
-                    // second loop standing for it says the flow repeats
-                    // twice over. That loop is the last thing built
-                    // here: `then action aLoop while c { ... }` writes
-                    // the succession as the statement and leaves the
-                    // loop beside it.
+                    // `loop { ... } until c;` is one node written as two statements, and what
+                    // the `until` asks belongs to the loop before it -- a second loop
+                    // standing for it says the flow repeats twice over. That loop is the last
+                    // thing built here: `then action aLoop while c { ... }` writes the
+                    // succession as the statement and leaves the loop beside it.
                     if let Some(repeats) =
                         loop_before(model, under).filter(|_| closes_a_loop(&member))
                     {
@@ -593,14 +564,13 @@ fn closes_a_loop(node: &SyntaxNode) -> bool {
     node.kind() == SyntaxKind::CONTROL_STMT && tokens(node).next() == Some(SyntaxKind::UNTIL_KW)
 }
 
-/// Reify a `[4]` or `[0..*]` clause as the `MultiplicityRange` the standard
-/// stores: an owned range whose bounds are literal expressions, referenced
-/// from the element's `multiplicity`.
+/// Reify a `[4]` or `[0..*]` clause as the `MultiplicityRange` the
+/// standard stores: an owned range whose bounds are literal expressions,
+/// referenced from the element's `multiplicity`.
 ///
 /// A single bound is recorded as the range's `bound`, two as `lowerBound`
-/// and `upperBound` -- the same shape the written text has, with the KerML
-/// reading (`[n]` means exactly n, `[*]` means zero or more) left to the
-/// consumer.
+/// and `upperBound` -- the shape the written text has, with the KerML
+/// reading left to the consumer.
 fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     use SyntaxKind::*;
     // `part x [0..*]` writes the clause as a node of its own. A control
@@ -756,13 +726,9 @@ fn reify_feature_value(model: &mut Model, node: &SyntaxNode, owner: ElementId, b
 ///
 /// A literal becomes the matching literal element and a bare name a
 /// feature reference. Everything else the standard writes as an
-/// invocation: "OperatorExpressions provide a shorthand notation for
-/// InvocationExpressions that invoke a Function from the Kernel Function
-/// Library", so `a + b` invokes `DataFunctions::'+'` and hands it two
-/// arguments, each through a parameter of its own carrying the operand
-/// as its value. Kept as the text it was written as, an expression said
-/// nothing about what it comes to and every constraint about one was
-/// asked of nothing at all.
+/// invocation, so `a + b` invokes `DataFunctions::'+'` and hands it two
+/// arguments. Kept as text, an expression said nothing about what it comes
+/// to and every constraint about one was asked of nothing.
 fn value_expression(
     model: &mut Model,
     membership: ElementId,
@@ -800,15 +766,12 @@ fn value_expression(
         model.add_owned(membership, expression);
         built.source.push((expression, written.clone()));
         built.expressions.push(expression);
-        // `InvocationExpression = InstatiatedTypeMember ArgumentList
-        // EmptyResultMember` -- what it invokes is a membership of its
-        // own, and first, because `instantiatedType()` is "the first
-        // ownedMembership that is not a FeatureMembership". An operator
-        // writes none: `OperatorExpression::instantiatedType()` resolves
-        // the symbol against the function library instead, and
-        // `FeatureChainExpression = NonFeatureChainPrimaryArgumentMember
-        // '.' FeatureChainMember` uses that one place for the name it
-        // chains to.
+        // What an invocation invokes is a membership of its own, and first,
+        // because `instantiatedType()` is "the first ownedMembership that is not
+        // a FeatureMembership". An operator writes none:
+        // `OperatorExpression::instantiatedType()` resolves the symbol against
+        // the function library instead, and a feature chain expression uses that
+        // one place for the name it chains to.
         match &operator {
             None => {
                 let names_it = model.create(ElementKind::Membership);
@@ -937,14 +900,11 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
 
 /// How many of the operands are handed over; the rest are named.
 ///
-/// The classification operators are written like any other binary one
-/// and mean something else by their second half: `x istype T` asks
-/// whether `x` is a `T`, and `T` is named rather than handed over. A
-/// feature chain names the feature it reaches the same way, and `all T`
-/// names a type and hands over nothing --
-/// `ClassificationExpression` writes a `TypeReferenceMember`,
-/// `FeatureChainExpression` a `FeatureChainMember`, and
-/// `BaseFunctions::'all'` takes no argument at all.
+/// The classification operators are written like any other binary one and
+/// mean something else by their second half: `x istype T` asks whether `x`
+/// is a `T`, and `T` is named rather than handed over. A feature chain
+/// names the feature it reaches the same way, and `all T` names a type and
+/// hands over nothing.
 fn hands_over_only(written: &SyntaxNode) -> usize {
     if written.kind() == SyntaxKind::PATH_EXPR {
         return 1;
@@ -970,14 +930,13 @@ fn hands_over_only(written: &SyntaxNode) -> usize {
     }
 }
 
-/// The operands an invocation hands over, in the order it hands them,
-/// each with the parameter it was written against where one was.
+/// The operands an invocation hands over, in the order it hands them, each
+/// with the parameter it was written against where one was.
 ///
-/// A call names the function in front of its arguments, and that name
-/// is what it invokes rather than something handed to it. `F(q = 1, p =
-/// a)` names the parameters instead of relying on their order --
-/// `NamedArgument : Feature = ParameterRedefinition '=' ArgumentValue`
-/// -- and the argument list arrives flat, a name and a value apiece.
+/// A call names the function in front of its arguments, and that name is
+/// what it invokes rather than something handed to it. `F(q = 1, p = a)`
+/// names the parameters instead of relying on order, and the argument list
+/// arrives flat, a name and a value apiece.
 fn operands(written: &SyntaxNode) -> Vec<(Option<SyntaxNode>, SyntaxNode)> {
     use SyntaxKind::*;
     let mut out = Vec::new();
@@ -1005,12 +964,10 @@ fn operands(written: &SyntaxNode) -> Vec<(Option<SyntaxNode>, SyntaxNode)> {
 
 /// Hand one operand over as a parameter of the invocation.
 ///
-/// `PrimaryArgumentMember : ParameterMembership = ownedMemberParameter =
-/// PrimaryArgument`, `PrimaryArgument : Feature = ownedRelationship +=
-/// PrimaryArgumentValue` and `PrimaryArgumentValue : FeatureValue = value
-/// = PrimaryExpression` -- three elements deep, and
-/// `deriveInvocationExpressionArgument` reads the operand back through
-/// all three.
+/// `PrimaryArgumentMember` owns a `PrimaryArgument` owning a
+/// `PrimaryArgumentValue` -- three elements deep, and
+/// `deriveInvocationExpressionArgument` reads the operand back through all
+/// three.
 fn hands_over(
     model: &mut Model,
     expression: ElementId,
@@ -1036,15 +993,13 @@ fn hands_over(
     model.set(value, "value", Value::Ref(inner));
 }
 
-/// Stand a `Membership` on a feature reference expression for what it
-/// will turn out to refer to.
+/// Stand a `Membership` on a feature reference expression for what it will
+/// turn out to refer to.
 ///
 /// `deriveFeatureReferenceExpressionReferent` takes the *first* owned
 /// membership that is not a parameter's, so the one holding the referent
-/// has to come before whatever else the expression owns -- the text it
-/// was written as, among other things. Name resolution fills in what it
-/// relates once the name has been looked up; until then it relates
-/// nothing, which is what an unresolved name amounts to.
+/// has to come before whatever else the expression owns. Name resolution
+/// fills in what it relates once the name has been looked up.
 fn refers_through(model: &mut Model, expression: ElementId, kind: ElementKind) {
     if kind == ElementKind::FeatureReferenceExpression {
         let membership = model.create(ElementKind::Membership);
@@ -1055,12 +1010,11 @@ fn refers_through(model: &mut Model, expression: ElementId, kind: ElementKind) {
 
 /// Give an expression the parameter it comes to.
 ///
-/// `deriveExpressionResult` reads the first `ReturnParameterMembership`
-/// an expression owns, and `validateFeatureReferenceExpressionResult`
-/// holds that parameter to being owned by the expression itself. The
-/// notation writes it nowhere: `= ledPinNumber` says what the value is
-/// and says nothing about the parameter the expression hands it back
-/// through.
+/// `deriveExpressionResult` reads the first `ReturnParameterMembership` an
+/// expression owns, and `validateFeatureReferenceExpressionResult` holds
+/// that parameter to being owned by the expression itself. The notation
+/// writes it nowhere: `= ledPinNumber` says what the value is and nothing
+/// about the parameter it is handed back through.
 fn results_in(model: &mut Model, expression: ElementId) -> ElementId {
     let result = model.create(ElementKind::Feature);
     model.add_owned(expression, result);
@@ -1135,10 +1089,7 @@ fn represent_textually(model: &mut Model, element: ElementId, text: &str) {
 ///
 /// The parser leaves the clause flat, so the payload has nothing standing
 /// for it. Its name is what the rest of the model refers to --
-/// `subscribing.sub`, `trigger1.ignitionCmd` -- and for a transition
-/// `sysml-semantics` attaches the typing written after it.
-///
-/// `PayloadParameter : ReferenceUsage` and
+/// `subscribing.sub`, `trigger1.ignitionCmd`.
 /// `deriveAcceptActionUsagePayloadParameter` -- "the payloadParameter of
 /// an AcceptActionUsage is its first parameter" -- so what waits is a
 /// parameter of the node and not an action of its own.
@@ -1175,18 +1126,14 @@ fn reify_accept_payload(
 
 /// Reify what a `send` or an `accept` acts on.
 ///
-/// `SendNode : SendActionUsage = 'send' ArgumentMember ( 'via'
-/// ArgumentMember )? ( 'to' ArgumentMember )?` -- each clause writes an
-/// argument, which the standard keeps as an input parameter of the
-/// action holding what was written as its value and reads back by
-/// position: `senderArgument = argument(2)`, `receiverArgument =
-/// argument(3)`. The parameters stand there whether or not the source
-/// wrote a clause for each, which is what `validateSendActionParameters`
-/// and `validateAcceptActionUsageParameters` say outright.
+/// Each clause writes an argument, which the standard keeps as an input
+/// parameter holding what was written as its value and reads back by
+/// position: `senderArgument = argument(2)`. The parameters stand there
+/// whether or not the source wrote a clause for each, which
+/// `validateSendActionParameters` says outright.
 ///
-/// Without them the port a message goes out of is nowhere in the model,
-/// so `via displayPort` named nothing and a name that stands for nothing
-/// went unreported.
+/// Without them the port a message goes out of is nowhere in the model, so
+/// `via displayPort` named nothing and went unreported.
 fn reify_action_arguments(
     model: &mut Model,
     node: &SyntaxNode,
@@ -1238,12 +1185,10 @@ fn reify_action_arguments(
 
 /// What an `accept` waits for, where it waits for a time or a change.
 ///
-/// `TriggerExpression : TriggerInvocationExpression = kind = ( 'at' |
-/// 'after' ) ArgumentMember | kind = 'when' ArgumentExpressionMember`,
-/// and the payload of the accept takes it as its value -- which is what
-/// `deriveAcceptActionUsagePayloadArgument` reads back. Which of the
-/// three functions in the library's `Triggers` package it invokes is
-/// what the `kind` says, so the keyword is the whole of it.
+/// The payload of the accept takes the trigger expression as its value,
+/// which is what `deriveAcceptActionUsagePayloadArgument` reads back.
+/// Which of the three functions in the library's `Triggers` package it
+/// invokes is what the `kind` says, so the keyword is the whole of it.
 fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built: &mut Built) {
     let Some((keyword, kind)) = [
         (SyntaxKind::AFTER_KW, "after"),
@@ -1276,15 +1221,12 @@ fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built
     let value = model.create(ElementKind::FeatureValue);
     model.add_owned(argument, value);
     model.set(value, "featureWithValue", Value::Ref(argument));
-    // `kind = 'when' ownedRelationship += ArgumentExpressionMember`, and
-    // `ArgumentExpressionValue : FeatureValue = ownedRelatedElement +=
-    // OwnedExpressionReference` -- a change trigger waits on what an
-    // expression *is*, so what it is handed is a reference to one and
-    // not the expression itself, which is what
-    // `validateTriggerInvocationExpressionWhenArgument` reads. The
-    // expression it refers to is owned through a feature membership,
-    // and that is the first membership that is not a parameter's --
-    // where `deriveFeatureReferenceExpressionReferent` reads it off.
+    // A change trigger waits on what an expression *is*, so what it is handed
+    // is a reference to one and not the expression itself, which is what
+    // `validateTriggerInvocationExpressionWhenArgument` reads. The expression
+    // it refers to is owned through a feature membership, the first that is
+    // not a parameter's -- where
+    // `deriveFeatureReferenceExpressionReferent` reads it off.
     let held = match kind {
         "when" => {
             let reference = model.create(ElementKind::FeatureReferenceExpression);
@@ -1537,18 +1479,14 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     if let Some(declaration) = tokens(node).find_map(control_node_kind) {
         return Some(declaration);
     }
-    // `accept Go then s2;` in a state body is a transition out of the
-    // state it is written in: `TargetTransitionUsage : TransitionUsage =
-    // ... TriggerActionMember ... 'then' TransitionSuccessionMember`.
-    // Read as the succession its `then` would otherwise make, the trigger
-    // has nothing standing for it and the transition nothing to be found
-    // by.
+    // `accept Go then s2;` in a state body is a transition out of the state
+    // it is written in. Read as the succession its `then` would otherwise
+    // make, the trigger has nothing standing for it and the transition
+    // nothing to be found by.
     //
-    // `if x then a;` after a decision node is the same shape:
-    // `GuardedTargetSuccession : TransitionUsage = GuardExpressionMember
-    // 'then' TransitionSuccessionMember`. An `IfNode` writes its
-    // branches in braces and no `then` at all, so the keyword is what
-    // tells a branch of the flow from a structured node.
+    // `if x then a;` after a decision node is the same shape. An `IfNode`
+    // writes its branches in braces and no `then` at all, so the keyword is
+    // what tells a branch of the flow from a structured node.
     if is_target_transition(node) {
         return Some(ElementKind::TransitionUsage);
     }
@@ -1565,15 +1503,13 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     {
         return Some(ElementKind::IfActionUsage);
     }
-    // `then send new S() via p;` declares the action as much as `then
-    // merge continue;` declares the node, and for the same reason the
-    // declaration wins: read as the succession alone, the action the
-    // source wrote is in the model nowhere at all. What the statement
-    // continues from is then the step before it, which is how a
-    // succession with one end written reads anyway.
-    // and only where the action is the statement's own: `transition t1
-    // first a do send 1 to p then b` writes one as the effect it carries
-    // across, and the transition is what the statement declares.
+    // `then send new S() via p;` declares the action as much as `then merge
+    // continue;` declares the node, and the declaration wins for the same
+    // reason: read as the succession alone, the action the source wrote is
+    // nowhere in the model. What the statement continues from is then the
+    // step before it.
+    // And only where the action is the statement's own: `transition t1 first
+    // a do send 1 to p then b` writes one as the effect it carries across.
     let continues = (has_token(node, SyntaxKind::THEN_KW) || has_token(node, SyntaxKind::FIRST_KW))
         && !has_token(node, SyntaxKind::TRANSITION_KW)
         && !has_token(node, SyntaxKind::DO_KW);
@@ -1632,15 +1568,11 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
         SyntaxKind::SEND_KW => Some(ElementKind::SendActionUsage),
         SyntaxKind::ACCEPT_KW => Some(ElementKind::AcceptActionUsage),
         SyntaxKind::ASSIGN_KW => Some(ElementKind::AssignmentActionUsage),
-        // `first x;` on its own is `InitialNodeMember : FeatureMembership
-        // = MemberPrefix 'first' memberFeature = [QualifiedName]`: it
-        // names which step comes first and writes no flow at all. The
-        // flow is what a `then` writes -- `TargetSuccession :
-        // SuccessionAsUsage = SourceEndMember 'then' ConnectorEndMember`
-        // -- so `first a; then b;` is one succession and not two. Read
-        // as a succession as well, the `first` took the flow its `then`
-        // writes and left that one relating its own declaration to
-        // itself.
+        // `first x;` on its own names which step comes first and writes no flow
+        // at all. The flow is what a `then` writes, so `first a; then b;` is one
+        // succession and not two. Read as a succession as well, the `first` took
+        // the flow its `then` writes and left that one relating its own
+        // declaration to itself.
         SyntaxKind::FIRST_KW if !has_token(node, SyntaxKind::THEN_KW) => {
             // A `Membership` rather than the `FeatureMembership` the
             // grammar names: this one refers to a member declared
@@ -1684,16 +1616,14 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
     })
 }
 
-/// Whether a control statement is a transition rather than the
-/// succession its `then` reads as.
+/// Whether a control statement is a transition rather than the succession
+/// its `then` reads as.
 ///
 /// `TargetTransitionUsage` puts a trigger, a guard or both before the
-/// `then`; a bare `then b` and a `first a then b` are successions. A
-/// guard alone is a transition too -- `GuardedTargetSuccession :
-/// TransitionUsage = GuardExpressionMember 'then'
-/// TransitionSuccessionMember` -- and what tells `if hot then cool;`
-/// from the `if` node of a structured body is the `then`, which a node
-/// writing its branches in braces does not have.
+/// `then`; a bare `then b` and a `first a then b` are successions. A guard
+/// alone is a transition too, and what tells `if hot then cool;` from the
+/// `if` node of a structured body is the `then`, which a node writing its
+/// branches in braces does not have.
 fn is_target_transition(node: &SyntaxNode) -> bool {
     // `else A3;` writes the branch a guard did not take, and writes no
     // `then` at all: `DefaultTargetSuccession : TransitionUsage =
@@ -2279,17 +2209,14 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
     })
 }
 
-/// Whether a feature is part of what its owner is, rather than
-/// something the owner only refers to.
+/// Whether a feature is part of what its owner is, rather than something
+/// the owner only refers to.
 ///
-/// The rules are the standard's own. `ref` says reference outright
-/// (`BasicUsagePrefix : ( isReference ?= 'ref' )?`), and KerML makes a
-/// reference of anything with a direction, anything that is a connector
-/// end, and anything with no featuring type: `direction <> null or
-/// isEnd or featuringType->isEmpty() implies isReference`. SysML adds
-/// that a port owns nothing composite but its nested ports:
-/// `ownedUsage->reject(oclIsKindOf(PortUsage))->forAll(not
-/// isComposite)`. Everything else a type owns is composite.
+/// The rules are the standard's own. `ref` says reference outright, and
+/// KerML makes a reference of anything with a direction, anything that is
+/// a connector end, and anything with no featuring type. SysML adds that a
+/// port owns nothing composite but its nested ports. Everything else a
+/// type owns is composite.
 fn is_composite(node: &SyntaxNode, kind: ElementKind, owning: ElementKind) -> bool {
     if scope_has(node, SyntaxKind::REF_KW)
         || kind == ElementKind::ReferenceUsage
@@ -2470,17 +2397,14 @@ fn leading_keywords(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
     leading.into_iter()
 }
 
-/// Whether this node is an anonymous prefix wrapper: a declaration that
-/// carries only the keywords written before another declaration, which is
+/// Whether this node is an anonymous prefix wrapper: a declaration
+/// carrying only the keywords written before another declaration, which is
 /// its one child.
 ///
 /// `variant part optA;` and `in event occurrence ieo;` parse this way. The
-/// wrapper names nothing and stands for nothing; what it says describes
-/// the declaration it wraps.
-///
-/// A connector end really does own what it nests, though -- `end [1]
-/// feature transferTarget references target;` is an anonymous end whose
-/// feature is its own member -- so `end` is never a wrapper.
+/// wrapper names nothing; what it says describes the declaration it wraps.
+/// A connector end really does own what it nests, so `end` is never a
+/// wrapper.
 fn is_prefix_wrapper(node: &SyntaxNode) -> bool {
     use SyntaxKind::*;
     matches!(node.kind(), DEFINITION | USAGE)
@@ -2539,16 +2463,15 @@ fn declared_name(node: &SyntaxNode) -> Option<String> {
     Some(unquote(name.text()))
 }
 
-/// Whether the name after `connector` or `binding` is an end rather
-/// than a name of the element's own.
+/// Whether the name after `connector` or `binding` is an end rather than a
+/// name of the element's own.
 ///
 /// Both write their declaration only in front of the keyword that
-/// introduces the first end -- `from` for a connector, `bind` or `of`
-/// for a binding -- so `connector eng to tanks.main1;` and `binding a =
-/// b;` name nothing. The n-ary connector form writes its ends in
-/// parentheses and may be named without a `from`, and a binding may
-/// write a declaration and no ends at all (`binding bi { ... }`), so
-/// the `to` and the `=` are what tell those apart.
+/// introduces the first end, so `connector eng to tanks.main1;` and
+/// `binding a = b;` name nothing. The n-ary form writes its ends in
+/// parentheses and may be named without a `from`, and a binding may write
+/// a declaration and no ends at all, so the `to` and the `=` tell those
+/// apart.
 fn names_an_end(node: &SyntaxNode) -> bool {
     has_token(node, SyntaxKind::CONNECTOR_KW)
         && has_token(node, SyntaxKind::TO_KW)
@@ -2803,17 +2726,13 @@ mod tests {
             .all(|&it| model.kind(it) != ElementKind::ConjugatedPortDefinition));
     }
 
-    /// `IfNode = 'if' ExpressionParameterMember
-    /// ActionBodyParameterMember ( 'else' ... )?`, and
-    /// `ActionBodyParameter : ActionUsage = ... '{' ActionBodyItem* '}'`.
-    /// What a structured control node writes in braces is one parameter
-    /// handed to it, not members of the node itself:
-    /// `validateForLoopActionUsageParameters` counts a loop's sequence
-    /// and its body as two, however many statements the body holds.
+    /// What a structured control node writes in braces is one parameter handed
+    /// to it, not members of the node itself:
+    /// `validateForLoopActionUsageParameters` counts a loop's sequence and its
+    /// body as two, however many statements the body holds.
     ///
-    /// A bare `loop` asks nothing and is handed an empty parameter all
-    /// the same -- `'loop' EmptyParameterMember`, where `EmptyUsage :
-    /// ReferenceUsage = {}`.
+    /// A bare `loop` asks nothing and is handed an empty parameter all the
+    /// same -- `'loop' EmptyParameterMember`.
     #[test]
     fn a_control_node_is_handed_one_body_however_much_it_holds() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -2844,17 +2763,14 @@ mod tests {
         );
     }
 
-    /// A loop written after a `then`, and one given a name, are still
-    /// the loop they declare.
+    /// A loop written after a `then`, and one given a name, are still the loop
+    /// they declare.
     ///
-    /// `then while c { ... }` writes the flow it continues *and* the
-    /// loop; read in the order the keywords appear, the leading `then`
-    /// answered first and the loop was in the model nowhere at all,
-    /// with the body it was handed. `action aLoop while c { ... }`
-    /// introduces a name rather than a plain action, and what the loop
-    /// asks begins after the keyword that says which loop it is. A
-    /// `for` is the same both ways round, and so is the branch of a
-    /// `then if c { ... }`.
+    /// `then while c { ... }` writes the flow it continues *and* the loop;
+    /// read in keyword order the leading `then` answered first and the loop
+    /// was nowhere in the model. `action aLoop while c { ... }` introduces a
+    /// name rather than a plain action, and what the loop asks begins after
+    /// the keyword that says which loop it is.
     #[test]
     fn a_loop_after_a_then_or_under_a_name_is_still_a_loop() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -2931,20 +2847,15 @@ mod tests {
 
     /// What a behaviour is handed, which the notation writes nowhere.
     ///
-    /// `AcceptNode : AcceptActionUsage = ... 'accept'
-    /// PayloadParameterMember ( 'via' NodeParameterMember )?` and
-    /// `PayloadParameter : ReferenceUsage`, so what an accept node waits
-    /// for is its first parameter and not an action of its own.
-    /// `TriggerAction : AcceptActionUsage` gives a transition an accept
-    /// action to wait with, and the transition keeps two parameters of
-    /// its own: the occurrence it transitions from, and what the trigger
-    /// accepted -- which subsets the trigger's payload, and is how `bind
-    /// payload = aState.aTransition.apayload;` names it in the library.
+    /// `PayloadParameter : ReferenceUsage`, so what an accept node waits for
+    /// is its first parameter and not an action of its own. A transition keeps
+    /// two parameters: the occurrence it transitions from, and what the
+    /// trigger accepted -- which subsets the trigger's payload, and is how
+    /// `bind payload = aState.aTransition.apayload;` names it in the library.
     ///
-    /// `validateAcceptActionUsageParameters`,
-    /// `validateSendActionParameters` and
-    /// `validateTransitionUsageParameters` count all of these, and none
-    /// of them was there.
+    /// `validateAcceptActionUsageParameters`, `validateSendActionParameters`
+    /// and `validateTransitionUsageParameters` count all of these, and none
+    /// was there.
     #[test]
     fn a_behaviour_keeps_the_parameters_it_is_handed() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -3046,14 +2957,12 @@ mod tests {
 
     /// A guard before a `then`, and a lone `else`, are transitions.
     ///
-    /// `if x > 1 then A2;` after a decision node is
-    /// `GuardedTargetSuccession : TransitionUsage`, and the `else A3;`
-    /// under it is `DefaultTargetSuccession : TransitionUsage`. Read as
-    /// the `if` node of a structured body, the first declared an action
-    /// with a branch it never had; the second declared nothing at all,
-    /// and the branch the source wrote was in the model nowhere. What
-    /// tells them from a structured node is the `then` -- `if c { ... }
-    /// else { ... }` writes its branches in braces and no `then`.
+    /// `if x > 1 then A2;` after a decision node is a
+    /// `GuardedTargetSuccession`, and the `else A3;` under it a
+    /// `DefaultTargetSuccession`. Read as the `if` node of a structured body,
+    /// the first declared an action with a branch it never had and the second
+    /// declared nothing at all. What tells them apart is the `then` -- `if c {
+    /// ... } else { ... }` writes its branches in braces and no `then`.
     #[test]
     fn a_guard_before_a_then_and_a_lone_else_are_transitions() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -3085,17 +2994,13 @@ mod tests {
         );
     }
 
-    /// A loop names the body it repeats, and the `until` after it is
-    /// its own.
+    /// A loop names the body it repeats, and the `until` after it is its own.
     ///
-    /// `loop action charging { ... } until c;` is one node:
-    /// `ActionBodyParameter : ActionUsage = ( 'action' UsageDeclaration?
-    /// )? '{' ActionBodyItem* '}'` gives the body a name, which
-    /// `charging.monitor` reads through, and `WhileLoopNode = ... ( 'until'
-    /// ExpressionParameterMember ';' )?` closes it. Read as it was
-    /// written -- a loop, an action beside it and a second loop -- the
-    /// node asked for the text of its own body and the flow repeated
-    /// twice over.
+    /// `loop action charging { ... } until c;` is one node: the body gets a
+    /// name, which `charging.monitor` reads through, and the `until` closes
+    /// it. Read as written -- a loop, an action beside it and a second loop --
+    /// the node asked for the text of its own body and the flow repeated twice
+    /// over.
     #[test]
     fn a_loop_names_the_body_it_repeats_and_the_until_after_it_is_its_own() {
         let (model, roots) = build_model(&sysml_syntax::parse(
@@ -3979,17 +3884,14 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// What stands between an `end` and the declaration after it is the
-    /// cross feature, and the declaration is the end.
+    /// What stands between an `end` and the declaration after it is the cross
+    /// feature, and the declaration is the end.
     ///
-    /// `end [1] feature src references source;` -- `EndUsagePrefix :
-    /// Usage = isEnd ?= 'end' ( ownedRelationship +=
-    /// OwnedCrossFeatureMember )?`, and the standard says where the
-    /// cross feature lands: "owned cross features are in the namespace
-    /// of the owning association ends, so their names are qualified by
-    /// the name of the association ends". Read the other way round, the
-    /// association's end is the `[1]` and the end the source declared
-    /// is nested inside it.
+    /// `end [1] feature src references source;` -- and the standard says where
+    /// the cross feature lands: "owned cross features are in the namespace of
+    /// the owning association ends, so their names are qualified by the name
+    /// of the association ends". Read the other way round, the association's
+    /// end is the `[1]` and the end the source declared is nested inside it.
     #[test]
     fn a_cross_feature_belongs_to_the_end_written_after_it() {
         let (model, roots) = build_model(&sysml_syntax::parse(

@@ -165,19 +165,16 @@ fn collect_operations(doc: &roxmltree::Document, xml: &str, out: &mut Vec<Operat
 }
 
 /// The rules of one kind the metamodel states, in the order it states
-/// them: `validate` for the constraints a model has to satisfy,
-/// `derive` for how a derived property is worked out.
+/// them: `validate` for constraints, `derive` for how a derived property
+/// is worked out.
 ///
-/// The `body` of a specification, read as it was written.
-///
-/// XML turns every line end inside an attribute value into a space, and
-/// an OCL `--` comment runs to the end of its line. Read after that
-/// normalisation, the `-- Note:` in `deriveFeatureType` and the two
-/// `--` lines in `validateRedefinitionFeaturingTypes` swallow every
-/// word written after them, and neither specification parses. The
-/// attribute's own range says where it stands in the file, so the text
-/// is taken from there, with only the four entities the metamodel
-/// writes put back.
+/// The `body` of a specification, read as it was written. XML turns every
+/// line end inside an attribute value into a space, and an OCL `--`
+/// comment runs to the end of its line -- so after that normalisation the
+/// `-- Note:` in `deriveFeatureType` and the two `--` lines in
+/// `validateRedefinitionFeaturingTypes` swallow every word after them, and
+/// neither specification parses. The attribute's own range says where it
+/// stands in the file, so the text is taken from there.
 fn as_written(spec: roxmltree::Node, xml: &str) -> Option<String> {
     let body = spec.attributes().find(|it| it.name() == "body")?;
     Some(
@@ -458,7 +455,13 @@ fn generate(
     writeln!(
         w,
         "//! from the OMG normative metamodel (vendor/metamodel/KerML.xmi +\n\
-         //! SysML.xmi). Do not edit by hand."
+         //! SysML.xmi). Do not edit by hand.\n\
+         //!\n\
+         //! The OCL of each rule below, and the sentence it states in words,\n\
+         //! are the specification's own: Copyright (c) Object Management\n\
+         //! Group, Inc., reproduced under the terms of use the OMG grants\n\
+         //! with its specifications rather than under this crate's. See\n\
+         //! NOTICE."
     )
     .unwrap();
     writeln!(w, "#![allow(clippy::all)]").unwrap();

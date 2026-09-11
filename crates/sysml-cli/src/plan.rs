@@ -1,23 +1,14 @@
 //! What a model implies for code, in no language in particular.
 //!
-//! `generate_rust` answers this question in Rust and hands back Rust.
-//! Somebody writing the same model in Python, Kotlin or C gets nothing
-//! from that, and asking a language model to read the SysML itself puts
-//! it back to guessing at exactly the things it cannot guess: whether
-//! `wheels : Wheel[4]` is an array of four or a list of any number,
-//! whether a `part` is owned or referred to, what `ISQ::MassValue`
-//! bottoms out in, which of a `variation`'s variants there are.
+//! `generate_rust` answers this in Rust and hands back Rust. Whoever
+//! writes Python or C gets nothing from that, and reading the SysML
+//! instead means guessing at what it cannot see: whether `wheels :
+//! Wheel[4]` is an array or a list, whether a `part` is owned or
+//! referred to, what `ISQ::MassValue` bottoms out in.
 //!
-//! So the answer is stated once, as data, and whoever writes the code --
-//! a person, or a model with a language this toolchain has never heard
-//! of -- reads it rather than the model. Nothing here decides anything
-//! about a language: no identifier is spelled, no container is named, no
-//! type is mapped. It says what the model says, resolved, with the
-//! things a code generator must ask about made explicit.
-//!
-//! It lives here because the two things that read it -- the MCP server
-//! and `sysml plan` -- live here. A second crate reading it would be the
-//! reason to move it into one of its own.
+//! So it is stated once, as data. Nothing here decides anything about a
+//! language: no identifier is spelled, no container named, no type
+//! mapped.
 
 use serde::Serialize;
 
@@ -29,21 +20,15 @@ use sysml_semantics::Workspace;
 pub struct Plan {
     /// Whether the model this was read off resolves.
     ///
-    /// A plan is only as good as the model behind it: a feature whose
-    /// type resolved to nothing arrives with no type at all, and a
-    /// reader that was not told writes an untyped field and never learns
-    /// the model was misspelt. `generate_rust` refuses such a model
-    /// outright for exactly that reason; this hands the plan over and
-    /// says what is missing, since somebody writing a model is entitled
-    /// to see what it implies so far.
+    /// A feature whose type resolved to nothing arrives with no type at
+    /// all. `generate_rust` refuses such a model outright; this hands
+    /// the plan over and says what is missing.
     pub checked: Checked,
     /// Each definition the model declares, in declaration order.
     pub definitions: Vec<Definition>,
     /// What a package declares outright rather than inside a definition:
-    /// `attribute ledPinNumber : Integer = 13;`. These are not
-    /// definitions and were not planned, so a default that named one --
-    /// `attribute pin = ledPinNumber;` -- named something the plan did
-    /// not contain, and whoever read it had to invent the number.
+    /// `attribute ledPinNumber : Integer = 13;`. Without them a default
+    /// that names one names nothing the plan contains.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub constants: Vec<Feature>,
 }
@@ -90,26 +75,18 @@ pub struct Definition {
     pub documentation: Option<String>,
     /// What the model annotates it with, verbatim.
     ///
-    /// A model says things about a definition that this toolchain has no
-    /// opinion about, and the commonest of them is where the thing
-    /// already exists: `@code { :>> writtenIn = "rust"; :>> path =
-    /// "crate::hal::Gpio"; }` says
-    /// this port *is* a type somebody has written, and the actions whose
-    /// paths begin the same way are its methods. Read without it, a port
-    /// with no features is an empty record and the actions belong to
-    /// nothing -- which is the model's own account of what connects
-    /// them, dropped.
+    /// Most usefully where the thing already exists: `@code { :>>
+    /// writtenIn = "rust"; :>> path = "crate::hal::Gpio"; }` says this
+    /// port *is* a written type, and the actions whose paths begin the
+    /// same way are its methods. Without it they belong to nothing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
     /// Whether the model forbids instances of it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub is_abstract: bool,
-    /// What the model declares it specializes, qualified, and only
-    /// that: the direct parent rather than everything above it, and not
-    /// the standard library specialization every definition gets whether
-    /// or not it asks. A reader handed the whole closure has to work out
-    /// which of them is the parent, and cannot where the answer is a
-    /// library name it was told to ignore.
+    /// What the model declares it specializes, qualified: the direct
+    /// parent, not everything above it and not the library
+    /// specialization every definition gets whether it asks or not.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub specializes: Vec<String>,
     /// Its own features: attributes, parts, ports, parameters.
@@ -172,12 +149,8 @@ pub struct Definition {
     /// What passes between them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Flow>,
-    /// What is joined to what inside it.
-    ///
-    /// A definition's parts are not a bag: `connect pump to tank;` is
-    /// the whole of why the two are there together, and a reader given
-    /// the parts and not the wiring writes a record whose fields have
-    /// nothing to do with each other.
+    /// What is joined to what inside it. `connect pump to tank;` is the
+    /// whole of why the two parts are there together.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<Connection>,
 }
@@ -214,11 +187,9 @@ pub struct Feature {
     /// everything is unless the model says otherwise.
     #[serde(skip_serializing_if = "Multiplicity::is_one")]
     pub multiplicity: Multiplicity,
-    /// Whether the whole owns it (`part`) or merely refers to it
-    /// (`ref part`) -- which decides ownership, copying and lifetime in
-    /// every language that has an opinion about them. Said only of what
-    /// a whole can be made of: an attribute is a value and a value is
-    /// owned by nobody.
+    /// Whether the whole owns it (`part`) or refers to it (`ref part`).
+    /// Said only of what a whole can be made of: a value is owned by
+    /// nobody.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub composite: Option<bool>,
     /// Whether the collection keeps its order, and whether it may hold
@@ -328,11 +299,9 @@ pub struct Trigger {
     pub typed_by: Option<String>,
 }
 
-/// One behaviour a definition carries out.
-///
-/// What it performs is named rather than described again: the behaviour
-/// is a definition of its own, with its parameters, wherever the model
-/// declares it.
+/// One behaviour a definition carries out. What it performs is named
+/// rather than described again: the behaviour is a definition of its
+/// own wherever the model declares it.
 #[derive(Serialize)]
 pub struct Performed {
     /// What the model calls it here.
@@ -469,17 +438,12 @@ fn shape_of(ws: &mut Workspace, id: ElementId) -> Option<&'static str> {
         ElementKind::StateDefinition => "state machine",
         ElementKind::CalculationDefinition | ElementKind::ConstraintDefinition => "function",
         ElementKind::ActionDefinition => "behaviour",
-        // An attribute definition with a primitive under it and nothing
-        // of its own is that primitive under another name:
-        // `attribute def Millis :> Integer;`. Written as a record it
-        // becomes an empty class holding nothing, which is a thing the
-        // model does not have.
+        // `attribute def Millis :> Integer;` is a primitive under
+        // another name; as a record it would be an empty class.
         ElementKind::AttributeDefinition if under && bare => "value",
-        // A port is a place a thing connects, not a thing with fields,
-        // and a requirement is a question asked of a model rather than
-        // anything to build. `record` covered all five of these, which
-        // made the field that says what to write in code the less
-        // informative of the two.
+        // A port is a place a thing connects and a requirement is a
+        // question asked of a model; `record` covered both and said
+        // less than the metaclass beside it.
         ElementKind::PortDefinition | ElementKind::InterfaceDefinition => "port",
         ElementKind::RequirementDefinition => "requirement",
         ElementKind::PartDefinition
@@ -496,16 +460,12 @@ fn shape_of(ws: &mut Workspace, id: ElementId) -> Option<&'static str> {
                 _ => "record",
             }
         }
-        // KerML declares the same things in its own words, and a model
-        // written in it used to plan as nothing at all -- an empty
-        // answer, which reads as "there is nothing here to write" rather
-        // than "this half of the language was not looked at". Half the
-        // standard library is written this way, and so is anything a
-        // modeller writes below the systems layer.
+        // KerML declares the same things in its own words -- half the
+        // standard library is written that way -- and planning it as
+        // nothing read as "there is nothing here to write".
         //
-        // Asked after the SysML kinds above and not instead of them: a
-        // `part def` is a `Structure` too, and it has more to say for
-        // itself than one.
+        // Asked after the SysML kinds, not instead: a `part def` is a
+        // `Structure` too and has more to say for itself.
         kind if kind.is_a(ElementKind::Function) => "function",
         kind if kind.is_a(ElementKind::Behavior) => "behaviour",
         kind if kind.is_a(ElementKind::DataType) && under && bare => "value",
@@ -603,7 +563,8 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
                 .copied()
                 .filter(|&child| {
                     ws.model().kind(child) == ElementKind::PerformActionUsage
-                        && ws.model().name(child).is_some()
+                        && (ws.model().name(child).is_some()
+                            || sysml_model::redefined(ws.model(), child).is_some())
                 })
                 .collect();
             mine.into_iter().map(|child| performed(ws, child)).collect()
@@ -654,7 +615,7 @@ fn is_feature(ws: &Workspace, child: ElementId) -> bool {
     // name of its own -- `attribute :>> mass = 1200.0;` -- and borrows
     // the name it redefines. Read as nameless it is dropped, and what
     // the model says a car's mass is goes unsaid.
-    if model.name(child).is_none() && redefined(model, child).is_none() {
+    if model.name(child).is_none() && sysml_model::redefined(model, child).is_none() {
         return false;
     }
     if matches!(
@@ -706,12 +667,11 @@ fn is_feature_kind(kind: ElementKind) -> bool {
 }
 
 fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
-    let typed = ws
-        .model()
-        .type_of(child)
-        .or_else(|| redefined(ws.model(), child).and_then(|it| ws.model().type_of(it)));
+    let typed = ws.model().type_of(child).or_else(|| {
+        sysml_model::redefined(ws.model(), child).and_then(|it| ws.model().type_of(it))
+    });
     let (lower, upper) = bounds(ws, child);
-    let borrowed = redefined(ws.model(), child).and_then(|it| ws.model().name(it));
+    let borrowed = sysml_model::redefined(ws.model(), child).and_then(|it| ws.model().name(it));
     Feature {
         name: ws
             .model()
@@ -723,16 +683,11 @@ fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
         typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
         primitive: typed.and_then(|ty| primitive_of(ws, ty)),
         multiplicity: Multiplicity { lower, upper },
-        // `declared_flag` rather than `flag`: a usage that says nothing
-        // about ordering or uniqueness is not a usage that is neither,
-        // it is one the specification answers for -- and a generator
-        // that reads `unique: false` off silence writes a list where the
-        // model meant a set.
-        // An end is one of the two sides a connection relates, and
-        // dropping it as "not a field" left `connection def Pipe { end
-        // source : Pump; end target : Tank; }` planned as an empty
-        // record -- a pipe between nothing and nothing. It is a feature
-        // and it says that it is an end.
+        // `declared_flag` rather than `flag`: silence about ordering or
+        // uniqueness is the specification's answer, not `false`, and a
+        // generator reading it off silence writes a list for a set.
+        // An end is a feature that says it is one -- dropped as "not a
+        // field", `connection def Pipe` planned as an empty record.
         end: ws.model().declared_flag(child, "isEnd"),
         composite: ownable(ws.model().kind(child))
             .then(|| ws.model().declared_flag(child, "isComposite")),
@@ -748,34 +703,24 @@ fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
 /// The declared multiplicity, as two numbers. Everything is one of
 /// itself unless the model says otherwise.
 fn bounds(ws: &Workspace, usage: ElementId) -> (i64, Option<i64>) {
-    let model = ws.model();
-    let Some(Value::Ref(range)) = model.get(usage, "multiplicity") else {
+    use sysml_model::Bound;
+    let Some(declared) = sysml_model::declared_multiplicity(ws.model(), usage) else {
         return (1, Some(1));
     };
-    let bound = |name: &str| -> Option<Option<i64>> {
-        let Some(Value::Ref(bound)) = model.maybe(*range, name) else {
-            return None;
-        };
-        if model.kind(*bound) == ElementKind::LiteralInfinity {
-            return Some(None);
-        }
-        // A bound written as anything but a literal -- `[n]`, naming a
-        // feature -- says nothing this can put a number to, so it says
-        // any number of them rather than one, which is the reading that
-        // cannot be mistaken for a model that said nothing at all.
-        match model.maybe(*bound, "value") {
-            Some(Value::Int(int)) => Some(Some(*int)),
-            _ => Some(None),
-        }
+    // A bound written as anything but a literal -- `[n]`, naming a
+    // feature -- says nothing this can put a number to, so it says any
+    // number of them rather than one, which is the reading that cannot
+    // be mistaken for a model that said nothing at all.
+    let number = |end: Option<Bound>| match end {
+        Some(Bound::Exactly(n)) => Some(n),
+        _ => None,
     };
     // `[4]` is a bound on its own, which is both ends at once
-    if let Some(exactly) = bound("bound") {
+    if declared.bound.is_some() {
+        let exactly = number(declared.bound);
         return (exactly.unwrap_or(0), exactly);
     }
-    (
-        bound("lowerBound").flatten().unwrap_or(0),
-        bound("upperBound").unwrap_or(None),
-    )
+    (number(declared.lower).unwrap_or(0), number(declared.upper))
 }
 
 /// The standard library primitive a type bottoms out in, walking what it
@@ -787,7 +732,7 @@ fn primitive_of(ws: &mut Workspace, ty: ElementId) -> Option<&'static str> {
         if !seen.insert(next) {
             continue;
         }
-        if let Some(found) = ws.model().name(next).and_then(primitive_named) {
+        if let Some(found) = ws.model().name(next).and_then(sysml_model::primitive) {
             return Some(found);
         }
         queue.extend(ws.supertypes(next));
@@ -795,53 +740,30 @@ fn primitive_of(ws: &mut Workspace, ty: ElementId) -> Option<&'static str> {
     None
 }
 
-/// The standard library primitive that goes by this name, where one
-/// does.
-fn primitive_named(name: &str) -> Option<&'static str> {
-    match name {
-        "Real" => Some("Real"),
-        "Integer" => Some("Integer"),
-        "Natural" => Some("Natural"),
-        "Positive" => Some("Positive"),
-        "Boolean" => Some("Boolean"),
-        "String" => Some("String"),
-        _ => None,
-    }
-}
-
 /// The `= value` a usage was declared with.
 fn given(ws: &Workspace, usage: ElementId) -> Option<Given> {
-    let model = ws.model();
-    let membership = model
-        .owned(usage)
-        .iter()
-        .copied()
-        .find(|&child| model.kind(child) == ElementKind::FeatureValue)?;
-    let expression = model.maybe(membership, "value")?.as_id()?;
-    let literal = match model.maybe(expression, "value") {
-        Some(Value::Real(real)) => serde_json::json!(real),
-        Some(Value::Int(int)) => serde_json::json!(int),
-        Some(Value::Bool(flag)) => serde_json::json!(flag),
-        Some(Value::String(text)) => serde_json::json!(text),
-        _ => return written(model, expression).map(Given::Expression),
-    };
-    Some(Given::Literal(literal))
+    use sysml_model::{Declared, Literal};
+    Some(match sysml_model::declared_value(ws.model(), usage)? {
+        Declared::Text(text) => Given::Expression(text),
+        Declared::Literal(Literal::Real(real)) => Given::Literal(serde_json::json!(real)),
+        Declared::Literal(Literal::Int(int)) => Given::Literal(serde_json::json!(int)),
+        Declared::Literal(Literal::Bool(flag)) => Given::Literal(serde_json::json!(flag)),
+        Declared::Literal(Literal::String(text)) => Given::Literal(serde_json::json!(text)),
+    })
 }
 
 /// What an inherited feature this one redefines is called.
 fn redefines(ws: &mut Workspace, usage: ElementId) -> Option<String> {
-    let redefined = redefined(ws.model(), usage)?;
+    let redefined = sysml_model::redefined(ws.model(), usage)?;
     Some(ws.qualified_name_of(redefined))
 }
 
 /// What the model itself declares a definition specializes.
 ///
 /// [`Workspace::supertypes`] walks the whole way up and includes what
-/// the library implies, which is the right answer to "what is this a
-/// kind of" and the wrong one to "what does this inherit from": every
-/// definition specializes something of the library's whether it says so
-/// or not, and the parent is then one name among several with nothing to
-/// mark it.
+/// the library implies: the right answer to "what kind of thing is
+/// this", the wrong one to "what does it inherit from", where the
+/// parent is one name among several with nothing to mark it.
 fn declared_parents(ws: &mut Workspace, id: ElementId) -> Vec<String> {
     let model = ws.model();
     let written: Vec<ElementId> = model
@@ -858,11 +780,9 @@ fn declared_parents(ws: &mut Workspace, id: ElementId) -> Vec<String> {
         .collect()
 }
 
-/// What the model annotates an element with.
-///
-/// A metadata usage sets its properties by redefining them --
-/// `:>> path = "crate::hal::Gpio";` -- so what it says is read off the
-/// redefinition and the value beside it.
+/// What the model annotates an element with. A metadata usage sets its
+/// properties by redefining them -- `:>> path = "crate::hal::Gpio";` --
+/// so each is read off the redefinition and the value beside it.
 fn annotations(ws: &mut Workspace, owned: &[ElementId]) -> Vec<Annotation> {
     let carried: Vec<ElementId> = owned
         .iter()
@@ -879,7 +799,7 @@ fn annotations(ws: &mut Workspace, owned: &[ElementId]) -> Vec<Annotation> {
                 .iter()
                 .copied()
                 .filter_map(|setting| {
-                    let redefined = redefined(ws.model(), setting)?;
+                    let redefined = sysml_model::redefined(ws.model(), setting)?;
                     let name = ws.model().name(redefined)?.to_string();
                     Some((name, given(ws, setting)?))
                 })
@@ -905,25 +825,14 @@ fn constraints(ws: &Workspace, owned: &[ElementId], role: Role) -> Vec<String> {
                 .iter()
                 .copied()
                 .find(|&it| model.kind(it) == ElementKind::Expression)
-                .and_then(|it| written(model, it))
+                .and_then(|it| sysml_model::expression_text(model, it))
         })
         .collect()
 }
 
-/// The inherited feature a usage redefines.
-fn redefined(model: &sysml_model::Model, usage: ElementId) -> Option<ElementId> {
-    model.owned(usage).iter().copied().find_map(|child| {
-        (model.kind(child) == ElementKind::Redefinition)
-            .then(|| model.redefined_feature(child))
-            .flatten()
-    })
-}
-
-/// The state a machine starts in.
-///
-/// The model writes it as `entry; then dark;` -- an entry action with a
-/// succession out of it -- so it is neither the first state declared nor
-/// anything a state says about itself.
+/// The state a machine starts in. Written `entry; then dark;` -- an
+/// entry action with a succession out of it -- so it is neither the
+/// first state declared nor anything a state says of itself.
 fn initial_state(ws: &Workspace, owned: &[ElementId]) -> Option<String> {
     let model = ws.model();
     let entry = owned
@@ -966,40 +875,25 @@ fn acting(ws: &Workspace, owned: &[ElementId], role: Role) -> Option<String> {
 
 /// The result expression of a calculation or constraint, as written.
 fn expression_of(ws: &Workspace, id: ElementId) -> Option<String> {
-    let model = ws.model();
-    model
-        .owned(id)
-        .iter()
-        .copied()
-        .filter(|&child| {
-            model.kind(child) == ElementKind::Expression
-                && model.member_role(child) == Some(Role::Result)
-        })
-        .find_map(|child| written(model, child))
-}
-
-/// The text the model wrote for an expression, off the textual
-/// representation the builder keeps beside it.
-fn written(model: &sysml_model::Model, expression: ElementId) -> Option<String> {
-    model.owned(expression).iter().find_map(|&child| {
-        (model.kind(child) == ElementKind::TextualRepresentation)
-            .then(|| model.maybe(child, "body"))
-            .flatten()?
-            .as_str()
-            .map(str::to_string)
-    })
+    sysml_model::result_expression_text(ws.model(), id)
 }
 
 fn performed(ws: &mut Workspace, child: ElementId) -> Performed {
+    // `perform action :>> pause { ... }` narrows an inherited one and is
+    // written with no name and no type of its own: both are borrowed
+    // from what it redefines, the way a feature borrows them
+    let redefines = sysml_model::redefined(ws.model(), child);
     let of = ws
         .model()
         .type_of(child)
-        .or_else(|| redefined(ws.model(), child).and_then(|it| ws.model().type_of(it)));
+        .or_else(|| redefines.and_then(|it| ws.model().type_of(it)));
+    let borrowed = redefines.and_then(|it| ws.model().name(it));
     Performed {
         name: ws
             .model()
             .name(child)
-            .expect("picked by having a name")
+            .or(borrowed)
+            .expect("picked by having a name, its own or a borrowed one")
             .to_string(),
         performed: of.map(|it| ws.qualified_name_of(it)),
         documentation: ws.documentation_of(child),
@@ -1053,7 +947,9 @@ fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
     };
     let model = ws.model();
     let guard = match model.get(usage, "guardExpression") {
-        Some(Value::RefList(guards)) => guards.first().and_then(|&it| written(model, it)),
+        Some(Value::RefList(guards)) => guards
+            .first()
+            .and_then(|&it| sysml_model::expression_text(model, it)),
         _ => None,
     };
     let effect =
@@ -1120,11 +1016,9 @@ fn connection(ws: &mut Workspace, child: ElementId) -> Option<Connection> {
     })
 }
 
-/// The two ends of a connector, as the model names them.
-///
-/// The ends of a connector are the members it marks as ends, which is
-/// not the same as the plain features it owns: `connect a.b to c.d`
-/// owns two, and reading them by metaclass finds neither.
+/// The two ends of a connector, as the model names them: the members it
+/// marks as ends, which is not the same as the features it owns --
+/// `connect a.b to c.d` owns two, and neither is found by metaclass.
 fn joined(model: &sysml_model::Model, child: ElementId) -> Option<(String, String)> {
     let ends: Vec<String> = model
         .owned(child)

@@ -1,13 +1,12 @@
 //! Everything the toolchain does, to every file in the corpus.
 //!
-//! Each crate has its own corpus test, and each asks about its own
-//! concern. This asks the question none of them do -- does any of it
-//! fall over -- by running the whole set over all 403 files: resolve,
-//! export to JSON and read it back, draw the definition and browser
-//! views and every definition's internals, and format. Nothing may
-//! panic; the JSON must survive a round trip unchanged; the SVG must be
-//! balanced; and formatting must be idempotent, must keep every token,
-//! and must leave the library resolving to exactly what it did before.
+//! Each crate has its own corpus test asking about its own concern. This
+//! asks the one none of them do -- does any of it fall over -- by running
+//! the whole set over all 403 files: resolve, export to JSON and read it
+//! back, draw every view, and format. Nothing may panic; the JSON must
+//! survive a round trip unchanged; the SVG must be balanced; and
+//! formatting must be idempotent, keep every token, and leave the library
+//! resolving to exactly what it did.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;

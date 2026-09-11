@@ -1,43 +1,38 @@
 //! Name resolution and relationship reification.
 //!
 //! A [`Workspace`] holds any number of parsed files built into one shared
-//! [`Model`], all owned by a synthetic root namespace (the KerML global
-//! namespace, addressable as `$`). [`Workspace::resolve_all`] then resolves
+//! [`Model`], owned by a synthetic root namespace (the KerML global
+//! namespace, addressable as `$`). [`Workspace::resolve_all`] resolves
 //! every explicit typing (`: T`), specialization (`:>`), redefinition
-//! (`:>>`) and reference subsetting (`::>`) target and reifies the
-//! corresponding relationship elements ([`ElementKind::FeatureTyping`],
-//! [`ElementKind::Subclassification`], [`ElementKind::Subsetting`],
-//! [`ElementKind::Redefinition`], [`ElementKind::ReferenceSubsetting`]) into
-//! the model, with resolved element references as properties.
+//! (`:>>`) and reference subsetting (`::>`) target, and reifies the
+//! relationship elements for them into the model with resolved references
+//! as properties.
 //!
-//! It resolves the names written inside expressions too -- the body of a
-//! `require constraint { ... }`, the result of a `calc`, the value after
-//! `=`. The model keeps an expression as the text the author wrote rather
-//! than as a tree of elements, so those names are read off the syntax and
-//! looked up from the element the expression belongs to, which is the
-//! scope the language gives them.
+//! It resolves the names written inside expressions too -- a `require
+//! constraint { ... }` body, the result of a `calc`, the value after `=`.
+//! The model keeps an expression as the text its author wrote rather than
+//! as a tree, so those names are read off the syntax and looked up from
+//! the element the expression belongs to, which is the scope the language
+//! gives them.
 //!
-//! Lookup handles: member names and short names, ownership-scope walking,
+//! Lookup handles member and short names, ownership-scope walking,
 //! visibility (members default public, imports default private; only
 //! `public import` re-exports; `import all` overrides), imports (`A::B`,
-//! `A::*`, `A::**`, re-exports through import chains), aliases, inherited
-//! members through resolved specializations and typings (which also makes
-//! feature chains like `engine.mass` work), implicit semantic-library
-//! specializations (`part def` → `Parts::Part`, ...), user-defined keywords
-//! via SemanticMetadata (`#cause x` specializes the keyword's `baseType`),
+//! `A::*`, `A::**`, re-exports through chains), aliases, inherited members
+//! through resolved specializations and typings (which is what makes
+//! `engine.mass` work), implicit semantic-library specializations (`part
+//! def` to `Parts::Part`), user-defined keywords via SemanticMetadata,
 //! connector-end scoping, implicit `result` parameters, effective names of
 //! unnamed redefining features, and `$`-rooted qualified names.
 //!
 //! With the official standard library loaded, every reference in the
-//! library and in all official example models resolves (regression-tested).
+//! library and in all official example models resolves.
 //!
 //! # Where things are
 //!
-//! This file holds the [`Workspace`] itself -- what it is made of, what
-//! it caches, and the questions an editor asks it: where an element is,
-//! what is visible at a point, what a name is spelled from the root,
-//! what is wrong with a file. The work of answering a written name is
-//! next door:
+//! This file holds the [`Workspace`] itself -- what it is made of, what it
+//! caches, and the questions an editor asks it. The work of answering a
+//! written name is next door:
 //!
 //! | Module | What it does |
 //! | --- | --- |
@@ -52,10 +47,8 @@
 //! | `rules` | The constraints the specification states, evaluated |
 //! | `ocl` | Reading those constraints, which the metamodel states in OCL |
 //!
-//! Every one of them is `impl Workspace` over the fields declared here,
-//! so the split is for a reader and costs nothing at run time. It was
-//! one file of six and a half thousand lines, of which a single impl
-//! block was four and a half.
+//! Every one is `impl Workspace` over the fields declared here, so the
+//! split is for a reader and costs nothing at run time.
 
 // Nothing here needs `unsafe`, and saying so is what keeps it that way.
 #![forbid(unsafe_code)]
@@ -285,8 +278,8 @@ impl ImportScope {
     }
 }
 
-/// Any number of parsed files, built into one model and resolved
-/// against each other.
+/// Any number of parsed files, built into one model and resolved against
+/// each other.
 ///
 /// Everything is owned by a synthetic root namespace -- the KerML global
 /// namespace, which a model addresses as `$`. Files are added with
@@ -294,10 +287,9 @@ impl ImportScope {
 /// [`Workspace::resolve_all`]; what is wrong with the result is
 /// [`Workspace::diagnose`].
 ///
-/// A workspace caches a great deal about the model it holds, and
-/// [`Clone`] is how a copy is taken to ask questions of -- the language
-/// server clones the resolved standard library rather than reading it
-/// again for every project.
+/// A workspace caches a great deal, and [`Clone`] is how a copy is taken
+/// to ask questions of -- the language server clones the resolved standard
+/// library rather than reading it again for every project.
 pub struct Workspace {
     model: Model,
     root: ElementId,
@@ -490,22 +482,18 @@ impl Workspace {
         }
     }
 
-    /// Parse `text` (dialect chosen from the file name's extension) and add
-    /// it to the workspace. Returns the file index.
+    /// Parse `text` (dialect chosen from the file name's extension) and add it
+    /// to the workspace. Returns the file index.
     ///
-    /// The same file read twice is one file. A caller reaching one file
-    /// two ways -- through a link, or a URL spelled two ways -- would
-    /// otherwise declare everything in it twice, and the second copy
-    /// would lose every lookup to the first, silently, in a model that
+    /// The same file read twice is one file: a caller reaching one file two
+    /// ways would otherwise declare everything in it twice, and the second
+    /// copy would lose every lookup to the first, silently, in a model that
     /// still resolves.
     ///
-    /// A name added again over *different* text is a different
-    /// question, and still adds a second file rather than replacing the
-    /// first: a workspace hands element ids out to its callers, and
-    /// taking a file back would leave every id from it pointing at
-    /// nothing. A front end that reopens a file -- the language server,
-    /// when a buffer replaces what is on disk -- builds the workspace
-    /// again instead.
+    /// A name added again over *different* text still adds a second file
+    /// rather than replacing the first: a workspace hands element ids to its
+    /// callers, and taking a file back would leave every id from it pointing
+    /// at nothing. A front end that reopens a file builds the workspace again.
     pub fn add_file(&mut self, name: impl Into<String>, text: &str) -> usize {
         let name = name.into();
         if let Some(same) = self
@@ -644,22 +632,19 @@ impl Workspace {
         }
     }
 
-    /// [`Workspace::findings`], and the specification's own constraints
-    /// after them.
+    /// [`Workspace::findings`], and the specification's own constraints after
+    /// them.
     ///
-    /// The order is the point, and so is the stop. A constraint asked of
-    /// a model with a dangling reference answers about the hole and not
-    /// about the model: one undeclared type in a five-line file drew
-    /// four complaints of its own, none of them a second thing to fix.
-    /// The constraints are written against the standard library too, so
-    /// a workspace loaded without it is not asked them either.
+    /// The order is the point, and so is the stop. A constraint asked of a
+    /// model with a dangling reference answers about the hole: one undeclared
+    /// type in a five-line file drew four complaints, none of them a second
+    /// thing to fix. The constraints are written against the standard library
+    /// too, so a workspace loaded without it is not asked them either.
     ///
-    /// That rule was written out three times -- once in the command
-    /// line, once in the language server, once nowhere at all in the MCP
-    /// server, which asked them of anything. Reading the same paragraph
-    /// in two places and not the third is how the third stayed wrong, so
-    /// the decision is made here and the front ends only say what came
-    /// of it.
+    /// That rule was written out three times -- once in the command line, once
+    /// in the language server, and nowhere at all in the MCP server, which
+    /// asked them of anything. The decision is made here and the front ends
+    /// say what came of it.
     ///
     /// `files` empty means every file, as it does for `findings`.
     pub fn diagnose(&mut self, files: &[usize]) -> Diagnosis {
@@ -685,18 +670,15 @@ impl Workspace {
         }
     }
 
-    /// Root packages declared under a name the standard library has
-    /// already taken.
+    /// Root packages declared under a name the standard library has taken.
     ///
-    /// Every file's outermost packages are members of one shared root
-    /// namespace, so a `package Requirements` of one's own and the
-    /// library's `Requirements` are two members of it under one name.
-    /// Resolution keeps both halves working by reading each name on the
-    /// side of the library boundary it was written on -- but the name
-    /// then means one thing in the model and another in the library,
-    /// and nothing in the file says so. Two packages of one's own
-    /// sharing a name are not reported: the official examples do it
-    /// deliberately, writing the same model twice over.
+    /// Every file's outermost packages are members of one shared root, so a
+    /// `package Requirements` of one's own and the library's are two members
+    /// under one name. Resolution keeps both halves working by reading each
+    /// name on the side of the library boundary it was written on -- but the
+    /// name then means one thing in the model and another in the library, and
+    /// nothing in the file says so. Two packages of one's own sharing a name
+    /// are not reported: the official examples do it deliberately.
     fn library_collisions(&self) -> Vec<Finding> {
         let named: Vec<(ElementId, &str)> = self
             .model
@@ -913,19 +895,17 @@ impl Workspace {
     }
 
     /// The named elements `query` finds, best first: what was asked for
-    /// exactly, then what starts with it, then what merely contains it,
-    /// and within each the shorter name before the longer. Searching for
-    /// `Natural` and being handed two SI units before
-    /// `ScalarValues::Natural` is the difference between a useful answer
-    /// and one that has to be read through.
+    /// exactly, then what starts with it, then what merely contains it, and
+    /// within each the shorter name first. Searching `Natural` and being
+    /// handed two SI units before `ScalarValues::Natural` is the difference
+    /// between a useful answer and one to be read through.
     ///
-    /// An empty query finds everything, which is what a symbol picker
-    /// opens with. Asked twice, it answers the same: names that tie are
-    /// left in the order the model holds them.
+    /// An empty query finds everything, which is what a symbol picker opens
+    /// with. Names that tie keep the order the model holds them in.
     ///
-    /// Both the language server's symbol search and the MCP server's
-    /// library search are this; they used to sort differently, and only
-    /// one of them put an exact match first.
+    /// The language server's symbol search and the MCP server's library search
+    /// are both this; they used to sort differently, and only one put an exact
+    /// match first.
     pub fn search_names(&self, query: &str, limit: usize) -> Vec<ElementId> {
         let needle = query.to_lowercase();
         let mut found: Vec<(u8, usize, ElementId)> = self
@@ -949,24 +929,19 @@ impl Workspace {
         found.into_iter().map(|(_, _, id)| id).collect()
     }
 
-    /// The named elements whose *documentation* `query` finds, best
-    /// first: the whole of it as a phrase, then its words found apart,
-    /// and within each the shorter documentation before the longer -- a
-    /// paragraph that is largely about what was asked for before one
-    /// that mentions it in passing.
+    /// The named elements whose *documentation* `query` finds, best first: the
+    /// whole of it as a phrase, then its words found apart, and within each
+    /// the shorter documentation first -- a paragraph largely about what was
+    /// asked for before one that mentions it in passing.
     ///
-    /// This is the question a search over names cannot answer. Somebody
-    /// transcribing a specification has the words the specification
-    /// used, not the words the library used: a sentence about "the
-    /// resistance a fluid offers to flow" is asking for
-    /// `ISQ::DynamicViscosityValue`, which shares not one word with it
-    /// -- but the library says "viscosity" and "fluid" in the
-    /// documentation of the thing it means.
+    /// This is what a search over names cannot answer. Somebody transcribing a
+    /// specification has the words the specification used: a sentence about
+    /// "the resistance a fluid offers to flow" is asking for
+    /// `ISQ::DynamicViscosityValue`, which shares not one word with it -- but
+    /// the library says "viscosity" and "fluid" in its documentation.
     ///
-    /// An empty query finds nothing rather than everything: every
-    /// documented element in the library is not an answer to a question
-    /// nobody asked, and it is the answer a name search gives for the
-    /// same query only because a symbol picker opens with one.
+    /// An empty query finds nothing rather than everything: every documented
+    /// element in the library is not an answer to a question nobody asked.
     pub fn search_documentation(&self, query: &str, limit: usize) -> Vec<ElementId> {
         let needle = query.trim().to_lowercase();
         if needle.is_empty() {
@@ -995,22 +970,19 @@ impl Workspace {
 
     /// What a name that resolved to nothing might have meant.
     ///
-    /// Two answers, and telling them apart is the whole point. A name
-    /// the workspace declares somewhere is not a wrong name: it is a
-    /// right one that nothing brought into scope, and what it wants is
-    /// an import. A name nothing declares is a wrong one, and what it
-    /// wants is the nearest thing that is declared.
+    /// Two answers, and telling them apart is the whole point. A name the
+    /// workspace declares somewhere is a right one that nothing brought into
+    /// scope, and what it wants is an import. A name nothing declares is a
+    /// wrong one, and what it wants is the nearest thing declared.
     ///
-    /// `attribute capacity : VolumeValue;` and `attribute temp :
-    /// Temperature;` are reported the same way by resolution -- two
-    /// names that found nothing -- and are not the same mistake at all:
-    /// the first is `ISQ::VolumeValue` un-imported, the second is
-    /// `TemperatureValue` misremembered. A reader told only that both
-    /// resolved to nothing has to work that out one name at a time.
+    /// `attribute capacity : VolumeValue;` and `attribute temp : Temperature;`
+    /// are reported the same way by resolution and are not the same mistake:
+    /// the first is `ISQ::VolumeValue` un-imported, the second
+    /// `TemperatureValue` misremembered.
     ///
-    /// Asked for several names at once because the walk over every
-    /// declared name is what costs: sixty thousand of them with the
-    /// standard library loaded, once rather than once per name.
+    /// Asked for several names at once because the walk over every declared
+    /// name is what costs: sixty thousand with the library loaded, once rather
+    /// than once per name.
     pub fn suggestions(&self, wanted: &[String]) -> Vec<Suggestion> {
         // the last segment is what a name answers to; `ISQ::Volume`
         // missed because of `Volume`, not because of `ISQ`
@@ -1037,28 +1009,21 @@ impl Workspace {
                     elsewhere[at].push(id);
                     continue;
                 }
-                // A declared name that holds what was asked for --
-                // `TemperatureValue` for `Temperature`. The other way
-                // about is worth offering too, since a name may be
-                // asked for with more on it than the library gives it,
-                // but only where what is declared is a real word and
-                // most of what was asked: otherwise every one-letter
-                // parameter in the library matches every query that
-                // happens to contain its letter, and the answer to
-                // `VolumeValue` is `L`, `M`, `o`, `u`, `v`.
+                // A declared name that holds what was asked for -- `TemperatureValue` for
+                // `Temperature`. The other way about is worth offering too, but only
+                // where what is declared is a real word and most of what was asked:
+                // otherwise every one-letter parameter in the library matches every query
+                // containing its letter, and the answer to `VolumeValue` is `L`, `M`,
+                // `o`, `u`, `v`.
                 let holds = spelled.contains(needle);
                 let held = spelled.len() >= 4
                     && needle.contains(&spelled)
                     && spelled.len() * 2 >= needle.len();
-                // Ranked the way `search_names` ranks, and for the
-                // same reason: a name that *begins* with what was asked
-                // is the one that was probably meant.
-                // `TemperatureValue` before `debyeTemperature`, and
-                // both before what merely held the query.
-                // And a name that is neither -- because the mistake was
-                // a letter, not a word. `Wheeel` holds no declared name
-                // and is held by none, and is the commonest kind of
-                // wrong name there is.
+                // Ranked the way `search_names` ranks, and for the same reason: a name
+                // that *begins* with what was asked is the one probably meant.
+                // And a name that is neither, because the mistake was a letter rather
+                // than a word: `Wheeel` holds no declared name and is held by none, and
+                // is the commonest kind of wrong name there is.
                 let (rank, off) = match (holds, held) {
                     (true, _) if spelled.starts_with(needle) => (0, 0),
                     (true, _) => (1, 0),
@@ -1250,39 +1215,33 @@ impl Workspace {
     /// Whether the standard library is part of this workspace.
     ///
     /// The specification's constraints are written against it: they name
-    /// `Base::Anything`, `Performances::Performance`,
-    /// `ScalarValues::Boolean`. Asked of a model loaded without the
-    /// library they answer about what is missing rather than about the
-    /// model -- `case def Trip { objective placed; }` draws four
-    /// complaints on its own and none at all with the library beside it,
-    /// which is a false alarm and not a finding. `Base::Anything` is
-    /// what everything else specializes, and it is there exactly when
-    /// the library is.
+    /// `Base::Anything`, `Performances::Performance`, `ScalarValues::Boolean`.
+    /// Asked of a model loaded without the library they answer about what is
+    /// missing rather than about the model -- `case def Trip { objective
+    /// placed; }` draws four complaints on its own and none with the library
+    /// beside it. `Base::Anything` is there exactly when the library is.
     pub fn has_standard_library(&mut self) -> bool {
         self.named_globally("Base::Anything").is_some()
     }
 
     /// The elements that name `of` at the association end `end`.
     ///
-    /// `Feature::typing` is "the FeatureTypings for which a certain
-    /// Feature is the typedFeature": a property no metaclass declares,
-    /// because the association that has it owns the end. The model keeps
-    /// the relationship, so the answer is found by looking the other way
-    /// about -- and read one at a time each of those is a scan of every
-    /// element, walked over every type a feature reaches, which is the
-    /// difference between a check taking seconds and a quarter of a
-    /// minute.
+    /// `Feature::typing` is "the FeatureTypings for which a certain Feature is
+    /// the typedFeature": a property no metaclass declares, because the
+    /// association that has it owns the end. The model keeps the relationship,
+    /// so the answer is found the other way about -- and read one at a time
+    /// each is a scan of every element, walked over every type a feature
+    /// reaches, which is the difference between a check taking seconds and a
+    /// quarter of a minute.
     ///
-    /// So it is indexed once, for every such end at a time. `fill` is
-    /// what builds that index; which ends there are is the metamodel's
-    /// business, and is stated where the constraints are read.
+    /// So it is indexed once, for every such end at a time. `fill` builds that
+    /// index; which ends there are is the metamodel's business, stated where
+    /// the constraints are read.
     ///
-    /// The model grows while the constraints are checked -- a derivation
-    /// may reify what it reads -- so the index carries the size it was
-    /// built for and is built again when that has moved. Stamping it
-    /// here rather than at the call site is what stops the two from
-    /// disagreeing: the caller cannot record a generation it did not
-    /// index.
+    /// The model grows while the constraints are checked -- a derivation may
+    /// reify what it reads -- so the index carries the size it was built for
+    /// and is built again when that has moved. Stamping it here rather than at
+    /// the call site is what stops the two disagreeing.
     pub(crate) fn reverse_ends(
         &mut self,
         fill: impl FnOnce(&Model) -> HashMap<(&'static str, ElementId), Vec<ElementId>>,
@@ -1353,14 +1312,12 @@ impl Workspace {
 
     /// The `doc` body attached to an element, if any, as prose.
     ///
-    /// What the parser keeps is the inside of the comment, margin and
-    /// all: a `doc /* ... */` written over several lines arrives as
-    /// `"* Two states, and the LED follows\n         * which one is
-    /// current"`. The `*` down the left is decoration and so is the
-    /// indentation that carried it, and every reader wanting the
-    /// sentence had to know that -- the diagrams stripped it, hover and
-    /// the MCP server did not, and a code generator handed it wrote the
-    /// asterisks into a docstring.
+    /// What the parser keeps is the inside of the comment, margin and all: a
+    /// `doc /* ... */` over several lines arrives as `"* Two states, and the
+    /// LED follows\n         * which one is current"`. The `*` down the left
+    /// is decoration and so is the indentation that carried it, and every
+    /// reader wanting the sentence had to know that -- the diagrams stripped
+    /// it, hover and the MCP server did not.
     pub fn documentation_of(&self, elem: ElementId) -> Option<String> {
         self.documented(elem).map(prose)
     }
@@ -1394,15 +1351,14 @@ fn prose(body: &str) -> String {
 /// How many letters apart two names are, given up on once they are more
 /// than `most` apart.
 ///
-/// A name that resolved to nothing is usually a name that was nearly
-/// written: a letter doubled, one missed, two the other way round.
-/// Substring matching finds none of those -- `Wheeel` neither holds
-/// `Wheel` nor is held by it -- and this is what does, the way rustc's
-/// own suggestions do it.
+/// A name that resolved to nothing is usually one that was nearly written:
+/// a letter doubled, one missed, two the other way round. Substring
+/// matching finds none of those -- `Wheeel` neither holds `Wheel` nor is
+/// held by it -- and this does, the way rustc's own suggestions do.
 ///
 /// A row is given up as soon as every way through it costs more than
-/// `most`, which is what keeps a walk over sixty thousand declared names
-/// worth doing: almost all of them are abandoned on their first letter.
+/// `most`, which is what makes a walk over sixty thousand names worth
+/// doing: almost all are abandoned on their first letter.
 fn within(name: &str, wanted: &str, most: usize) -> Option<usize> {
     let name: Vec<char> = name.chars().collect();
     let wanted: Vec<char> = wanted.chars().collect();
@@ -1487,10 +1443,9 @@ pub(crate) fn implied_bases(kind: ElementKind) -> Vec<&'static str> {
 ///
 /// `validateConnectorBinarySpecialization` -- "if a Connector has more
 /// than two connectorEnds, then it must not specialize, directly or
-/// indirectly, the Association BinaryLink" -- and
-/// `validateAssociationBinarySpecialization` says the same of an
-/// association. Each of these is listed in front of what it narrows, so
-/// dropping it leaves the one an n-ary relationship reaches.
+/// indirectly, the Association BinaryLink" -- and the same of an
+/// association. Each is listed in front of what it narrows, so dropping it
+/// leaves the one an n-ary relationship reaches.
 pub(crate) const BINARY: [&str; 5] = [
     "Links::BinaryLink",
     "Objects::BinaryLinkObject",
@@ -1551,15 +1506,12 @@ pub(crate) fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         // so a viewpoint was specializing nothing at all.
         ViewpointDefinition | ViewpointUsage => &["Views::ViewpointCheck"],
         RenderingDefinition | RenderingUsage => &["Views::Rendering"],
-        // The library says which is which in as many words:
-        // "MetadataItem is the base type of all MetadataDefinitions",
-        // and "metadataItems is the base feature of all
-        // MetadataUsages". Given the type, a usage was typed by a
-        // second metaclass beside the one it names -- a
-        // `MetadataDefinition` is a `Metaclass` -- and
-        // `validateMetadataFeatureMetaclass`, which asks for exactly
-        // one, reported seventy-two sound models of the corpus once the
-        // implied relationships were written down.
+        // The library says which is which in as many words: "MetadataItem is the
+        // base type of all MetadataDefinitions", and "metadataItems is the base
+        // feature of all MetadataUsages". Given the type, a usage was typed by a
+        // second metaclass beside the one it names -- a `MetadataDefinition` is a
+        // `Metaclass` -- and `validateMetadataFeatureMetaclass`, which asks for
+        // exactly one, reported seventy-two sound models.
         MetadataDefinition => &["Metadata::MetadataItem"],
         MetadataUsage => &["Metadata::metadataItems"],
         OccurrenceDefinition | OccurrenceUsage | EventOccurrenceUsage => {
@@ -1711,13 +1663,11 @@ mod tests {
 
     /// A report points at what a reader can go and look at.
     ///
-    /// Most of a model was never written down: of the official corpus's
-    /// 109616 elements only 30235 have syntax of their own, and the
-    /// other 79380 -- an implied specialization, a reified connector
-    /// end, a multiplicity standing for a bound -- are shown where
-    /// whatever owns them was written. The one element of a workspace
-    /// that is under no file is its root, and nothing a constraint is
-    /// asked of is that.
+    /// Most of a model was never written down: of the official corpus's 109616
+    /// elements only 30235 have syntax of their own, and the other 79380 -- an
+    /// implied specialization, a reified connector end, a multiplicity -- are
+    /// shown where whatever owns them was written. The one element under no
+    /// file is the root, and nothing a constraint is asked of is that.
     #[test]
     fn what_was_never_written_is_shown_where_its_owner_was() {
         let (ws, _) = resolved_workspace(&[(
@@ -1758,17 +1708,16 @@ mod tests {
         assert_eq!(ws.element_place(root), None);
     }
 
-    /// `subset g subsets f;` relates the same two features as `feature
-    /// g :> f;`, with the relationship written as the statement instead
-    /// of reified under a declaration. Read only where a declaration
-    /// carries it, the statement form reached the model relating nothing
-    /// to nothing.
+    /// `subset g subsets f;` relates the same two features as `feature g :>
+    /// f;`, with the relationship written as the statement instead of reified
+    /// under a declaration. Read only where a declaration carries it, the
+    /// statement form reached the model relating nothing to nothing.
     ///
-    /// `disjoining d disjoint A from B;` writes its two types in a shape
-    /// of its own -- the name first, which leaves `disjoint A` a part
-    /// and `B` the bare operand after `from` -- and is read by position
-    /// either way. The last two statements miss on either side, which
-    /// leaves that end unsaid rather than guessed.
+    /// `disjoining d disjoint A from B;` writes its two types in a shape of
+    /// its own -- the name first, which leaves `disjoint A` a part and `B` the
+    /// bare operand after `from` -- and is read by position either way. The
+    /// last two statements miss on either side, which leaves that end unsaid
+    /// rather than guessed.
     #[test]
     fn a_relationship_written_as_a_statement_says_what_it_relates() {
         let (ws, stats) = resolved_workspace(&[(
@@ -2069,15 +2018,13 @@ mod tests {
         assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
     }
 
-    /// A whole name is answered however many elements share its last
-    /// segment.
+    /// A whole name is answered however many elements share its last segment.
     ///
-    /// The library types the standard implies are found by their whole
-    /// name, and the last segment of one is often what a model calls its
-    /// own features: `x` names two hundred and seventy elements of the
-    /// published corpus by itself. Taking only the first few hundred
-    /// candidates left the answer to how many other things happened to
-    /// be called the same.
+    /// The library types the standard implies are found by their whole name,
+    /// and the last segment of one is often what a model calls its own
+    /// features: `x` names two hundred and seventy elements of the published
+    /// corpus by itself. Taking only the first few hundred candidates left the
+    /// answer to how many other things happened to be called the same.
     #[test]
     fn a_name_shared_by_a_crowd_still_answers() {
         let crowd = (0..600)

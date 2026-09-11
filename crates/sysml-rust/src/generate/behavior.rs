@@ -1,13 +1,11 @@
 //! What a model says happens, written as Rust that does it.
 //!
-//! A `calc def` becomes a function and a method, with a result
-//! expression translated where it is within the translated subset and a
-//! `todo!` naming what the model wrote where it is not. A `state def`
-//! becomes a state machine -- an enum of states and a step that reads an
-//! event -- with guards translated where they read the event's payload.
-//! An `action def` whose dataflow the model wired end to end becomes the
-//! body that performs it; one it did not becomes a trait for a person to
-//! write.
+//! A `calc def` becomes a function and a method, with its result
+//! expression translated where it is within the subset and a `todo!`
+//! naming what the model wrote where it is not. A `state def` becomes a
+//! state machine -- an enum of states and a step that reads an event. An
+//! `action def` whose dataflow the model wired end to end becomes the body
+//! that performs it; one it did not becomes a trait for a person to write.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -617,17 +615,16 @@ impl<'a> Generator<'a> {
         let name = self.model.name(usage)?.to_string();
         Some((name, format!("{}State", type_ident(self.model.name(def)?))))
     }
-    /// An action definition's body, compiled out of what the model says
-    /// its parts are and how they are wired: the subactions in the order
-    /// the successions put them in, each called with what the flows and
-    /// bindings feed it, and the result read off the flows into the
-    /// definition's own `out` parameters.
+    /// An action definition's body, compiled out of what the model says its
+    /// parts are and how they are wired: the subactions in the order the
+    /// successions put them in, each called with what the flows and bindings
+    /// feed it, and the result read off the flows into the definition's own
+    /// `out` parameters.
     ///
-    /// It is all-or-nothing. A dataflow with a gap in it -- an input
-    /// nothing feeds, a result nothing produces, an order that does not
-    /// exist -- is not written half-way; the trait method stays open,
-    /// and what stopped it is named, because a modeller who is one flow
-    /// short should not have to guess which one.
+    /// It is all-or-nothing. A dataflow with a gap in it is not written
+    /// half-way; the trait method stays open and what stopped it is named,
+    /// because a modeller who is one flow short should not have to guess
+    /// which.
     fn action_body(&self, def: ElementId) -> Result<Body, String> {
         let model = self.model;
         let mut steps: Vec<(ElementId, ElementId)> = Vec::new();

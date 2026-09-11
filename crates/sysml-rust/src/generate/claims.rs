@@ -1,11 +1,10 @@
 //! What the model claims about itself, written where a reader will meet
 //! it.
 //!
-//! A requirement becomes documentation on what satisfies it and a test
-//! for the verification case that answers for it -- `#[ignore]` where the
+//! A requirement becomes documentation on what satisfies it and a test for
+//! the verification case that answers for it -- `#[ignore]` where the
 //! model names no such case, so the gap is a test that says it is a gap
-//! rather than a silence. An `assert constraint` becomes an assertion,
-//! and a decomposition becomes the doc that says what a whole is made of.
+//! rather than a silence. An `assert constraint` becomes an assertion.
 
 use sysml_model::{ElementId, ElementKind, Value};
 

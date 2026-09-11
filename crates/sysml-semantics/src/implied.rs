@@ -1,17 +1,16 @@
-//! The relationships the notation leaves for the reader to infer, put
-//! into the model.
+//! The relationships the notation leaves for the reader to infer, put into
+//! the model.
 //!
-//! `connect a to b;` writes two ends and no redefinition, but the
-//! standard says each end redefines the one its association declares,
-//! and a constraint written about `endFeature` is asked of a model that
-//! holds them. The same goes for what an end participates in, the cross
-//! subsetting between the two ends of an association, and the `result`
-//! a calculation returns without saying so.
+//! `connect a to b;` writes two ends and no redefinition, but the standard
+//! says each end redefines the one its association declares, and a
+//! constraint about `endFeature` is asked of a model that holds them. The
+//! same goes for what an end participates in, the cross subsetting between
+//! two ends, and the `result` a calculation returns without saying so.
 //!
-//! Nothing here reads a name that was written. Each of these is a
-//! consequence of what the model already says, materialised so that
-//! everything downstream -- the constraints, the interchange format,
-//! the diagram -- can read it off rather than infer it again.
+//! Nothing here reads a name that was written: each is a consequence of
+//! what the model already says, materialised so that the constraints, the
+//! interchange format and the diagram read it off rather than infer it
+//! again.
 
 use sysml_model::{ElementId, ElementKind, Role, Value};
 
@@ -21,15 +20,13 @@ use crate::{implied_bases, reaches, Workspace, BINARY, OWNING_ENDS};
 impl Workspace {
     /// The redefinition an end declared beside a supertype's implies.
     ///
-    /// "If a Feature has isEnd = true and an owningType that is not
-    /// empty, then, for each direct supertype of its owningType, it
-    /// must redefine the endFeature at the same position, if any."
-    /// Almost nothing writes it: `connect a to b` names no end at all,
-    /// and the binary connection it specializes is reached implicitly.
-    /// Read without it every such connector has four ends -- the two it
-    /// was written with and the two it inherits -- and "a connector
-    /// specializing a binary one is binary" is true of none of the
-    /// eight hundred in the corpus.
+    /// "If a Feature has isEnd = true and an owningType that is not empty,
+    /// then, for each direct supertype of its owningType, it must redefine the
+    /// endFeature at the same position, if any." Almost nothing writes it:
+    /// `connect a to b` names no end at all. Read without it every such
+    /// connector has four ends -- the two written and the two inherited -- and
+    /// "a connector specializing a binary one is binary" is true of none of
+    /// the eight hundred in the corpus.
     pub(crate) fn imply_end_redefinitions(&mut self) {
         for elem in self.model.ids().collect::<Vec<_>>() {
             let mine = self.own_ends(elem);
@@ -151,21 +148,18 @@ impl Workspace {
     /// Every end of an association or a connector subsets
     /// `Links::Link::participant`.
     ///
-    /// "If a Feature has isEnd = true and an owningType that is an
-    /// Association or a Connector, then it must directly or indirectly
-    /// specialize `Links::Link::participant` from the Kernel Semantic
-    /// Library", and the semantics section writes an N-ary association
-    /// out "with implied relationships included" as one `end feature
-    /// eN[1..1] subsets Links::Link::participant;` per end.
+    /// "If a Feature has isEnd = true and an owningType that is an Association
+    /// or a Connector, then it must directly or indirectly specialize
+    /// `Links::Link::participant`", and the semantics section writes an N-ary
+    /// association out with one `end feature eN[1..1] subsets
+    /// Links::Link::participant;` per end.
     ///
-    /// The first two ends reach it already, through the `source` and
-    /// `target` they are made to redefine -- the library writes both as
-    /// `subsets participant`. A third end redefines nothing, because
-    /// nothing above it has a third, and without this it has no
-    /// supertype and so no type at all: `abstract connection def C {
-    /// end end1; end end2; end end3; }` of `ConnectionTest.sysml` was
-    /// the one model in the corpus that `validateAssociationEndTypes`
-    /// reported, and it is sound.
+    /// The first two ends reach it through the `source` and `target` they
+    /// redefine. A third redefines nothing, because nothing above it has a
+    /// third, and without this it has no supertype and so no type:
+    /// `ConnectionTest.sysml`'s three-ended `abstract connection def C` was
+    /// the one model in the corpus `validateAssociationEndTypes` reported, and
+    /// it is sound.
     pub(crate) fn imply_end_participation(&mut self) {
         let Some(participant) = self.named_globally("Links::Link::participant") else {
             return;
@@ -195,14 +189,11 @@ impl Workspace {
     }
     /// The subsetting an owned cross feature implies.
     ///
-    /// "If this Feature is the ownedCrossFeature of an end Feature,
-    /// then, for any end Feature that is redefined by the owning end
-    /// Feature of this Feature, this Feature must subset the
-    /// crossFeature of the redefined end Feature, if this exists."
-    /// Nothing writes it down: the association declares the cross
-    /// feature and the redefinition and leaves what holds between them
-    /// to the tool, and `validateFeatureCrossFeatureSpecialization` is
-    /// the specification asking for it back.
+    /// "If this Feature is the ownedCrossFeature of an end Feature, then, for
+    /// any end Feature that is redefined by the owning end Feature of this
+    /// Feature, this Feature must subset the crossFeature of the redefined end
+    /// Feature, if this exists." The association declares the cross feature and
+    /// the redefinition and leaves what holds between them to the tool.
     pub(crate) fn imply_cross_subsettings(&mut self) {
         for elem in self.model.ids().collect::<Vec<_>>() {
             let Some(mine) = self.owned_cross_feature(elem) else {
@@ -242,12 +233,11 @@ impl Workspace {
     }
     /// The cross feature an end owns, where it wrote one.
     ///
-    /// `ownedCrossFeature()` is "the first ownedMember of the Feature
-    /// that is a Feature, but not a Multiplicity or a MetadataFeature,
-    /// and whose owningMembership is not a FeatureMembership". The
-    /// notation writes that two ways, and both are read here from what
-    /// was written: `member feature inCart;` inside the end, and `end
-    /// inCart[0..1] feature cart : ShoppingCart;` in front of it.
+    /// `ownedCrossFeature()` is "the first ownedMember of the Feature that is
+    /// a Feature, but not a Multiplicity or a MetadataFeature, and whose
+    /// owningMembership is not a FeatureMembership". The notation writes it
+    /// two ways, and both are read here: `member feature inCart;` inside the
+    /// end, and `end inCart[0..1] feature cart : ShoppingCart;` in front.
     fn owned_cross_feature(&self, elem: ElementId) -> Option<ElementId> {
         if !self.model.flag(elem, "isEnd") {
             return None;
@@ -277,17 +267,15 @@ impl Workspace {
         // the second step of
         self.model.chaining_feature(crossed).get(1).copied()
     }
-    /// A feature that redefines an end is an end, and an end is not
-    /// composite.
+    /// A feature that redefines an end is an end, and an end is not composite.
     ///
-    /// `end` is written once: the corpus writes it on the outer feature
-    /// and nests redefinitions of it without repeating the keyword, and
-    /// the standard says as much --
-    /// `validateRedefinitionEndConformance` holds a feature redefining
-    /// an end to being one, and
-    /// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` holds
-    /// an end to not being composite. Redefinitions are resolved by
-    /// now, so this is where the two can be said.
+    /// `end` is written once: the corpus writes it on the outer feature and
+    /// nests redefinitions without repeating the keyword.
+    /// `validateRedefinitionEndConformance` holds a feature redefining an end
+    /// to being one, and
+    /// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` holds an end
+    /// to not being composite. Redefinitions are resolved by now, so this is
+    /// where both can be said.
     pub(crate) fn carry_ends(&mut self) {
         loop {
             let mut carried = false;
@@ -320,20 +308,17 @@ impl Workspace {
     /// Reify the implied specializations resolution reasons with, as the
     /// relationship elements the standard stores.
     ///
-    /// Every definition and usage inherits from a semantic-library base --
-    /// a `part def` from `Parts::Part`, a feature from `Base::things`, an
-    /// element under a user-defined `#keyword` from that keyword's base --
-    /// and resolution has always used those bases without materializing
-    /// them. This pass writes each one the model does not already reach
-    /// explicitly as an owned `Subclassification` (classifiers) or
-    /// `Subsetting` (features) with `isImplied` set, the way the standard
-    /// interchanges them. Elements that gained one are marked
+    /// Every definition and usage inherits from a semantic-library base -- a
+    /// `part def` from `Parts::Part`, a feature from `Base::things` -- and
+    /// resolution has always used those without materializing them. This pass
+    /// writes each one the model does not already reach as an owned
+    /// `Subclassification` or `Subsetting` with `isImplied` set, the way the
+    /// standard interchanges them, and marks what gained one
     /// `isImpliedIncluded`.
     ///
-    /// Call after [`resolve_all`](Workspace::resolve_all); bases that do
-    /// not resolve (no library loaded) are skipped. Running the pass again
-    /// adds nothing: what the first run wrote is reachable now. Returns
-    /// how many relationships were written.
+    /// Call after [`resolve_all`](Workspace::resolve_all); bases that do not
+    /// resolve are skipped, and running it again adds nothing. Returns how
+    /// many relationships were written.
     pub fn materialize_implied(&mut self) -> usize {
         let mut written = 0;
         for elem in self.model.ids().collect::<Vec<_>>() {
@@ -429,14 +414,11 @@ impl Workspace {
     }
     /// The redefinition a declared result parameter implies.
     ///
-    /// `abstract function LiteralEvaluation specializes Evaluation {
-    /// return : ScalarValue[1]; }` -- the library writes no `redefines`,
-    /// and the standard says it does not have to: a result parameter of
-    /// a function that specializes another redefines that one's. Without
-    /// the redefinition the specializing function has two result
-    /// parameters, its own and the one it inherits, and "a function has
-    /// exactly one" is true of none of the five hundred in the corpus
-    /// that declare one.
+    /// The library writes no `redefines`, and the standard says it does not
+    /// have to: a result parameter of a function that specializes another
+    /// redefines that one's. Without it the specializing function has two
+    /// result parameters, and "a function has exactly one" is true of none of
+    /// the five hundred in the corpus that declare one.
     fn imply_return_redefinitions(&mut self) -> usize {
         let mut written = 0;
         for elem in self.model.ids().collect::<Vec<_>>() {

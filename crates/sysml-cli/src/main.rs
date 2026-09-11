@@ -20,11 +20,9 @@ fn parse_file(path: &Path, text: &str) -> sysml_syntax::Parse {
 /// What `--version` prints.
 ///
 /// The standard library moves with the specification, so which release a
-/// model was resolved against is part of what produced an answer. A
-/// version that names only this tool cannot be used to reproduce one.
-///
-/// Built once rather than `concat!`ed, because the release is a `const`
-/// in another crate and `concat!` takes literals.
+/// model was resolved against is part of what produced an answer. Built
+/// once rather than `concat!`ed: the release is a `const` in another crate
+/// and `concat!` takes literals.
 fn version() -> &'static str {
     static IT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     IT.get_or_init(|| {
@@ -294,12 +292,10 @@ enum ApiCommand {
 
 /// Whether findings are coloured, asked once.
 ///
-/// `check`, `parse`, `export` and `api push` can all print a finding,
-/// and none of them is about display. Threading a bool down through
-/// four call chains to reach the one line that draws it is how a
-/// display decision ends up in the signature of everything, so it is
-/// settled from the command line, the environment and the terminal
-/// before any command runs, and read where it is used.
+/// `check`, `parse`, `export` and `api push` can all print a finding and
+/// none of them is about display. Threading a bool down four call chains
+/// to reach the one line that draws it puts a display decision in the
+/// signature of everything, so it is settled before any command runs.
 static COLOUR: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// When to colour what is said to a person.
@@ -314,11 +310,9 @@ enum Colour {
 impl Colour {
     /// Whether to colour, now, on this stream.
     ///
-    /// Findings go to stderr, so that is the stream to ask: a person
-    /// watching a build has one terminal and a pipe, and colouring by
-    /// what stdout happens to be gives them escape codes in a log.
-    /// `NO_COLOR` is honoured because a reader who has said once that
-    /// they do not want colour should not have to say it per tool.
+    /// Findings go to stderr, so that is the stream to ask: colouring by what
+    /// stdout happens to be gives a person escape codes in a log. `NO_COLOR`
+    /// is honoured -- said once, it should not have to be said per tool.
     fn wanted(self) -> bool {
         match self {
             Colour::Always => true,
@@ -505,13 +499,10 @@ fn export(
     ExitCode::SUCCESS
 }
 
-/// The model of `files`, resolved against `library`, as interchange JSON
-/// and the number of elements it came from. `sysml export` writes this
-/// out and `sysml api push` sends it, so both mean the same thing by a
-/// model.
-/// The count is the whole document and the count beside it the part of
-/// it that is a library's rather than the model's, which the standard
-/// interchanges alongside the model and marks `isLibraryElement`.
+/// The model of `files`, resolved against `library`, as interchange JSON.
+/// `sysml export` writes this out and `sysml api push` sends it, so both
+/// mean the same thing by a model. The first count is the whole document,
+/// the second the part of it that is a library's rather than the model's.
 fn exported(
     files: &[PathBuf],
     library: &[PathBuf],
@@ -569,16 +560,13 @@ fn exported(
     }
     // A model is resolved against a library and is not made of one. Six
     // elements exported with the standard library beside them wrote
-    // ninety-six thousand, and `sysml api push` sent every one of them
-    // to somebody's server -- which nobody asked for and which happened
-    // only because the library stopped having to be named to be loaded.
+    // ninety-six thousand, and `sysml api push` sent every one.
     //
-    // What the model refers to across that line stays the `@id` it
-    // always was. Those are UUIDv5 over the ownership path, so anybody
-    // holding the same library computes the same ones: it is how the
-    // standard refers to an element another project holds. A document
-    // that has to stand on its own asks for the library with
-    // `--include-library`.
+    // What the model refers to across that line stays the `@id` it always
+    // was. Those are UUIDv5 over the ownership path, so anybody holding the
+    // same library computes the same ones -- how the standard refers to an
+    // element another project holds. `--include-library` writes a document
+    // that stands on its own.
     if !whole {
         extras.omitted = extras.library.clone();
     }
@@ -604,13 +592,11 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
             Ok(text) => text,
             Err(err) => return Unreadable::refuse(path, err, "fmt", format),
         };
-        // Re-spacing a file the parser could not follow can move where a
-        // quote or a comment ends -- `package Name' {` runs the quote on
-        // to wherever the next one is, and putting the tokens back with
-        // different spacing puts the name somewhere else. Printing that
-        // is harmless, since every character is still there to read.
-        // Writing it over the modeller's file is not, so `--write`
-        // reports such a file instead of rewriting it.
+        // Re-spacing a file the parser could not follow can move where a quote or
+        // comment ends -- `package Name' {` runs the quote on to the next one --
+        // and putting the tokens back differently puts the name somewhere else.
+        // Printing that is harmless; writing it over the modeller's file is not,
+        // so `--write` reports such a file instead.
         let parse = parse_file(path, &text);
         if write && !parse.ok() {
             eprintln!(
@@ -726,23 +712,16 @@ fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<
 
 /// Give `ws` a standard library, unless it already has one.
 ///
-/// Almost nothing in a SysML model resolves without it -- `part def
-/// Vehicle;` specializes `Parts::Part`, every feature subsets
-/// `Base::things` -- so a tool that cannot find one reports every name in
-/// every model as unresolved. Until there was a copy built in, finding
-/// one meant cloning a repository whose history is two gigabytes to
-/// obtain one and a third megabytes of model.
+/// Almost nothing resolves without it -- `part def Vehicle;` specializes
+/// `Parts::Part`, every feature subsets `Base::things` -- so a tool that
+/// cannot find one reports every name in every model as unresolved.
 ///
-/// What is already loaded wins. `sysml check model/ path/to/sysml.library`
-/// has named the library as a plain path since before there was anything
-/// to fall back on, and a second copy loaded over it would make every
-/// name in it answer twice. That is also why this runs after the paths
-/// are loaded rather than before: what the model brought is the question
-/// being asked.
-///
-/// Then `SYSML_LIBRARY_PATH`, which is how a launcher with nowhere to put
-/// a flag says it, and which the language server and the MCP server have
-/// always read. Then the copy built in.
+/// What is already loaded wins: `sysml check model/ path/to/sysml.library`
+/// has named it as a plain path since before there was anything to fall
+/// back on, and a second copy over it would make every name answer twice.
+/// That is why this runs after the paths are loaded. Then
+/// `SYSML_LIBRARY_PATH`, which a launcher with nowhere to put a flag sets
+/// and the other two front ends read. Then the copy built in.
 fn ensure_library(
     ws: &mut sysml_semantics::Workspace,
     without: bool,
@@ -767,11 +746,8 @@ fn ensure_library(
 /// Which standard library answered.
 ///
 /// A program reading the JSON cannot tell otherwise, and what it decides
-/// on the strength of the answer depends on it: every reference into the
-/// library reads as unresolved without one, and the constraints the
-/// specification states are not put to a model that has none. The
-/// command line used to be the one front end that never said, back when
-/// naming a path was the only way to have a library at all.
+/// depends on it: without one every reference into the library reads as
+/// unresolved and the specification's constraints are not put at all.
 enum Answered {
     /// One of the paths the caller named was it.
     Given,
@@ -796,10 +772,9 @@ impl Answered {
 
 /// What the model implies for code, in no language in particular.
 ///
-/// The library is loaded and resolved behind the model, since what a
-/// feature bottoms out in is a question about the library -- but only
-/// the model's own definitions are planned: nobody is generating the
-/// standard library.
+/// The library is loaded and resolved behind the model -- what a feature
+/// bottoms out in is a question about it -- but only the model's own
+/// definitions are planned.
 fn plan(paths: &[PathBuf], format: Format, bare: bool) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if let Err(unreadable) = load_paths(&mut ws, paths) {
@@ -919,8 +894,7 @@ fn named(
 ///
 /// `--internal`, `--browser` and `--sequence` name one drawing between
 /// them, and travelled as three arguments that could all be set at once
-/// and meant nothing together. One of these says the same thing and can
-/// only say one of them.
+/// and meant nothing together.
 enum View<'a> {
     /// The definitions and the relationships that run between them,
     /// which is what `diagram` draws when it is asked for nothing else.
@@ -1258,12 +1232,10 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     let names = &found.names;
     let shown = &names[..limit.min(names.len())];
     let texts = held_texts(&ws, shown);
-    // What each of them might have meant. The workspace can see every
-    // name declared in it, so a name it could not find is either a right
-    // name nothing brought into scope or a wrong one with a right name
-    // beside it -- two different mistakes that resolution reports
-    // identically. Asked for all of them at once because the walk over
-    // every declared name is what costs.
+    // What each of them might have meant: a right name nothing brought into
+    // scope, or a wrong one with a right name beside it -- two mistakes that
+    // resolution reports identically. Asked for all at once, because the walk
+    // over every declared name is what costs.
     let missed: Vec<String> = shown.iter().map(|u| u.what.clone()).collect();
     let might = ws.suggestions(&missed);
     let mut unresolved = Vec::new();
@@ -1297,20 +1269,15 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
             }
         }
     }
-    // What the specification itself requires, over and above every name
-    // resolving. A model whose names all resolve can still be one the
-    // standard rejects -- an objective on a part definition, a
-    // parameter passed the wrong way. Whether it was worth asking --
-    // constraints come after names, as names come after syntax, and
-    // they are written against the standard library besides -- is
-    // `diagnose`'s to decide, so that this and the MCP server and the
-    // language server cannot drift apart on it.
+    // What the specification requires, over and above every name resolving: a
+    // model that resolves can still be one the standard rejects. Whether it
+    // was worth asking -- constraints come after names, as names come after
+    // syntax, and they are written against the library besides -- is
+    // `diagnose`'s to decide, so the three front ends cannot drift apart.
     //
-    // `unevaluated` counts the constraints this toolchain refuses to
-    // run, which says something about the toolchain and nothing about
-    // the model in front of the reader -- so the text report leaves it
-    // out and tells a person the violations, while the JSON carries the
-    // count for a program that wants to know how much was asked.
+    // `unevaluated` counts the constraints this toolchain refuses to run,
+    // which says something about the toolchain and nothing about the model,
+    // so the text report leaves it out and the JSON carries it.
     let checked = &diagnosed.rules;
     // A zero read out of a model nothing was asked of is a clean bill
     // the check never gave, so the text report leaves the sentence out
@@ -1440,11 +1407,10 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     }
 }
 
-/// The text of each file these findings are in, so that they can be
-/// placed after `ws` has been borrowed again to resolve. It comes from
-/// the workspace rather than from a second read of the file: `file_name`
-/// is a lossy rendering of the path, so a path that is not UTF-8 names
-/// no file, and the second read would find nothing and place every
+/// The text of each file these findings are in, so they can be placed
+/// after `ws` has been borrowed again to resolve. From the workspace
+/// rather than a second read: `file_name` is a lossy rendering of the
+/// path, so a path that is not UTF-8 would find nothing and place every
 /// finding at 1:1.
 fn held_texts(
     ws: &sysml_semantics::Workspace,
@@ -1642,17 +1608,15 @@ fn span(range: sysml_syntax::TextRange) -> std::ops::Range<usize> {
 
 /// What is known about a name that resolved to nothing.
 ///
-/// Two different mistakes, and only one of them is this name's. A name
-/// the workspace declares somewhere is a right name nothing brought into
-/// scope, and what it wants is an import -- so that is all that is said,
-/// even though there are also names near it: `MassValue` is answered by
-/// `ISQBase::MassValue`, and a list of every other name with `value` in
-/// it underneath makes the answer worse. A name nothing declares is a
-/// wrong one, and then the near ones are the whole of the answer.
+/// Two different mistakes, and only one is this name's. A name the
+/// workspace declares somewhere wants an import -- so that is all that is
+/// said, even though names are near it too: `MassValue` is answered by
+/// `ISQBase::MassValue`, and every other name with `value` in it
+/// underneath makes the answer worse. A name nothing declares is a wrong
+/// one, and then the near ones are the whole answer.
 ///
-/// A person acts on two or three of them and reads past the rest, so
-/// the sentence stops there; the JSON carries what was found, since a
-/// program is choosing rather than reading.
+/// A person acts on two or three and reads past the rest, so the sentence
+/// stops there; the JSON carries what was found.
 fn helps(meant: &sysml_semantics::Suggestion) -> Vec<String> {
     const ENOUGH: usize = 3;
     if !meant.elsewhere.is_empty() {

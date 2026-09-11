@@ -1,15 +1,12 @@
 //! Working a written name out to the element it names.
 //!
-//! A name is looked up from where it was written, outward: the members
-//! of the enclosing namespace, then what that namespace inherits, then
-//! what it imports, then the namespace that owns it, and so on to the
-//! root. Visibility narrows what each step may answer with -- members
-//! are public by default and imports private, only a `public import`
-//! re-exports -- and a qualified name walks that whole search once per
-//! segment.
+//! A name is looked up from where it was written, outward: the members of
+//! the enclosing namespace, then what it inherits, then what it imports,
+//! then the namespace that owns it, and so on to the root. Visibility
+//! narrows what each step may answer with, and a qualified name walks that
+//! whole search once per segment.
 //!
-//! What a lookup *finds* is here. What is then done with it -- the
-//! relationship reified, the reference recorded -- is in `reify`.
+//! What a lookup *finds* is here; what is then done with it is in `reify`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -84,23 +81,21 @@ impl Reach {
 impl Workspace {
     /// The element a whole name answers to, read from the root.
     ///
-    /// Visibility has no part in it: this is the index a tool searches,
-    /// not a name a model wrote, and `Vault::Sealed` names the same
-    /// element whether or not the file asking could have written it.
+    /// Visibility has no part in it: this is the index a tool searches, not a
+    /// name a model wrote, and `Vault::Sealed` names the same element whether
+    /// or not the file asking could have written it.
     /// [`resolve_from`](Self::resolve_from) is the other question.
     ///
-    /// `Namespace::resolveGlobal` is one of the four the metamodel
-    /// writes as prose about what it would do rather than as OCL. The
-    /// last segment names the candidates and the whole name picks one
-    /// out -- a scan of every name in the workspace, which is why the
-    /// answers are kept.
+    /// `Namespace::resolveGlobal` is one of the four the metamodel writes as
+    /// prose rather than OCL. The last segment names the candidates and the
+    /// whole name picks one out -- a scan of every name in the workspace,
+    /// which is why the answers are kept.
     ///
-    /// The candidates are gathered rather than searched for. Ranking
-    /// them the way [`search_names`](Self::search_names) does is work
-    /// for a person choosing between near misses, and the answer here is
-    /// decided by the whole name afterwards; taking the best few hundred
-    /// first only meant that a model with enough elements called `x`
-    /// could push `SomePackage::x` out of its own answer.
+    /// The candidates are gathered rather than searched for: ranking them the
+    /// way [`search_names`](Self::search_names) does is work for a person
+    /// choosing between near misses, and taking the best few hundred first
+    /// only meant that enough elements called `x` could push `SomePackage::x`
+    /// out of its own answer.
     pub fn named_globally(&mut self, qualified: &str) -> Option<ElementId> {
         if let Some(&found) = self.globals.get(qualified) {
             return found;
@@ -143,15 +138,13 @@ impl Workspace {
         let outer = std::mem::replace(&mut self.origin, elem);
         let exclude = Some(elem);
         let found = self.resolve_segments(elem, segments, exclude).or_else(|| {
-            // The declaration is kept out of the first walk so that it
-            // cannot answer for itself. That is about where the walk
-            // *ends*, though, and the name it is looking for may pass
-            // through the declaration on the way: `classifier C
-            // specializes C::D { classifier D; }` reaches a member of
-            // its own, and the first segment of that path is the name
-            // being declared. So the walk is made again with the
-            // declaration allowed to answer, and what it landed on is
-            // what decides.
+            // The declaration is kept out of the first walk so it cannot answer for
+            // itself -- but that is about where the walk *ends*, and the name may
+            // pass through the declaration on the way: `classifier C specializes
+            // C::D { classifier D; }` reaches a member of its own, and the first
+            // segment of that path is the name being declared. So the walk is made
+            // again with the declaration allowed to answer, and what it landed on
+            // decides.
             let hit = self.resolve_segments(elem, segments, None)?;
             if hit != elem {
                 return Some(hit);
@@ -189,16 +182,14 @@ impl Workspace {
         self.forget_provisional();
         found
     }
-    /// Where an import's path was written, and what each part of it
-    /// names. The wildcard at the end names nothing.
+    /// Where an import's path was written, and what each part of it names. The
+    /// wildcard at the end names nothing.
     ///
-    /// An import that names nothing is a finding like any other name
-    /// that resolves to nothing. It reads as one too: `import
-    /// Vehicles::*;` where the package is spelled `Vehicle` brings in
-    /// nothing at all, and every name the file expected from it then
-    /// fails somewhere else -- or, in a file that only re-exports, goes
-    /// quietly missing. Saying so at the import is saying it once,
-    /// where the typo is.
+    /// An import that names nothing is a finding like any other: `import
+    /// Vehicles::*;` where the package is spelled `Vehicle` brings in nothing,
+    /// and every name the file expected then fails somewhere else -- or, in a
+    /// file that only re-exports, goes quietly missing. Saying so at the
+    /// import is saying it once, where the typo is.
     pub(crate) fn record_import(
         &mut self,
         import: ElementId,
@@ -718,13 +709,11 @@ impl Workspace {
     fn effective_name(&self, elem: ElementId) -> Option<String> {
         let Some(node) = self.source.get(&elem) else {
             // A parameter the standard implies has no syntax to read.
-            // `ReferenceUsage::namingFeature` -- "if this ReferenceUsage
-            // is the payload parameter of a TransitionUsage, then its
-            // naming Feature is the payloadParameter of the
-            // triggerAction of that TransitionUsage" -- and what it
-            // subsets is that parameter, which is how `bind payload =
-            // aState.aTransition.apayload;` names it from the
-            // transition.
+            // `ReferenceUsage::namingFeature` -- "if this ReferenceUsage is the
+            // payload parameter of a TransitionUsage, then its naming Feature is the
+            // payloadParameter of the triggerAction" -- and what it subsets is that
+            // parameter, which is how `bind payload = aState.aTransition.apayload;`
+            // names it from the transition.
             return self
                 .model
                 .owned(elem)

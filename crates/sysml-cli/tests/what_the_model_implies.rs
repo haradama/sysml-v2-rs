@@ -669,10 +669,16 @@ fn what_a_definition_performs_is_said() {
          \t\t\tdoc /* until the next tick */\n\
          \t\t}\n\
          \t}\n\
+         \tpart def PreciseClock :> Clock {\n\
+         \t\tperform action :>> pause {\n\
+         \t\t\tdoc /* more often */\n\
+         \t\t}\n\
+         \t}\n\
          }\n",
     );
     let out = sysml(&["--format", "json", "plan", at.to_str().unwrap()]);
     let plan: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(plan["checked"]["ok"], true, "{plan}");
     let clock = said(&plan, "Doing::Clock");
     let [performs] = clock["performs"].as_array().unwrap().as_slice() else {
         panic!("one performed action: {clock}");
@@ -683,6 +689,17 @@ fn what_a_definition_performs_is_said() {
         "so its parameters can be read"
     );
     assert_eq!(performs["documentation"], "until the next tick");
+
+    // a subtype that narrows it writes neither name nor type, and both
+    // are borrowed from what it redefines -- the way a feature written
+    // `attribute :>> mass = 1200.0;` borrows `mass`
+    let precise = said(&plan, "Doing::PreciseClock");
+    let [narrowed] = precise["performs"].as_array().unwrap().as_slice() else {
+        panic!("one performed action: {precise}");
+    };
+    assert_eq!(narrowed["name"], "pause");
+    assert_eq!(narrowed["of"], "Doing::Wait");
+    assert_eq!(narrowed["documentation"], "more often");
 }
 
 /// A plan is only as good as the model behind it, and says so.

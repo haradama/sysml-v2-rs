@@ -4,8 +4,8 @@ Language server: diagnostics, go-to-definition, find-references, rename,
 completion, hover, symbols, formatting — with a [VSCode
 extension](https://github.com/haradama/sysml-v2-rs/tree/main/editors/vscode) as its client.
 
-```console
-$ sysml-lsp            # speaks LSP over stdio
+```sh
+sysml-lsp            # speaks LSP over stdio
 ```
 
 The standard library is parsed and resolved once at startup; the project

@@ -2,17 +2,15 @@
 //!
 //! [`crate::import`] writes this metadata and [`crate::generate`] reads
 //! it. Spelling the names here rather than on each side is the point of
-//! keeping the two together: a property one writes and the other never
-//! reads, or reads under another name, is a seam that cannot drift if
-//! there is only one list of them.
+//! keeping the two together: a property one writes and the other reads
+//! under another name is a seam that cannot drift if there is only one
+//! list of them.
 //!
-//! The notation says which language it is talking about rather than
-//! being one language's own. It was `@rust { path = "..."; }`, which
-//! made every other language either a second vocabulary to invent or a
-//! model that could not say the thing at all -- and a model bound to a
-//! Python API and a model bound to a Rust one differ in a value, not in
-//! how they are written. What is Rust's here is the *content*: a
-//! receiver spelled `&mut self`, capabilities named after traits.
+//! The notation says which language it is talking about rather than being
+//! one language's own. It was `@rust { path = "..."; }`, which made every
+//! other language a second vocabulary to invent. What is Rust's here is
+//! the *content*: a receiver spelled `&mut self`, capabilities named after
+//! traits.
 
 /// The metadata definition a binding is a usage of.
 pub const DEF: &str = "code";

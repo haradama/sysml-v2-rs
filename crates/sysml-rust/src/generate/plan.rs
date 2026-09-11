@@ -2,14 +2,12 @@
 //!
 //! A definition's Rust shape depends on the shapes of everything it
 //! composes: whether a struct can derive `Debug`, whether it can answer
-//! `Default::default()`, which generic parameters it needs so that a
-//! part with API-bound ports composes, and where a composition cycle has
-//! to be broken with a `Box` to keep the type finite. None of those can
-//! be settled for one definition on its own, so they are settled for all
-//! of them at once, by passes that run until they stop changing.
+//! `Default::default()`, which generic parameters it needs, and where a
+//! composition cycle has to be broken with a `Box`. None can be settled
+//! for one definition alone, so they are settled for all at once, by
+//! passes that run until they stop changing.
 //!
-//! Nothing here writes a character of Rust. It works out the answers the
-//! writing then reads off.
+//! Nothing here writes a character of Rust.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -98,15 +96,14 @@ impl<'a> Generator<'a> {
         generator.settle_derives();
         generator
     }
-    /// Depth-first over the composition graph; the edge that would close
-    /// a cycle is remembered and later held behind a `Box`.
+    /// Depth-first over the composition graph; the edge that would close a
+    /// cycle is remembered and later held behind a `Box`.
     ///
     /// The graph runs over the flattened fields rather than the declared
-    /// members, since a field a general hands down is held inline just
-    /// as tightly as one declared here, and over the payloads of a
-    /// variation's variants, which an enum holds inline the same way.
-    /// A cycle closing through either of those went unboxed, and the
-    /// struct it closed on had no size Rust could work out.
+    /// members, since a field a general hands down is held inline just as
+    /// tightly, and over the payloads of a variation's variants, which an enum
+    /// holds inline the same way. A cycle closing through either went unboxed,
+    /// and the struct it closed on had no size Rust could work out.
     fn break_cycles(&mut self) {
         let mut done: HashSet<ElementId> = HashSet::new();
         let mut boxed = HashSet::new();

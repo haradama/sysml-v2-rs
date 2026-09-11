@@ -1,28 +1,25 @@
-//! A name that answered to nothing answered against the files there
-//! were then.
+//! A name that answered to nothing answered against the files there were
+//! then.
 //!
 //! Every cache in a workspace is a memory of what the model said, and a
 //! file added afterwards can make any of them wrong. The ones that
-//! remember a *failure* are the dangerous half: a supertype list that
-//! came out short is recomputed the moment anything asks again, but a
-//! name remembered as resolving to nothing is remembered as such for
-//! good unless something forgets it.
-//!
-//! `Workspace::forget_failures` is what forgets them, and it is called
-//! from `add_file` for exactly this reason.
+//! remember a *failure* are the dangerous half: a supertype list that came
+//! out short is recomputed the moment anything asks again, but a name
+//! remembered as resolving to nothing stays that way unless something
+//! forgets it -- which is what `Workspace::forget_failures` is for, and
+//! why `add_file` calls it.
 
 use sysml_semantics::Workspace;
 
 /// The one that got away: `has_standard_library` asks whether
-/// `Base::Anything` is there, and the answer was remembered from the
-/// root namespace.
+/// `Base::Anything` is there, and the answer was remembered from the root
+/// namespace.
 ///
 /// A tool that asks before loading the library -- which is what a tool
-/// with a copy built in does, to find out whether it needs to use it --
-/// went on being told there was no library after loading one. Nothing
-/// looked wrong: every name resolved. What was missing is that the
-/// specification's own constraints are only put to a model that has the
-/// library to be asked against, so they were silently never put.
+/// with a copy built in does -- went on being told there was none after
+/// loading one. Every name resolved, so nothing looked wrong; what was
+/// missing is that the specification's constraints are only put to a model
+/// that has the library, so they were silently never put.
 #[test]
 fn a_library_that_arrives_after_the_question_still_answers_it() {
     let mut ws = Workspace::new();

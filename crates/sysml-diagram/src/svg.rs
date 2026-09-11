@@ -13,22 +13,16 @@ use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 const FONT: &str = "Arial, Helvetica, sans-serif";
 
 /// Colours for both viewer themes, after the specification's figures:
-/// black ink on white boxes, keywords included. The dark palette keeps the
-/// same print-like contrast for dark viewers (the VSCode preview among
-/// them); the document is self-contained, so the palette travels with it.
+/// black ink on white boxes. The dark palette keeps the same print-like
+/// contrast, and the document is self-contained, so the palette travels
+/// with it.
 ///
-/// Both are written out as colours rather than held in one place as custom
-/// properties, which is what a stylesheet would do. A saved drawing is
-/// opened by more than a browser -- an image viewer, a thumbnailer, a
-/// converter -- and the two engines most of those are, librsvg and resvg,
-/// read no custom property at all: what they make of `fill: var(--box)` is
-/// a declaration they cannot resolve, which leaves the shape in the
-/// initial paint. Black fill, no stroke, and a drawing whose lines have
-/// all gone. Neither a `var()` fallback nor the plain declaration before
-/// it nor a presentation attribute on the element survives that in both of
-/// them; a colour written into the rule does. What they do agree on is to
-/// pass over a media query they cannot answer, so the dark half below is
-/// read by the viewers that asked for it and by nobody else.
+/// Both are written out as colours rather than as custom properties. A
+/// saved drawing is opened by more than a browser, and librsvg and resvg
+/// read no custom property at all: `fill: var(--box)` leaves the shape in
+/// the initial paint -- black fill, no stroke, every line gone. What they
+/// do agree on is to pass over a media query they cannot answer, so the
+/// dark half is read by the viewers that asked for it.
 const CSS: &str = "\
 .box { fill: #ffffff; stroke: #000000; stroke-width: 1; }\n\
 .rule, .edge { stroke: #000000; stroke-width: 1; fill: none; }\n\
@@ -101,13 +95,11 @@ pub(crate) fn markers() -> String {
 /// One drawing being made.
 ///
 /// Nine accumulators used to travel together through six hundred lines,
-/// and what tied them was that a drawing is made in passes rather than
-/// in one sweep. Every line goes down before any box, because the boxes
-/// paint over the ends. Every box is drawn before any port, because a
-/// port sits on a border and a neighbour drawn later would cover it.
-/// Every name is held back until last, because where a name reads best
-/// depends on what is already there. Each pass leaves what the next one
-/// needs, and this is what it leaves it in.
+/// and what tied them was that a drawing is made in passes. Every line
+/// goes down before any box, because the boxes paint over the ends. Every
+/// box before any port, because a port sits on a border. Every name last,
+/// because where a name reads best depends on what is already there. Each
+/// pass leaves what the next one needs.
 struct Canvas<'a> {
     diagram: &'a Diagram,
     layout: &'a Layout,
@@ -339,14 +331,12 @@ impl<'a> Canvas<'a> {
                         },
                     }
                 }
-                // neither of these follows the layering, so the line runs
-                // centre to centre clipped to both borders. Composition puts a
-                // filled diamond on the side of the whole; a connection is
-                // undirected and gets no marker at all.
-                // A feature typed by the thing that declares it. The line
-                // has nowhere to go but back, so it drops into the gap
-                // under the row and returns -- downward because that is the
-                // one direction the canvas grows to make room in.
+                // Neither of these follows the layering, so the line runs centre to
+                // centre clipped to both borders. Composition puts a filled diamond on
+                // the side of the whole; a connection is undirected and gets no marker.
+                // A feature typed by the thing that declares it has nowhere to go but
+                // back, so it drops into the gap under the row and returns -- downward,
+                // the one direction the canvas grows in.
                 Relation::Composition | Relation::Reference | Relation::Portion
                     if edge.from == edge.to =>
                 {
@@ -428,15 +418,13 @@ impl<'a> Canvas<'a> {
                 | Relation::Event
                 | Relation::Annotation
                 | Relation::Client => {
-                    // a connection ends at the port it names, where the
-                    // box declares one: the standard draws the port on the
-                    // border, and a second square beside it would be a
-                    // second port that the model never had
+                    // A connection ends at the port it names, where the box declares one: the
+                    // standard draws the port on the border, and a second square beside it
+                    // would be a port the model never had.
                     //
-                    // A port is one square, so a second line naming it is
-                    // drawn to where the first line left it rather than to a
-                    // place worked out afresh, which would leave one of the
-                    // two touching nothing.
+                    // A port is one square, so a second line naming it is drawn to where the
+                    // first left it rather than to a place worked out afresh, which would
+                    // leave one of the two touching nothing.
                     let held = (
                         anchored(&self.anchors, edge.from, edge.ends.0.as_deref()),
                         anchored(&self.anchors, edge.to, edge.ends.1.as_deref()),
@@ -464,16 +452,14 @@ impl<'a> Canvas<'a> {
                         Some(place) => (outer(place), true),
                         None => (facing(to, centre_of(from)), false),
                     };
-                    // Hold edges sharing a pair of boxes apart, so two
-                    // connections do not collapse into one line. A line
-                    // leaves through a border, so what holds two of them
-                    // apart runs along that border: shifted across the line
-                    // instead, an end drifts off the box it belongs to --
-                    // outside it at one end, and inside it at the other.
+                    // Hold edges sharing a pair of boxes apart, so two connections do not
+                    // collapse into one line. A line leaves through a border, so what holds
+                    // two of them apart runs along that border: shifted across the line
+                    // instead, an end drifts off the box -- outside it at one end, inside it
+                    // at the other.
                     //
-                    // An end on a port has been slid already, by the same
-                    // amount and for the same reason, so that the square it
-                    // is drawn as stays on the border it straddles.
+                    // An end on a port has been slid already, by the same amount, so the
+                    // square stays on the border it straddles.
                     let shift = lane * lane_spacing(from, to, siblings, self.style);
                     if !first_is_port {
                         (x1, y1) = slid(from, (x1, y1), first_away, shift);
@@ -616,15 +602,13 @@ impl<'a> Canvas<'a> {
                             ((x1, first), (x2, second), ((x1, first), (column, first)))
                         }
                     };
-                    // A detour leaves both boxes downward and a route leaves
-                    // by the border it was routed out of, neither of which
-                    // is the border a straight line to the other box
-                    // crosses. The square is drawn on that border later, so
-                    // it is told where the line really left instead.
+                    // A detour leaves both boxes downward and a route leaves by the border it
+                    // was routed out of, neither of which is the border a straight line
+                    // crosses. The square is drawn on that border later, so it is told where
+                    // the line really left.
                     //
-                    // Only the first line to name a port says where its
-                    // square goes; the lines after it were drawn to that
-                    // square and have nothing to add.
+                    // Only the first line to name a port says where its square goes; the
+                    // later ones were drawn to that square.
                     for (name, at, held, place, point, toward) in [
                         (
                             &edge.ends.0,
@@ -855,10 +839,8 @@ fn label_room(diagram: &Diagram, at: usize, style: &Style) -> f64 {
 ///
 /// A port is a square on a border with its name reading outwards, and on
 /// the outer border of an outermost box that name reads off the canvas.
-/// The engines place boxes and know nothing of the words drawn round
-/// them, so the room is made here, where the words are: everything is
-/// slid clear of the top left corner and the canvas grows by as much as
-/// it was short.
+/// The engines place boxes and know nothing of the words round them, so
+/// the room is made here.
 pub(crate) fn with_room_for_labels(
     diagram: &Diagram,
     layout: &Layout,
@@ -1045,14 +1027,13 @@ fn polyline(walked: &[(f64, f64)]) -> String {
     out
 }
 
-/// Which border each box is left through on a detour, and the gap the
-/// line runs along after it.
+/// Which border each box is left through on a detour, and the gap the line
+/// runs along after it.
 ///
-/// A line leaves a box on the side that faces the other one: where the
-/// layering has put a whole above its parts, it leaves the whole
-/// downward and arrives at the part from above. Between boxes in one row
-/// there is no such side, and both are left downward -- the one direction
-/// the canvas grows to make room in.
+/// A line leaves a box on the side facing the other one: where the
+/// layering has put a whole above its parts, it leaves downward and
+/// arrives from above. Between boxes in one row there is no such side, and
+/// both are left downward -- the one direction the canvas grows in.
 fn facing_sides(
     layout: &Layout,
     edge: &Edge,
@@ -2205,15 +2186,14 @@ fn border_point(rect: &Placed, target: (f64, f64)) -> (f64, f64) {
 /// Escape the five characters that cannot appear literally in XML text,
 /// and drop the ones it cannot carry at all.
 ///
-/// A `doc` body is whatever the file put between the comment markers, so
-/// a model can hand the drawing a form feed or a stray `NUL` -- and XML
-/// admits no control character but tab, newline and return, not even
-/// written as a character reference. One of them in a name is the
-/// difference between a drawing and a file no viewer will open, and
-/// nothing in the corpus has ever carried one, so nothing has ever said
-/// so. They are dropped rather than stood in for: there is no glyph for
-/// a character that was never printable. [`columns`] drops them too, so
-/// that a box is measured on the text that is drawn in it.
+/// A `doc` body is whatever the file put between the comment markers, so a
+/// model can hand the drawing a form feed or a stray `NUL` -- and XML
+/// admits no control character but tab, newline and return, not even as a
+/// character reference. One of them in a name is the difference between a
+/// drawing and a file no viewer will open. They are dropped rather than
+/// stood in for: there is no glyph for a character that was never
+/// printable. [`columns`] drops them too, so a box is measured on the text
+/// drawn in it.
 ///
 /// [`columns`]: crate::columns
 pub(crate) fn escape(text: &str) -> String {

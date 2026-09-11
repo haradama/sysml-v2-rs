@@ -1,10 +1,10 @@
 //! Smoke test: drive the `sysml` binary over the vendored SysML-v2-Release
 //! corpus.
 //!
-//! The per-crate corpus regressions (`sysml-syntax`, `sysml-semantics`, ...)
-//! call the parser directly. This one goes through the shipped binary, so file
-//! discovery, dialect selection from the extension and the reported statistics
-//! are exercised the way a user hits them.
+//! The per-crate corpus regressions call the parser directly. This one
+//! goes through the shipped binary, so file discovery, dialect selection
+//! from the extension and the reported statistics are exercised the way a
+//! user hits them.
 //!
 //! Requires the submodule:
 //!
@@ -12,9 +12,8 @@
 //! git submodule update --init --depth 1
 //! ```
 //!
-//! The test skips when `vendor/` is absent — packaged crates do not ship it —
-//! but a checkout that is present and truncated fails instead of passing
-//! silently.
+//! Skips when `vendor/` is absent -- packaged crates do not ship it -- but
+//! a checkout that is present and truncated fails instead.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

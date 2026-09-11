@@ -10,6 +10,11 @@ repository.workspace = true
 # `workspace.package` resolves against the workspace root, so every
 # crate published carried the whole project's README
 readme = "README.md"
+# `src/generated.rs` carries the specification's own OCL and wording,
+# which is the OMG's rather than this crate's to license. NOTICE says
+# which parts and under what terms, the way `sysml-stdlib` does for the
+# standard library.
+include = ["src/**", "tests/**", "README.md", "LICENSE-*", "NOTICE"]
 keywords.workspace = true
 categories.workspace = true
 

@@ -8,16 +8,12 @@
 //! model/car.sysml:4:20: unresolved `Wheel`
 //! ```
 //!
-//! -- which says where to look but not what is there, so the reader
-//! opens the file to find out, and what the tool already knew about the
-//! name went unsaid. Quoting the line, underlining the span and putting
-//! what is known underneath is a solved problem: `annotate-snippets` is
-//! rustc's own renderer, taken out of it and published. It counts a
-//! column the way a terminal draws one, which is the part that is easy
-//! to get wrong -- a caret placed by byte offset lands half a line away
-//! from what it means on any file with a wide character in it, and this
-//! toolchain's models carry documentation in whatever language they were
-//! written in.
+//! -- which says where to look but not what is there. Quoting the line,
+//! underlining the span and putting what is known underneath is a solved
+//! problem: `annotate-snippets` is rustc's own renderer, published. It
+//! counts a column the way a terminal draws one, which is the part that is
+//! easy to get wrong -- a caret placed by byte offset lands half a line
+//! away on any file with a wide character in it.
 
 use std::ops::Range;
 
@@ -57,13 +53,11 @@ pub struct Said<'a> {
 
 /// Draw it, in colour or without.
 ///
-/// A span is made to fit the text rather than trusted. A parser
-/// complaining that the file stopped points past the end of it, and one
-/// clipped by somebody's arithmetic can land inside a character; a
-/// renderer handed either panics, so a model that merely ends badly
-/// would take the report with it. It is clamped to the text, widened out
-/// to whole characters, and widened again to one character where it is
-/// empty, since nothing is drawn under a caret that is nowhere.
+/// A span is made to fit the text rather than trusted: a parser
+/// complaining that the file stopped points past the end, and one clipped
+/// by arithmetic can land inside a character -- a renderer handed either
+/// panics. It is clamped, widened to whole characters, and widened again
+/// to one character where it is empty.
 pub fn draw(said: &Said<'_>, colour: bool) -> String {
     let start = floor(said.text, said.span.start.min(said.text.len()));
     let end = ceiling(said.text, said.span.end.clamp(start, said.text.len()));
@@ -102,12 +96,11 @@ pub fn draw(said: &Said<'_>, colour: bool) -> String {
     renderer.render(&groups).to_string()
 }
 
-/// The character boundary at or before `offset`, and the one at or
-/// after it.
+/// The character boundary at or before `offset`, and the one at or after
+/// it.
 ///
 /// Offsets come from the lexer and land on boundaries, but one that has
-/// been clipped -- to the end of a file, or by a caller's arithmetic --
-/// need not, and slicing a string anywhere else is a panic. A span
+/// been clipped need not, and slicing anywhere else is a panic. A span
 /// widened to the character it started inside is what the reader wanted
 /// underlined anyway.
 fn floor(text: &str, offset: usize) -> usize {

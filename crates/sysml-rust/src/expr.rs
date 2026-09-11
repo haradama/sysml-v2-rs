@@ -1,18 +1,17 @@
 //! SysML expression text as a Rust expression, for the simple subset.
 //!
-//! What translates: literals, references to what the caller can name
-//! (parameters, fields), feature chains (`line.amount`), the arithmetic,
-//! comparison and logical operators, `**` as `powf`, escaped names,
-//! parentheses, the conditional
-//! `if c ? a else b`, and a call of a calculation the generator wrote a
-//! function for. A whole number keeps its written form unless the caller
-//! says the expression is over reals, in which case it gets the point
-//! Rust needs and SysML does not write; a model mixing types Rust will
-//! not mix still surfaces as a Rust type error rather than a silent
-//! coercion. Anything beyond the subset -- a call of something abstract
-//! or of nothing at all, a call that names only some of its arguments,
-//! an unresolvable reference -- makes the whole expression
-//! untranslatable, and the caller says so instead of approximating.
+//! What translates: literals, references to what the caller can name,
+//! feature chains (`line.amount`), the arithmetic, comparison and logical
+//! operators, `**` as `powf`, escaped names, parentheses, `if c ? a else
+//! b`, and a call of a calculation the generator wrote a function for. A
+//! whole number keeps its written form unless the caller says the
+//! expression is over reals, so a model mixing types Rust will not mix
+//! surfaces as a type error rather than a silent coercion.
+//!
+//! Anything beyond the subset -- a call of something abstract or of
+//! nothing at all, a call naming only some of its arguments, an
+//! unresolvable reference -- makes the whole expression untranslatable,
+//! and the caller says so instead of approximating.
 
 /// What a call resolves to: the function Rust spells it as, and the
 /// parameters it takes, in order, so that a call written with named
@@ -392,14 +391,14 @@ impl Parser<'_> {
         )
     }
 
-    /// `a ** b`, which Rust spells as a method. Both sides have to be
-    /// `Real`; an exponent written as a whole number is spelled as one
-    /// anyway, since `x ** 2` means the same real number as `x ** 2.0`
-    /// and only one of the two compiles.
+    /// `a ** b`, which Rust spells as a method. Both sides have to be `Real`;
+    /// an exponent written as a whole number is spelled as one anyway, since
+    /// `x ** 2` means the same real number as `x ** 2.0` and only one of the
+    /// two compiles.
     ///
-    /// It is written `f64::powf(a, b)` rather than `a.powf(b)` because a
-    /// literal base -- `3.0 ** 2` -- has no settled type yet, and Rust
-    /// will not pick one of its float types to look a method up on.
+    /// Written `f64::powf(a, b)` rather than `a.powf(b)` because a literal
+    /// base has no settled type yet, and Rust will not pick one of its float
+    /// types to look a method up on.
     fn power(&mut self) -> Option<Node> {
         let lhs = self.unary()?;
         if !self.eat(&Token::StarStar) {

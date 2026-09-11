@@ -600,12 +600,10 @@ fn above(edge: &Edge) -> Option<(usize, usize)> {
 /// otherwise one below the deepest of whatever lies above it.
 ///
 /// What reads down the page is a graph and not a tree: a specialization
-/// written in a circle, or a chain of parts that comes back round, closes
-/// a cycle that the parser accepts and name resolution reifies. A cycle
-/// has no top to hang the layers from, so the walk below drops the edge
-/// that closes one -- it never steps back into the branch it is already
-/// in -- and ranks what is left in a single pass, which terminates
-/// whatever the model says.
+/// written in a circle closes a cycle the parser accepts and resolution
+/// reifies. A cycle has no top to hang the layers from, so the walk drops
+/// the edge that closes one and ranks what is left in a single pass, which
+/// terminates whatever the model says.
 fn ranks(diagram: &Diagram) -> Vec<usize> {
     let count = diagram.nodes.len();
     let mut below: Vec<Vec<usize>> = vec![Vec::new(); count];
@@ -688,9 +686,8 @@ fn order_layers(diagram: &Diagram, ranks: &[usize]) -> Vec<Vec<usize>> {
 ///
 /// Only specializations decide the layers, so a whole and its parts often
 /// land in the same one. An unrelated definition declared between them
-/// would then sit between them on the canvas as well, and the line joining
-/// them would have to go the long way round something it has nothing to do
-/// with.
+/// would sit between them on the canvas as well, and the line joining them
+/// would go the long way round.
 fn group_within_layers(diagram: &Diagram, layers: &mut [Vec<usize>]) {
     for layer in layers.iter_mut() {
         let mut grouped: Vec<usize> = Vec::with_capacity(layer.len());

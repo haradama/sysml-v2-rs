@@ -1,78 +1,49 @@
 //! Standard JSON interchange for [`sysml_model::Model`].
 //!
-//! Follows the serialization style of the SysML v2 API & Services standard:
-//! every element is a JSON object with `"@type"` (metaclass name), `"@id"`
-//! (UUID) and its properties, where element references are `{"@id": ...}`
-//! objects. Element UUIDs are deterministic (UUIDv5 over the element's
-//! ownership path, where a name places an element among its siblings),
-//! so the same model exports as the same JSON however its files were
-//! ordered on the way in.
+//! Follows the serialization style of the SysML v2 API & Services
+//! standard: every element is a JSON object with `"@type"`, `"@id"` and
+//! its properties, where element references are `{"@id": ...}` objects.
+//! Element UUIDs are deterministic -- UUIDv5 over the ownership path,
+//! where a name places an element among its siblings -- so the same model
+//! exports as the same JSON however its files were ordered on the way in.
 //!
-//! Every element is serialized with the complete property set its
-//! metaclass declares, the shape the standard's API serializes: stored
-//! properties as they are, derivable ones derived, and the rest at their
-//! defaults (`null`, `[]`, `false`). Derived here are identity and naming
-//! (`elementId`, `name`, `shortName`, `qualifiedName`), the whole
-//! ownership web (`owner`/`ownedElement`, `ownedRelationship`,
-//! `owningRelationship`, `owningMembership`, `owningNamespace`), a
-//! relationship's related elements (`relatedElement`, `source`, `target`,
-//! `ownedRelatedElement`, `owningRelatedElement`, and each end under
-//! whatever name its own metaclass gives it), a membership's member
-//! (`memberElement`, `memberName` and their owned forms), and annotation
-//! bindings (`documentation`, `textualRepresentation`).
+//! Every element carries the complete property set its metaclass declares:
+//! stored properties as they are, derivable ones derived, the rest at
+//! their defaults. Derived here are identity and naming, the whole
+//! ownership web, a relationship's related elements, a membership's
+//! member, and annotation bindings.
 //!
-//! The inheritance closure is derived too, from the relationships name
+//! The inheritance closure is derived from the relationships name
 //! resolution reified: `feature`, `inheritedFeature` and
-//! `inheritedMembership` walk the resolved specializations and typings
-//! (redefined features excepted), `input`/`output`/`parameter` read the
-//! declared directions, and a feature's `type` is its typings' targets.
-//! An unresolved model derives empty closures -- which is what it knows.
+//! `inheritedMembership` walk the resolved specializations and typings,
+//! `input`/`output`/`parameter` read the declared directions, and a
+//! feature's `type` is its typings' targets. An unresolved model derives
+//! empty closures -- which is what it knows.
 //!
 //! Ownership is reified the way the abstract syntax has it: a membership
-//! bridges a namespace and each element it owns, while a pure
-//! relationship -- a specialization, an import, a membership -- is owned
-//! directly and owns its own elements as `ownedRelatedElement`. A
-//! relationship that is also a type or a feature is a member all the
-//! same: a connector, an association and a dependency each reach the
-//! namespace that declares them through a membership, as the grammar
-//! has them. The
-//! membership's metaclass follows the member: `FeatureMembership` for a
-//! feature of a type, `EndFeatureMembership` for a connector end,
-//! `ParameterMembership`/`ReturnParameterMembership` for a directed
-//! feature of a behavior, `SubjectMembership`, `ActorMembership`,
-//! `StakeholderMembership`, `ObjectiveMembership` and `VariantMembership`
-//! for members declared in those roles, `TransitionFeatureMembership`
-//! (with its `kind`) for a transition's trigger, guard and effect,
-//! `StateSubactionMembership` (kind `entry`/`do`/`exit`) for a state's
-//! subactions, `RequirementConstraintMembership` (kind `assumption` or
-//! `requirement`) and `FramedConcernMembership` for a requirement's
-//! constraints and concerns, `ViewRenderingMembership` for the
-//! rendering a view is drawn with, and `OwningMembership` otherwise. Each carries the visibility the member
-//! was declared with. Bridging memberships are synthesized on export with
-//! deterministic UUIDs and folded back on import -- role, visibility and
-//! all -- so either shape, this crate's or another tool's, reads back
-//! into the same model.
+//! bridges a namespace and each element it owns, while a pure relationship
+//! is owned directly and owns its own elements as `ownedRelatedElement`. A
+//! relationship that is also a type or a feature is a member all the same.
+//! The membership's metaclass follows the member -- `FeatureMembership`
+//! for a feature of a type, `EndFeatureMembership` for a connector end,
+//! and so on for each role the notation has a keyword for,
+//! `OwningMembership` otherwise -- and each carries the visibility the
+//! member was declared with. Bridging memberships are synthesized on
+//! export with deterministic UUIDs and folded back on import, so either
+//! shape reads back into the same model.
 //!
 //! What only a resolver can know -- the members imports bring in, what
 //! each import resolved to, and which elements belong to a library model
-//! -- comes in through [`Extras`]: `sysml-cli`'s `export` builds it from
-//! `sysml-semantics` (`imported_members`, `import_of`) and the files
-//! loaded as `--library`, and [`to_json_with`] folds it into `member`,
-//! `membership`, `importedMembership`, `importedNamespace` and
-//! `isLibraryElement`. Plain [`to_json`] leaves those at what the model
-//! alone can say.
+//! -- comes in through [`Extras`], which [`to_json_with`] folds into
+//! `member`, `membership`, `importedMembership`, `importedNamespace` and
+//! `isLibraryElement`.
 //!
 //! `name`, `shortName`, `qualifiedName` and a membership's `memberName`
 //! follow KerML's effective-name rule: a feature declared without a name
-//! -- `attribute :>> mass;` -- answers to the name of what it redefines
-//! (or, failing that, references). The implied specializations resolution
-//! reasons with can be made part of the model itself with
-//! `sysml-semantics`' `materialize_implied` -- each becomes an owned
-//! relationship with `isImplied` set, which this serialization then
-//! carries like any other; `sysml-cli`'s `export` runs it.
+//! answers to the name of what it redefines, or failing that references.
 //!
-//! Remaining simplification: derived properties beyond the ones named
-//! here are emitted at their defaults.
+//! Remaining simplification: derived properties beyond the ones named here
+//! are emitted at their defaults.
 
 // Nothing here needs `unsafe`, and saying so is what keeps it that way.
 #![forbid(unsafe_code)]
@@ -152,21 +123,16 @@ pub fn element_uuid(model: &Model, id: ElementId) -> Uuid {
     uuid_of_path(&format!("sysml-v2-rs:{}", segments.join("/")))
 }
 
-/// Where an element sits among the siblings that answer to the same
-/// name.
+/// Where an element sits among the siblings that answer to the same name.
 ///
-/// The plain position among all of them made every UUID in a file
-/// depend on which files were loaded before it: a workspace hangs each
-/// file's declarations off one root namespace, so `sysml export a.sysml
-/// b.sysml` and `sysml export b.sysml a.sysml` moved the package `a.sysml`
-/// declares -- and everything under it -- to another slot. Counting only
-/// namesakes leaves a name to place its own element, so what a model
-/// exports depends on the model and on nothing else: not on the order of
-/// the files, nor on what they are called or where they sit on disk,
-/// which keying by file name would have made the UUIDs depend on
-/// instead. Only elements sharing a name -- or sharing having none --
-/// are still counted off in the order the model holds them, which is all
-/// that is left to tell them apart.
+/// The plain position among all of them made every UUID in a file depend
+/// on which files were loaded before it: a workspace hangs each file's
+/// declarations off one root namespace, so `sysml export a.sysml b.sysml`
+/// and the same two the other way round moved the package `a.sysml`
+/// declares to another slot. Counting only namesakes leaves a name to
+/// place its own element, so what a model exports depends on the model
+/// alone -- not on the file names, which keying by file would have made it
+/// depend on instead.
 fn namesake_index(model: &Model, siblings: &[ElementId], id: ElementId) -> usize {
     siblings
         .iter()
@@ -200,13 +166,11 @@ fn uuid_of_path(path: &str) -> Uuid {
 /// UUID it is written under, the UUID of the membership it is owned
 /// through, and the qualified name it answers to.
 ///
-/// Each of the three is a path from the root, and each was once built by
-/// walking back up to the root from every element in turn -- the UUID
-/// scanning each owner's children on the way to find where the element
-/// sits among them, and again for every reference to a synthesized
-/// membership. That made an export cost grow with the square of the
-/// model's depth. Walking down instead knows each index, and each
-/// prefix, as it goes.
+/// Each is a path from the root, and each was once built by walking back
+/// up from every element in turn -- the UUID scanning each owner's
+/// children to find where the element sits among them, and again for every
+/// reference to a synthesized membership, which made an export cost grow
+/// with the square of the model's depth.
 struct Identities {
     uuids: HashMap<ElementId, Uuid>,
     bridges: HashMap<ElementId, Uuid>,
@@ -305,17 +269,16 @@ const FOLDED: [ElementKind; 17] = [
 
 /// The derived properties the model stores itself, and so the only ones
 /// import reads back: a multiplicity and its bounds, a transition's
-/// trigger, guard and effect, and the rest of what the builder writes
-/// into a property the metamodel calls derived.
+/// trigger, guard and effect, and the rest of what the builder writes into
+/// a property the metamodel calls derived.
 ///
 /// Everything else derived is computed afresh on export. Reading one of
 /// those back would let the copy that came in shadow the answer: an
-/// element renamed after import would still export the `name` and
-/// `qualifiedName` it arrived with.
+/// element renamed after import would still export the `name` it arrived
+/// with.
 ///
-/// The list is what the builder and the resolver between them write; the
-/// CLI's corpus sweep round-trips every file in the corpus and reports
-/// the drift when one is missing from it.
+/// The CLI's corpus sweep round-trips every file and reports the drift
+/// when one is missing from this list.
 const STORED_DERIVED: [&str; 18] = [
     "bound",
     "chainingFeature",
@@ -482,16 +445,13 @@ impl<'a> Closures<'a> {
 
 /// Does ownership of this element pass through a synthesized membership?
 ///
-/// A pure relationship -- a specialization, an import, a membership --
-/// needs none at either end: the standard has an element own those
-/// directly, and a pure relationship own its elements the same way, so a
-/// `FeatureValue` holds the expression it sets without a membership
-/// between them. A relationship that is also a type or a feature is a
-/// member all the same: the grammar reaches a connector, an association
-/// and a dependency alike through the membership of the namespace that
-/// declares them (KerML's `NonFeatureMember` and `TypeFeatureMember`),
-/// and a relationship that is also a namespace owns its own members that
-/// way in turn.
+/// A pure relationship needs none at either end: the standard has an
+/// element own those directly, so a `FeatureValue` holds the expression it
+/// sets without a membership between them. A relationship that is also a
+/// type or a feature is a member all the same -- the grammar reaches a
+/// connector, an association and a dependency alike through the membership
+/// of the namespace that declares them -- and a relationship that is also
+/// a namespace owns its own members that way in turn.
 fn bridged(model: &Model, owned: ElementId) -> bool {
     if only_a_relationship(model.kind(owned)) {
         return false;
@@ -506,8 +466,7 @@ fn bridged(model: &Model, owned: ElementId) -> bool {
 /// import, a specialization -- rather than one that is also a type or a
 /// dependency?
 ///
-/// The distinction runs through the whole reified shape: what a
-/// relationship owns that is only a relationship in turn is an
+/// What a relationship owns that is only a relationship in turn is an
 /// `ownedRelationship` of it and no end of it, while a connector or an
 /// association owned by a membership is both.
 fn only_a_relationship(kind: ElementKind) -> bool {
@@ -516,14 +475,13 @@ fn only_a_relationship(kind: ElementKind) -> bool {
         && !kind.is_a(ElementKind::Dependency)
 }
 
-/// What a relationship owns and relates in one: the ends it holds
-/// itself, rather than everything under it.
+/// What a relationship owns and relates in one: the ends it holds itself,
+/// rather than everything under it.
 ///
 /// An `import A::*[@Safety]` owns the filter that narrows it, and a
-/// `Membership` owns whatever it brings in; neither the filter nor a
-/// membership one level down is an end of the relationship above it.
-/// Counting them as ends made the ends the model states disagree with
-/// the ends read back from them.
+/// `Membership` owns whatever it brings in; neither is an end of the
+/// relationship above it. Counting them as ends made the ends the model
+/// states disagree with the ends read back.
 fn related_to(model: &Model, id: ElementId) -> Vec<ElementId> {
     model
         .owned(id)
@@ -605,19 +563,17 @@ pub struct Extras {
     /// Elements to leave out of the document altogether.
     ///
     /// A model is resolved against a library and is not made of one: a
-    /// six-element model exported with the standard library beside it
-    /// writes ninety-six thousand elements, and `sysml api push` sends
-    /// them. What the model refers to across that line is written as the
-    /// `@id` it always was -- these are UUIDv5 over the ownership path,
-    /// so anybody holding the same library computes the same ones, which
-    /// is how the standard refers to an element another project holds.
+    /// six-element model exported with the standard library beside it writes
+    /// ninety-six thousand elements, and `sysml api push` sends them. What the
+    /// model refers to across that line is written as the `@id` it always was
+    /// -- UUIDv5 over the ownership path, so anybody holding the same library
+    /// computes the same ones.
     pub omitted: std::collections::HashSet<ElementId>,
 }
 
-/// Serialize the whole model as an array of element objects (stable order):
-/// every element in arena order, then the memberships synthesized between
-/// each owner and the owned elements that need one. Each object carries
-/// the complete property set of its metaclass.
+/// Serialize the whole model as an array of element objects in stable
+/// order: every element in arena order, then the memberships synthesized
+/// between each owner and the owned elements that need one.
 ///
 /// Derived properties that need the resolver -- imported memberships,
 /// `isLibraryElement` -- stay at their defaults here; [`to_json_with`]
@@ -631,9 +587,7 @@ pub fn to_json(model: &Model) -> Json {
 /// This was eight closures stacked at the top of a five-hundred-line
 /// function, capturing seven things between them. A closure cannot be
 /// lifted out of the body that declares it, so the length was not
-/// incidental to the design -- it *was* the design. Named on a struct,
-/// each is a method that can be read on its own, and the two long bodies
-/// that used to trail behind them are methods too.
+/// incidental to the design -- it *was* the design.
 struct Writing<'a> {
     model: &'a Model,
     extras: &'a Extras,
@@ -876,15 +830,12 @@ impl Writing<'_> {
         }
     }
 
-    /// What a name-driven derived property holds, when the model can
-    /// say.
+    /// What a name-driven derived property holds, when the model can say.
     ///
-    /// The metamodel declares these and states no value for them: they
-    /// are what a reader is expected to work out from what the model
-    /// does keep. Everything the standard asks for and this model can
-    /// answer is answered here; what it cannot is left at the default,
-    /// which is the honest answer for a property this toolchain does not
-    /// build the abstract syntax for.
+    /// The metamodel declares these and states no value for them: they are
+    /// what a reader is expected to work out from what the model keeps. What
+    /// this model cannot answer is left at the default, which is the honest
+    /// answer for a property it does not build the abstract syntax for.
     fn derived(&self, id: ElementId, name: &str) -> Option<Json> {
         let kind = self.model.kind(id);
         let is_relationship = kind.is_a(ElementKind::Relationship);
@@ -1306,13 +1257,11 @@ fn default_for(meta: &sysml_model::FeatureMeta) -> Json {
 }
 
 /// Where each relationship metaclass writes its ends: the chain of
-/// property names from the one it declares down to `source` or `target`
-/// itself, each redefining or subsetting the next. A `Subclassification`
-/// writes its specific end as `subclassifier`, which redefines
-/// `specific`, which subsets `source`; the metaclass that wrote one link
-/// of the chain has said the same thing about all of them. Read most
-/// specific first, and only the links the metaclass declares are
-/// written, so one entry serves a whole family.
+/// property names from the one it declares down to `source` or `target`,
+/// each redefining or subsetting the next. A `Subclassification` writes
+/// its specific end as `subclassifier`, which redefines `specific`, which
+/// subsets `source`. Read most specific first, and only the links the
+/// metaclass declares are written, so one entry serves a whole family.
 const ENDS: [(ElementKind, &[&str], &[&str]); 15] = [
     (
         ElementKind::FeatureValue,
@@ -1552,14 +1501,13 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
         Ok(members)
     };
 
-    // pass 2: properties, and the ownership each element states.
-    // Ownership may be written as the derived `ownedElement`, as
-    // memberships, or as a relationship's own related elements -- often
-    // all at once, so each pair counts once, in the order it is first
-    // given. None of it is built until all of it is known to be a tree:
-    // `Model::add_owned` refuses a cycle rather than let every later
-    // walk of the ownership web run for ever, and foreign JSON is where
-    // a cycle would come from.
+    // Pass 2: properties, and the ownership each element states. Ownership
+    // may be written as the derived `ownedElement`, as memberships, or as a
+    // relationship's own related elements -- often all at once, so each pair
+    // counts once, in the order it is first given. None of it is built until
+    // all of it is known to be a tree: `Model::add_owned` refuses a cycle
+    // rather than let every later walk run for ever, and foreign JSON is
+    // where a cycle would come from.
     let mut stated = std::collections::HashSet::new();
     let mut edges: Vec<(ElementId, ElementId)> = Vec::new();
     for (object, id) in created.iter().zip(&ids) {
@@ -2138,14 +2086,11 @@ mod tests {
         assert_eq!(membership_of("driver"), "ActorMembership");
         assert_eq!(membership_of("owner1"), "StakeholderMembership");
         assert_eq!(membership_of("obj1"), "ObjectiveMembership");
-        // a declared parameter is written as a `TypeBodyElement` --
-        // `FunctionBodyPart : Type = ( TypeBodyElement |
-        // ReturnFeatureMember )*` -- so its membership is an ordinary
-        // feature membership. Only what an invocation hands over is a
-        // `ParameterMembership`, whose parameter
-        // `parameterDirection()` requires to be `in`; read the other way
-        // round, `out y` would be a parameter whose direction is not
-        // what its own membership requires.
+        // A declared parameter is written as a `TypeBodyElement`, so its
+        // membership is an ordinary feature membership. Only what an invocation
+        // hands over is a `ParameterMembership`, whose `parameterDirection()`
+        // must be `in`; read the other way round, `out y` would be a parameter
+        // whose direction is not what its own membership requires.
         assert_eq!(membership_of("x"), "FeatureMembership");
         assert_eq!(membership_of("y"), "FeatureMembership");
         assert_eq!(membership_of("z"), "ReturnParameterMembership");

@@ -3,14 +3,12 @@
 //! The standard library is parsed and resolved once at startup and never
 //! again. The project is that workspace cloned, with every model file in
 //! the client's folders added and resolved. The analysis is the project
-//! cloned again, with every open document added on top -- because a
-//! buffer that has stopped matching what is on disk is what the editor
-//! is actually looking at, and the file underneath it must be left out
-//! rather than declared twice.
+//! cloned again, with every open document on top -- because a buffer that
+//! has stopped matching what is on disk is what the editor is looking at,
+//! and the file underneath must be left out rather than declared twice.
 //!
-//! Each layer is thrown away and rebuilt when the one below it moves,
-//! which is why they are layers: a keystroke rebuilds the top one and
-//! the library underneath it is not parsed again.
+//! Each layer is thrown away and rebuilt when the one below it moves: a
+//! keystroke rebuilds the top one, and the library is not parsed again.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -140,18 +138,16 @@ impl Server {
     }
     /// The model files beside an open document.
     ///
-    /// A document is read in the company it was written in, even where
-    /// the workspace folders do not reach it. A vendored corpus is
-    /// excluded so that opening one file does not pay for reading all of
-    /// it -- but half a model read on its own reports every name its
-    /// other half declares as unresolved, which is a complaint about the
-    /// exclusion rather than about the model.
+    /// A document is read in the company it was written in, even where the
+    /// workspace folders do not reach it. A vendored corpus is excluded so
+    /// that opening one file does not pay for reading all of it -- but half a
+    /// model read on its own reports every name its other half declares as
+    /// unresolved, which is a complaint about the exclusion rather than about
+    /// the model.
     ///
-    /// The document's own directory and the tree below it, which is the
-    /// same reach the preview offers to draw. The standard library is
-    /// the one directory this does not read: it is loaded once at
-    /// startup, and a second copy of it collides with the first at every
-    /// name.
+    /// The document's own directory and the tree below it. The standard
+    /// library is the one directory this does not read: it is loaded once at
+    /// startup, and a second copy collides with the first at every name.
     fn beside_open_documents(&self) -> Vec<PathBuf> {
         let mut files = Vec::new();
         for url in self.docs.keys() {
@@ -317,20 +313,19 @@ impl Server {
             .zip(self.docs.get(uri))
             .is_some_and(|(ws, text)| ws.file_parse(*file).syntax().text() != text.as_str())
     }
-    /// The document a file stands for: its URL, and the text the analysis
-    /// was built from.
+    /// The document a file stands for: its URL, and the text the analysis was
+    /// built from.
     ///
     /// The text comes from the workspace's own parse rather than from the
     /// buffer or the disk. Every range this server hands out was measured
-    /// against that text, and a project file can change on disk between
-    /// one analysis and the next: read afresh, an offset from the old text
-    /// lands somewhere else in the new one -- inside a character, and the
-    /// server died where it sliced.
+    /// against that text, and a project file can change on disk between one
+    /// analysis and the next: read afresh, an old offset lands somewhere else
+    /// -- inside a character, and the server died where it sliced.
     ///
-    /// The path is answered as the workspace folder spelled it. Resolving
-    /// it through its links would name the same file a second way, and the
-    /// editor that followed the answer would open a file this server did
-    /// not think it had.
+    /// The path is answered as the workspace folder spelled it. Resolving it
+    /// through its links would name the same file a second way, and the editor
+    /// following the answer would open a file this server did not think it
+    /// had.
     pub(crate) fn document(&mut self, file: usize) -> Option<(Url, String)> {
         let analysis = self.analysis();
         // An open document is answered in the spelling its own client

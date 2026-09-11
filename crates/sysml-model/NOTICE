@@ -1,0 +1,34 @@
+The OMG normative metamodel
+===========================
+
+`src/generated.rs` is written by the generator in this crate from the
+normative machine-readable metamodel the Object Management Group
+publishes with the specifications:
+
+    KerML 1.0   https://www.omg.org/spec/KerML/20250201/KerML.xmi
+    SysML 2.0   https://www.omg.org/spec/SysML/20250201/SysML.xmi
+
+Most of what it carries is derived -- metaclass names, their inheritance,
+the shape of each property. Some of it is the specification's own text,
+reproduced unchanged so that this crate can state and evaluate what the
+specification requires:
+
+  * the OCL body of each of the 180 constraints, 235 derivations and 99
+    operations it states (`RULES`, `DERIVATIONS`, `OPERATIONS`), about
+    65,000 characters
+  * the sentence each constraint and derivation states in words
+    (`Rule::says`), about 42,000
+
+Those portions are Copyright © Object Management Group, Inc. and the
+specification submitters, and are reproduced under the terms of use the
+OMG grants with its specifications, which license their use to create and
+distribute software implementing them. They are not licensed under this
+crate's MIT or Apache-2.0 terms, which cover the rest of it; nothing in
+them was written here and nothing in them was changed.
+
+`vendor/metamodel/` in the repository holds the two XMI files themselves,
+with the same terms. They are not part of the published crate.
+
+OMG®, SysML® and Systems Modeling Language® are registered trademarks of
+the Object Management Group. This project is not affiliated with or
+endorsed by the OMG.

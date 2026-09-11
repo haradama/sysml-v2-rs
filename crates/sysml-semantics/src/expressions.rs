@@ -1,12 +1,11 @@
 //! The names written inside an expression.
 //!
-//! The model keeps an expression as the text its author wrote rather
-//! than as a tree of elements, so the names in a constraint body, in the
-//! result of a `calc` and after an `=` are read off the syntax and
-//! looked up from the element the expression belongs to. That is the
-//! scope the language gives them, and working it out is a pass of its
-//! own: what an invocation hands its arguments to, what a feature chain
-//! steps through, what an index comes to, what a cast casts to.
+//! The model keeps an expression as the text its author wrote rather than
+//! as a tree of elements, so the names in a constraint body, in the result
+//! of a `calc` and after an `=` are read off the syntax and looked up from
+//! the element the expression belongs to -- the scope the language gives
+//! them. Working it out is a pass of its own: what an invocation hands its
+//! arguments to, what a chain steps through, what a cast casts to.
 
 use std::collections::HashSet;
 
@@ -20,11 +19,10 @@ use crate::{Access, ResolveStats, Workspace};
 impl Workspace {
     /// What each expression in the tree refers to, and what it invokes.
     ///
-    /// A feature reference names a feature; an invocation names the
-    /// function it hands its arguments to, which an operator names by
-    /// the symbol the specification's operator table maps -- `a + b`
-    /// invokes `DataFunctions::'+'`. Both are held on a `Membership`
-    /// the builder stands there ahead of everything else, since
+    /// A feature reference names a feature; an invocation names the function
+    /// it hands its arguments to, which an operator names through the
+    /// specification's operator table. Both are held on a `Membership` the
+    /// builder stands there ahead of everything else, since
     /// `instantiatedType()` and `referent` each read the first one.
     pub(crate) fn resolve_expression_tree(&mut self, asked: &[ElementId]) {
         // Only what was asked for. Walking a name before the file it is
@@ -179,13 +177,11 @@ impl Workspace {
     }
     /// A cast comes to the type it casts to.
     ///
-    /// `as` is "select instances of type (cast)" and `meta` the same of
-    /// a metaclass, and `BaseFunctions::'as'` returns `Anything`: the
-    /// type is named beside the operator rather than returned, so what
-    /// the expression comes to is nowhere in the model unless this puts
-    /// it there. `(that as SpatialItem).localClock` reads `localClock`
-    /// from a `SpatialItem` on the strength of it, which is what
-    /// `validateFeatureChainExpressionConformance` asks about.
+    /// `as` is "select instances of type (cast)", and `BaseFunctions::'as'`
+    /// returns `Anything`: the type is named beside the operator rather than
+    /// returned, so what the expression comes to is nowhere in the model
+    /// unless this puts it there. `(that as SpatialItem).localClock` reads
+    /// `localClock` on the strength of it.
     fn comes_to_what_it_casts_to(&mut self, membership: ElementId, cast: ElementId) {
         let casts = self
             .model
@@ -224,12 +220,10 @@ impl Workspace {
     }
     /// The feature a chain expression chains to.
     ///
-    /// "If the membershipOwningNamespace is a FeatureChainExpression,
-    /// then the local Namespace is the result parameter of the argument
-    /// Expression": `(that as SpatialItem).localClock` reads
-    /// `localClock` from what `that as SpatialItem` comes to, which for
-    /// a cast is the type it casts to and otherwise what its result
-    /// specializes.
+    /// "If the membershipOwningNamespace is a FeatureChainExpression, then the
+    /// local Namespace is the result parameter of the argument Expression":
+    /// `(that as SpatialItem).localClock` reads `localClock` from what `that
+    /// as SpatialItem` comes to, which for a cast is the type it casts to.
     fn chains_to(&mut self, membership: ElementId, node: &SyntaxNode) {
         let owner = self
             .model
@@ -298,12 +292,11 @@ impl Workspace {
     }
     /// Each argument redefines the parameter it is handed to.
     ///
-    /// `deriveInvocationExpressionArgument` reads an argument back as
-    /// "the owned feature that redefines this input, and the value it
-    /// holds", and `validateInvocationExpressionParameterRedefinition`
-    /// holds every argument to redefining exactly one of them. The
-    /// notation writes the arguments in order and names none of them,
-    /// so the order is what says which is which.
+    /// `deriveInvocationExpressionArgument` reads an argument back as "the
+    /// owned feature that redefines this input, and the value it holds", and
+    /// `validateInvocationExpressionParameterRedefinition` holds every
+    /// argument to redefining exactly one. The notation names none of them, so
+    /// the order is what says which is which.
     fn hands_over_what_it_takes(&mut self, invocation: ElementId, function: ElementId) {
         let taken = self.taken_by(function, &mut Vec::new());
         let handed = self.takes(invocation);
@@ -339,16 +332,14 @@ impl Workspace {
     }
     /// An invocation comes to what the function it invokes hands back.
     ///
-    /// The result an invocation owns redefines the function's own, which
-    /// is where an expression gets what it comes to: `@Safety` is a
-    /// boolean because `BaseFunctions::'@'` returns one, and nothing
-    /// else in the model says so.
+    /// The result an invocation owns redefines the function's own: `@Safety`
+    /// is a boolean because `BaseFunctions::'@'` returns one, and nothing else
+    /// in the model says so.
     ///
-    /// `checkInvocationExpressionSpecialization` has the invocation
-    /// specialize the function outright. Read that way it inherits the
-    /// function's parameters as well, and every constraint that counts
-    /// what an invocation is handed then counts the ones it inherits
-    /// beside the ones it was given -- which the standard removes as
+    /// `checkInvocationExpressionSpecialization` has the invocation specialize
+    /// the function outright. Read that way it inherits the function's
+    /// parameters too, and every constraint counting what an invocation is
+    /// handed counts those beside them -- which the standard removes as
     /// redefined and this model does not.
     fn comes_to_what_it_invokes(&mut self, invocation: ElementId, function: ElementId) {
         let mine = self.hands_back(invocation).expect(
@@ -467,13 +458,11 @@ impl Workspace {
     }
     /// The names a multiplicity counts with.
     ///
-    /// `succession causalOrdering first [nCauses] causes.startShot then
-    /// [nEffects] effects { attribute nCauses = size(causes); ... }`
-    /// counts with an attribute the succession declares, and
-    /// `validateMultiplicityRangeBoundResultTypes` reads what such a
-    /// bound comes to. The builder keeps a named bound as the text it
-    /// was written as; until the name is looked up the bound refers to
-    /// nothing, and says nothing about what it counts.
+    /// `first [nCauses] causes.startShot ... { attribute nCauses =
+    /// size(causes); }` counts with an attribute the succession declares, and
+    /// `validateMultiplicityRangeBoundResultTypes` reads what such a bound
+    /// comes to. The builder keeps a named bound as text; until the name is
+    /// looked up it refers to nothing.
     pub(crate) fn count_with_what_is_named(&mut self) {
         for elem in self.model.ids().collect::<Vec<_>>() {
             if self.model.kind(elem) != ElementKind::FeatureReferenceExpression
@@ -514,12 +503,11 @@ impl Workspace {
     }
     /// Resolve every name written in an expression, from `owner`.
     ///
-    /// An expression is not reified as a tree of elements -- the model
-    /// keeps it as the text the author wrote -- so the names in it are
-    /// read off the syntax and looked up from the element the expression
-    /// belongs to. That is the scope the language gives them: the
-    /// constraint of a requirement sees the requirement's subject, the
-    /// result of a `calc` sees its parameters.
+    /// The model keeps an expression as the text the author wrote, so the
+    /// names in it are read off the syntax and looked up from the element it
+    /// belongs to. That is the scope the language gives them: the constraint
+    /// of a requirement sees the requirement's subject, the result of a `calc`
+    /// its parameters.
     pub(crate) fn resolve_expression(
         &mut self,
         owner: ElementId,

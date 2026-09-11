@@ -1,17 +1,14 @@
 //! What an `import` brings into a namespace, and what an `alias` stands
 //! for.
 //!
-//! `import A::B;` takes one member, `A::*` takes the namespace's own,
-//! `A::**` takes those and everything nested below them, and each of
-//! those may be filtered: `import A::*[@Safety];` admits only what the
-//! condition holds of, which means classifying every candidate before
-//! it is known whether the name is there at all. A re-export chain --
-//! `public import` of a namespace that itself publicly imports -- is
-//! walked the same way, with a guard, since a model may write a cycle.
+//! `import A::B;` takes one member, `A::*` the namespace's own, `A::**`
+//! those and everything nested below, and each may be filtered: `import
+//! A::*[@Safety];` admits only what the condition holds of, which means
+//! classifying every candidate before it is known whether the name is
+//! there at all. A re-export chain is walked the same way, with a guard,
+//! since a model may write a cycle.
 //!
-//! An alias is here because it is the same question asked of one name:
-//! what does this stand for, once whatever it stands for has been
-//! worked out.
+//! An alias is here because it is the same question asked of one name.
 
 use std::collections::HashSet;
 
@@ -51,10 +48,9 @@ impl Workspace {
     /// visibility-filtered, in import order: what the standard's derived
     /// `importedMembership` reaches beyond the owned members.
     ///
-    /// A member import contributes the member itself; a namespace import
-    /// contributes the target's visible members (all of them under
-    /// `import all`); a recursive import adds the visible members of every
-    /// namespace below the target as well.
+    /// A member import contributes the member; a namespace import the target's
+    /// visible members (all of them under `import all`); a recursive import
+    /// those of every namespace below the target as well.
     pub fn imported_members(&mut self, ns: ElementId) -> Vec<ElementId> {
         let mut out = Vec::new();
         let mut seen: HashSet<ElementId> = self.model.owned(ns).iter().copied().collect();
@@ -120,16 +116,15 @@ impl Workspace {
             .filter(|c| self.model.kind(*c).is_a(ElementKind::Import))
             .collect()
     }
-    /// The filter conditions an import has to satisfy, each with the
-    /// element the names in it are resolved from.
+    /// The filter conditions an import has to satisfy, each with the element
+    /// the names in it are resolved from.
     ///
-    /// The language writes them in two places -- `import A::*[@Safety];`
-    /// on the import itself and `filter @Safety;` beside it in the
-    /// package -- and means the same by both: the grammar makes the
-    /// bracketed form a `FilterPackage` owning the import, so either way
-    /// the conditions belong to the namespace the names arrive in. Only
-    /// the second is an element of the model, which is why both are read
-    /// off the syntax here rather than one of each.
+    /// The language writes them in two places -- `import A::*[@Safety];` and
+    /// `filter @Safety;` beside it -- and means the same by both: the grammar
+    /// makes the bracketed form a `FilterPackage` owning the import, so either
+    /// way the conditions belong to the namespace the names arrive in. Only
+    /// the second is an element of the model, which is why both are read off
+    /// the syntax here.
     fn filters_of(&self, import: ElementId) -> Vec<(SyntaxNode, ElementId)> {
         let mut out = Vec::new();
         let condition_of = |node: &SyntaxNode, at: ElementId, out: &mut Vec<_>| {
@@ -167,19 +162,14 @@ impl Workspace {
     }
     /// Whether an import may bring `member` in.
     ///
-    /// "All filterConditions are checked against every Membership that
-    /// would otherwise be imported into the Package if it had no
-    /// filterConditions. A Membership shall be imported into the Package
-    /// if and only if every filterCondition evaluates to true either
-    /// with no target Element, or with any MetadataFeature of the
-    /// memberElement of the Membership as the target Element" (KerML
-    /// 8.4.4.14).
+    /// "A Membership shall be imported into the Package if and only if every
+    /// filterCondition evaluates to true either with no target Element, or
+    /// with any MetadataFeature of the memberElement of the Membership as the
+    /// target Element" (KerML 8.4.4.14).
     ///
-    /// A condition past what is evaluated here answers yes. A filter
-    /// says which of the names already there to keep, so one that is not
-    /// understood must not take a name the model does declare and leave
-    /// it resolving to nothing -- the same three-answer reading the
-    /// constraint checker gives an OCL body it cannot evaluate.
+    /// A condition past what is evaluated here answers yes: a filter says
+    /// which of the names already there to keep, so one that is not understood
+    /// must not leave a name the model declares resolving to nothing.
     pub(crate) fn admits(
         &mut self,
         member: ElementId,
@@ -248,15 +238,13 @@ impl Workspace {
     }
     /// Is `member` classified by `wanted`?
     ///
-    /// Two ways it can be. What has been said about it: `@Safety;`
-    /// inside a body and `#Safety` in front of a declaration both leave
-    /// a metadata feature owned by what they annotate, typed by the
-    /// metadata definition they name. And what it *is*: the standard
-    /// libraries carry a reflective model of the abstract syntax --
-    /// `metaclass Structure specializes Class` in `KerML`, `metadata def
-    /// PartUsage` in `SysML` -- so `@Structure` and `@SysML::PartUsage`
-    /// filter by the metaclass rather than by any annotation. The corpus
-    /// writes both, in the same file.
+    /// Two ways it can be. What has been said about it: `@Safety;` inside a
+    /// body and `#Safety` in front of a declaration both leave a metadata
+    /// feature typed by the definition they name. And what it *is*: the
+    /// standard libraries carry a reflective model of the abstract syntax --
+    /// `metaclass Structure specializes Class` -- so `@Structure` filters by
+    /// the metaclass rather than by any annotation. The corpus writes both, in
+    /// one file.
     fn classified_by(&mut self, member: ElementId, wanted: ElementId) -> bool {
         for child in self.model.owned(member).to_vec() {
             if !self.model.kind(child).is_a(ElementKind::MetadataFeature) {
@@ -338,14 +326,12 @@ impl Workspace {
         })();
         self.resolving.pop();
         self.in_progress.remove(&import);
-        // Resolving one import can ask for another -- `import A::B;` then
-        // `import B::c;` -- and the guard above answers `None` for
-        // whichever is already under way. That `None` says nothing about
-        // the import, so remembering it would leave the import dead for
-        // the rest of the session. Every other failure is the real
-        // answer and must be remembered: a name that is genuinely absent
-        // is asked for once per reference, and re-searching every scope
-        // each time costs seconds on a forty-line file.
+        // Resolving one import can ask for another -- `import A::B;` then `import
+        // B::c;` -- and the guard above answers `None` for whichever is already
+        // under way. That `None` says nothing about the import, so remembering it
+        // would leave it dead for the session. Every other failure is the real
+        // answer and must be remembered: re-searching every scope per reference
+        // costs seconds on a forty-line file.
         self.imports.insert(import, result.clone());
         if result.is_none() && self.blocked != cut {
             self.provisional.insert(import);

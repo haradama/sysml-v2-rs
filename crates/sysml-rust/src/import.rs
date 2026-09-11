@@ -2,11 +2,11 @@
 //!
 //! The input is what `rustdoc` writes with `--output-format json`: the one
 //! machine-readable statement of a crate's public API, re-exports resolved
-//! and macros expanded. [`rustdoc_to_sysml`] turns it into a SysML package
-//! in which every definition carries a `@code { ... }` metadata usage
-//! naming the Rust item it binds to -- so a systems model can `import` the
-//! package, type its ports and `perform` its actions, and a code generator
-//! can later call the real API instead of inventing parallel types.
+//! and macros expanded. [`rustdoc_to_sysml`] turns it into a package in
+//! which every definition carries a `@code { ... }` metadata usage naming
+//! the Rust item it binds to -- so a model can `import` the package, type
+//! its ports and `perform` its actions, and a generator can call the real
+//! API instead of inventing parallel types.
 //!
 //! The mapping, deliberately monomorphic:
 //!
@@ -18,42 +18,33 @@
 //!   `out error [0..1]`
 //! - free `fn` -> `action def`
 //! - generic items, and anything else, are skipped and listed at the end
-//!   of the package rather than dropped silently
+//!   rather than dropped silently
 //!
-//! A scalar keeps the width the crate declared. `sysml rustgen` reads a
-//! `Natural` back as a `u64` and a `Real` as an `f64`, so a `u32` folded
-//! into `Natural` returns from the round trip as a type the crate's own
-//! functions refuse. Every Rust scalar that is not one of those five
-//! gets an `attribute def` of its own, bound to the type it stands for.
-//! For the same reason a borrow reads as a value only for `&str`, which
-//! is how Rust passes a string: a signature taking `T` where the crate
-//! takes `&T` does not compile, so every other `&T` is refused.
+//! A scalar keeps the width the crate declared: `sysml rustgen` reads a
+//! `Natural` back as a `u64`, so a `u32` folded into `Natural` returns
+//! from the round trip as a type the crate's own functions refuse. Every
+//! other Rust scalar gets an `attribute def` of its own. For the same
+//! reason a borrow reads as a value only for `&str`, which is how Rust
+//! passes a string.
 //!
-//! A container nested in a container -- `Option<Vec<u8>>` -- is refused
-//! as well. SysML says how many of a type there are once, and folding
-//! the two levels into one would say something the crate does not.
+//! A container nested in a container -- `Option<Vec<u8>>` -- is refused:
+//! SysML says how many of a type there are once, and folding the two
+//! levels into one would say something the crate does not.
 //!
 //! Rust keeps types and functions in namespaces of their own and SysML
-//! does not, so `struct Config` and `fn config` both want to be
-//! `Config`. The type keeps the name, since signatures refer to it, and
-//! the action takes the name of the trait it belongs to as a prefix --
-//! or a number, where it belongs to no trait -- and says so in its
-//! `doc`.
+//! does not, so `struct Config` and `fn config` both want to be `Config`.
+//! The type keeps the name, since signatures refer to it, and the action
+//! takes the name of the trait it belongs to as a prefix -- or a number,
+//! where it belongs to none.
 //!
-//! A `pub use` re-export is followed to the item it names, so a crate
-//! that keeps its types in modules imports as what it publishes rather
-//! than as what its `lib.rs` happens to spell out. Nothing that was
-//! skipped is ever named by a signature: a definition whose parameters
-//! or result have no shape is skipped in turn, so every name in the
-//! package resolves.
+//! A `pub use` re-export is followed to the item it names. Nothing skipped
+//! is ever named by a signature: a definition whose parameters or result
+//! have no shape is skipped in turn, so every name resolves.
 //!
-//! Names that collide with SysML keywords are quoted (`'filter'`). The
-//! output is deterministic: declaration order in, declaration order out.
-//!
-//! rustdoc's JSON is versioned, and this importer reads the format that
-//! spells a function's parameters as `sig`. An older document is refused
-//! rather than imported: every action in it would come out with no
-//! parameters at all, and nothing would say so.
+//! Names that collide with SysML keywords are quoted (`'filter'`), and the
+//! output is deterministic. rustdoc's JSON is versioned, and this reads
+//! the format that spells a function's parameters as `sig`; an older
+//! document is refused rather than imported with no parameters at all.
 //!
 //! Regenerate an input with:
 //!

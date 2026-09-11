@@ -66,8 +66,7 @@ pub struct Sequence {
 ///
 /// An interaction that specializes another carries on the exchange it
 /// inherits, so the messages are read off the same list the
-/// interconnection view is assembled from -- the definition, whatever it
-/// specializes, and, for a usage, whatever its type does.
+/// interconnection view is assembled from.
 pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
     let mut sequence = Sequence::default();
     for child in assembled_from(model, definition) {

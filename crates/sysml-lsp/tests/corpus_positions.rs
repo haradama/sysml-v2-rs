@@ -2,12 +2,11 @@
 //!
 //! An editor sends requests wherever the cursor happens to be: inside a
 //! name, on a brace, past the end of a line, past the end of the file.
-//! The end-to-end tests cover a handful of positions in a model written
-//! for them; this covers roughly a quarter of a million requests across
-//! all 309 example models, at columns chosen to land off the end as
-//! often as on a name. It also applies a run of incremental edits and
-//! then sends the same text whole, so that the two must agree -- an
-//! off-by-one in UTF-16 offsets shows up as nothing else.
+//! This covers roughly a quarter of a million requests across all 309
+//! example models, at columns chosen to land off the end as often as on a
+//! name. It also applies a run of incremental edits and then sends the
+//! same text whole, so the two must agree -- an off-by-one in UTF-16
+//! offsets shows up as nothing else.
 
 mod common;
 
@@ -100,17 +99,14 @@ fn every_position_in_the_corpus() {
                     json!({"textDocument":{"uri":&uri},"position":{"line":row,"character":col},
                            "newName":"Renamed"}),
                 ) {
-                    // A rename it declines -- off a name, of an alias
-                    // whose uses it could not follow, of a feature that
-                    // declares no name and borrows none either, or of
-                    // something the standard library declares -- is the
-                    // answer, not a fault.
+                    // A rename it declines -- off a name, of an alias whose uses it could not
+                    // follow, of a feature that borrows its name, or of something the
+                    // standard library declares -- is the answer, not a fault.
                     //
-                    // That last one only began to happen when the server
-                    // gained a copy of the library to resolve against:
-                    // before, a cursor on `Anything` landed on nothing,
-                    // and the refusal that says an editor must not write
-                    // into the library was never reached.
+                    // That last one only began to happen when the server gained a copy of the
+                    // library: before, a cursor on `Anything` landed on nothing, and the
+                    // refusal that says an editor must not write into the library was never
+                    // reached.
                     if !e.contains("nothing to rename here")
                         && !e.contains("alias")
                         && !e.contains("declares no name")

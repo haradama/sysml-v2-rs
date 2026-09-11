@@ -1,14 +1,13 @@
 //! Every example of the notation is real SysML.
 //!
 //! The point of `notation` is that an agent asking how a construct is
-//! written gets something it can copy rather than something plausible.
-//! An example that no longer parses -- or that resolves to nothing, or
-//! that the specification's own constraints reject -- is worse than no
-//! example at all: it is a wrong answer given confidently, to a caller
-//! that asked precisely because it did not know.
+//! written gets something it can copy rather than something plausible. An
+//! example that no longer parses -- or resolves to nothing, or that the
+//! specification's constraints reject -- is worse than none: it is a wrong
+//! answer given confidently, to a caller that asked because it did not
+//! know.
 //!
-//! So each is put through the same `check` an agent would put its own
-//! model through.
+//! So each is put through the same `check` an agent would.
 
 use sysml_cli::notation::{notation, NOTATION};
 use sysml_semantics::Workspace;

@@ -1,17 +1,15 @@
 //! The client the end-to-end tests drive the server with.
 //!
-//! Six of these had grown, one per test file, and they had drifted:
-//! the same request was `request` in three of them and `ask` in two,
-//! returning a value in one and a `Result` in the other; one waited ten
-//! seconds for an answer and the rest thirty; `diagnostics` meant the
-//! next publication for a file in two files and the next `n`
-//! publications for any file in a third. None of that was a difference
-//! between the tests -- it was six people's afternoons -- and reading a
-//! test meant first working out which client it had.
+//! Six of these had grown, one per test file, and they had drifted: the
+//! same request was `request` in three and `ask` in two, returning a value
+//! in one and a `Result` in the other; one waited ten seconds for an
+//! answer and the rest thirty; `diagnostics` meant three different things.
+//! None of that was a difference between the tests, and reading one meant
+//! first working out which client it had.
 //!
 //! So there is one client, and the two shapes of each question keep
-//! separate names: `ask` hands back the server's error, `request`
-//! asserts there is none.
+//! separate names: `ask` hands back the server's error, `request` asserts
+//! there is none.
 
 // Each test binary compiles its own copy of this module and drives the
 // server its own way, so what one of them does not call is dead code in

@@ -1,16 +1,13 @@
 //! The standard library, without being handed one.
 //!
-//! Almost nothing in a SysML model resolves without it: `part def
-//! Vehicle;` specializes `Parts::Part`, every feature subsets
-//! `Base::things`. Until there was a copy built into the binary, getting
-//! one meant cloning a repository whose history is two gigabytes to
-//! obtain one and a third megabytes of model -- so `cargo install
-//! sysml-cli` gave you a tool that reported every name in every model as
-//! unresolved until you did.
+//! Almost nothing in a SysML model resolves without it. Until there was a
+//! copy built into the binary, getting one meant cloning a repository
+//! whose history is two gigabytes for one and a third megabytes of model
+//! -- so `cargo install sysml-cli` gave you a tool that reported every
+//! name in every model as unresolved until you did.
 //!
-//! What the rest of the suite checks is the other half: `--no-library`,
-//! which is what a model looks like to a tool that cannot find one, and
-//! which several tests depend on because they are about that.
+//! The rest of the suite checks the other half: `--no-library`, which is
+//! what a model looks like to a tool that cannot find one.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};

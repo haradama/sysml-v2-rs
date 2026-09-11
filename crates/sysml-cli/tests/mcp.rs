@@ -1219,8 +1219,12 @@ fn a_server_told_nothing_answers_out_of_the_copy_built_in() {
 
 /// A library of two documented definitions, for the searches that are
 /// about what a definition says rather than what it is called.
-fn saying_library() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join("sysml-mcp-documented");
+///
+/// Written under a directory of the caller's own: three tests wrote the
+/// same file at once, and a server started between one test's truncate
+/// and its write read an empty library and searched it for nothing.
+fn saying_library(under: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sysml-mcp-documented-{under}"));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("tiny.sysml"),
@@ -1240,7 +1244,7 @@ fn saying_library() -> std::path::PathBuf {
 /// specification is in.
 #[test]
 fn library_search_can_look_at_what_a_definition_says() {
-    let dir = saying_library();
+    let dir = saying_library("says");
     let mut server = sysml_cli::mcp::Server::new(Some(&dir));
     let found = answered(
         &server
@@ -1266,7 +1270,7 @@ fn library_search_can_look_at_what_a_definition_says() {
 /// is what sends a model off to invent its own.
 #[test]
 fn a_name_that_finds_nothing_falls_back_to_the_documentation() {
-    let dir = saying_library();
+    let dir = saying_library("falls-back");
     let mut server = sysml_cli::mcp::Server::new(Some(&dir));
 
     // a name it does know is answered as a name, and says so
@@ -1301,7 +1305,7 @@ fn a_name_that_finds_nothing_falls_back_to_the_documentation() {
 /// Asked for both, the names come first and nothing is listed twice.
 #[test]
 fn both_puts_the_names_first_and_says_each_once() {
-    let dir = saying_library();
+    let dir = saying_library("both");
     let mut server = sysml_cli::mcp::Server::new(Some(&dir));
     let found = answered(
         &server

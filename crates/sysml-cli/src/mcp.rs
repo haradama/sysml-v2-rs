@@ -1,9 +1,9 @@
 //! A Model Context Protocol server for SysML v2, over stdio.
 //!
 //! SysML v2 was adopted in 2025 and hardly appears in what a language
-//! model has read. Asked to write it, a model writes something that
-//! looks right and names things that do not exist. This server exists to
-//! answer the questions it should have asked instead:
+//! model has read. Asked to write it, a model writes something that looks
+//! right and names things that do not exist. This server answers the
+//! questions it should have asked instead:
 //!
 //! - `check` -- does this model parse, and does every name in it resolve?
 //! - `visible_names` -- what may legally be written at this point?
@@ -11,16 +11,13 @@
 //! - `notation` -- how is this kind of thing written at all?
 //! - `generation_plan` -- what does this model imply for code?
 //!
-//! What they do is tell the truth about a model, which is the part a
-//! language model cannot supply for itself. Where something can be
-//! derived exactly -- the Rust a model implies, the SysML an existing
-//! crate's API already is -- deriving it is telling the truth too, and
-//! the tools that do that say in the same answer what they could not
-//! derive, so what is left to write is stated rather than missing.
+//! Where something can be derived exactly -- the Rust a model implies, the
+//! SysML a crate's API already is -- the tool says in the same answer what
+//! it could not derive, so what is left to write is stated rather than
+//! missing.
 //!
-//! The transport is the MCP stdio one: JSON-RPC 2.0, one message per
-//! line. [`serve`] runs the loop over any reader and writer, so a test
-//! drives it the same way a client does.
+//! The transport is the MCP stdio one: JSON-RPC 2.0, one message per line.
+//! [`serve`] runs the loop over any reader and writer.
 
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
@@ -34,12 +31,10 @@ use sysml_semantics::Workspace;
 /// What this server speaks when the client asks for something else.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// The revisions this server can speak. A client names the one it wants
-/// and that one is echoed back; a client that names anything else --
-/// including a revision from after this server was written -- is told
-/// what the server does speak, and decides for itself whether it can
-/// live with that. Echoing back whatever was asked for promised to speak
-/// revisions that do not exist.
+/// The revisions this server can speak. A client names one and that one is
+/// echoed back; any other -- including one from after this server was
+/// written -- is told what the server does speak and decides for itself.
+/// Echoing back whatever was asked promised revisions that do not exist.
 const SPOKEN: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
 
 /// The library and open documents, answered against.
@@ -58,11 +53,8 @@ pub struct Server {
 /// The model a call is about when it names no source of its own.
 ///
 /// A model of any size is spread over files, and without this every call
-/// has to restate all of them in `alongside`. Restating them is not slow
-/// -- a call costs about eight milliseconds either way -- it is the kind
-/// of thing that is got wrong: a file left out reads as a page of
-/// unresolved names, and what the client then believes is that the model
-/// is broken.
+/// restates them in `alongside` -- not slow, but easy to get wrong: a file
+/// left out reads as a page of unresolved names.
 struct Project {
     /// Where it was loaded from, for the answer to say.
     root: String,
@@ -85,13 +77,12 @@ impl Server {
         Server::holding(library, project, true)
     }
 
-    /// A server with no standard library at all, which `sysml
-    /// --no-library mcp` starts.
+    /// A server with no standard library at all, which `sysml --no-library
+    /// mcp` starts.
     ///
     /// Every reference into the library then reads as unresolved and the
-    /// constraints are not put at all -- which is what a model looks
-    /// like to a tool that cannot find a library, and is worth being
-    /// able to ask for on purpose rather than only by accident.
+    /// constraints are not put at all -- worth asking for on purpose rather
+    /// than only by accident.
     pub fn without_library(project: Option<&Path>) -> Server {
         Server::holding(None, project, false)
     }
@@ -150,11 +141,10 @@ impl Server {
 
     /// Read the project as it is now.
     ///
-    /// The agent asking these questions is the one writing the files, so
-    /// a project read at startup and never again answers about a model
-    /// that no longer exists. The walk is redone rather than the mtimes
-    /// watched, because a file the agent has just written is as likely
-    /// to be a new one as an edited one.
+    /// The agent asking is the one writing the files, so a project read once
+    /// at startup answers about a model that no longer exists. The walk is
+    /// redone rather than mtimes watched: a file just written is as likely to
+    /// be new as edited.
     fn refresh(&mut self) {
         let Some(project) = &mut self.project else {
             return;
@@ -174,12 +164,10 @@ impl Server {
     /// One request in, one response out -- or nothing, for a
     /// notification, which by JSON-RPC has no reply.
     pub fn handle(&mut self, request: &Value) -> Option<Value> {
-        // Anything that is not a request object cannot be acted on, and
-        // JSON-RPC has the server say so rather than fall silent: a
-        // client that sent an id is waiting for an answer and would wait
-        // for ever. MCP carries no batches, so an array -- empty or not
-        // -- is refused the same way, under the null id that the spec
-        // gives an unidentifiable request.
+        // Anything that is not a request object cannot be acted on, and JSON-RPC
+        // has the server say so rather than fall silent: a client that sent an id
+        // would wait for ever. MCP carries no batches, so an array is refused the
+        // same way, under the null id the spec gives an unidentifiable request.
         let Some(fields) = request.as_object() else {
             return Some(invalid("a request is a JSON object", Value::Null));
         };
@@ -253,14 +241,12 @@ impl Server {
         })
     }
 
-    /// The workspace one call is answered against: the library, the
-    /// project where the launcher named one, and whatever the call
-    /// brought itself.
+    /// The workspace one call is answered against: the library, the project
+    /// where the launcher named one, and whatever the call brought itself.
     ///
-    /// A file the call names replaces the copy the project holds rather
-    /// than being added beside it -- added, everything in it would be
-    /// declared twice -- so an edit can be asked about before it is
-    /// written.
+    /// A file the call names replaces the project's copy rather than joining
+    /// it -- added, everything in it would be declared twice -- so an edit can
+    /// be asked about before it is written.
     fn opened(&self, arguments: &Value) -> Result<Opened, String> {
         let named = source(arguments)?;
         let alongside = alongside(arguments);
@@ -296,16 +282,13 @@ impl Server {
         self.refresh();
         let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
 
-        // The answer is about the whole model that was opened -- the
-        // file asked about and every file it is spread over -- because
-        // that is what the reference counts are over. Each finding says
-        // which file it is in, so a sibling that does not resolve is
-        // reported under its own path instead of being counted in
-        // `references` and then left out of `unresolved`.
+        // The answer is about the whole model that was opened, since that is what
+        // the reference counts are over. Each finding says which file it is in,
+        // so a sibling that does not resolve is reported under its own path
+        // rather than counted in `references` and left out of `unresolved`.
         //
-        // The name and the text of each open file are held here so that
-        // a finding can be placed after `ws` has been borrowed to
-        // resolve.
+        // The name and text of each open file are held here so a finding can be
+        // placed after `ws` has been borrowed to resolve.
         let texts: Vec<(String, String)> = open
             .iter()
             .map(|&f| {
@@ -343,24 +326,19 @@ impl Server {
         }
 
         let stats = ws.resolve_files(&open);
-        // The names, the root packages that collide with the library's,
-        // and -- if the model is in any state to be asked -- what the
-        // specification itself requires of it. The order and the stop
-        // are `diagnose`'s: this used to put every constraint to
-        // whatever it was handed, so one dangling reference came back
-        // as a list of complaints about the hole, and a project opened
-        // without the library was told it broke rules that are written
-        // against the library.
+        // The names, the root packages that collide with the library's, and --
+        // if the model is in any state to be asked -- what the specification
+        // requires of it. The order and the stop are `diagnose`'s: putting every
+        // constraint to whatever it was handed turned one dangling reference into
+        // a list of complaints about the hole.
         let diagnosed = ws.diagnose(&open);
-        // A name that found nothing is reported with what it might have
-        // meant. Resolution says only that both of these missed:
+        // A name that found nothing is reported with what it might have meant.
+        // Resolution says only that both of these missed:
         //
         //     attribute capacity : VolumeValue;   -- `ISQ::VolumeValue`, un-imported
         //     attribute temp : Temperature;       -- `TemperatureValue`, misremembered
         //
-        // and they are not the same mistake. An agent told only that
-        // each resolved to nothing has to search for them one at a
-        // time; told which is which, it has the answer already.
+        // and they are not the same mistake.
         let missed: Vec<String> = diagnosed
             .found
             .names
@@ -562,10 +540,9 @@ impl Server {
 
     /// An existing Rust API stated as SysML.
     ///
-    /// The mapping is not obvious -- what becomes a multiplicity, what
-    /// becomes a port, which borrows can be crossed at all -- and a
-    /// model that gets it wrong says so only when the generated code
-    /// will not compile. So it is derived rather than written.
+    /// The mapping is not obvious -- what becomes a multiplicity, what becomes
+    /// a port, which borrows can be crossed -- and a model that gets it wrong
+    /// says so only when the generated code will not compile.
     fn import_rust(&mut self, arguments: &Value) -> Result<Value, String> {
         let json = match arguments.get("json").and_then(Value::as_str) {
             Some(json) => json.to_string(),
@@ -608,13 +585,11 @@ impl Server {
 
     /// What the model implies for code, in no language in particular.
     ///
-    /// `generate_rust` answers the same question in Rust and hands back
-    /// Rust. This hands back what the Rust was written from, so that a
-    /// caller with a language of its own -- which is most callers -- can
-    /// write it without guessing at the things a model does not wear on
-    /// its face: whether four wheels are an array or a list, whether a
-    /// part is owned or referred to, what `ISQ::MassValue` bottoms out
-    /// in.
+    /// `generate_rust` answers the same question in Rust. This hands back what
+    /// the Rust was written from, so a caller with a language of its own can
+    /// write it without guessing at what a model does not wear on its face:
+    /// whether four wheels are an array or a list, whether a part is owned or
+    /// referred to, what `ISQ::MassValue` bottoms out in.
     fn generation_plan(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
         let Opened {
@@ -695,12 +670,10 @@ impl Server {
 
         let mut how = asked;
         let mut found = hunt(how);
-        // Nothing is named that. The words a specification used are not
-        // the words the library used -- "how much fluid it holds" is
-        // `ISQ::VolumeValue` -- and an empty answer reads as "the
-        // library does not have one", which is what sends a model off to
-        // invent its own. So look where the library says what it means,
-        // rather than only at what it calls it.
+        // Nothing is named that. The words a specification used are not the words
+        // the library used -- "how much fluid it holds" is `ISQ::VolumeValue` --
+        // and an empty answer reads as "the library does not have one", which is
+        // what sends a model off to invent its own.
         if found.is_empty() && how == "names" {
             how = "documentation";
             found = hunt(how);
@@ -732,9 +705,8 @@ fn matches(ws: &Workspace, how: &str, query: &str, limit: usize) -> Vec<ElementI
 /// How a construct is written, with an example that has been checked.
 ///
 /// Asked for nothing in particular it answers the list, which is the
-/// question a caller with a paragraph of prose in front of it actually
-/// has: not "what is the grammar of a requirement" but "which of these
-/// is the sentence I am looking at".
+/// question a caller with prose in front of it has: not "what is the
+/// grammar of a requirement" but "which of these is the sentence".
 fn notation(arguments: &Value) -> Result<Value, String> {
     let Some(of) = arguments.get("of").and_then(Value::as_str) else {
         let every: Vec<Value> = crate::notation::NOTATION
@@ -801,13 +773,11 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
     found
         .iter()
         .map(|&elem| {
-            // An alias is a membership that carries a name, and the
-            // standard library offers its friendliest names that way:
-            // `alias TemperatureValue for ThermodynamicTemperatureValue;`.
-            // Read off the alias itself, the metaclass is `Membership`
-            // and there is no documentation -- so the answer a caller
-            // most wants was the one labelled uselessly. What it names
-            // is what it is.
+            // An alias is a membership that carries a name, and the library offers
+            // its friendliest names that way: `alias TemperatureValue for
+            // ThermodynamicTemperatureValue;`. Read off the alias itself the
+            // metaclass is `Membership` with no documentation, so what a caller most
+            // wants was the thing labelled uselessly. What it names is what it is.
             let names = ws.alias_target(elem).unwrap_or(elem);
             let mut entry = json!({
                 "name": ws.qualified_name_of(elem),

@@ -5,13 +5,12 @@
 //! standing -- the names inside expressions, the ends a statement named,
 //! the relationships the notation implies.
 //!
-//! The order is not arbitrary. A feature chain cannot be walked until
-//! the typings it steps through are reified; an end cannot redefine the
-//! one its association declares until the association's supertypes are
-//! known. And what is cleared before a pass matters as much: resolving
-//! one file again must forget what that file said last time without
-//! forgetting what its neighbours said, or a workspace an editor keeps
-//! open grows a second copy of every relationship it holds.
+//! The order is not arbitrary. A feature chain cannot be walked until the
+//! typings it steps through are reified; an end cannot redefine the one
+//! its association declares until the association's supertypes are known.
+//! And resolving one file again must forget what that file said last time
+//! without forgetting its neighbours, or a workspace an editor keeps open
+//! grows a second copy of every relationship.
 
 use std::collections::HashSet;
 
@@ -24,14 +23,12 @@ use crate::{Clear, ResolveStats, Workspace};
 impl Workspace {
     /// Forget what was worked out from names that were not there.
     ///
-    /// A workspace grows a file at a time: an editor opens a buffer
-    /// over a project already loaded, a project loads its library
-    /// after the file being edited. A lookup that failed before the
-    /// file arrived is no evidence about the workspace it is asked
-    /// about now, and remembering it is how a language server comes to
-    /// underline a name the model does resolve. What was found stands
-    /// -- a file only adds names, and the ones already found are still
-    /// where they were.
+    /// A workspace grows a file at a time: an editor opens a buffer over a
+    /// project already loaded, a project loads its library after the file
+    /// being edited. A lookup that failed before the file arrived is no
+    /// evidence about the workspace now, and remembering it is how a language
+    /// server underlines a name the model does resolve. What was found stands
+    /// -- a file only adds names.
     pub(crate) fn forget_failures(&mut self) {
         self.imports.retain(|_, target| target.is_some());
         self.aliases.retain(|_, target| target.is_some());
@@ -57,19 +54,15 @@ impl Workspace {
         let ids: Vec<ElementId> = self.model.ids().collect();
         self.resolve_ids(&ids, Clear::TheseFiles)
     }
-    /// Resolve only elements belonging to the given files (imports,
-    /// supertypes etc. from other files are still resolved on demand).
-    /// Resolve `files`, and then whatever they turned out to reach,
-    /// until nothing new is reached.
+    /// Resolve `files`, and then whatever they turned out to reach, until
+    /// nothing new is reached.
     ///
     /// A reader of the model -- a drawing, a generator -- follows the
-    /// relationships resolution reifies, so a type that was never
-    /// resolved has no members to show and no supertype to inherit
-    /// from. Resolving every loaded file answers that by doing far more
-    /// work than the question needs: a standard library is thousands of
-    /// references, of which a model uses a handful. This resolves the
-    /// files asked for, sees which files the answers landed in, and
-    /// goes round again.
+    /// relationships resolution reifies, so a type that was never resolved has
+    /// no members to show and no supertype to inherit from. Resolving every
+    /// loaded file answers that by doing far more work than the question
+    /// needs: a standard library is thousands of references, of which a model
+    /// uses a handful.
     pub fn resolve_reached(&mut self, files: &[usize]) -> ResolveStats {
         let mut stats = self.resolve_files(files);
         let mut done: HashSet<ElementId> = self
@@ -306,33 +299,22 @@ impl Workspace {
                                 }
                                 continue;
                             }
-                            // A dotted operand names a chain, not the
-                            // feature at the end of it. The abstract
-                            // syntax the OMG publishes makes a `Feature`
-                            // of its own of it, carrying the steps as
-                            // `FeatureChaining`: `Occurrences.kermlx`
-                            // does exactly that for `subset
-                            // laterOccurrence.successors subsets
-                            // earlierOccurrence.successors;`. Read as
-                            // the last step alone, the operand is the
-                            // feature that step names anywhere rather
-                            // than the one this path reaches, and what
-                            // features it is read off the wrong element
-                            // -- which is the whole of what
+                            // A dotted operand names a chain, not the feature at the end of it. The
+                            // published abstract syntax makes a `Feature` of its own of it, carrying
+                            // the steps as `FeatureChaining` -- `Occurrences.kermlx` does exactly
+                            // that. Read as the last step alone, the operand is the feature that step
+                            // names anywhere rather than the one this path reaches, and what features
+                            // it is read off the wrong element -- which is the whole of what
                             // `validateSubsettingFeaturingTypes` and
                             // `validateRedefinitionFeaturingTypes` ask.
-                            // A reference subsetting is one too -- the
-                            // published abstract syntax stands 106 of
-                            // them under the standard library alone --
-                            // and a connector end written as `lcp ::>
-                            // w.lcp` reaches what it relates through the
-                            // chain rather than as it.
-                            // For a cross subsetting there is more:
-                            // `deriveFeatureCrossFeature` reads
-                            // `crossedFeature.chainingFeature->at(2)`,
-                            // and `validateCrossSubsettingCrossedFeature`
-                            // holds the first step to being the other
-                            // end of the association.
+                            //
+                            // A reference subsetting is one too -- 106 of them under the standard
+                            // library alone -- and a connector end written `lcp ::> w.lcp` reaches
+                            // what it relates through the chain. For a cross subsetting there is
+                            // more: `deriveFeatureCrossFeature` reads
+                            // `crossedFeature.chainingFeature->at(2)`, and
+                            // `validateCrossSubsettingCrossedFeature` holds the first step to being
+                            // the other end of the association.
                             let names_a_chain = matches!(
                                 part_kind,
                                 SyntaxKind::CROSSES_KW
@@ -354,20 +336,17 @@ impl Workspace {
                     }
                 }
             }
-            // `perform w;`, `exhibit s;`, `assert c;`, `include u;` --
-            // `PerformActionUsageDeclaration : PerformActionUsage = (
-            // ownedRelationship += OwnedReferenceSubsetting ... )`. The
-            // reference is what the usage is *about*, and without it the
-            // model says only that something is performed.
+            // `perform w;`, `exhibit s;`, `assert c;`, `include u;` -- the reference
+            // is what the usage is *about*, and without it the model says only that
+            // something is performed.
             //
-            // A name that does not resolve is left alone rather than
-            // reported: `satisfy requirement viewpointConformance by
-            // that;` writes the same shape and *declares* that name, so
-            // a finding here would be a false one.
+            // A name that does not resolve is left alone rather than reported:
+            // `satisfy requirement viewpointConformance by that;` writes the same
+            // shape and *declares* that name, so a finding here would be false.
             //
-            // `satisfy r by p;` and `verify r;` have resolvers of their
-            // own below, which record the same operand: recording it here
-            // too would give a rename two edits over the one name.
+            // `satisfy r by p;` and `verify r;` have resolvers of their own that
+            // record the same operand; recording it here too would give a rename two
+            // edits over one name.
             let handled = self
                 .model
                 .kind(id)
@@ -411,21 +390,19 @@ impl Workspace {
         stats.lookups = self.lookups - began;
         stats
     }
-    /// What a connector relates, where it wrote its ends as
-    /// declarations of their own.
+    /// What a connector relates, where it wrote its ends as declarations of
+    /// their own.
     ///
-    /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort
-    /// to [1] shankPort ::> hub.shankPort;` writes the ends and not the
-    /// things they stand for, and `relatedFeature =
-    /// connectorEnd.ownedReferenceSubsetting.subsettedFeature` says
-    /// which of them the connector relates. What an end refers to is
-    /// resolved with the end rather than with the connector, so this
-    /// waits until both are.
+    /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to [1]
+    /// shankPort ::> hub.shankPort;` writes the ends and not the things they
+    /// stand for, and `relatedFeature =
+    /// connectorEnd.ownedReferenceSubsetting.subsettedFeature` says which of
+    /// them the connector relates. What an end refers to is resolved with the
+    /// end, so this waits until both are.
     ///
-    /// A dotted reference is a chain, and what the connector relates is
-    /// the feature that chain ends at -- which is what an end written
-    /// without a name of its own already reports, and a consumer asking
-    /// what is connected to what wants the port and not the path to it.
+    /// A dotted reference is a chain, and what the connector relates is the
+    /// feature it ends at: a consumer asking what is connected to what wants
+    /// the port, not the path to it.
     fn relate_named_ends(&mut self) {
         for elem in self.model.ids().collect::<Vec<_>>() {
             if !self.model.kind(elem).is_a(ElementKind::Connector)

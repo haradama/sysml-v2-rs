@@ -17,11 +17,11 @@ it was resolved against: what the model refers to across that line is an
 the same library computes the same ones. `--include-library` writes a
 document that stands on its own instead.
 
-```console
-$ sysml parse vehicle.sysml
-$ sysml check model/
-$ sysml diagram vehicle.sysml -o vehicle.svg
-$ sysml mcp
+```sh
+sysml parse vehicle.sysml
+sysml check model/
+sysml diagram vehicle.sysml -o vehicle.svg
+sysml mcp
 ```
 
 A finding is said twice over. To a person it is drawn the way rustc

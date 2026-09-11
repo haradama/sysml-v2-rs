@@ -1,12 +1,11 @@
 //! The OCL the specification writes its well-formedness constraints in.
 //!
 //! [`sysml_model::RULES`] carries those constraints as the metamodel
-//! states them, in OCL, verbatim. This parses the subset they use into a
-//! tree that [`crate::rules`] evaluates. The subset is what the 180
-//! constraints actually contain and no more -- navigation, the
-//! collection operations, `let`, `if`, and the logical and comparison
-//! operators -- because a parser that accepts what the corpus never
-//! writes is a parser nothing checks.
+//! states them, verbatim. This parses the subset they use into a tree that
+//! [`crate::rules`] evaluates: navigation, the collection operations,
+//! `let`, `if`, and the logical and comparison operators -- what the 180
+//! constraints contain and no more, because a parser that accepts what the
+//! corpus never writes is a parser nothing checks.
 
 /// One OCL expression.
 #[derive(Clone, Debug, PartialEq)]
@@ -547,25 +546,23 @@ mod tests {
 
     use super::*;
 
-    /// The derivations and operations the specification writes so that
-    /// they cannot be read as they stand, which is a different list
-    /// from the constraints and a longer one. It is read here from the
-    /// metamodel's own text, before `rules::UNCLOSED` closes any of it.
+    /// The derivations and operations the specification writes so that they
+    /// cannot be read as they stand -- a different list from the constraints,
+    /// and a longer one. Read from the metamodel's own text, before
+    /// `rules::UNCLOSED` closes any of it.
     ///
-    /// Two kinds sit in it. Some are the specification's own text:
-    /// `Namespace::resolveGlobal` and three of its neighbours are
-    /// written as prose about what they would do rather than as OCL,
-    /// and `Expression::modelLevelEvaluable` stops in the middle of a
-    /// `forAll(` it never closes, as `deriveFeatureCrossFeature` and
-    /// `deriveTransitionUsageSource` each stop one `endif` short --
-    /// those three are closed and read, since the grammar leaves one
-    /// place for the closing, and `ControlNode::multiplicityHasBounds`
-    /// is a fourth. The rest are the specification's own too, or this
-    /// subset's: `OperatorExpression::instantiatedType` writes a string
+    /// Two kinds sit in it. Some are prose about what they would do rather
+    /// than OCL -- `Namespace::resolveGlobal` and three neighbours -- and some
+    /// stop in the middle of what they open:
+    /// `Expression::modelLevelEvaluable` in a `forAll(`,
+    /// `deriveFeatureCrossFeature` and `deriveTransitionUsageSource` one
+    /// `endif` short, which are closed and read since the grammar leaves one
+    /// place for the closing. The rest are the specification's own slips or
+    /// this subset's: `OperatorExpression::instantiatedType` writes a string
     /// in double quotes, which OCL spells with single ones.
     ///
-    /// It is pinned so that the list cannot grow unnoticed, and so that
-    /// closing one of the gaps shows up here as the gain it is.
+    /// Pinned so the list cannot grow unnoticed, and so closing one of the
+    /// gaps shows up as the gain it is.
     #[test]
     fn what_the_specification_writes_that_this_subset_cannot_read() {
         const UNREADABLE: [&str; 17] = [
@@ -615,16 +612,14 @@ mod tests {
         assert_eq!(names, UNREADABLE, "{said}");
     }
 
-    /// One constraint of the specification cannot be read, and it is a
-    /// defect in the specification's own text rather than a gap in this
-    /// subset: `validateFeatureEndNoDirection` is written `isEnd
-    /// implied direction = null`, and `implied` is not an OCL operator.
-    /// `rules::UNCLOSED` repairs it before it is run, on the pilot
-    /// implementation's word rather than this parser's; what is pinned
-    /// here is the specification's own text, which still says `implied`.
+    /// One constraint cannot be read, and it is a defect in the
+    /// specification's own text rather than a gap in this subset:
+    /// `validateFeatureEndNoDirection` is written `isEnd implied direction =
+    /// null`, and `implied` is not an OCL operator. `rules::UNCLOSED` repairs
+    /// it before it is run, on the pilot implementation's word; what is pinned
+    /// here is the specification's text, which still says `implied`.
     ///
-    /// It is named here so that a second one cannot appear unnoticed:
-    /// what this test holds is that the subset reads everything else.
+    /// Named so a second one cannot appear unnoticed.
     #[test]
     fn every_constraint_the_specification_states_parses_but_its_own_one_defect() {
         const DEFECTIVE: [&str; 1] = ["validateFeatureEndNoDirection"];

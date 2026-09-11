@@ -1,15 +1,14 @@
 //! What a type reaches through what it specializes.
 //!
 //! A namespace's members are not only the ones it declares: it inherits
-//! whatever its supertypes have, and a feature inherits through the
-//! types it is declared with, which is what makes `engine.mass` a name
-//! that resolves. Working out the supertypes is where the implicit ones
-//! come in too -- the semantic-library type the standard maps each
-//! metaclass to (`part def` to `Parts::Part`), and the `baseType` a
-//! user-defined keyword names through its metadata.
+//! whatever its supertypes have, and a feature inherits through the types
+//! it is declared with, which is what makes `engine.mass` resolve. Working
+//! out the supertypes brings in the implicit ones too -- the
+//! semantic-library type the standard maps each metaclass to, and the
+//! `baseType` a user-defined keyword names through its metadata.
 //!
-//! The answers are cached, because a lookup asks for them once per
-//! namespace per segment and the standard library specializes deeply.
+//! The answers are cached: a lookup asks once per namespace per segment,
+//! and the standard library specializes deeply.
 
 use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_syntax::{is_name_chain, SyntaxKind, SyntaxNode};
@@ -200,15 +199,13 @@ impl Workspace {
                 }
             }
         }
-        // `variant manualTransmission;` names one of the usages the
-        // model already has; `variant part v;` declares a new one. The
-        // difference is whether a kind keyword was written, and the
-        // reference form has to bring what it names along with it.
-        // An enumeration value is a variant of its enumeration, and it
-        // *declares* the value rather than naming one written
-        // elsewhere: `enum def E1 { a; b; c; }` has no `a` anywhere
-        // else to bring along, and looking for one reaches past the
-        // enumeration to whatever else the workspace calls `a`.
+        // `variant manualTransmission;` names one of the usages the model already
+        // has; `variant part v;` declares a new one, and the difference is
+        // whether a kind keyword was written.
+        // An enumeration value is a variant that *declares* the value rather than
+        // naming one written elsewhere: `enum def E1 { a; b; c; }` has no `a`
+        // anywhere else, and looking for one reaches past the enumeration to
+        // whatever else the workspace calls `a`.
         let enumerated = self.model.owner(elem).is_some_and(|owner| {
             self.model
                 .kind(owner)
@@ -278,19 +275,15 @@ impl Workspace {
         self.supertypes.insert(elem, supers.clone());
         supers
     }
-    /// What the semantic metadata annotating an element makes it
-    /// specialize.
+    /// What the semantic metadata annotating an element makes it specialize.
     ///
-    /// `checkMetadataFeatureSemanticSpecialization`: a metadata feature
-    /// whose metaclass has a `baseType` annotates a type that must
-    /// specialize it -- and the annotation is written either as a
-    /// keyword in front of the declaration, `#cause 'battery old'`, or
-    /// as a member of its body, `class C1 { @B; }`. The base is taken
-    /// as the standard maps it: a classifier annotated with a feature
-    /// base specializes the *types* of that feature rather than the
-    /// feature, since a classifier subsets nothing; the other three
-    /// pairings take the base as it is, a feature being typed by a
-    /// classifier base and subsetting a feature one.
+    /// `checkMetadataFeatureSemanticSpecialization`: a metadata feature whose
+    /// metaclass has a `baseType` annotates a type that must specialize it,
+    /// written either as a keyword in front of the declaration or as a member
+    /// of its body. The base is taken as the standard maps it: a classifier
+    /// annotated with a feature base specializes the *types* of that feature,
+    /// since a classifier subsets nothing; the other three pairings take the
+    /// base as it is.
     pub(crate) fn semantic_bases_of(&mut self, elem: ElementId) -> Vec<ElementId> {
         let Some(node) = self.source.get(&elem).cloned() else {
             return Vec::new();
@@ -331,14 +324,12 @@ impl Workspace {
     }
     /// What a feature's value makes it subset.
     ///
-    /// `checkFeatureValuationSpecialization`: a feature with a value
-    /// that is not a default, no direction and no specialization of its
-    /// own subsets the result of the expression it is bound to. The
-    /// result is an element of the model with nothing to say for
-    /// itself until the expression tree has been walked, and a name
-    /// written after the feature -- `feature c = b.c;` -- is looked up
-    /// before then, so what the value comes to is read off its text
-    /// here, the way every other clause of a declaration is.
+    /// `checkFeatureValuationSpecialization`: a feature with a value that is
+    /// not a default, no direction and no specialization of its own subsets
+    /// the result of the expression it is bound to. That result has nothing to
+    /// say for itself until the expression tree has been walked, and a name
+    /// written after the feature -- `feature c = b.c;` -- is looked up before
+    /// then, so what the value comes to is read off its text here.
     fn valued_by(&mut self, elem: ElementId, node: &SyntaxNode) -> Option<ElementId> {
         if !self.model.kind(elem).is_a(ElementKind::Feature)
             || self.model.maybe(elem, "direction").is_some()
@@ -361,12 +352,10 @@ impl Workspace {
     }
     /// The feature an expression comes to, where its text says which.
     ///
-    /// A name comes to what it names; `a#(1).b` chains `b` from what
-    /// `a#(1)` comes to; and `a#(1)` is one of the `a`s --
-    /// `checkIndexExpressionResultSpecialization` -- unless `a` is a
-    /// collection, whose `#` picks an element out of it rather than one
-    /// of it. Anything else -- a literal, an invocation -- comes to
-    /// nothing a name could be looked up in.
+    /// A name comes to what it names; `a#(1).b` chains `b` from what `a#(1)`
+    /// comes to; and `a#(1)` is one of the `a`s, unless `a` is a collection,
+    /// whose `#` picks an element out of it. Anything else comes to nothing a
+    /// name could be looked up in.
     fn comes_to(&mut self, elem: ElementId, written: &SyntaxNode) -> Option<ElementId> {
         let found = match written.kind() {
             SyntaxKind::NAME_REF => self.resolve_operand(elem, &operand_segments(written)),

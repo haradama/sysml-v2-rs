@@ -271,10 +271,10 @@ fn compartment_of(model: &Model, member: ElementId) -> &'static str {
 /// first.
 ///
 /// The metamodel makes a use case a kind of calculation and a metadata
-/// usage a kind of item, so a row for the general kind placed above the
-/// special one would answer for both and file the special one under the
-/// wrong heading. `no_compartment_is_shadowed_by_a_more_general_one`
-/// holds the order to that.
+/// usage a kind of item, so a row for the general kind above the special
+/// one would answer for both and file the special one under the wrong
+/// heading. `no_compartment_is_shadowed_by_a_more_general_one` holds the
+/// order to that.
 const COMPARTMENTS: [(ElementKind, &str); 29] = [
     // `successions-compartment` is the standard's own; a transition
     // has no compartment there at all, and is only ever the line
@@ -591,9 +591,9 @@ pub fn definition_diagram(model: &Model, roots: &[ElementId]) -> Diagram {
 ///
 /// `package-node` holds a `general-view` of what the package contains, so
 /// a definition is drawn inside the package that owns it. A sub-package
-/// counts its enclosing ones as depth, and holds only what it owns
-/// directly -- a package whose members are all sub-packages still gets a
-/// frame, because the frames it encloses are drawn inside it.
+/// counts its enclosing ones as depth and holds only what it owns
+/// directly; a package whose members are all sub-packages still gets a
+/// frame.
 fn packages_of(model: &Model, nodes: &[Node]) -> Vec<Group> {
     let mut groups: Vec<Group> = Vec::new();
     // what each group is a frame for, so the same package is found again
@@ -659,17 +659,14 @@ fn enclosing_packages(model: &Model, element: ElementId) -> Vec<(ElementId, &str
     chain
 }
 
-/// The internal structure of one definition: a box per part, state or action
-/// it is composed of, and an edge per connection or transition declared
-/// between two of them.
+/// The internal structure of one definition: a box per part, state or
+/// action it is composed of, and an edge per connection or transition
+/// declared between two of them.
 ///
-/// The same shape serves a `part def` (parts wired by `connect`), a
-/// `state def` (states linked by `transition`) and an `action def` (actions
-/// sequenced by `first ... then`), because all three are children of the
-/// definition related by a two-ended statement.
-///
-/// Edges whose ends leave the definition, and self-edges between two
-/// features of one box, are left undrawn.
+/// The same shape serves a `part def`, a `state def` and an `action def`,
+/// because all three are children of the definition related by a two-ended
+/// statement. Edges whose ends leave the definition, and self-edges
+/// between two features of one box, are left undrawn.
 pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram {
     let mut nodes: Vec<Node> = Vec::new();
     let mut index: HashMap<ElementId, usize> = HashMap::new();
@@ -1207,14 +1204,13 @@ fn is_box(model: &Model, element: ElementId) -> bool {
     is_structure_box(kind)
 }
 
-/// Whether a usage is one of the things a definition is composed of, rather
-/// than a relationship between two of them.
+/// Whether a usage is one of the things a definition is composed of,
+/// rather than a relationship between two of them.
 ///
 /// The exclusions matter because the metamodel makes every relationship a
 /// specialization of what it relates: `ConnectionUsage` is a `PartUsage`,
-/// and `TransitionUsage` and the control nodes are all `ActionUsage`. A
-/// named `connect c : Conn ...` or `transition t first a then b` must be an
-/// edge only, never also a box.
+/// and `TransitionUsage` is an `ActionUsage`. A named `connect c : Conn`
+/// must be an edge only, never also a box.
 fn is_structure_box(kind: ElementKind) -> bool {
     let composed = kind.is_a(ElementKind::PartUsage)
         || kind.is_a(ElementKind::StateUsage)
@@ -1502,18 +1498,15 @@ fn annotation_keyword(relation: Relation) -> &'static str {
 
 /// One composition edge per distinct part type a definition declares.
 ///
-/// Two parts of the same type would draw the same line twice, so the target
-/// is only linked once. A definition holding a feature of its own type --
-/// `part subcomponents : MassedThing;` inside `MassedThing` -- is drawn
-/// like any other membership, back onto the box it left: the standard
-/// exempts no feature from being drawn, and a recursive structure is
-/// something a reader has to be able to see.
+/// Two parts of the same type would draw the same line twice, so the
+/// target is only linked once. A definition holding a feature of its own
+/// type is drawn like any other membership, back onto the box it left: the
+/// standard exempts no feature from being drawn, and a recursive structure
+/// is something a reader has to be able to see.
 ///
 /// A port is the exception, because it is drawn: it sits on the border of
-/// what declares it, as its own square, and the line to what it is typed
-/// by leaves from that square. So a port names its end of the line, and
-/// two ports of one type get a line each -- one square each is what the
-/// drawing already has.
+/// what declares it, as its own square, and the line leaves from that
+/// square -- so two ports of one type get a line each.
 fn compositions_of(
     model: &Model,
     definition: ElementId,
@@ -1523,41 +1516,33 @@ fn compositions_of(
 ) {
     let mut linked: Vec<(usize, Relation, Option<String>)> = Vec::new();
     for &child in model.owned(definition) {
-        // Every feature a type owns is drawn from the type to what the
-        // feature is typed by: the standard's `type-relationship` reads
-        // `composite-feature-membership | noncomposite-feature-
-        // membership`, the same diamond filled or hollow, and the model
-        // says which of the two on `isComposite`.
+        // Every feature a type owns is drawn from the type to what the feature is
+        // typed by: the standard's `type-relationship` reads `composite-feature-
+        // membership | noncomposite-feature-membership`, the same diamond filled
+        // or hollow, and the model says which on `isComposite`.
         //
-        // A connector is left out. It is drawn as the edge between the
-        // two things it relates, and its ends with it, so a diamond per
-        // end would say the same thing a second time.
+        // A connector is left out: it is drawn as the edge between the two things
+        // it relates, so a diamond per end would say that again. So is a feature
+        // drawn as a keyworded edge of its own -- `perform action b : B` -- since
+        // the «perform» line already says it.
         //
-        // What a feature subsets or redefines is drawn too, where both
-        // are on the canvas: the standard has `subsetting` and
-        // `redefinition` among its type relationships, and a `part big
-        // :> engine` that is joined to nothing reads as unrelated to
-        // the engine it is one of.
-        //
-        // A feature that is drawn as a keyworded edge of its own --
-        // `perform action b : B`, `exhibit state s : S`, `assert
-        // constraint k : K` -- is left out for the same reason: the
-        // «perform» line already says what a diamond would say again.
+        // What a feature subsets or redefines is drawn where both are on the
+        // canvas: the standard has `subsetting` and `redefinition` among its type
+        // relationships, and a `part big :> engine` joined to nothing reads as
+        // unrelated to the engine it is one of.
         if model.kind(child).is_a(ElementKind::ConnectorAsUsage)
             || model.flag(child, "isEnd")
             || annotation_relation(model, child).is_some()
         {
             continue;
         }
-        // A portion is composite too, and the standard draws it
-        // differently: `portion-relationship` carries its own marker,
-        // because a timeslice is part of an occurrence in a way a wheel
-        // is not part of a car.
-        // Asked of every member, so both of these are properties the
-        // member may not have at all -- a comment is neither a portion
-        // nor composite, and that is an answer rather than a gap.
-        // `isComposite` keeps three cases and not two: written false is
-        // a reference, and unwritten is nothing to draw.
+        // A portion is composite too, and the standard draws it differently: a
+        // timeslice is part of an occurrence in a way a wheel is not part of a
+        // car.
+        // Asked of every member, so both are properties the member may not have
+        // at all -- a comment is neither a portion nor composite, and that is an
+        // answer rather than a gap. `isComposite` keeps three cases: written
+        // false is a reference, unwritten is nothing to draw.
         let relation = match model.flag(child, "isPortion") {
             true => Relation::Portion,
             false => match model.maybe(child, "isComposite") {
@@ -1639,15 +1624,14 @@ fn specializations_of(
 /// Everything a definition is assembled from: what it owns, and what it
 /// inherits from the definitions it specializes, nearest first.
 ///
-/// `part def BlinkingBoard :> ArduinoCompatibleBoard { part app : BlinkApp; }`
-/// is a board with a sketch on it. Reading only what it owns draws the
+/// `part def BlinkingBoard :> ArduinoCompatibleBoard { part app : BlinkApp;
+/// }` is a board with a sketch on it. Reading only what it owns draws the
 /// sketch and none of the board -- and then every `connect` the board
-/// declares is missing, and every `satisfy` that names one of its parts
-/// points at nothing and is left standing alone on the canvas.
+/// declares is missing, and every `satisfy` naming one of its parts points
+/// at nothing.
 ///
-/// A usage is assembled from what its type is: drawing `part v : Vehicle`
-/// from what the usage itself owns leaves an empty page, when what the
-/// reader asked to see is what a `Vehicle` is made of.
+/// A usage is assembled from what its type is: `part v : Vehicle` drawn
+/// from what the usage owns is an empty page.
 pub(crate) fn assembled_from(model: &Model, definition: ElementId) -> Vec<ElementId> {
     nesting_owners(model, definition)
         .into_iter()
@@ -1822,14 +1806,13 @@ fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge
     links
 }
 
-/// Where a view of one thing reads its members from: the thing itself
-/// and whatever it specializes, then the type it was declared with and
-/// whatever that specializes, since `part w : Wheel;` declares nothing
-/// of its own.
+/// Where a view of one thing reads its members from: the thing itself and
+/// whatever it specializes, then the type it was declared with and
+/// whatever that specializes, since `part w : Wheel;` declares nothing of
+/// its own.
 ///
-/// A definition names no type and answers with itself and its
-/// supertypes; a usage answers with the type's, which is the only
-/// structure it has.
+/// A definition names no type and answers with itself and its supertypes;
+/// a usage answers with the type's.
 fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
     let mut seen = HashSet::new();
     itself_and_supertypes(model, usage)
@@ -1941,14 +1924,13 @@ fn features_with_type(model: &Model, usage: ElementId) -> Vec<(&'static str, Fea
     out
 }
 
-/// The named features a definition declares directly, gathered into
-/// the compartments the standard puts them in, in the order the
-/// compartments were first needed.
+/// The named features a definition declares directly, gathered into the
+/// compartments the standard puts them in, in the order the compartments
+/// were first needed.
 ///
-/// Every feature, not only the usages SysML layers on top of them: a
-/// KerML `step` or `feature` is what a KerML model is written out of,
-/// and a box that lists only usages is an empty box on every page of
-/// one.
+/// Every feature, not only the usages SysML layers on top of them: a KerML
+/// `step` or `feature` is what a KerML model is written out of, and a box
+/// listing only usages is an empty box on every page of one.
 fn features_of(model: &Model, definition: ElementId) -> Vec<(&'static str, Feature)> {
     let mut out = Vec::new();
     for &child in model.owned(definition) {
@@ -2283,12 +2265,11 @@ fn shown_relationship(model: &Model, member: ElementId) -> Option<(&'static str,
 
 /// A block of prose as compartment lines.
 ///
-/// Where a comment was broken is where it fitted the source, not where it
-/// fits a box, so the words are run together and broken again to a width
-/// a box can hold -- a paragraph left on one line would set the width of
-/// everything drawn beside it. The standard writes `…` where a
-/// compartment holds more than it shows, and a doc long enough to crowd
-/// out the model is what that is for.
+/// Where a comment was broken is where it fitted the source, not a box, so
+/// the words are run together and broken again to a width a box can hold
+/// -- a paragraph left on one line would set the width of everything drawn
+/// beside it. The standard writes `…` where a compartment holds more than
+/// it shows.
 fn wrapped(text: &str, room: usize) -> Vec<String> {
     /// Lines of prose a box shows before the rest is left unsaid.
     const MOST: usize = 6;
@@ -2473,12 +2454,11 @@ fn type_name(model: &Model, usage: ElementId) -> Option<String> {
 /// references until a type turns up.
 ///
 /// A declared typing answers straight away. Otherwise `part big :> engine`
-/// is one of whatever `engine` is, so the walk carries on from `engine`
-/// and ends where a typing turns up or where nothing further is subset.
-/// It never has to decide what to do with something that is not a
-/// feature: what a feature subsets, redefines or references is a feature
-/// too, which is why a model writing `:> Fuel` for an `item def Fuel`
-/// leaves that name unresolved rather than arriving here.
+/// is one of whatever `engine` is, so the walk carries on from there. It
+/// never has to decide what to do with something that is not a feature:
+/// what a feature subsets, redefines or references is a feature too, which
+/// is why `:> Fuel` for an `item def Fuel` leaves that name unresolved
+/// rather than arriving here.
 fn resolved_type(model: &Model, usage: ElementId) -> Option<ElementId> {
     let mut visited = HashSet::new();
     let mut queue = std::collections::VecDeque::from([usage]);
@@ -2835,15 +2815,13 @@ mod tests {
         // an action a definition owns is composite too -- the standard
         // has `Parts::Part::ownedActions` for exactly that
         assert_eq!(joined(Relation::Composition), ["Fuel", "Spin", "Wheel"]);
-        // `ref` says reference outright, and so does a direction: a
-        // parameter is not part of what its owner is. So does being an
-        // attribute: `validateAttributeUsageIsReference` -- "An
-        // AttributeUsage is always referential" -- so `attribute v :
-        // Volt` is drawn with the hollow diamond a reference carries.
-        // A port is one as well: `validatePortUsageIsReference` says a
-        // port owned by anything that is not itself a port is
-        // referential, since `port p : Pin` says where a Car connects
-        // and not what one is made of.
+        // `ref` says reference outright, and so does a direction: a parameter is
+        // not part of what its owner is. So does being an attribute --
+        // `validateAttributeUsageIsReference` -- so `attribute v : Volt` is drawn
+        // with the hollow diamond. A port is one as well:
+        // `validatePortUsageIsReference` says a port owned by anything that is
+        // not itself a port is referential, since `port p : Pin` says where a Car
+        // connects and not what one is made of.
         assert_eq!(
             joined(Relation::Reference),
             ["Driver", "Fuel", "Pin", "Volt"]

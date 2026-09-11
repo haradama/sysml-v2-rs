@@ -1,33 +1,27 @@
 //! Language server for SysML v2 / KerML.
 //!
-//! Features: parse + name-resolution diagnostics, go-to-definition, hover
-//! (kind, qualified name, documentation), document symbols, and whole-file
-//! formatting. The standard library is preloaded so that references into
-//! it resolve and definitions inside it can be jumped to: the copy built
-//! into this binary, or the directory given in
-//! `initializationOptions.libraryPath` (or the `SYSML_LIBRARY_PATH`
-//! environment variable). `initializationOptions.noLibrary` asks for
-//! none at all, which is what a client wanting a model on its own terms
-//! says -- loading and resolving one is the whole of what starting
+//! Features: parse and name-resolution diagnostics, go-to-definition,
+//! hover, document symbols, and whole-file formatting. The standard
+//! library is preloaded so references into it resolve and definitions
+//! inside it can be jumped to: the copy built into this binary, or the
+//! directory given in `initializationOptions.libraryPath` (or
+//! `SYSML_LIBRARY_PATH`). `initializationOptions.noLibrary` asks for none
+//! at all -- loading and resolving one is the whole of what starting
 //! costs.
 //!
 //! Analysis is three layers, each rebuilt by a rarer event than the one
 //! above it. The standard library is parsed and resolved once at startup.
-//! On top of it sit the project's own files -- every `.sysml`/`.kerml`
-//! under the workspace folders -- rebuilt when a document is opened or
-//! closed, since a file open in the editor is read from its buffer rather
-//! than from disk. On top of those sit the open buffers, rebuilt on every
+//! On top of it sit the project's own files, rebuilt when a document is
+//! opened or closed, since a file open in the editor is read from its
+//! buffer. On top of those sit the open buffers, rebuilt on every
 //! keystroke. A model is written across several files that import each
 //! other, so without the middle layer a file would resolve only against
-//! whatever else happened to be open in a tab.
+//! whatever happened to be open in a tab.
 //!
 //! The middle layer leaves out `initializationOptions.excludePaths` -- a
-//! vendored corpus is not the project's to read on every open -- and
-//! takes in the model files beside each open document: its directory and
-//! the tree below it, which is the reach the preview offers to draw. So a
-//! file opened out of an excluded directory is still read in the company
-//! it was written in, rather than reporting every name its other half
-//! declares as unresolved.
+//! vendored corpus is not the project's to read on every open -- and takes
+//! in the model files beside each open document, so a file opened out of
+//! an excluded directory is still read in the company it was written in.
 //!
 //! Run the binary (`sysml-lsp`) over stdio, or drive [`run`] with an
 //! in-memory [`Connection`] for testing.
@@ -228,15 +222,14 @@ struct Placed {
     index: LineIndex,
 }
 
-/// The parameters of a notification, or nothing when they are not what
-/// the method says they are.
+/// The parameters of a notification, or nothing when they are not what the
+/// method says they are.
 ///
-/// A client is not supposed to send such a thing, and one that does is
-/// not a reason for this server to stop: an editor whose language server
-/// exits mid-session leaves the file it was editing without diagnostics,
-/// completion or anything else until the window is reloaded. The
-/// complaint goes to stderr, which is where a client collects a server's
-/// log.
+/// A client is not supposed to send such a thing, and one that does is not
+/// a reason to stop: an editor whose language server exits mid-session
+/// leaves the file without diagnostics or completion until the window is
+/// reloaded. The complaint goes to stderr, where a client collects a
+/// server's log.
 fn taken<T: serde::de::DeserializeOwned>(note: Notification) -> Option<T> {
     let method = note.method.clone();
     match serde_json::from_value(note.params) {
@@ -379,14 +372,13 @@ impl Server {
         Ok(())
     }
 
-    /// Say what is wrong with each open document, where that has
-    /// changed.
+    /// Say what is wrong with each open document, where that has changed.
     ///
-    /// `changed` is the document the client has just told this server
-    /// about, which is published either way: a client that waits to
-    /// hear back about the keystroke it sent has to hear something.
-    /// Every keystroke in one file used to republish every open file,
-    /// and an editor takes each of those apart and lays it out again.
+    /// `changed` is the document the client has just told this server about,
+    /// which is published either way: a client that waits to hear back about
+    /// the keystroke it sent has to hear something. Every keystroke in one
+    /// file used to republish every open file, and an editor takes each of
+    /// those apart and lays it out again.
     fn publish_diagnostics(
         &mut self,
         connection: &Connection,
@@ -441,18 +433,13 @@ impl Server {
                     });
                 }
             }
-            // What the specification requires, over and above every name
-            // resolving. Asked of this one document it costs about a
-            // millisecond, so an editor can be told while it is typed.
-            // Whether it was worth asking at all is `diagnose`'s to
-            // decide, and it decides it the same way for the command
-            // line and the MCP server.
+            // What the specification requires, over and above every name resolving.
+            // Asked of one document it costs about a millisecond, so an editor can be
+            // told while it is typed. Whether it was worth asking is `diagnose`'s to
+            // decide, the same way for all three front ends.
             //
-            // A violation names an element, which may be one the
-            // notation never wrote; `element_place` walks out to the
-            // nearest thing that was, and one placed in another document
-            // belongs to that document's diagnostics rather than this
-            // one's.
+            // A violation names an element, which may be one the notation never
+            // wrote; `element_place` walks out to the nearest thing that was.
             for violation in &diagnosed.rules.violations {
                 // Asked of this document, every violation is about an
                 // element under it, and the walk out to the nearest
@@ -601,11 +588,10 @@ impl Server {
 /// Where inside a recorded range the name being renamed is written.
 ///
 /// What was recorded is not always the name alone. A mention can be a
-/// feature chain -- `system.sub1`, one reference, ending on the step
-/// that names what is being renamed -- and a declaration whose tree
-/// holds no name node of its own is recorded as the whole of it:
-/// `then fork F { ... }`, which the new name written over all of it
-/// would replace, body and all.
+/// feature chain -- `system.sub1`, ending on the step that names what is
+/// being renamed -- and a declaration whose tree holds no name node of its
+/// own is recorded as the whole of it: `then fork F { ... }`, which the
+/// new name would replace, body and all.
 fn name_token(ws: &Workspace, file: usize, range: TextRange, name: &str) -> Option<TextRange> {
     let syntax = ws.file_parse(file).syntax();
     let first = syntax.token_at_offset(range.start()).right_biased();
@@ -617,13 +603,11 @@ fn name_token(ws: &Workspace, file: usize, range: TextRange, name: &str) -> Opti
 
 /// ELK's positions, or nothing when it has not answered in time.
 ///
-/// The command is a child process that reads a graph and writes back
-/// where things go. Run on this thread it can hang the whole server,
-/// which has only the one, and an editor whose language server has
-/// stopped answering has stopped doing everything -- no diagnostics, no
-/// completion, no navigation, in every file at once. It is run beside
-/// the loop instead and given only so long; what it does after that is
-/// its own business, and the diagram is drawn here meanwhile.
+/// The command is a child process that reads a graph and writes back where
+/// things go. Run on this thread it can hang the whole server, which has
+/// only the one -- no diagnostics, no completion, no navigation, in every
+/// file at once. It is run beside the loop instead and given only so long;
+/// the diagram is drawn here meanwhile.
 fn elk_within(
     diagram: &sysml_diagram::Diagram,
     style: &sysml_diagram::Style,

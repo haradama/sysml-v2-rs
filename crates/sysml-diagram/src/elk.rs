@@ -1,16 +1,13 @@
-//! The Eclipse Layout Kernel as the layout engine: `elkrs` decides
-//! where the boxes go, and everything visible -- boxes, compartments,
-//! ports, edges, labels -- is still drawn by this crate's own renderer
-//! in its own style. The positions and the routes both come from ELK:
-//! it picks them together, and a line drawn straight across a layout
-//! that was arranged expecting bends ends up where ELK left no room for
-//! it. Where ELK routes nothing, the renderer routes for itself, as it
-//! does under the built-in layout.
+//! The Eclipse Layout Kernel as the layout engine: `elkrs` decides where
+//! the boxes go, and everything visible is still drawn by this crate's own
+//! renderer in its own style. The positions and the routes both come from
+//! ELK, since it picks them together and a line drawn straight across a
+//! layout arranged for bends ends up where ELK left no room. Where ELK
+//! routes nothing, the renderer routes for itself.
 //!
-//! Nothing here requires ELK at build time: the `elkrs` binary is
-//! spawned at run time (`cargo install elkrs`), and a missing or
-//! failing binary surfaces as an [`ElkError`] the caller can fall back
-//! from.
+//! Nothing here requires ELK at build time: the `elkrs` binary is spawned
+//! at run time (`cargo install elkrs`), and a missing or failing binary
+//! surfaces as an [`ElkError`] the caller can fall back from.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};
@@ -529,13 +526,11 @@ mod tests {
 
     /// Held while a test writes a stand-in for `elkrs` and runs it.
     ///
-    /// Writing a program and then running it is a race when anything
-    /// else in the process forks in between: the child inherits the
-    /// still-open write handle, and Linux refuses to run a file that
-    /// something holds open for writing. Two tests here write and run
-    /// their own `elkrs`, and either one's fork can spoil the other's
-    /// exec, which showed up as one or the other failing every few runs.
-    /// Taking turns is enough -- nothing else in this process forks.
+    /// Writing a program and then running it is a race when anything else in
+    /// the process forks in between: the child inherits the still-open write
+    /// handle, and Linux refuses to run a file something holds open for
+    /// writing. Two tests here write and run their own `elkrs`, and either
+    /// one's fork can spoil the other's exec.
     static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// An executable stand-in for `elkrs`, unique per test.
