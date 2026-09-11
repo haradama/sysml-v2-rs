@@ -3,19 +3,35 @@
   "displayName": "SysML v2",
   "description": "SysML v2 / KerML language support: diagnostics, completion, navigation, formatting via sysml-lsp",
   "version": "0.1.0",
-  "publisher": "sysml-v2-rs",
+  "publisher": "haradama",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/haradama/sysml-v2-rs"
   },
-  "engines": {
-    "vscode": "^1.75.0"
+  "homepage": "https://github.com/haradama/sysml-v2-rs/tree/main/editors/vscode",
+  "bugs": {
+    "url": "https://github.com/haradama/sysml-v2-rs/issues"
   },
+  "icon": "icon.png",
   "categories": [
     "Programming Languages",
     "Linters",
     "Formatters"
+  ],
+  "keywords": [
+    "sysml",
+    "sysml v2",
+    "kerml",
+    "mbse",
+    "systems engineering"
+  ],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:sysml",
+    "onLanguage:kerml"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -153,9 +169,5 @@
     "typescript": "^5.4.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"
-  },
-  "activationEvents": [
-    "onLanguage:sysml",
-    "onLanguage:kerml"
-  ]
+  }
 }
