@@ -3,7 +3,7 @@
 //! Almost nothing in a SysML model resolves without it. Until there was a
 //! copy built into the binary, getting one meant cloning a repository
 //! whose history is two gigabytes for one and a third megabytes of model
-//! -- so `cargo install sysml-cli` gave you a tool that reported every
+//! -- so `cargo install sysmlv2-cli` gave you a tool that reported every
 //! name in every model as unresolved until you did.
 //!
 //! The rest of the suite checks the other half: `--no-library`, which is

@@ -3,7 +3,7 @@
 //! The files are read at compile time with `include_str!` rather than at
 //! run time, so a program that loads the standard library needs no
 //! filesystem, no install step and no path to be told: it is in the
-//! binary. That is what makes `cargo install sysml-cli` a tool that
+//! binary. That is what makes `cargo install sysmlv2-cli` a tool that
 //! resolves names rather than one that asks for a 2 GB checkout first.
 //!
 //! The table is written into `OUT_DIR` rather than checked in, so it

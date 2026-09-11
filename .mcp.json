@@ -4,7 +4,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "for b in \"$0/target/release/sysml\" \"$0/target/debug/sysml\"; do [ -x \"$b\" ] && exec \"$b\" \"$@\"; done; exec cargo run -q --release --manifest-path \"$0/Cargo.toml\" -p sysml-cli -- \"$@\"",
+        "for b in \"$0/target/release/sysml\" \"$0/target/debug/sysml\"; do [ -x \"$b\" ] && exec \"$b\" \"$@\"; done; exec cargo run -q --release --manifest-path \"$0/Cargo.toml\" -p sysmlv2-cli -- \"$@\"",
         "${CLAUDE_PROJECT_DIR}",
         "mcp"
       ]

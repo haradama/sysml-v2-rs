@@ -27,7 +27,7 @@ help:
 	@echo "make vscode-clean    remove the extension's build artifacts"
 
 lsp:
-	$(CARGO) build --release -p sysml-lsp
+	$(CARGO) build --release -p sysmlv2-lsp
 
 $(EXT_DIR)/node_modules: $(EXT_DIR)/package.json
 	cd $(EXT_DIR) && $(NPM) install --no-audit --no-fund

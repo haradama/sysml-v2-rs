@@ -65,7 +65,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: build the tool
-        run: cargo build --release -p sysml-cli
+        run: cargo build --release -p sysmlv2-cli
       # one tree at a time, which is how each of them is a model: the
       # KerML examples declare a class `Camera` and the SysML training
       # models a package of that name, so a workspace holding both has
@@ -119,7 +119,7 @@ jobs:
       - name: render corpus models and check the SVG is well-formed
         run: |
           set -eu
-          cargo build --release -p sysml-cli
+          cargo build --release -p sysmlv2-cli
           for model in \
             "vendor/sysml-v2-release/sysml/src/examples/Vehicle Example/VehicleDefinitions.sysml" \
             "vendor/sysml-v2-release/sysml/src/examples/Simple Tests/PartTest.sysml" \
@@ -166,7 +166,7 @@ jobs:
         working-directory: examples/arduino-uno
         run: |
           set -eu
-          cargo run --manifest-path ../../Cargo.toml -p sysml-cli -- rustgen \
+          cargo run --manifest-path ../../Cargo.toml -p sysmlv2-cli -- rustgen \
             model/blink.sysml model/requirements.sysml model/verification.sysml \
             --library model/hardware.sysml \
             --library model/middleware.sysml \
@@ -175,7 +175,7 @@ jobs:
           diff -u src/generated.rs /tmp/generated.rs
       - name: the model resolves whole
         run: |
-          cargo run -p sysml-cli -- check examples/arduino-uno/model \
+          cargo run -p sysmlv2-cli -- check examples/arduino-uno/model \
             crates/sysml-stdlib/library
       - name: it runs, and says what the README says it says
         working-directory: examples/arduino-uno

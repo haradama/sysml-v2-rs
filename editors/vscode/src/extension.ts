@@ -92,7 +92,7 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
     const command = serverCommand(context);
     const choice = await vscode.window.showErrorMessage(
       `Cannot start \`${command}\`. Run \`make vscode\` in the repository, ` +
-        "or build with `cargo build --release -p sysml-lsp` and set `sysml.server.path`.",
+        "or build with `cargo build --release -p sysmlv2-lsp` and set `sysml.server.path`.",
       "Open Settings"
     );
     if (choice === "Open Settings") {

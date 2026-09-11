@@ -22,7 +22,7 @@ if (!binary) {
   process.exit(2);
 }
 if (!fs.existsSync(binary)) {
-  console.error(`no server binary at ${binary}; \`cargo build --release -p sysml-lsp\` writes one`);
+  console.error(`no server binary at ${binary}; \`cargo build --release -p sysmlv2-lsp\` writes one`);
   process.exit(1);
 }
 

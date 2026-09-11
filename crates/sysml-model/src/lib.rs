@@ -3,7 +3,7 @@
 //! The metamodel — [`ElementKind`] (175 metaclasses), their inheritance
 //! hierarchy, feature metadata and enumerations — is generated from the
 //! official Ecore definition (see `vendor/metamodel/`, regenerate with
-//! `cargo run -p sysml-model --features codegen --bin sysml-codegen`).
+//! `cargo run -p sysmlv2-model --features codegen --bin sysml-codegen`).
 //!
 //! Elements live in an arena ([`Model`]) and reference each other by
 //! [`ElementId`], which mirrors the standard API's UUID-per-element design

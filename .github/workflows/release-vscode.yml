@@ -71,7 +71,7 @@ jobs:
       - if: matrix.apt != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
       - name: build the language server
-        run: cargo build --release -p sysml-lsp --target ${{ matrix.target }}
+        run: cargo build --release -p sysmlv2-lsp --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           # a fifth of the binary is symbols nobody downloading it reads;

@@ -18,7 +18,7 @@ fn committed_generated_file_is_in_sync() {
         std::fs::read_to_string(root.join("crates/sysml-model/src/generated.rs")).unwrap();
     assert_eq!(
         generated, committed,
-        "generated.rs is stale — run `cargo run -p sysml-model --features codegen --bin sysml-codegen`"
+        "generated.rs is stale — run `cargo run -p sysmlv2-model --features codegen --bin sysml-codegen`"
     );
     // run() rewrites the default path with identical bytes (kept in this
     // test so nothing else reads the file mid-write)
