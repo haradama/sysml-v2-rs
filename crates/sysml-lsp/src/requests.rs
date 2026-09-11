@@ -447,9 +447,6 @@ impl Server {
     /// below it rather than the document alone.
     pub(crate) fn diagram(&mut self, params: &DiagramParams) -> Option<DiagramResult> {
         let uri = Url::parse(&params.uri).ok()?;
-        let elk = params.layout.as_deref() == Some("elk");
-        let command = self.elk_command.clone();
-        let patience = self.elk_patience;
         let directory = params.scope.as_deref() == Some("directory");
         let within = directory
             .then(|| file_of(&uri))
@@ -472,23 +469,7 @@ impl Server {
         };
         let roots = roots.as_slice();
         let style = sysml_diagram::Style::default();
-        // ELK when asked for and available, this crate's own layout
-        // otherwise -- the preview always renders something
-        let draw = |diagram: &sysml_diagram::Diagram| {
-            if elk {
-                match elk_within(diagram, &style, &command, patience) {
-                    Some(Ok(svg)) => return svg,
-                    Some(Err(error)) => {
-                        eprintln!("sysml-lsp: falling back to the built-in layout: {error}")
-                    }
-                    None => eprintln!(
-                        "sysml-lsp: ELK has not answered in {patience:?}; \
-                         drawing with the built-in layout"
-                    ),
-                }
-            }
-            sysml_diagram::render(diagram, &style)
-        };
+        let draw = |diagram: &sysml_diagram::Diagram| sysml_diagram::render(diagram, &style);
         let svg = match params.view.as_deref() {
             Some("browser") => {
                 let view = sysml_diagram::browser_view(ws.model(), roots);

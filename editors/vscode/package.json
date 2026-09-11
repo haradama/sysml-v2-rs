@@ -81,20 +81,6 @@
           "default": false,
           "description": "Open the diagram preview beside the editor whenever a SysML or KerML file is opened. Off by default: a panel that appears unasked takes half the window from the file you came to read. Ask for it with `SysML: Open Diagram Preview` or the button in the editor title bar."
         },
-        "sysml.diagram.layout": {
-          "type": "string",
-          "enum": [
-            "elk",
-            "builtin"
-          ],
-          "default": "elk",
-          "description": "Layout engine for the diagram preview. `elk` runs the `elkrs` command (positions only, the drawing stays the same) and falls back to the built-in layout when it is not installed -- `cargo install elkrs`."
-        },
-        "sysml.diagram.elk": {
-          "type": "string",
-          "default": "elkrs",
-          "description": "The Eclipse Layout Kernel command the language server runs for diagram layout (`cargo install elkrs`)."
-        },
         "sysml.trace.server": {
           "type": "string",
           "enum": [

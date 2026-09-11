@@ -32,8 +32,7 @@ sysml-semantics.workspace = true
 sysml-stdlib.workspace = true
 sysml-interchange.workspace = true
 sysml-rust.workspace = true
-# both of these offer the ELK layout, which is what the feature is
-sysml-diagram = { workspace = true, features = ["elk"] }
+sysml-diagram.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }

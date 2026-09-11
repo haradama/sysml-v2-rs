@@ -108,8 +108,6 @@ impl Server {
             languages: HashMap::new(),
             analysis: None,
             published: HashMap::new(),
-            elk_command: "elkrs".to_string(),
-            elk_patience: std::time::Duration::from_secs(10),
         }
     }
     /// Every model file under the workspace folders.

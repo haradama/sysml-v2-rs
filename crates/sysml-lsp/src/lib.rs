@@ -144,17 +144,6 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         .collect();
 
     let mut server = Server::new(library, &roots, &excluded);
-    if let Some(command) = option("elkCommand") {
-        server.elk_command = command;
-    }
-    let millis = init
-        .initialization_options
-        .as_ref()
-        .and_then(|o| o.get("elkTimeoutMs"))
-        .and_then(serde_json::Value::as_u64);
-    if let Some(millis) = millis {
-        server.elk_patience = std::time::Duration::from_millis(millis);
-    }
     server.serve(connection)
 }
 
@@ -197,11 +186,6 @@ pub struct Server {
     /// what was last published about each open document, so that what
     /// has not changed is not said again
     published: HashMap<Url, Vec<Diagnostic>>,
-    /// the ELK command a `layout: "elk"` diagram request runs
-    elk_command: String,
-    /// how long that command is given before this server draws the
-    /// diagram itself
-    elk_patience: std::time::Duration,
 }
 
 /// One analysis pass over the library + the project + all open documents.
@@ -601,27 +585,6 @@ fn name_token(ws: &Workspace, file: usize, range: TextRange, name: &str) -> Opti
         .map(|token| token.text_range())
 }
 
-/// ELK's positions, or nothing when it has not answered in time.
-///
-/// The command is a child process that reads a graph and writes back where
-/// things go. Run on this thread it can hang the whole server, which has
-/// only the one -- no diagnostics, no completion, no navigation, in every
-/// file at once. It is run beside the loop instead and given only so long;
-/// the diagram is drawn here meanwhile.
-fn elk_within(
-    diagram: &sysml_diagram::Diagram,
-    style: &sysml_diagram::Style,
-    command: &str,
-    patience: std::time::Duration,
-) -> Option<Result<String, sysml_diagram::ElkError>> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let (diagram, style, command) = (diagram.clone(), *style, command.to_string());
-    std::thread::spawn(move || {
-        let _ = sender.send(sysml_diagram::render_with_elk(&diagram, &style, &command));
-    });
-    receiver.recv_timeout(patience).ok()
-}
-
 /// The element an `internal` view is asked for, by the name a reader
 /// typed.
 ///
@@ -706,8 +669,6 @@ struct DiagramParams {
     view: Option<String>,
     /// The element an `internal` view is of.
     element: Option<String>,
-    /// `builtin` (default) or `elk` -- who decides the positions.
-    layout: Option<String>,
     /// `file` (default) draws the document on its own; `directory` draws
     /// every model file in its directory and below alongside it.
     scope: Option<String>,

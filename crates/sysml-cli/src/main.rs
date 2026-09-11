@@ -153,13 +153,6 @@ enum Command {
         /// view: a lifeline per participant and the messages between them
         #[arg(long, value_name = "NAME", conflicts_with_all = ["internal", "browser"])]
         sequence: Option<String>,
-        /// Let the Eclipse Layout Kernel arrange and route it (the
-        /// drawing itself stays the same); needs `cargo install elkrs`
-        #[arg(long)]
-        elk: bool,
-        /// The ELK command to run with --elk
-        #[arg(long, default_value = "elkrs", value_name = "COMMAND")]
-        elk_command: String,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -353,8 +346,6 @@ fn main() -> ExitCode {
             internal,
             browser,
             sequence,
-            elk,
-            elk_command,
             output,
         } => {
             // the flags name one drawing between them; clap allows more
@@ -366,14 +357,7 @@ fn main() -> ExitCode {
                 (Some(name), _, _) => View::Internal(name),
                 _ => View::Definitions,
             };
-            diagram(
-                &paths,
-                &library,
-                view,
-                elk.then_some(elk_command.as_str()),
-                output.as_deref(),
-                bare,
-            )
+            diagram(&paths, &library, view, output.as_deref(), bare)
         }
         Command::ImportRust {
             json,
@@ -913,7 +897,6 @@ fn diagram(
     paths: &[PathBuf],
     library: &[PathBuf],
     view: View<'_>,
-    elk: Option<&str>,
     output: Option<&Path>,
     bare: bool,
 ) -> ExitCode {
@@ -986,16 +969,7 @@ fn diagram(
         return ExitCode::FAILURE;
     }
     let style = sysml_diagram::Style::default();
-    let svg = match elk {
-        Some(command) => match sysml_diagram::render_with_elk(&diagram, &style, command) {
-            Ok(svg) => svg,
-            Err(error) => {
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        },
-        None => sysml_diagram::render(&diagram, &style),
-    };
+    let svg = sysml_diagram::render(&diagram, &style);
     let count = |relation| {
         diagram
             .edges

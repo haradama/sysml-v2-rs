@@ -232,9 +232,6 @@ export class Preview {
           view: this.view,
           element: this.element,
           scope: this.scope,
-          layout: vscode.workspace
-            .getConfiguration("sysml")
-            .get<string>("diagram.layout", "elk"),
         }
       );
       if (result) {

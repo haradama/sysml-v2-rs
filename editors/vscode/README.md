@@ -37,12 +37,6 @@ editing. Closing it keeps it closed until you ask again. Set
 `sysml.preview.openAutomatically` to have it open by itself whenever a
 `.sysml` or `.kerml` file is opened.
 
-The layout is this toolchain's own unless `sysml.diagram.layout` asks
-for the Eclipse Layout Kernel, which needs `elkrs` on the path
-(`cargo install elkrs`, or `sysml.diagram.elk` to name it elsewhere); it
-trades reproducible bytes for ELK's crossing minimization, and falls
-back to the built-in layout when the binary is not there.
-
 Beside the view is how much of the model the drawing is of: `This file`
 draws the document on its own, `This folder` draws every model file in
 its directory and below alongside it. A model is commonly written across

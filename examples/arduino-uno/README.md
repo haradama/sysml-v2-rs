@@ -202,8 +202,5 @@ sysml diagram model/*.sysml \
     --internal ArduinoCompatibleBoard -o board.svg
 ```
 
-Add `--elk` to hand the arrangement to the Eclipse Layout Kernel
-(`cargo install elkrs`); the drawing itself stays the same.
-
 `--internal BlinkingBoard` draws the other half instead: the application
 and the requirements it answers for, with an edge per `satisfy`.

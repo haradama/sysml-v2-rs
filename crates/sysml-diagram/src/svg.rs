@@ -130,6 +130,9 @@ struct Canvas<'a> {
     anchors: Vec<Anchor>,
     /// How far down a detour reached, so the canvas can grow to hold it.
     floor: f64,
+    /// And how far right a name set beside a line reached, for the same
+    /// reason.
+    verge: f64,
     /// Every run of every line, for the names set beside them.
     drawn: Vec<Leg>,
     /// And those names, held back until all the lines are down.
@@ -159,6 +162,7 @@ impl<'a> Canvas<'a> {
             landings: Vec::new(),
             anchors: Vec::new(),
             floor: 0.0,
+            verge: 0.0,
             drawn: Vec::new(),
             asides: Vec::new(),
             written: Vec::new(),
@@ -701,9 +705,15 @@ impl<'a> Canvas<'a> {
         taken.extend(self.written.iter().copied());
         for aside in &self.asides {
             let put = clear_spot(aside, &self.drawn, &taken, self.style);
+            // the spot is the clearest one, but a name off the left of the
+            // canvas is clipped away entirely rather than merely crowded,
+            // so it is slid back on
+            let half = self.style.text_width(&aside.text) / 2.0;
+            let put = (put.0.max(self.style.margin + half), put.1);
             // a name written under the lowest channel is the lowest thing on
-            // the canvas
+            // the canvas, and one past the right of it the widest
             self.floor = self.floor.max(put.1);
+            self.verge = self.verge.max(put.0 + half);
             label_at(&mut self.out, put, "middle", &aside.text);
             // and it is something every name after it has to keep clear of
             let rect = text_box(put, "middle", &aside.text, self.style);
@@ -760,7 +770,8 @@ impl<'a> Canvas<'a> {
     fn finish(mut self) -> String {
         self.out.push_str(&self.ports);
         let height = self.layout.height.max(self.floor + self.style.margin);
-        document(self.layout.width, height, self.style, &self.out)
+        let width = self.layout.width.max(self.verge + self.style.margin);
+        document(width, height, self.style, &self.out)
     }
 }
 
@@ -2235,6 +2246,19 @@ mod tests {
         render(&diagram, &Style::default())
     }
 
+    /// The same drawing with its lines routed by the renderer rather
+    /// than by ELK, which is how a swimlane view is drawn.
+    fn svg_routed_here(source: &str) -> String {
+        let ws = resolved(source);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        to_svg(
+            &diagram,
+            &crate::tests::routed_here(&diagram, &style),
+            &style,
+        )
+    }
+
     #[test]
     fn the_palette_is_written_in_colours_a_plain_renderer_can_read() {
         // librsvg and resvg -- between them, most of what opens a saved
@@ -2257,7 +2281,7 @@ mod tests {
     fn draws_a_box_per_definition_and_a_line_per_specialization() {
         let svg = svg_of("part def A;\npart def B :> A;\n");
         assert_eq!(svg.matches("<rect class=\"box\"").count(), 2);
-        assert_eq!(svg.matches("<line class=\"edge\"").count(), 1);
+        assert_eq!(svg.matches("class=\"edge\"").count(), 1);
         assert!(svg.contains("marker-end=\"url(#specialization)\""));
         assert!(svg.contains("\u{ab}part def\u{bb}"));
     }
@@ -2396,7 +2420,7 @@ mod tests {
         let ws = resolved("part def Super;\npart def Sub :> Super;\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let placed = layout(&diagram, &style);
+        let placed = crate::tests::routed_here(&diagram, &style);
         let svg = to_svg(&diagram, &placed, &style);
 
         let sub = diagram.nodes.iter().position(|n| n.name == "Sub").unwrap();
@@ -2430,7 +2454,7 @@ mod tests {
         let ws = resolved("part def Engine;\npart def Vehicle {\n\tpart eng : Engine;\n}\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let placed = layout(&diagram, &style);
+        let placed = crate::tests::routed_here(&diagram, &style);
         let edge = &diagram.edges[0];
         let (whole, part) = (&placed.placed[edge.from], &placed.placed[edge.to]);
 
@@ -2498,7 +2522,14 @@ mod tests {
              dependency from Sensor to Display;\n",
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
-        let placed = layout(&diagram, &style);
+        let mut placed = crate::tests::routed_here(&diagram, &style);
+        // put them on one row: ELK stacks what a dependency joins, and
+        // what is asked here is what happens when neither is above
+        assert_eq!(placed.placed.len(), 2);
+        for (box_, x) in placed.placed.iter_mut().zip([0.0, 300.0]) {
+            box_.x = x;
+            box_.y = 100.0;
+        }
         let joined = diagram
             .edges
             .iter()
@@ -2520,7 +2551,7 @@ mod tests {
     fn a_line_that_would_run_under_a_box_steps_around_it() {
         // `Chassis` is made of a wheel and of a bolt the wheel is made
         // of too, so the line to the bolt has a row to get past
-        let svg = svg_of(
+        let svg = svg_routed_here(
             "part def LugBolt;\n\
              part def Wheel { part lb : LugBolt; }\n\
              part def Chassis {\n\
@@ -2735,7 +2766,7 @@ mod tests {
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let placed = layout(&diagram, &style);
+        let placed = crate::tests::routed_here(&diagram, &style);
         let svg = to_svg(&diagram, &placed, &style);
 
         let height: f64 = svg
@@ -2757,7 +2788,7 @@ mod tests {
     #[test]
     fn a_line_beside_a_box_is_left_straight() {
         // one part, so nothing can be in the way
-        let svg = svg_of("part def Engine;\npart def Vehicle { part eng : Engine; }\n");
+        let svg = svg_routed_here("part def Engine;\npart def Vehicle { part eng : Engine; }\n");
         assert!(!svg.contains("<path class=\"edge\""));
         assert!(svg.contains("<line class=\"edge\""));
     }
@@ -3086,7 +3117,13 @@ mod tests {
             .find(|(_, name)| *name == "Car")
             .map(|(id, _)| id)
             .unwrap();
-        let svg = render(&interconnection_diagram(ws.model(), car), &Style::default());
+        let diagram = interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let svg = to_svg(
+            &diagram,
+            &crate::tests::routed_here(&diagram, &style),
+            &style,
+        );
 
         // a connection is undirected, so neither end carries a marker
         assert_eq!(svg.matches("<line class=\"edge\"").count(), 1);
@@ -3238,7 +3275,10 @@ mod tests {
         let (outer, inner, other) = (frame("Outer"), frame("Inner"), frame("Other"));
         assert!(outer.x <= inner.x && inner.x + inner.width <= outer.x + outer.width);
         assert!(outer.y < inner.y && inner.y + inner.height <= outer.y + outer.height);
-        assert!(other.y >= outer.y + outer.height, "two frames overlap");
+        assert!(
+            other.x >= outer.x + outer.width || other.y >= outer.y + outer.height,
+            "two frames overlap"
+        );
 
         // and every definition sits inside the package that owns it
         for (group, frame) in diagram.groups.iter().zip(&layout.packages) {
@@ -3297,7 +3337,10 @@ mod tests {
             assert!(top.x <= within.x && within.x + within.width <= top.x + top.width);
             assert!(top.y < within.y && within.y + within.height <= top.y + top.height);
         }
-        assert!(two.y >= one.y + one.height, "two frames overlap");
+        assert!(
+            two.x >= one.x + one.width || two.y >= one.y + one.height,
+            "two frames overlap"
+        );
         assert!(to_svg(&diagram, &layout, &Style::default()).contains(">Top</text>"));
     }
 
@@ -3474,7 +3517,13 @@ mod tests {
             .find(|(_, name)| *name == "Car")
             .map(|(id, _)| id)
             .unwrap();
-        let svg = render(&interconnection_diagram(ws.model(), car), &Style::default());
+        let diagram = interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let svg = to_svg(
+            &diagram,
+            &crate::tests::routed_here(&diagram, &style),
+            &style,
+        );
 
         let lines: Vec<&str> = svg
             .lines()
@@ -3529,7 +3578,7 @@ mod tests {
         let ws = resolved("port def Fuel;\npart def Tank { port out1 : Fuel; }\n");
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let mut layout = layout(&diagram, &style);
+        let mut layout = crate::tests::routed_here(&diagram, &style);
         let at = diagram
             .edges
             .iter()
@@ -3675,7 +3724,7 @@ mod tests {
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let mut layout = layout(&diagram, &style);
+        let mut layout = crate::tests::routed_here(&diagram, &style);
         let at = diagram
             .edges
             .iter()
@@ -3859,7 +3908,7 @@ mod tests {
         );
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let style = Style::default();
-        let mut layout = layout(&diagram, &style);
+        let mut layout = crate::tests::routed_here(&diagram, &style);
         // one row, with the wall standing between the two boxes the
         // line joins: a straight line would run under it, so the line
         // drops into the channel beneath the row and runs back along it
@@ -4132,7 +4181,7 @@ mod tests {
 mod port_tests {
     use super::*;
     use crate::tests::resolved;
-    use crate::{interconnection_diagram, layout, render};
+    use crate::{interconnection_diagram, render};
 
     fn car() -> String {
         let ws = resolved(
@@ -4187,7 +4236,7 @@ mod port_tests {
             .unwrap();
         let diagram = interconnection_diagram(ws.model(), car);
         let style = Style::default();
-        let placed = layout(&diagram, &style);
+        let placed = crate::tests::routed_here(&diagram, &style);
         let svg = to_svg(&diagram, &placed, &style);
 
         let y_of = |name: &str| -> f64 {
@@ -4205,22 +4254,27 @@ mod port_tests {
             head[start..].split('"').next().unwrap().parse().unwrap()
         };
         // each sits nearer the box that declares it than the other one
+        let reach = |name: &str, box_: &Placed| {
+            let (x, y) = (x_of(name), y_of(name));
+            (x - (box_.x + box_.width / 2.0)).hypot(y - (box_.y + box_.height / 2.0))
+        };
         let near = |name: &str, at: usize| {
-            let box_ = &placed.placed[at];
-            let other = &placed.placed[1 - at];
-            let mine = (x_of(name) - (box_.x + box_.width / 2.0)).abs();
-            let theirs = (x_of(name) - (other.x + other.width / 2.0)).abs();
+            let mine = reach(name, &placed.placed[at]);
+            let theirs = reach(name, &placed.placed[1 - at]);
             assert!(mine < theirs, "`{name}` is written beside the wrong box");
         };
         near("hub", 0);
         near("mount", 1);
         // and neither is written inside the box it sits on
         let wheel = &placed.placed[0];
+        let (x, y) = (x_of("hub"), y_of("hub"));
         assert!(
-            x_of("hub") <= wheel.x || x_of("hub") >= wheel.x + wheel.width,
-            "hub is written outside its box"
+            x <= wheel.x
+                || x >= wheel.x + wheel.width
+                || y <= wheel.y
+                || y >= wheel.y + wheel.height,
+            "hub is written inside its box"
         );
-        let _ = y_of("hub");
     }
 }
 
@@ -4363,7 +4417,13 @@ pub(crate) mod anchor_tests {
     fn both_lines_naming_one_port_set_out_from_its_square() {
         let diagram = diagram_of(TWICE, "Sys");
         let style = Style::default();
-        let svg = to_svg(&diagram, &layout(&diagram, &style), &style);
+        // routed here rather than by ELK, which is how a swimlane view
+        // is drawn: a line with nothing in its way stays straight
+        let svg = to_svg(
+            &diagram,
+            &crate::tests::routed_here(&diagram, &style),
+            &style,
+        );
 
         // one square for `o` and one for each `i`, not two for `o`
         let squares = squares(&svg);

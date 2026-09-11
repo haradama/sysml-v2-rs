@@ -9,8 +9,6 @@
 //! Skipped when the submodule is not checked out.
 
 use sysml_corpus::sysml_examples;
-#[cfg(feature = "elk")]
-use sysml_diagram::render_with_elk;
 use sysml_diagram::{definition_diagram, interconnection_diagram, render, Style};
 use sysml_semantics::Workspace;
 
@@ -144,52 +142,6 @@ fn every_word_of_an_internal_view_is_inside_its_canvas() {
     assert!(
         findings.is_empty(),
         "{} internal views run off the canvas:\n{}",
-        findings.len(),
-        findings.join("\n")
-    );
-}
-
-/// The same drawings with the positions ELK chose: it is told the sizes
-/// of the boxes, not of the names written round them, so the room has to
-/// be left after it has answered.
-///
-/// Skipped where `elkrs` is not installed.
-#[cfg(feature = "elk")]
-#[test]
-fn every_word_of_an_elk_drawing_is_inside_its_canvas() {
-    let Some(root) = sysml_examples() else { return };
-    let style = Style::default();
-    let mut findings = Vec::new();
-    for name in [
-        "validation/10-Analysis and Trades/10d-Dynamics Analysis.sysml",
-        "validation/14-Language Extensions/14b-Language Extensions.sysml",
-        "validation/07-Variant Configuration/7b-Variant Configurations.sysml",
-        "validation/12-Dependency Relationships/12b-Allocation-1.sysml",
-    ] {
-        let path = root.join(name);
-        let mut ws = Workspace::new();
-        ws.add_file(
-            path.to_string_lossy(),
-            &std::fs::read_to_string(&path).unwrap(),
-        );
-        ws.resolve_all();
-        let roots = ws.file_roots(0).to_vec();
-        let diagram = definition_diagram(ws.model(), &roots);
-        match render_with_elk(&diagram, &style, "elkrs") {
-            Ok(svg) => findings.extend(
-                overflows(&svg)
-                    .into_iter()
-                    .map(|bad| format!("{name}: {bad}")),
-            ),
-            Err(why) => {
-                eprintln!("skipping: {why}");
-                return;
-            }
-        }
-    }
-    assert!(
-        findings.is_empty(),
-        "{} ELK drawings run off the canvas:\n{}",
         findings.len(),
         findings.join("\n")
     );

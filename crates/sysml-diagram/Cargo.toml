@@ -17,15 +17,11 @@ categories.workspace = true
 sysml-model.workspace = true
 unicode-width = "0.2"
 
-# What reads the graph the Eclipse Layout Kernel hands back. Laying a
-# diagram out through ELK means running `elkrs` and reading its JSON, and
-# neither spawning a process nor parsing JSON is any business of a crate
-# that draws SVG -- so both are behind a feature, and anyone depending on
-# this crate for the drawing gets neither.
-serde_json = { version = "1", optional = true }
-
-[features]
-elk = ["dep:serde_json"]
+# The Eclipse Layout Kernel's own algorithms, ported to Rust. Where every
+# box goes is this crate's one layout question, and ELK is the answer the
+# standard's own tools give it; linking the port in means no binary to
+# install and no process to spawn.
+elkrs = "0.1"
 
 [dev-dependencies]
 sysml-corpus.workspace = true

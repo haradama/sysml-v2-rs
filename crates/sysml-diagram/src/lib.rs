@@ -5,10 +5,12 @@
 //! with supertypes above their subtypes, and serializes it as a standalone
 //! SVG document.
 //!
-//! No layout engine and no font engine are involved: layering, crossing
-//! reduction, text metrics and the SVG itself are all produced here, so a
-//! model always renders to the same bytes. Only how many columns a
-//! character takes is read from Unicode's own table.
+//! Where the boxes go is the Eclipse Layout Kernel's answer, through
+//! `elkrs` -- ELK's algorithms ported to Rust and linked in, so nothing
+//! is spawned and nothing has to be installed. Everything visible is
+//! drawn here: no font engine is involved, and the engine decides nothing
+//! at random, so a model always renders to the same bytes. Only how many
+//! columns a character takes is read from Unicode's own table.
 //!
 //! Only specializations the model reifies are drawn -- not the implicit
 //! library supertypes every definition inherits, or a diagram would
@@ -40,7 +42,6 @@
 // metamodel and would want the generator to write it.
 #![warn(missing_docs)]
 mod browser;
-#[cfg(feature = "elk")]
 mod elk;
 mod graph;
 mod layout;
@@ -48,8 +49,6 @@ mod sequence;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
-#[cfg(feature = "elk")]
-pub use elk::{elk_layout, ElkError};
 pub use graph::{
     definition_diagram, interconnection_diagram, lines, Compartment, Diagram, Edge, Feature, Node,
     Relation, Shape,
@@ -143,23 +142,6 @@ pub fn render(diagram: &Diagram, style: &Style) -> String {
     to_svg(diagram, &layout(diagram, style), style)
 }
 
-/// Like [`render`], but let ELK decide the positions -- `command` names
-/// the `elkrs` binary. Only the layout comes from ELK; boxes, edges and
-/// labels are still drawn here, so the two engines produce the same
-/// visual language.
-#[cfg(feature = "elk")]
-pub fn render_with_elk(
-    diagram: &Diagram,
-    style: &Style,
-    command: &str,
-) -> Result<String, ElkError> {
-    Ok(to_svg(
-        diagram,
-        &elk_layout(diagram, style, command)?,
-        style,
-    ))
-}
-
 /// Render a browser view as a standalone SVG document.
 pub fn render_browser(browser: &Browser, style: &Style) -> String {
     browser::to_svg(browser, style)
@@ -181,6 +163,15 @@ mod tests {
         ws.add_file("test.sysml", source);
         ws.resolve_all();
         ws
+    }
+
+    /// A layout with every route left to the renderer, which is how a
+    /// view ELK does not lay out -- a swimlane view -- reaches it. ELK
+    /// routes as it places, so where it answers, its routes are drawn.
+    pub(crate) fn routed_here(diagram: &Diagram, style: &Style) -> crate::Layout {
+        let mut laid_out = layout(diagram, style);
+        laid_out.routes.iter_mut().for_each(Vec::clear);
+        laid_out
     }
 
     #[test]

@@ -10,11 +10,12 @@ let diagram = sysml_diagram::definition_diagram(&model, &roots);
 let svg = sysml_diagram::render(&diagram, &sysml_diagram::Style::default());
 ```
 
-Layout is done here by default. The `elk` feature adds
-`render_with_elk`, which runs the Eclipse Layout Kernel (`elkrs`) for
-the arrangement and the routes; it is behind a feature because spawning
-a process and reading its JSON is no business of a crate that draws
-SVG.
+Where the boxes go and how the lines run is the Eclipse Layout Kernel's
+answer, through [`elkrs`](https://crates.io/crates/elkrs) -- ELK's
+algorithms ported to Rust and linked in, so there is nothing to install
+and no process to spawn. Everything visible is drawn here, and the
+engine decides nothing at random: one model renders to the same bytes
+every time.
 
 ## What is drawn
 

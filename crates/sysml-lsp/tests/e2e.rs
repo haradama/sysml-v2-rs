@@ -255,55 +255,6 @@ fn serves_diagrams_for_a_preview() {
     handle.join().unwrap();
 }
 
-/// `layout: "elk"` runs the configured ELK command for positions; a
-/// missing command falls back to the built-in layout instead of
-/// leaving the preview empty.
-#[test]
-fn lays_diagrams_out_with_elk_when_asked() {
-    use std::os::unix::fs::PermissionsExt;
-    let fake = std::env::temp_dir().join(format!("sysml-e2e-fake-elk-{}", std::process::id()));
-    std::fs::write(
-        &fake,
-        "#!/bin/sh\ncat >/dev/null\n\
-         printf '{\"width\":400,\"height\":144,\"children\":\
-[{\"id\":\"n0\",\"x\":0,\"y\":0},{\"id\":\"n1\",\"x\":0,\"y\":100}]}\\n'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    for (command, expected_height) in [
-        // the fake's canvas plus two 16px margins
-        (fake.to_str().unwrap(), Some("height=\"176\"")),
-        // no such command: the built-in layout draws instead
-        ("/nonexistent/elk/elkrs", None),
-    ] {
-        let (mut client, handle) = serving();
-        client.initialize_with(json!({ "elkCommand": command, "noLibrary": true }));
-
-        let uri = "file:///layout.sysml";
-        client.notify(
-            lsp_types::notification::DidOpenTextDocument::METHOD,
-            json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1,
-                     "text": "part def A;\npart def B :> A;\n" } }),
-        );
-        client.wait_diagnostics();
-
-        let result = client.request("sysml/diagram", json!({ "uri": uri, "layout": "elk" }));
-        let svg = result["svg"].as_str().unwrap();
-        assert!(svg.starts_with("<svg xmlns="));
-        assert!(svg.contains(">A<") && svg.contains(">B<"));
-        match expected_height {
-            Some(height) => assert!(svg.contains(height), "{svg:.240}"),
-            None => assert!(svg.contains("marker-end=\"url(#specialization)\"")),
-        }
-
-        client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
-        client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
-        handle.join().unwrap();
-    }
-    std::fs::remove_file(&fake).ok();
-}
-
 /// Open one document on a fresh server and hand back the client.
 fn opened(uri: &str, text: &str) -> (Client, std::thread::JoinHandle<()>) {
     let (client, handle, _) = opened_as(uri, "sysml", text);
@@ -576,48 +527,6 @@ fn a_buffer_with_no_file_behind_it_is_read_as_the_language_its_client_declared()
     );
     assert!(renamed.error.is_none(), "{:?}", renamed.error);
     client.stop(handle);
-}
-
-#[test]
-fn a_layout_command_that_never_answers_does_not_take_the_server_with_it() {
-    // ELK is a child process, and this server has one thread. Waiting on
-    // it left an editor with no diagnostics, no completion and no
-    // navigation in any file until the window was reloaded.
-    use std::os::unix::fs::PermissionsExt;
-    let fake = std::env::temp_dir().join(format!("sysml-e2e-stuck-elk-{}", std::process::id()));
-    std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let (mut client, handle) = serving();
-    client.request(
-        lsp_types::request::Initialize::METHOD,
-        json!({ "capabilities": {}, "initializationOptions": {
-            "elkCommand": fake.to_str().unwrap(), "elkTimeoutMs": 200, "noLibrary": true
-        }}),
-    );
-    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
-    let uri = "file:///stuck.sysml";
-    client.notify(
-        lsp_types::notification::DidOpenTextDocument::METHOD,
-        json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1,
-                 "text": "part def A;\npart def B :> A;\n" } }),
-    );
-    client.wait_diagnostics();
-
-    let result = client.request("sysml/diagram", json!({ "uri": uri, "layout": "elk" }));
-    let svg = result["svg"].as_str().unwrap();
-    // the built-in layout drew it, and the server is still answering
-    assert!(
-        svg.contains("marker-end=\"url(#specialization)\""),
-        "{svg:.240}"
-    );
-    let symbols = client.request(
-        lsp_types::request::DocumentSymbolRequest::METHOD,
-        json!({ "textDocument": { "uri": uri } }),
-    );
-    assert_eq!(symbols[0]["name"], "A");
-    client.stop(handle);
-    std::fs::remove_file(&fake).ok();
 }
 
 /// An editor is told what the specification requires, and not only what

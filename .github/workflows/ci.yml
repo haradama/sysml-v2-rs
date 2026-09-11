@@ -98,10 +98,11 @@ jobs:
       - name: check on the declared minimum
         run: cargo check --workspace --all-features --all-targets
 
-  # the ELK layout path is otherwise only ever exercised against a fake
-  # `elkrs` script in the crate's tests; this runs the real one
-  elk:
-    name: diagrams lay out with the real ELK
+  # what a drawing is worth is not something `cargo test` can see: that
+  # it parses as XML, and that the rasteriser a reviewer looks at it
+  # through still reads what the SVG writer writes
+  drawings:
+    name: the drawings a reviewer looks at
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -109,9 +110,7 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: install elkrs
-        run: cargo install elkrs --locked
-      - name: render corpus models through ELK and check the SVG is well-formed
+      - name: render corpus models and check the SVG is well-formed
         run: |
           set -eu
           cargo build --release -p sysml-cli
@@ -119,7 +118,7 @@ jobs:
             "vendor/sysml-v2-release/sysml/src/examples/Vehicle Example/VehicleDefinitions.sysml" \
             "vendor/sysml-v2-release/sysml/src/examples/Simple Tests/PartTest.sysml" \
             "vendor/sysml-v2-release/sysml/src/training/24. States/State Actions.sysml"; do
-            target/release/sysml diagram --elk "$model" -o out.svg
+            target/release/sysml diagram "$model" -o out.svg
             python3 -c 'import sys, xml.etree.ElementTree as et; et.parse("out.svg"); print("ok", sys.argv[1])' "$model"
           done
       # `tools/render` is outside the workspace, so `cargo test` never

@@ -722,7 +722,7 @@ fn diagram_draws_the_internal_structure_of_one_definition() {
     // the parts of Car, not the definitions themselves
     assert_eq!(stdout.matches("<rect class=\"box\"").count(), 2);
     assert!(stdout.contains(">w : Wheel</text>"), "{stdout}");
-    assert_eq!(stdout.matches("<line class=\"edge\"").count(), 1);
+    assert_eq!(stdout.matches("class=\"edge\"").count(), 1);
 
     let out = sysml(&["diagram", model.to_str().unwrap(), "--internal", "NoSuch"]);
     assert!(!out.status.success());
@@ -918,50 +918,6 @@ fn no_arguments_prints_usage() {
     let out = sysml(&[]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("Usage"));
-}
-
-#[test]
-fn diagram_can_let_elk_lay_out_the_boxes() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = temp_dir("diagram-elk");
-    let model = write(
-        &dir,
-        "model.sysml",
-        "part def PowerSource;\npart def Engine :> PowerSource;\n",
-    );
-    let fake = dir.join("fake-elk");
-    std::fs::write(
-        &fake,
-        "#!/bin/sh\ncat >/dev/null\n\
-         printf '{\"width\":400,\"height\":144,\"children\":\
-[{\"id\":\"n0\",\"x\":0,\"y\":0},{\"id\":\"n1\",\"x\":0,\"y\":100}]}\\n'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-    let out = sysml(&[
-        "diagram",
-        model.to_str().unwrap(),
-        "--elk",
-        "--elk-command",
-        fake.to_str().unwrap(),
-    ]);
-    assert!(out.status.success());
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    // the fake's canvas plus two 16px margins, not the built-in one
-    assert!(stdout.contains("height=\"176\""), "{stdout}");
-
-    // a missing elkrs is an error that says what to install
-    let out = sysml(&[
-        "diagram",
-        model.to_str().unwrap(),
-        "--elk",
-        "--elk-command",
-        "/nonexistent/elk/elkrs",
-    ]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("cargo install elkrs"), "{stderr}");
 }
 
 #[test]

@@ -52,9 +52,6 @@ function serverOptions(context: vscode.ExtensionContext): ServerOptions {
 
 function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions {
   const library = libraryPath(context);
-  const elk = vscode.workspace
-    .getConfiguration("sysml")
-    .get<string>("diagram.elk", "elkrs");
   const exclude = vscode.workspace
     .getConfiguration("sysml")
     .get<string[]>("workspace.exclude", []);
@@ -77,7 +74,6 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
     initializationOptions: {
       ...(library ? { libraryPath: library } : {}),
       ...(exclude.length > 0 ? { excludePaths: exclude } : {}),
-      elkCommand: elk,
     },
   };
 }

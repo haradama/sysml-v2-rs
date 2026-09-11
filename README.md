@@ -87,7 +87,7 @@ ws.resolve_all();
 | [`sysml-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one |
 | [`sysml-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation |
 | [`sysml-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library |
-| [`sysml-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out here or by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) |
+| [`sysml-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) |
 | [`sysml-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write |
 | [`sysml-lsp`](crates/sysml-lsp) | Language server: diagnostics, navigation, rename, completion, hover, symbols, formatting, and a live diagram preview |
 | [`sysml-cli`](crates/sysml-cli) | The `sysml` tool, including the MCP server |

@@ -23,8 +23,7 @@ sysml-model.workspace = true
 sysml-semantics.workspace = true
 # the standard library, so a server started with no path still resolves
 sysml-stdlib.workspace = true
-# both of these offer the ELK layout, which is what the feature is
-sysml-diagram = { workspace = true, features = ["elk"] }
+sysml-diagram.workspace = true
 lsp-server = "0.7"
 lsp-types = "0.94"
 serde = { version = "1", features = ["derive"] }
