@@ -85,11 +85,11 @@ fn what_is_bundled_is_what_the_release_holds() {
 #[test]
 fn the_release_it_names_is_the_one_checked_out() {
     let Some(root) = vendored() else { return };
-    let described = std::process::Command::new("git")
-        .args(["describe", "--tags", "--always"])
+    let asked = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
         .current_dir(root.parent().expect("the release above its library"))
         .output();
-    let Ok(out) = described else {
+    let Ok(out) = asked else {
         eprintln!("skipping: no git to ask");
         return;
     };
@@ -97,11 +97,11 @@ fn the_release_it_names_is_the_one_checked_out() {
         eprintln!("skipping: the release is not a git checkout here");
         return;
     }
-    let tag = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_string();
     assert_eq!(
-        tag,
-        sysml_stdlib::RELEASE,
-        "the submodule is at `{tag}`; `RELEASE` says `{}`",
+        commit,
+        sysml_stdlib::RELEASE_COMMIT,
+        "the submodule is at `{commit}`, which is not the {} release",
         sysml_stdlib::RELEASE
     );
 }

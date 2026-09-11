@@ -44,6 +44,14 @@ include!(concat!(env!("OUT_DIR"), "/files.rs"));
 /// which is why `sysml --version` prints this.
 pub const RELEASE: &str = "2026-05";
 
+/// The commit that release is, in the OMG's repository.
+///
+/// The name is for a reader and this is for a check: `git describe`
+/// wants the tags, and a submodule fetched shallowly -- which is what
+/// `git submodule update --depth 1` leaves, and what CI checks out --
+/// has none of them. The commit is there either way.
+pub const RELEASE_COMMIT: &str = "de1070ae8e79c21532b8004fc663d47b35d0e9fa";
+
 #[cfg(test)]
 mod tests {
     use super::*;
