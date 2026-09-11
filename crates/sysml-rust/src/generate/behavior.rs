@@ -8,7 +8,6 @@
 //! that performs it; one it did not becomes a trait for a person to write.
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
 use sysml_model::{ElementId, ElementKind, Value};
 

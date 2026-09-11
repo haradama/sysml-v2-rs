@@ -66,14 +66,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build the tool
         run: cargo build --release -p sysml-cli
+      # one tree at a time, which is how each of them is a model: the
+      # KerML examples declare a class `Camera` and the SysML training
+      # models a package of that name, so a workspace holding both has
+      # an `import Camera` in it that answers to two different things
       - name: parse, resolve and check all 403 files
         run: |
           set -eu
           started=$(date +%s)
-          ./target/release/sysml --format json check \
+          for tree in \
             vendor/sysml-v2-release/sysml/src \
             vendor/sysml-v2-release/kerml/src \
-            crates/sysml-stdlib/library > /dev/null
+            crates/sysml-stdlib/library; do
+            ./target/release/sysml --format json check "$tree" > /dev/null
+          done
           took=$(( $(date +%s) - started ))
           echo "checked the whole corpus in ${took}s"
           if [ "$took" -gt 120 ]; then
@@ -190,9 +196,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # jsdom, which the preview page is driven under, runs on 22 and up
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       # `npm ci` wants a lockfile, and this one is not checked in
       - name: install
         run: npm install --no-audit --no-fund
