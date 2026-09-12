@@ -4,5 +4,31 @@
   // it. Loading its 403 files into the language server would cost a
   // couple of seconds every time a document is opened, for names nobody
   // is editing.
-  "sysml.workspace.exclude": ["vendor"]
+  "sysml.workspace.exclude": ["vendor"],
+
+  // PlantUML's own default colours: a pale yellow box (#fefece) outlined
+  // in dark red (#a80036), a yellow note, and white paper under all of
+  // it. `ink` is every line *and* every letter here, so the words come
+  // out dark red too -- PlantUML writes them in black, which is the one
+  // place this differs.
+  //
+  // `"dark": null` says the drawing is one thing everywhere, which is
+  // what PlantUML does: the same white page whatever the editor's theme.
+  // Takes effect when the language server restarts (`Developer: Reload
+  // Window`).
+  "sysml.diagram.skin": {
+    "light": {
+      "page": "#ffffff",
+      "fill": "#fefece",
+      "ink": "#a80036",
+      "background": "#ffffff",
+      "kinds": {
+        "package": { "fill": "#ffffff" },
+        "comment": { "fill": "#fbfb77" }
+      }
+    },
+    "dark": null,
+    "font": "DejaVu Sans, Verdana, sans-serif",
+    "stroke": 1
+  }
 }
