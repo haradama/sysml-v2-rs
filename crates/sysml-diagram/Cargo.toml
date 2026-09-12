@@ -1,7 +1,9 @@
 [package]
 name = "sysmlv2-diagram"
 description = "Definition/specialization diagrams rendered to SVG from sysml-model"
-version.workspace = true
+# its own, now that it has one: a drawing is painted by a skin, and
+# the layout is ELK's, linked in rather than spawned
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

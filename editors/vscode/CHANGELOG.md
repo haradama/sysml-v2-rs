@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1
+
+- `sysml.format.width`: where a line too wide to read is opened, in
+  columns. `0` leaves every line as it was written.
+- `sysml.diagram.skin`: what the preview is painted in -- the name of
+  a skin that ships, or a palette of your own, down to the colour of
+  one kind of box and one kind of line.
+- Formatting a doc comment of several lines keeps its body together
+  rather than leaving the margin of wherever it used to be.
+- Editing a large model costs what the edit is rather than what the
+  model is.
+
 ## 0.1.0
 
 First release.

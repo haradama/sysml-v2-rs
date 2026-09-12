@@ -67,13 +67,16 @@ sysmlv2-stdlib = { path = "crates/sysml-stdlib", version = "0.1.0" }
 
 # The version here is the floor a published crate depends on, and it
 # moves when what is above needs something the older one has not got:
-# `sysmlv2-model` reads a comment's body through `comment_text`, which
-# `sysmlv2-syntax` 0.1.0 does not have. A crate whose own source has not
-# changed keeps `version.workspace = true` and the version it is
-# published under, since a new number says it changed.
-sysmlv2-syntax = { path = "crates/sysml-syntax", version = "0.1.1" }
+# the tool and the server format to a width, which `sysmlv2-syntax`
+# 0.1.1 cannot, and draw through a skin, which `sysmlv2-diagram` 0.1.0
+# has not got. A crate whose own source has not changed keeps
+# `version.workspace = true` and the version it is published under,
+# since a new number says it changed; a floor that nothing needs moved
+# stays where it is, so that a dependent still builds against what it
+# was tested with.
+sysmlv2-syntax = { path = "crates/sysml-syntax", version = "0.1.2" }
 sysmlv2-model = { path = "crates/sysml-model", version = "0.1.1" }
 sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
 sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
 sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.0" }
-sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.1.0" }
+sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.1.1" }
