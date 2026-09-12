@@ -1,10 +1,5 @@
 # sysml-v2-rs
 
-[<img alt="github" src="https://img.shields.io/badge/github-haradama/sysml--v2--rs-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/haradama/sysml-v2-rs)
-[<img alt="crates.io" src="https://img.shields.io/crates/v/sysmlv2-cli.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/sysmlv2-cli)
-[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-sysmlv2--cli-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/sysmlv2-cli)
-[<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/haradama/sysml-v2-rs/ci.yml?branch=main&style=for-the-badge" height="20">](https://github.com/haradama/sysml-v2-rs/actions)
-
 Rust libraries for [SysML v2](https://www.omg.org/sysml/sysmlv2/) — the OMG
 systems modeling language, adopted in 2025, built on KerML.
 
@@ -91,17 +86,17 @@ are called: `sysml-model` and `sysml-cli` on crates.io are other
 people's crates. Each keeps its library name, so `use sysml_model::…`
 is what the code reads either way.
 
-| Crate | |
-| --- | --- |
-| [`sysmlv2-syntax`](crates/sysml-syntax) | Lexer, recursive-descent parser, lossless CST and typed AST. Parsing never fails: bad input still reproduces the source, with diagnostics beside it |
-| [`sysmlv2-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one |
-| [`sysmlv2-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation |
-| [`sysmlv2-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library |
-| [`sysmlv2-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) |
-| [`sysmlv2-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write |
-| [`sysmlv2-lsp`](crates/sysml-lsp) | Language server: diagnostics, navigation, rename, completion, hover, symbols, formatting, and a live diagram preview |
-| [`sysmlv2-cli`](crates/sysml-cli) | The `sysml` tool, including the MCP server |
-| [`sysmlv2-stdlib`](crates/sysml-stdlib) | The KerML and SysML v2 standard libraries as text, built into every binary that resolves names (EPL-2.0) |
+| Crate | | |
+| --- | --- | --- |
+| [`sysmlv2-syntax`](crates/sysml-syntax) | Lexer, recursive-descent parser, lossless CST and typed AST. Parsing never fails: bad input still reproduces the source, with diagnostics beside it | [![crates.io](https://img.shields.io/crates/v/sysmlv2-syntax?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-syntax) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-syntax?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-syntax) |
+| [`sysmlv2-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one | [![crates.io](https://img.shields.io/crates/v/sysmlv2-model?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-model) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-model?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-model) |
+| [`sysmlv2-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation | [![crates.io](https://img.shields.io/crates/v/sysmlv2-semantics?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-semantics) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-semantics?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-semantics) |
+| [`sysmlv2-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library | [![crates.io](https://img.shields.io/crates/v/sysmlv2-interchange?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-interchange) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-interchange?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-interchange) |
+| [`sysmlv2-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) | [![crates.io](https://img.shields.io/crates/v/sysmlv2-diagram?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-diagram) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-diagram?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-diagram) |
+| [`sysmlv2-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write | [![crates.io](https://img.shields.io/crates/v/sysmlv2-rust?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-rust) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-rust?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-rust) |
+| [`sysmlv2-lsp`](crates/sysml-lsp) | Language server: diagnostics, navigation, rename, completion, hover, symbols, formatting, and a live diagram preview | [![crates.io](https://img.shields.io/crates/v/sysmlv2-lsp?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-lsp) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-lsp?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-lsp) |
+| [`sysmlv2-cli`](crates/sysml-cli) | The `sysml` tool, including the MCP server | [![crates.io](https://img.shields.io/crates/v/sysmlv2-cli?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-cli) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-cli?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-cli) |
+| [`sysmlv2-stdlib`](crates/sysml-stdlib) | The KerML and SysML v2 standard libraries as text, built into every binary that resolves names (EPL-2.0) | [![crates.io](https://img.shields.io/crates/v/sysmlv2-stdlib?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-stdlib) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-stdlib?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-stdlib) |
 
 ## For an AI agent
 
