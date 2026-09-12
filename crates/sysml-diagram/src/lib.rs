@@ -46,6 +46,7 @@ mod elk;
 mod graph;
 mod layout;
 mod sequence;
+pub mod skin;
 mod svg;
 
 pub use browser::{browser_view, Browser, Row};
@@ -55,10 +56,12 @@ pub use graph::{
 };
 pub use layout::{layout, Layout, Placed};
 pub use sequence::{sequence_view, Lifeline, Moment, Sequence};
+pub use skin::{Colour, Palette, Skin, Tint};
 pub use svg::to_svg;
 
-/// Sizes and spacing shared by the layout and the renderer.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Sizes and spacing shared by the layout and the renderer, and the
+/// skin the drawing is painted in.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Style {
     /// Font size of an element name, in pixels.
     pub font_size: f64,
@@ -76,6 +79,9 @@ pub struct Style {
     pub indent: f64,
     /// Width a layer may reach before it wraps onto another row.
     pub max_row_width: f64,
+    /// What the drawing is painted in. The notation is not here: a skin
+    /// says colour, face and weight, and never which marker means what.
+    pub skin: Skin,
 }
 
 impl Default for Style {
@@ -89,6 +95,7 @@ impl Default for Style {
             margin: 16.0,
             indent: 24.0,
             max_row_width: 1600.0,
+            skin: Skin::default(),
         }
     }
 }

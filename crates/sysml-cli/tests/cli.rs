@@ -1469,3 +1469,70 @@ fn check_reports_a_package_named_after_a_library_one() {
         .unwrap()
         .ends_with("mine.sysml"));
 }
+
+/// `--skin` names one that ships, or a file saying what to paint the
+/// drawing in.
+#[test]
+fn diagram_is_painted_in_the_skin_it_is_given() {
+    let dir = temp_dir("skin");
+    let model = write(
+        &dir,
+        "m.sysml",
+        "package P {\n\tpart def A;\n\trequirement def R;\n}\n",
+    );
+    let said = |args: &[&str]| {
+        let out = sysml(args);
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    };
+
+    // one that ships: `mono` is the drawing with nothing said about dark
+    let (ok, svg, _) = said(&["diagram", model.to_str().unwrap(), "--skin", "mono"]);
+    assert!(ok);
+    assert!(!svg.contains("prefers-color-scheme"), "{svg}");
+    assert!(
+        !svg.contains("kind-"),
+        "nothing is painted otherwise: {svg}"
+    );
+
+    // one written down
+    let skin = write(
+        &dir,
+        "skin.json",
+        "{ \"light\": { \"kinds\": { \"part def\": \"#e8f0fe\" } } }",
+    );
+    let (ok, svg, _) = said(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--skin",
+        skin.to_str().unwrap(),
+    ]);
+    assert!(ok);
+    assert!(
+        svg.contains(".kind-part-def .box { fill: #e8f0fe; }"),
+        "{svg}"
+    );
+    assert!(svg.contains("<g class=\"kind-part-def\">"), "{svg}");
+    // and the kind it said nothing about is drawn as it was
+    assert!(!svg.contains("kind-requirement-def"), "{svg}");
+
+    // a name that is no skin and no file says both things
+    let (ok, _, err) = said(&["diagram", model.to_str().unwrap(), "--skin", "chartreuse"]);
+    assert!(!ok);
+    assert!(err.contains("no skin `chartreuse`"), "{err}");
+    assert!(err.contains("default, mono, contrast"), "{err}");
+
+    // and a file that is not a skin says what is wrong with it
+    let wrong = write(&dir, "wrong.json", "{ \"light\": { \"paper\": \"#fff\" } }");
+    let (ok, _, err) = said(&[
+        "diagram",
+        model.to_str().unwrap(),
+        "--skin",
+        wrong.to_str().unwrap(),
+    ]);
+    assert!(!ok);
+    assert!(err.contains("no `paper`"), "{err}");
+}

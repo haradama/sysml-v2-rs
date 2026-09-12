@@ -17,6 +17,39 @@ and no process to spawn. Everything visible is drawn here, and the
 engine decides nothing at random: one model renders to the same bytes
 every time.
 
+## Skins
+
+A skin says colour, face and weight; the notation says everything else.
+`--skin mono` is the drawing with nothing said about the dark, which is
+what paper and every renderer that reads no media query see anyway.
+`--skin <file>` paints it as the file says:
+
+```json
+{
+  "light": {
+    "page": "#ffffff", "fill": "#ffffff", "ink": "#000000",
+    "kinds": {
+      "part def": { "fill": "#e8f0fe", "line": "#1a3a6b" },
+      "requirement def": "#fdecea",
+      "package": "#f6f6f6"
+    }
+  },
+  "dark": null
+}
+```
+
+A kind is the word the drawing writes in guillemets -- `part def`,
+`state def` -- with `package` for the frame and `comment` for the folded
+note, which write none. A bare colour is a fill, which is what a reader
+usually means; `fill`, `line` and `text` say more. `page` is what a name
+written over a line is haloed in, so it wants to be the colour of
+whatever the drawing is put on rather than the colour of a box.
+
+Colour says nothing the SysML v2 notation defines: the shapes carry the
+meaning, and a skin never changes which marker means what. A drawing
+nobody painted is the drawing this wrote before skins existed, byte for
+byte.
+
 ## What is drawn
 
 Three views, each the standard's own. `sysml diagram` in

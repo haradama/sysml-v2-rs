@@ -98,6 +98,23 @@
           "minimum": 0,
           "description": "Columns a line may reach before formatting breaks it at the readiest joint of what is on it -- before an `else` sooner than before a sum. A line is measured in columns, so a character an em across counts as two. 0 leaves every line as long as it comes, keeping only the breaks you wrote. Takes effect when the language server restarts."
         },
+        "sysml.diagram.skin": {
+          "default": "default",
+          "description": "How the diagram preview is painted: the name of a skin that ships (`default`, `mono`, `contrast`), or an object saying what to paint it in -- `page`, `fill` and `ink` for the drawing, and `kinds` for the boxes painted otherwise, under the word the drawing writes in guillemets (`part def`, `requirement def`, `package`). Colour says nothing the SysML v2 notation defines; the shapes carry the meaning either way. Takes effect when the language server restarts.",
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "default",
+                "mono",
+                "contrast"
+              ]
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
         "sysml.preview.openAutomatically": {
           "type": "boolean",
           "default": false,

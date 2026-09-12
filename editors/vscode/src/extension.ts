@@ -58,6 +58,9 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
   const width = vscode.workspace
     .getConfiguration("sysml")
     .get<number>("format.width", 100);
+  const skin = vscode.workspace
+    .getConfiguration("sysml")
+    .get<unknown>("diagram.skin", "default");
   // A file and an unsaved buffer are documents the server can speak
   // for. The other schemes a window shows are not: a `git:` document is
   // some earlier revision of a file, and handing it over declares that
@@ -78,6 +81,7 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
       ...(library ? { libraryPath: library } : {}),
       ...(exclude.length > 0 ? { excludePaths: exclude } : {}),
       formatWidth: width,
+      skin,
     },
   };
 }

@@ -643,3 +643,49 @@ fn the_client_says_how_wide_a_line_may_be() {
     );
     assert_eq!(narrow.matches("and").count(), 3, "{narrow}");
 }
+
+/// The client says how the preview is painted, by name or in full, and
+/// a skin that will not read leaves the drawing as it was.
+#[test]
+fn the_client_says_how_the_preview_is_painted() {
+    let uri = "file:///painted.sysml";
+    let text = "package P {\n\tpart def A;\n}\n";
+    let drawn = |skin: Value| {
+        let (mut client, handle) = serving();
+        let mut options = json!({ "noLibrary": true });
+        if !skin.is_null() {
+            options["skin"] = skin;
+        }
+        client.initialize_with(options);
+        client.notify(
+            lsp_types::notification::DidOpenTextDocument::METHOD,
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "sysml", "version": 1, "text": text,
+            }}),
+        );
+        client.wait_diagnostics();
+        let result = client.request("sysml/diagram", json!({ "uri": uri }));
+        let svg = result["svg"].as_str().unwrap().to_string();
+        client.stop(handle);
+        svg
+    };
+
+    // told nothing, the drawing is the one it always was
+    let plain = drawn(Value::Null);
+    assert!(plain.contains("prefers-color-scheme"), "{plain:.200}");
+    assert!(!plain.contains("kind-"), "{plain:.200}");
+
+    // told a name
+    let mono = drawn(json!("mono"));
+    assert!(!mono.contains("prefers-color-scheme"), "{mono:.200}");
+
+    // told what to paint it in
+    let painted = drawn(json!({ "light": { "kinds": { "part def": "#e8f0fe" } } }));
+    assert!(
+        painted.contains(".kind-part-def .box { fill: #e8f0fe; }"),
+        "{painted:.400}"
+    );
+
+    // and told something that is not a skin, it draws what it drew
+    assert_eq!(drawn(json!({ "light": { "paper": "#fff" } })), plain);
+}

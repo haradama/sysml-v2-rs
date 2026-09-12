@@ -26,6 +26,12 @@ unicode-width = "0.2"
 # install and no process to spawn.
 elkrs = "0.1"
 
+# A skin is written down where a reader can keep it -- a file, an
+# editor's settings -- and read here, so that the command line and the
+# language server read the same one the same way. `elkrs` builds this
+# already.
+serde_json = "1"
+
 [dev-dependencies]
 sysmlv2-corpus.workspace = true
 sysmlv2-semantics.workspace = true

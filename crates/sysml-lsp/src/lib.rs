@@ -157,6 +157,21 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
             width: width as usize,
         };
     }
+    // How the preview is painted: the name of a skin, or one written
+    // out. A skin that will not read leaves the drawing as it was and
+    // says why on stderr, which is the output channel an editor shows --
+    // a preview that came back unpainted and silent would be a setting
+    // nobody could debug.
+    if let Some(said) = init
+        .initialization_options
+        .as_ref()
+        .and_then(|o| o.get("skin"))
+    {
+        match sysml_diagram::skin::read(said) {
+            Ok(skin) => server.skin = skin,
+            Err(why) => eprintln!("sysml-lsp: the skin is not read: {why}"),
+        }
+    }
     server.serve(connection)
 }
 
@@ -201,6 +216,8 @@ pub struct Server {
     published: HashMap<Url, Vec<Diagnostic>>,
     /// what the formatter is told, where the client has an opinion
     layout: sysml_syntax::fmt::Layout,
+    /// and what the preview is painted in
+    skin: sysml_diagram::Skin,
 }
 
 /// One analysis pass over the library + the project + all open documents.

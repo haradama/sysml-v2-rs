@@ -158,6 +158,10 @@ enum Command {
         /// view: a lifeline per participant and the messages between them
         #[arg(long, value_name = "NAME", conflicts_with_all = ["internal", "browser"])]
         sequence: Option<String>,
+        /// How the drawing is painted: a skin that ships (`default`,
+        /// `mono`, `contrast`) or a JSON file saying what to paint it in
+        #[arg(long, value_name = "NAME|FILE")]
+        skin: Option<String>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -352,6 +356,7 @@ fn main() -> ExitCode {
             internal,
             browser,
             sequence,
+            skin,
             output,
         } => {
             // the flags name one drawing between them; clap allows more
@@ -363,7 +368,15 @@ fn main() -> ExitCode {
                 (Some(name), _, _) => View::Internal(name),
                 _ => View::Definitions,
             };
-            diagram(&paths, &library, view, output.as_deref(), bare)
+            let skin = match skin.as_deref().map(read_skin) {
+                Some(Ok(skin)) => skin,
+                Some(Err(why)) => {
+                    eprintln!("error: {why}");
+                    return ExitCode::FAILURE;
+                }
+                None => sysml_diagram::Skin::default(),
+            };
+            diagram(&paths, &library, view, output.as_deref(), bare, skin)
         }
         Command::ImportRust {
             json,
@@ -905,12 +918,37 @@ enum View<'a> {
     Sequence(&'a str),
 }
 
+/// The skin `asked` names: one that ships, or a JSON file saying what
+/// to paint the drawing in.
+///
+/// A name that is not one of the skins that ship is more likely a path
+/// that is not there than a skin nobody wrote, so the two are told
+/// apart by whether anything is at that path.
+fn read_skin(asked: &str) -> Result<sysml_diagram::Skin, String> {
+    if let Some(skin) = sysml_diagram::Skin::named(asked) {
+        return Ok(skin);
+    }
+    let path = Path::new(asked);
+    if !path.exists() {
+        return Err(format!(
+            "no skin `{asked}`, and no file at that path; the skins that ship are {}",
+            sysml_diagram::Skin::NAMES.join(", ")
+        ));
+    }
+    let text =
+        std::fs::read_to_string(path).map_err(|why| format!("cannot read {asked}: {why}"))?;
+    let said: serde_json::Value =
+        serde_json::from_str(&text).map_err(|why| format!("{asked} is not JSON: {why}"))?;
+    sysml_diagram::skin::read(&said).map_err(|why| format!("{asked}: {why}"))
+}
+
 fn diagram(
     paths: &[PathBuf],
     library: &[PathBuf],
     view: View<'_>,
     output: Option<&Path>,
     bare: bool,
+    skin: sysml_diagram::Skin,
 ) -> ExitCode {
     let mut ws = sysml_semantics::Workspace::new();
     if let Err(unreadable) = load_paths(&mut ws, paths) {
@@ -944,7 +982,13 @@ fn diagram(
             eprintln!("error: nothing to draw");
             return ExitCode::FAILURE;
         }
-        let svg = sysml_diagram::render_browser(&view, &sysml_diagram::Style::default());
+        let svg = sysml_diagram::render_browser(
+            &view,
+            &sysml_diagram::Style {
+                skin: skin.clone(),
+                ..Default::default()
+            },
+        );
         return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
     }
     if let View::Sequence(name) = view {
@@ -956,7 +1000,13 @@ fn diagram(
             eprintln!("error: `{name}` declares no interaction to draw");
             return ExitCode::FAILURE;
         }
-        let svg = sysml_diagram::render_sequence(&view, &sysml_diagram::Style::default());
+        let svg = sysml_diagram::render_sequence(
+            &view,
+            &sysml_diagram::Style {
+                skin: skin.clone(),
+                ..Default::default()
+            },
+        );
         return emit(
             &svg,
             output,
@@ -980,7 +1030,10 @@ fn diagram(
         eprintln!("error: nothing to draw");
         return ExitCode::FAILURE;
     }
-    let style = sysml_diagram::Style::default();
+    let style = sysml_diagram::Style {
+        skin,
+        ..Default::default()
+    };
     let svg = sysml_diagram::render(&diagram, &style);
     let count = |relation| {
         diagram

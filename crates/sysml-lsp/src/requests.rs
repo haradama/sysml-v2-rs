@@ -452,6 +452,7 @@ impl Server {
             .then(|| file_of(&uri))
             .flatten()
             .and_then(|path| path.parent().map(Path::to_path_buf));
+        let skin = self.skin.clone();
         let analysis = self.analysis();
         let file = *analysis.doc_files.get(&uri)?;
         let ws = &analysis.ws;
@@ -468,7 +469,10 @@ impl Server {
             None => ws.file_roots(file).to_vec(),
         };
         let roots = roots.as_slice();
-        let style = sysml_diagram::Style::default();
+        let style = sysml_diagram::Style {
+            skin,
+            ..Default::default()
+        };
         let draw = |diagram: &sysml_diagram::Diagram| sysml_diagram::render(diagram, &style);
         let svg = match params.view.as_deref() {
             Some("browser") => {

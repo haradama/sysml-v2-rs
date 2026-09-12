@@ -7,53 +7,12 @@ use crate::graph::{lines, Node};
 use crate::layout::child_boxes;
 use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 
-/// Font stack for the drawing: the same families a browser would pick for
-/// UI text, so a diagram looks native wherever it is embedded.
-/// The typeface the specification's own notation figures are set in.
-const FONT: &str = "Arial, Helvetica, sans-serif";
-
-/// Colours for both viewer themes, after the specification's figures:
-/// black ink on white boxes. The dark palette keeps the same print-like
-/// contrast, and the document is self-contained, so the palette travels
-/// with it.
-///
-/// Both are written out as colours rather than as custom properties. A
-/// saved drawing is opened by more than a browser, and librsvg and resvg
-/// read no custom property at all: `fill: var(--box)` leaves the shape in
-/// the initial paint -- black fill, no stroke, every line gone. What they
-/// do agree on is to pass over a media query they cannot answer, so the
-/// dark half is read by the viewers that asked for it.
-const CSS: &str = "\
-.box { fill: #ffffff; stroke: #000000; stroke-width: 1; }\n\
-.rule, .edge { stroke: #000000; stroke-width: 1; fill: none; }\n\
-.arrow { fill: #ffffff; stroke: #000000; stroke-width: 1; }\n\
-.diamond { fill: #000000; stroke: #000000; stroke-width: 1; }\n\
-.hollow { fill: #ffffff; stroke: #000000; stroke-width: 1; }\n\
-.tip { fill: none; stroke: #000000; stroke-width: 1; }\n\
-.initial { fill: #000000; }\n\
-.port { fill: #ffffff; stroke: #000000; stroke-width: 1; }\n\
-.guide { stroke: #000000; stroke-width: 1; opacity: 0.4; }\n\
-.dependency { stroke: #000000; stroke-width: 1; fill: none; stroke-dasharray: 6 4; }\n\
-.succession { stroke: #000000; stroke-width: 1; fill: none; stroke-dasharray: 4 3; }\n\
-.lifeline { stroke: #000000; stroke-width: 1; fill: none; stroke-dasharray: 3 4; }\n\
-.lane { fill: none; stroke: #000000; stroke-width: 1; }\n\
-.name { fill: #000000; font-weight: bold; }\n\
-.abstract { font-style: italic; }\n\
-.keyword, .feature { fill: #000000; }\n\
-.aside { fill: #000000; paint-order: stroke; stroke: #ffffff; stroke-width: 3; \
-stroke-linejoin: round; }\n\
-.compartment { fill: #000000; font-style: italic; }\n\
-@media (prefers-color-scheme: dark) {\n\
-  .box, .arrow, .hollow, .port { fill: #1e1e1e; stroke: #d4d4d4; }\n\
-  .rule, .edge, .tip, .guide, .dependency, .succession, .lifeline, .lane \
-{ stroke: #d4d4d4; }\n\
-  .diamond { fill: #d4d4d4; stroke: #d4d4d4; }\n\
-  .initial, .name, .keyword, .feature, .compartment { fill: #d4d4d4; }\n\
-  .aside { fill: #d4d4d4; stroke: #1e1e1e; }\n\
-}\n";
-
 /// The arrowheads and diamonds every view draws with, defined once so a
 /// document that uses one carries it.
+///
+/// These are the notation's and not a skin's: which marker a line
+/// carries is what the line means, so [`crate::Skin`] paints them and
+/// never redraws them.
 pub(crate) fn markers() -> String {
     let mut out = String::new();
     writeln!(
@@ -182,6 +141,17 @@ impl<'a> Canvas<'a> {
             let notch = (self.style.text_width(&frame.name) + 2.0 * self.style.padding)
                 .min(frame.width - slant)
                 .max(0.0);
+            // a package writes no keyword, so a skin paints it under the
+            // word a reader would use for it
+            let wrapped = self.style.skin.tints("package");
+            if wrapped {
+                writeln!(
+                    self.out,
+                    "<g class=\"{}\">",
+                    crate::skin::class_of("package")
+                )
+                .unwrap();
+            }
             writeln!(
                 self.out,
                 "<path class=\"box\" d=\"M {:.1} {:.1} H {:.1} L {:.1} {:.1} H {:.1} V {:.1} \
@@ -209,6 +179,9 @@ impl<'a> Canvas<'a> {
                 escape(&frame.name)
             )
             .unwrap();
+            if wrapped {
+                writeln!(self.out, "</g>").unwrap();
+            }
         }
     }
 
@@ -1242,24 +1215,54 @@ pub(crate) fn document(width: f64, height: f64, style: &Style, body: &str) -> St
     writeln!(
         out,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
-         viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{FONT}\" \
+         viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{}\" \
          font-size=\"{:.0}\">",
-        style.font_size
+        style.skin.font, style.font_size
     )
     .expect("writing to a String cannot fail");
-    writeln!(out, "<style>\n{CSS}</style>").unwrap();
+    writeln!(out, "<style>\n{}</style>", style.skin.stylesheet()).unwrap();
     out.push_str(body);
     writeln!(out, "</svg>").unwrap();
     out
 }
 
 /// Draw one box and, inside it, the parts it is assembled from.
+/// The word a skin paints a box under: what the drawing writes in
+/// guillemets, and `comment` for the folded note, which writes none.
+fn kind_of(node: &Node) -> &str {
+    match node.keyword.as_str() {
+        "" if node.shape == Shape::Note => "comment",
+        keyword => keyword,
+    }
+}
+
+/// The group a box is drawn in, carrying its kind where a skin paints
+/// that kind otherwise.
+///
+/// Only where it does: a drawing that says which kind every box is would
+/// be a different file from the one this wrote before skins, and the
+/// point of a default skin is that it is not.
+fn group_of(node: &Node, style: &Style) -> (String, &'static str) {
+    let kind = kind_of(node);
+    match style.skin.tints(kind) {
+        true => (
+            format!("<g class=\"{}\">", crate::skin::class_of(kind)),
+            "</g>",
+        ),
+        false => ("<g>".to_string(), "</g>"),
+    }
+}
+
 fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &Style) {
     let (x, y, width, height) = rect;
     // `comment-node` is the folded-corner note, holding its text and
     // nothing else -- no keyword line, no compartments
     if node.shape == Shape::Note {
         let fold = style.line_height;
+        let wrapped = style.skin.tints(kind_of(node));
+        if wrapped {
+            writeln!(out, "{}", group_of(node, style).0).unwrap();
+        }
         writeln!(
             out,
             "<path class=\"box\" d=\"M {x:.1} {y:.1} H {:.1} L {:.1} {:.1} V {:.1} \
@@ -1297,6 +1300,9 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
             .unwrap();
             line += style.line_height;
         }
+        if wrapped {
+            writeln!(out, "</g>").unwrap();
+        }
         return;
     }
     {
@@ -1312,7 +1318,8 @@ fn draw_box(out: &mut String, node: &Node, rect: (f64, f64, f64, f64), style: &S
 
         writeln!(
             out,
-            "<g>\n<rect class=\"box\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"{}\"/>",
+            "{}\n<rect class=\"box\" x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"{}\"/>",
+            group_of(node, style).0,
             placed.x,
             placed.y,
             placed.width,
@@ -2266,15 +2273,17 @@ mod tests {
         // declaration whose `var()` they cannot resolve leaves the shape
         // in the initial paint, which is a black box with no outline and
         // a tree with no branches, so the stylesheet names none.
-        assert!(!CSS.contains("var("), "{CSS}");
-        assert!(!CSS.contains("--"), "{CSS}");
+        let sheet = Style::default().skin.stylesheet();
+        let css = sheet.as_str();
+        assert!(!css.contains("var("), "{css}");
+        assert!(!css.contains("--"), "{css}");
         // and the dark half is behind a query, which is what they skip
-        let dark = CSS.find("prefers-color-scheme").expect("a dark palette");
+        let dark = css.find("prefers-color-scheme").expect("a dark palette");
         assert!(
-            CSS[..dark].contains("#ffffff"),
+            css[..dark].contains("#ffffff"),
             "the light half comes first"
         );
-        assert!(CSS[dark..].contains("#1e1e1e"), "the dark half is inside");
+        assert!(css[dark..].contains("#1e1e1e"), "the dark half is inside");
     }
 
     #[test]
