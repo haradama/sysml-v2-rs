@@ -1,5 +1,10 @@
 # sysml-v2-rs
 
+[<img alt="github" src="https://img.shields.io/badge/github-haradama/sysml--v2--rs-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20">](https://github.com/haradama/sysml-v2-rs)
+[<img alt="crates.io" src="https://img.shields.io/crates/v/sysmlv2-cli.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/sysmlv2-cli)
+[<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-sysmlv2--cli-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/sysmlv2-cli)
+[<img alt="build status" src="https://img.shields.io/github/actions/workflow/status/haradama/sysml-v2-rs/ci.yml?branch=main&style=for-the-badge" height="20">](https://github.com/haradama/sysml-v2-rs/actions)
+
 Rust libraries for [SysML v2](https://www.omg.org/sysml/sysmlv2/) — the OMG
 systems modeling language, adopted in 2025, built on KerML.
 

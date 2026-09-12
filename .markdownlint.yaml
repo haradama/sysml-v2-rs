@@ -7,6 +7,12 @@ MD013: false
 # fenced code blocks must declare a language
 MD040: true
 
+# the badges at the top of the README, which markdown has no way to
+# give a height to
+MD033:
+  allowed_elements:
+    - img
+
 # tables use padded pipes: `| a | b |`
 MD060:
   style: padded
