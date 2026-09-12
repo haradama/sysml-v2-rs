@@ -144,6 +144,19 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         .collect();
 
     let mut server = Server::new(library, &roots, &excluded);
+    // How wide a line may be before formatting breaks it. Read once, as
+    // the library path is: a client that changes it restarts the server,
+    // which is what changing any of these takes.
+    if let Some(width) = init
+        .initialization_options
+        .as_ref()
+        .and_then(|o| o.get("formatWidth"))
+        .and_then(serde_json::Value::as_u64)
+    {
+        server.layout = sysml_syntax::fmt::Layout {
+            width: width as usize,
+        };
+    }
     server.serve(connection)
 }
 
@@ -186,6 +199,8 @@ pub struct Server {
     /// what was last published about each open document, so that what
     /// has not changed is not said again
     published: HashMap<Url, Vec<Diagnostic>>,
+    /// what the formatter is told, where the client has an opinion
+    layout: sysml_syntax::fmt::Layout,
 }
 
 /// One analysis pass over the library + the project + all open documents.

@@ -402,6 +402,43 @@ fn fmt_formats_checks_and_writes() {
     assert!(!out.status.success());
 }
 
+/// `--width` says where a line gives way, and `--width 0` says nowhere.
+#[test]
+fn fmt_breaks_a_line_where_the_width_says() {
+    let dir = temp_dir("fmt-width");
+    let long = write(
+        &dir,
+        "long.sysml",
+        "package P { part def A { attribute a = b and c and d and e; } }",
+    );
+    let said = |args: &[&str]| String::from_utf8_lossy(&sysml(args).stdout).to_string();
+
+    // wide enough to hold it
+    let whole = said(&["fmt", long.to_str().unwrap()]);
+    assert_eq!(whole.matches("and").count(), 3, "{whole}");
+    assert_eq!(
+        whole.lines().filter(|l| l.contains("and")).count(),
+        1,
+        "{whole}"
+    );
+
+    // and not wide enough
+    let broken = said(&["fmt", "--width", "30", long.to_str().unwrap()]);
+    assert!(
+        broken.lines().filter(|l| l.contains("and")).count() > 1,
+        "{broken}"
+    );
+    assert_eq!(broken.matches("and").count(), 3, "{broken}");
+
+    // nothing to keep to: as long as it comes
+    let flat = said(&["fmt", "--width", "0", long.to_str().unwrap()]);
+    assert_eq!(
+        flat.lines().filter(|l| l.contains("and")).count(),
+        1,
+        "{flat}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn fmt_write_reports_readonly_failures() {

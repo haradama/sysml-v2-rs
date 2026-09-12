@@ -55,6 +55,9 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
   const exclude = vscode.workspace
     .getConfiguration("sysml")
     .get<string[]>("workspace.exclude", []);
+  const width = vscode.workspace
+    .getConfiguration("sysml")
+    .get<number>("format.width", 100);
   // A file and an unsaved buffer are documents the server can speak
   // for. The other schemes a window shows are not: a `git:` document is
   // some earlier revision of a file, and handing it over declares that
@@ -74,6 +77,7 @@ function clientOptions(context: vscode.ExtensionContext): LanguageClientOptions 
     initializationOptions: {
       ...(library ? { libraryPath: library } : {}),
       ...(exclude.length > 0 ? { excludePaths: exclude } : {}),
+      formatWidth: width,
     },
   };
 }

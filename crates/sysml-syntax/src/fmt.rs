@@ -19,13 +19,35 @@ use crate::{parse_dialect, shared_indent, Dialect, SyntaxKind, SyntaxKind::*, Sy
 const INDENT: &str = "    ";
 
 /// How wide a line may be before the formatter looks for somewhere to
-/// break it.
+/// break it, where nobody says otherwise.
 ///
 /// Nothing in the notation makes a line too long -- a newline is
 /// whitespace wherever it falls -- so this is about reading. A hundred
 /// columns is what fits beside a diagram preview on a laptop, which is
 /// where these files are read.
 const WIDTH: usize = 100;
+
+/// What the formatter is free to decide, for a caller with an opinion
+/// about it.
+///
+/// Everything else it does is the notation's: four spaces, one member to
+/// a line, a `doc` on its own. Where a line that will not fit gives way
+/// is the one thing a reader can reasonably want a say in, so it is the
+/// one thing here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// Columns a line may reach before it is broken, counting a
+    /// character an em across as two. Zero leaves every line as long as
+    /// it comes, which is what the formatter did before it could break
+    /// one at all.
+    pub width: usize,
+}
+
+impl Default for Layout {
+    fn default() -> Layout {
+        Layout { width: WIDTH }
+    }
+}
 
 /// How wide `text` is on screen. A character an em across takes two
 /// columns, which is what makes a line of Japanese twice as long as its
@@ -74,7 +96,12 @@ fn joint_rank(prev: &SyntaxToken, next: &SyntaxToken) -> Option<u8> {
 
 /// Format a whole source file.
 pub fn format(text: &str, dialect: Dialect) -> String {
-    format_parsed(&parse_dialect(text, dialect))
+    format_with(text, dialect, Layout::default())
+}
+
+/// The same, laid out as `layout` asks.
+pub fn format_with(text: &str, dialect: Dialect, layout: Layout) -> String {
+    format_parsed_with(&parse_dialect(text, dialect), layout)
 }
 
 /// Format a file that has already been parsed.
@@ -83,6 +110,11 @@ pub fn format(text: &str, dialect: Dialect) -> String {
 /// command line, which parses to find out whether the file is worth
 /// rewriting at all -- need not have it parsed a second time.
 pub fn format_parsed(parse: &crate::Parse) -> String {
+    format_parsed_with(parse, Layout::default())
+}
+
+/// The same, laid out as `layout` asks.
+pub fn format_parsed_with(parse: &crate::Parse, layout: Layout) -> String {
     let all_tokens: Vec<SyntaxToken> = parse
         .syntax()
         .descendants_with_tokens()
@@ -95,6 +127,7 @@ pub fn format_parsed(parse: &crate::Parse) -> String {
         .first()
         .is_some_and(|token| token.text().starts_with('\u{feff}'));
     let formatted = Formatter {
+        layout,
         out: String::new(),
         depth: 0,
         line_empty: true,
@@ -119,6 +152,7 @@ pub fn format_file(name: &str, text: &str) -> String {
 }
 
 struct Formatter {
+    layout: Layout,
     out: String,
     depth: usize,
     /// nothing emitted on the current line yet
@@ -345,6 +379,18 @@ impl Formatter {
         if !self.line_breakable || self.joints.is_empty() {
             return;
         }
+        // a width of nothing is no width to keep to, so only the breaks
+        // the author wrote are kept
+        if self.layout.width == 0 {
+            let kept: Vec<usize> = self
+                .joints
+                .iter()
+                .filter(|joint| joint.kept)
+                .map(|joint| joint.at)
+                .collect();
+            self.open_at(kept);
+            return;
+        }
         let mut chosen: Vec<usize> = self
             .joints
             .iter()
@@ -373,11 +419,16 @@ impl Formatter {
                 .collect();
             chosen.extend(giving);
         }
-        chosen.sort_unstable();
-        // from the end, so that each splice leaves the earlier offsets
-        // where they were
+        self.open_at(chosen);
+    }
+
+    /// Break the line at each of `at`, which are offsets of the spaces
+    /// that give way. Spliced from the end, so that each one leaves the
+    /// offsets before it where they were.
+    fn open_at(&mut self, mut at: Vec<usize>) {
+        at.sort_unstable();
         let indent = " ".repeat(self.line_indent + INDENT.len());
-        for at in chosen.into_iter().rev() {
+        for at in at.into_iter().rev() {
             self.out.replace_range(at..at + 1, &format!("\n{indent}"));
         }
     }
@@ -403,7 +454,7 @@ impl Formatter {
                 let indent = self.line_indent + usize::from(at > 0) * INDENT.len();
                 (indent + columns(&self.out[from..to]), (from, to))
             })
-            .filter(|(width, _)| *width > WIDTH)
+            .filter(|(width, _)| *width > self.layout.width)
             .max_by_key(|(width, _)| *width)
             .map(|(_, stretch)| stretch)
     }
@@ -483,6 +534,17 @@ fn in_short_name(token: &SyntaxToken) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A caller that has a tree in hand formats from it, and gets what
+    /// formatting the text would have given. The command line goes this
+    /// way -- it parses to find out whether the file is worth rewriting
+    /// at all -- and says nothing about the width, which is the default.
+    #[test]
+    fn a_tree_in_hand_need_not_be_parsed_again() {
+        let text = "package P{part def A;}";
+        let parse = crate::parse_dialect(text, Dialect::SysML);
+        assert_eq!(format_parsed(&parse), fmt(text));
+    }
 
     fn fmt(text: &str) -> String {
         format(text, Dialect::SysML)
@@ -667,6 +729,39 @@ mod tests {
             fmt("part def P { attribute a = b + c; }"),
             "part def P {\n    attribute a = b + c;\n}\n"
         );
+    }
+
+    /// The width is the caller's to set: a narrower one gives way at
+    /// joints a wider one leaves alone, and nothing is what nothing is
+    /// measured against.
+    #[test]
+    fn the_width_is_the_callers_to_set() {
+        let flat = "part def P { attribute a = b and c and d; }";
+        let wide = |text: &str, width: usize| format_with(text, Dialect::SysML, Layout { width });
+        // a hundred columns holds it; twenty does not
+        assert_eq!(
+            wide(flat, 100),
+            "part def P {\n    attribute a = b and c and d;\n}\n"
+        );
+        let narrow = wide(flat, 20);
+        assert_eq!(
+            narrow.lines().filter(|line| line.contains("and")).count(),
+            2,
+            "{narrow}"
+        );
+        assert_eq!(wide(&narrow, 20), narrow);
+
+        // a width of nothing leaves the line as long as it comes
+        let long = "part def P { attribute a = if x == 1 ? \"one\" else if x == 2 ? \"two\" else if x == 3 ? \"three\" else \"nothing at all\"; }";
+        let unwrapped = wide(long, 0);
+        assert_eq!(unwrapped.lines().count(), 3, "{unwrapped}");
+        assert!(
+            super::columns(unwrapped.lines().nth(1).unwrap()) > WIDTH,
+            "{unwrapped}"
+        );
+        // and still keeps the breaks the author wrote
+        let broken = "part def P {\n    attribute a =\n        b + c;\n}\n";
+        assert_eq!(wide(broken, 0), broken);
     }
 
     #[test]

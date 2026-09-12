@@ -4,6 +4,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use sysml_cli::report::{self, Said, Severity};
+use sysml_syntax::fmt::Layout;
 use sysml_syntax::{Diagnostic, Dialect};
 
 mod api;
@@ -109,6 +110,10 @@ enum Command {
         /// Exit non-zero if any file is not already formatted
         #[arg(long)]
         check: bool,
+        /// Columns a line may reach before it is broken at the readiest
+        /// joint of what is on it; 0 leaves every line as long as it comes
+        #[arg(long, default_value_t = 100, value_name = "COLUMNS")]
+        width: usize,
     },
     /// Load files (or directories) into one workspace, resolve all names and
     /// report unresolved references, then check what the specification
@@ -337,7 +342,8 @@ fn main() -> ExitCode {
             files,
             write,
             check,
-        } => fmt(&files, write, check, format),
+            width,
+        } => fmt(&files, write, check, format, Layout { width }),
         Command::Check { paths, show } => check(&paths, show, format, bare),
         Command::Plan { paths } => plan(&paths, format, bare),
         Command::Diagram {
@@ -567,7 +573,13 @@ fn exported(
     Some((json, written, borrowed))
 }
 
-fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> ExitCode {
+fn fmt(
+    files: &[PathBuf],
+    write: bool,
+    check_only: bool,
+    format: Format,
+    layout: Layout,
+) -> ExitCode {
     let mut dirty = 0usize;
     let mut unformatted = Vec::new();
     let mut broken = Vec::new();
@@ -592,7 +604,7 @@ fn fmt(files: &[PathBuf], write: bool, check_only: bool, format: Format) -> Exit
         }
         // the tree is what the formatter reads, and this one is already in
         // hand: formatting from the text would parse the file again
-        let formatted = sysml_syntax::fmt::format_parsed(&parse);
+        let formatted = sysml_syntax::fmt::format_parsed_with(&parse, layout);
         if check_only {
             if formatted != text {
                 if format == Format::Text {

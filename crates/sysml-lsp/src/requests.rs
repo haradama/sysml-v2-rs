@@ -356,7 +356,7 @@ impl Server {
         if !sysml_syntax::parse_dialect(text, dialect).ok() {
             return None;
         }
-        let formatted = sysml_syntax::fmt::format_file(&self.workspace_name(uri), text);
+        let formatted = sysml_syntax::fmt::format_with(text, dialect, self.layout);
         if formatted == *text {
             return Some(Vec::new());
         }

@@ -92,6 +92,12 @@
           "default": [],
           "description": "Directories in the workspace whose models are not part of this project -- a vendored corpus, someone else's model. Their names do not resolve and are not offered in completion. A file opened from inside one is still read together with the model files in its own directory and below, so that half a model does not report the other half as unresolved. Relative paths are taken from each workspace folder."
         },
+        "sysml.format.width": {
+          "type": "number",
+          "default": 100,
+          "minimum": 0,
+          "description": "Columns a line may reach before formatting breaks it at the readiest joint of what is on it -- before an `else` sooner than before a sum. A line is measured in columns, so a character an em across counts as two. 0 leaves every line as long as it comes, keeping only the breaks you wrote. Takes effect when the language server restarts."
+        },
         "sysml.preview.openAutomatically": {
           "type": "boolean",
           "default": false,

@@ -593,3 +593,53 @@ fn diagnostics_say_what_the_specification_requires() {
     client.notify(lsp_types::notification::Exit::METHOD, json!(null));
     handle.join().unwrap();
 }
+
+/// `formatWidth` is what the client says about where a line gives way,
+/// and the server formats to it.
+///
+/// The setting is read at initialize, as the library path is: an editor
+/// that changes it restarts the server.
+#[test]
+fn the_client_says_how_wide_a_line_may_be() {
+    let uri = "file:///wide.sysml";
+    let text = "package P {\n\tpart def A {\n\t\tattribute a = b and c and d and e;\n\t}\n}\n";
+    let formatted = |width: Option<u64>| {
+        let (mut client, handle) = serving();
+        let mut options = json!({ "noLibrary": true });
+        if let Some(width) = width {
+            options["formatWidth"] = json!(width);
+        }
+        client.initialize_with(options);
+        client.notify(
+            lsp_types::notification::DidOpenTextDocument::METHOD,
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "sysml", "version": 1, "text": text,
+            }}),
+        );
+        client.wait_diagnostics();
+        let edits = client.request(
+            lsp_types::request::Formatting::METHOD,
+            json!({
+                "textDocument": { "uri": uri },
+                "options": { "tabSize": 4, "insertSpaces": true }
+            }),
+        );
+        let said = edits[0]["newText"].as_str().unwrap_or(text).to_string();
+        client.stop(handle);
+        said
+    };
+
+    // told nothing, the line holds; told thirty columns, it gives way
+    let wide = formatted(None);
+    assert_eq!(
+        wide.lines().filter(|line| line.contains("and")).count(),
+        1,
+        "{wide}"
+    );
+    let narrow = formatted(Some(30));
+    assert!(
+        narrow.lines().filter(|line| line.contains("and")).count() > 1,
+        "{narrow}"
+    );
+    assert_eq!(narrow.matches("and").count(), 3, "{narrow}");
+}

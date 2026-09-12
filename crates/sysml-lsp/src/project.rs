@@ -108,6 +108,7 @@ impl Server {
             languages: HashMap::new(),
             analysis: None,
             published: HashMap::new(),
+            layout: sysml_syntax::fmt::Layout::default(),
         }
     }
     /// Every model file under the workspace folders.

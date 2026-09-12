@@ -21,8 +21,11 @@ extension, so the names in a model resolve the moment a file is opened.
 
 Manual override, when wanted: `sysml.server.path` points at another server
 binary, `sysml.library.path` at another standard library (else
-`SYSML_LIBRARY_PATH` is honoured), and `sysml.trace.server` logs the
-traffic between VSCode and the server in the output channel.
+`SYSML_LIBRARY_PATH` is honoured), `sysml.format.width` says how wide a
+line may be before formatting breaks it -- 0 leaves every line as long as
+it comes -- and `sysml.trace.server` logs the traffic between VSCode and
+the server in the output channel. All of them are read when the server
+starts, so a window reload is what applies a change.
 
 The preview is opened with `SysML: Open Diagram Preview`, or the button
 in the editor title bar, and then follows whichever model you are
