@@ -396,6 +396,69 @@ pub enum Relation {
     /// since the dot is not what the client depends on.
     Client,
 }
+impl Relation {
+    /// The word a skin names this relation by: what a reader would call
+    /// the line, in the words the notation uses for it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Relation::Specialization => "specialization",
+            Relation::Composition => "composition",
+            Relation::Reference => "reference",
+            Relation::Subsetting => "subsetting",
+            Relation::Redefinition => "redefinition",
+            Relation::Connection => "connection",
+            Relation::Transition => "transition",
+            Relation::Succession => "succession",
+            Relation::Satisfy => "satisfy",
+            Relation::Binding => "binding",
+            Relation::Interface => "interface",
+            Relation::Allocation => "allocation",
+            Relation::Flow => "flow",
+            Relation::SuccessionFlow => "succession flow",
+            Relation::Message => "message",
+            Relation::Assert => "assert",
+            Relation::Assume => "assume",
+            Relation::Require => "require",
+            Relation::Perform => "perform",
+            Relation::Exhibit => "exhibit",
+            Relation::Dependency => "dependency",
+            Relation::Portion => "portion",
+            Relation::Event => "event",
+            Relation::Annotation => "annotation",
+            Relation::Client => "client",
+        }
+    }
+
+    /// Every relation there is, so that a front end can say what it did
+    /// not recognise.
+    pub const ALL: &'static [Relation] = &[
+        Relation::Specialization,
+        Relation::Composition,
+        Relation::Reference,
+        Relation::Subsetting,
+        Relation::Redefinition,
+        Relation::Connection,
+        Relation::Transition,
+        Relation::Succession,
+        Relation::Satisfy,
+        Relation::Binding,
+        Relation::Interface,
+        Relation::Allocation,
+        Relation::Flow,
+        Relation::SuccessionFlow,
+        Relation::Message,
+        Relation::Assert,
+        Relation::Assume,
+        Relation::Require,
+        Relation::Perform,
+        Relation::Exhibit,
+        Relation::Dependency,
+        Relation::Portion,
+        Relation::Event,
+        Relation::Annotation,
+        Relation::Client,
+    ];
+}
 
 /// A relationship between two boxes. Both index fields index
 /// [`Diagram::nodes`].

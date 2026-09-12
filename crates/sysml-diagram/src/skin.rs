@@ -74,21 +74,37 @@ pub struct Palette {
     pub fill: Colour,
     /// Every line, and every letter.
     pub ink: Colour,
+    /// What the canvas itself is painted, where it is painted at all.
+    ///
+    /// Nothing leaves it transparent, which is what a drawing meant to
+    /// be dropped into a page wants and what this has always written. A
+    /// drawing meant to stand on its own -- saved, printed, pasted into
+    /// something whose colour nobody chose -- wants this, and usually
+    /// wants it the same colour as `page`.
+    pub background: Option<Colour>,
     /// Kinds painted otherwise, under the word the drawing writes in
     /// guillemets: `part def`, `requirement def`, `state`. `package` is
     /// the frame drawn round what a package holds, and `comment` the
     /// folded-corner note, neither of which carries a keyword.
     pub kinds: BTreeMap<String, Tint>,
+    /// Lines painted otherwise, under the word the notation calls the
+    /// relation by: `satisfy`, `composition`, `dependency`. The marker
+    /// on the line is painted with it -- a red line with a black
+    /// arrowhead is a drawing that looks broken.
+    pub relations: BTreeMap<String, Colour>,
 }
 
 impl Palette {
-    /// A palette of three colours and no exceptions.
+    /// A palette of three colours, a transparent canvas and no
+    /// exceptions.
     pub fn of(page: Colour, fill: Colour, ink: Colour) -> Palette {
         Palette {
             page,
             fill,
             ink,
+            background: None,
             kinds: BTreeMap::new(),
+            relations: BTreeMap::new(),
         }
     }
 }
@@ -155,6 +171,34 @@ impl Skin {
     /// them or says what it did not recognise.
     pub const NAMES: &'static [&'static str] = &["default", "mono", "contrast"];
 
+    /// The colour any palette paints `relation`, where one does. The
+    /// drawing asks before it writes a line, since a line that says
+    /// which relation it is, is a line some skin paints.
+    pub(crate) fn paints(&self, relation: crate::Relation) -> bool {
+        let asked = |palette: &Palette| palette.relations.contains_key(relation.name());
+        asked(&self.light) || self.dark.as_ref().is_some_and(asked)
+    }
+
+    /// Every relation any palette paints, in one list, so the drawing
+    /// can carry a marker for each.
+    pub(crate) fn painted_relations(&self) -> Vec<crate::Relation> {
+        crate::Relation::ALL
+            .iter()
+            .copied()
+            .filter(|relation| self.paints(*relation))
+            .collect()
+    }
+
+    /// Whether any palette paints the canvas, which is what decides
+    /// whether the drawing carries one to paint.
+    pub(crate) fn grounded(&self) -> bool {
+        self.light.background.is_some()
+            || self
+                .dark
+                .as_ref()
+                .is_some_and(|dark| dark.background.is_some())
+    }
+
     /// Whether any palette paints `kind` otherwise, which is what
     /// decides whether the drawing says which kind a box is at all.
     pub(crate) fn tints(&self, kind: &str) -> bool {
@@ -170,17 +214,23 @@ impl Skin {
     /// declaration they cannot resolve leaves the shape in its initial
     /// paint, which is a black box with no outline.
     pub fn stylesheet(&self) -> String {
+        let grounded = self.grounded();
         let mut out = self.light.rules(self.stroke);
+        if grounded {
+            out.push_str(&self.light.ground());
+        }
         out.push_str(&self.light.tint_rules());
+        out.push_str(&self.light.relation_rules());
         if let Some(dark) = &self.dark {
             // only what differs from the light half, so that a reader of
             // the sheet sees what the dark changes
-            let _ = write!(
-                out,
-                "@media (prefers-color-scheme: dark) {{\n{}{}}}\n",
-                dark.overrides(),
-                dark.tint_rules(),
-            );
+            let mut inside = dark.overrides();
+            if grounded {
+                inside.push_str(&dark.ground());
+            }
+            inside.push_str(&dark.tint_rules());
+            inside.push_str(&dark.relation_rules());
+            let _ = write!(out, "@media (prefers-color-scheme: dark) {{\n{inside}}}\n");
         }
         out
     }
@@ -249,6 +299,16 @@ impl Palette {
         out
     }
 
+    /// The canvas, where this palette paints one. A palette that paints
+    /// none still says so, since the other half of the sheet may paint
+    /// one and a drawing is one file.
+    fn ground(&self) -> String {
+        match self.background {
+            Some(colour) => format!(".ground {{ fill: {}; }}\n", colour.hex()),
+            None => ".ground { fill: none; }\n".to_string(),
+        }
+    }
+
     /// What the dark half has to say over the light one: the colours,
     /// and nothing of weight or face, which it does not change.
     fn overrides(&self) -> String {
@@ -263,6 +323,35 @@ impl Palette {
              .initial, .name, .keyword, .feature, .compartment {{ fill: {ink}; }}\n\
              .aside {{ fill: {ink}; stroke: {page}; }}\n"
         );
+        out
+    }
+
+    /// The lines painted otherwise, and the markers on them.
+    ///
+    /// Two classes rather than one, so that these beat the rule the
+    /// shape carries: a line is `.edge`, and this is `.edge.rel-satisfy`.
+    /// A marker's shape is filled or hollow according to what it means,
+    /// so the filled ones are painted through and the hollow ones only
+    /// outlined.
+    fn relation_rules(&self) -> String {
+        let mut out = String::new();
+        for (relation, colour) in &self.relations {
+            let class = format!("rel-{}", class_of(relation).trim_start_matches("kind-"));
+            let colour = colour.hex();
+            let _ = writeln!(
+                out,
+                ".edge.{class}, .succession.{class}, .dependency.{class}, \
+                 .lifeline.{class} {{ stroke: {colour}; }}"
+            );
+            let _ = writeln!(
+                out,
+                ".{class}.tip, .{class}.arrow, .{class}.hollow {{ stroke: {colour}; }}"
+            );
+            let _ = writeln!(
+                out,
+                ".{class}.diamond {{ fill: {colour}; stroke: {colour}; }}"
+            );
+        }
         out
     }
 
@@ -364,7 +453,11 @@ fn palette(said: &Value, whose: &str) -> Result<Palette, String> {
     let object = said
         .as_object()
         .ok_or_else(|| format!("`{whose}` is an object of colours"))?;
-    known(object.keys(), &["page", "fill", "ink", "kinds"], whose)?;
+    known(
+        object.keys(),
+        &["page", "fill", "ink", "background", "kinds", "relations"],
+        whose,
+    )?;
     let asked = |name: &str| -> Result<Option<Colour>, String> {
         object.get(name).map(|said| colour(said, name)).transpose()
     };
@@ -377,8 +470,36 @@ fn palette(said: &Value, whose: &str) -> Result<Palette, String> {
         page: asked("page")?.unwrap_or(base.page),
         fill: asked("fill")?.unwrap_or(base.fill),
         ink: asked("ink")?.unwrap_or(base.ink),
+        background: asked("background")?,
         kinds,
+        relations: match object.get("relations") {
+            Some(said) => lines(said, whose)?,
+            None => BTreeMap::new(),
+        },
     })
+}
+
+/// The relations a palette paints otherwise, one colour each.
+fn lines(said: &Value, whose: &str) -> Result<BTreeMap<String, Colour>, String> {
+    let object = said
+        .as_object()
+        .ok_or_else(|| format!("`{whose}.relations` is an object, one colour per relation"))?;
+    let known: Vec<&str> = crate::Relation::ALL
+        .iter()
+        .map(|relation| relation.name())
+        .collect();
+    object
+        .iter()
+        .map(|(relation, said)| {
+            if !known.contains(&relation.as_str()) {
+                return Err(format!(
+                    "there is no `{relation}` to paint; the lines a drawing has are {}",
+                    known.join(", ")
+                ));
+            }
+            Ok((relation.clone(), colour(said, relation)?))
+        })
+        .collect()
 }
 
 /// The kinds a palette paints otherwise, one entry each.
@@ -639,6 +760,125 @@ mod tests {
         );
     }
 
+    /// A painted relation colours its line and the marker on it, and
+    /// the marker is a copy: one is referred to by name and takes no
+    /// colour from the line that refers to it.
+    #[test]
+    fn a_painted_relation_takes_its_marker_with_it() {
+        use crate::tests::resolved;
+        let ws = resolved("package P { part def A; part def B :> A; }\n");
+        let diagram = crate::definition_diagram(ws.model(), &[ws.root()]);
+        let mut light = Skin::default().light;
+        light.relations.insert(
+            "specialization".to_string(),
+            Colour::parse("#1a7f37").unwrap(),
+        );
+        let style = crate::Style {
+            skin: Skin {
+                light,
+                ..Skin::default()
+            },
+            ..Default::default()
+        };
+        let svg = crate::render(&diagram, &style);
+
+        // the line says which relation it is, and points at the copy
+        assert!(svg.contains("class=\"edge rel-specialization\""), "{svg}");
+        assert!(
+            svg.contains("marker-end=\"url(#specialization--specialization)\""),
+            "{svg}"
+        );
+        // the copy is there, drawn as the notation draws it and told
+        // which relation it is drawn for
+        assert!(
+            svg.contains("<marker id=\"specialization--specialization\""),
+            "{svg}"
+        );
+        assert!(svg.contains("class=\"rel-specialization arrow\""), "{svg}");
+        // the one it was copied from is still there for everything else
+        assert!(svg.contains("<marker id=\"specialization\""), "{svg}");
+        assert!(
+            svg.contains(".rel-specialization.tip, .rel-specialization.arrow"),
+            "{svg}"
+        );
+    }
+
+    /// A relation the notation draws with no marker -- a connection, an
+    /// interface, a binding, all of which are undirected -- is painted
+    /// on the line and carries no copy of anything.
+    #[test]
+    fn a_relation_with_no_marker_is_painted_on_the_line() {
+        use crate::tests::resolved;
+        let ws = resolved(
+            "package P {\n\
+             \tpart def W { port hub; }\n\
+             \tpart def X { port mount; }\n\
+             \tpart def C { part w : W; part x : X; connect w.hub to x.mount; }\n\
+             }\n",
+        );
+        let model = ws.model();
+        let inside = model
+            .descendants(ws.root())
+            .into_iter()
+            .find(|&id| model.name(id) == Some("C"))
+            .expect("the part that wires the two");
+        let diagram = crate::interconnection_diagram(model, inside);
+        let mut light = Skin::default().light;
+        light
+            .relations
+            .insert("connection".to_string(), Colour::parse("#8b1a10").unwrap());
+        let style = crate::Style {
+            skin: Skin {
+                light,
+                ..Skin::default()
+            },
+            ..Default::default()
+        };
+        let svg = crate::render(&diagram, &style);
+        assert!(svg.contains("rel-connection"), "{svg}");
+        assert!(svg.contains(".edge.rel-connection"), "{svg}");
+        // nothing was copied, since there is nothing on the end to copy
+        assert!(!svg.contains("--connection\""), "{svg}");
+    }
+
+    /// The canvas is painted where a skin paints one, and left alone
+    /// where none does -- which is what a drawing dropped into a page
+    /// wants, and what this wrote before there were skins.
+    #[test]
+    fn the_canvas_is_painted_only_where_a_skin_paints_one() {
+        use crate::tests::resolved;
+        let ws = resolved("package P { part def A; }\n");
+        let diagram = crate::definition_diagram(ws.model(), &[ws.root()]);
+        let plain = crate::render(&diagram, &crate::Style::default());
+        assert!(!plain.contains("class=\"ground\""), "{plain}");
+        assert!(!plain.contains(".ground"), "{plain}");
+
+        let style = crate::Style {
+            skin: Skin {
+                light: Palette {
+                    background: Colour::parse("#fffdf7"),
+                    ..Skin::default().light
+                },
+                ..Skin::default()
+            },
+            ..Default::default()
+        };
+        let painted = crate::render(&diagram, &style);
+        assert!(painted.contains(".ground { fill: #fffdf7; }"), "{painted}");
+        assert!(
+            painted.contains("<rect class=\"ground\" x=\"0\" y=\"0\""),
+            "{painted}"
+        );
+        // the dark half paints none, and says so rather than inheriting
+        let dark = painted
+            .find("prefers-color-scheme")
+            .expect("the default skin has a dark half");
+        assert!(
+            painted[dark..].contains(".ground { fill: none; }"),
+            "{painted}"
+        );
+    }
+
     /// A dark palette paints its own kinds, inside the query.
     #[test]
     fn the_dark_half_paints_its_own_kinds() {
@@ -716,6 +956,39 @@ mod tests {
         let dark = both.dark.expect("a dark half");
         assert_eq!(dark.page, Colour(0x101010));
         assert_eq!(dark.kinds["part def"].fill, Some(Colour(0x243447)));
+    }
+
+    #[test]
+    fn a_relation_nobody_draws_is_refused() {
+        let refused = |said: Value| read(&said).unwrap_err();
+        let said = refused(json!({ "light": { "relations": { "inheritance": "#000" } } }));
+        assert!(said.contains("no `inheritance` to paint"), "{said}");
+        assert!(said.contains("specialization"), "{said}");
+        assert!(
+            refused(json!({ "light": { "relations": [] } })).contains("one colour per relation")
+        );
+        assert!(
+            refused(json!({ "light": { "relations": { "satisfy": 7 } } })).contains("is a colour")
+        );
+
+        // and one it does draw is read
+        let skin = read(&json!({
+            "light": { "relations": { "satisfy": "#8b1a10", "succession flow": "#123456" } }
+        }))
+        .unwrap();
+        assert_eq!(skin.light.relations["satisfy"], Colour(0x8b1a10));
+        assert!(skin.paints(crate::Relation::Satisfy));
+        assert!(skin.paints(crate::Relation::SuccessionFlow));
+        assert!(!skin.paints(crate::Relation::Composition));
+        assert_eq!(skin.painted_relations().len(), 2);
+    }
+
+    #[test]
+    fn the_canvas_is_read_like_any_other_colour() {
+        let skin = read(&json!({ "light": { "background": "#fffdf7" }, "dark": null })).unwrap();
+        assert_eq!(skin.light.background, Colour::parse("#fffdf7"));
+        assert!(skin.grounded());
+        assert!(!Skin::default().grounded());
     }
 
     #[test]

@@ -28,11 +28,13 @@ what paper and every renderer that reads no media query see anyway.
 {
   "light": {
     "page": "#ffffff", "fill": "#ffffff", "ink": "#000000",
+    "background": "#fffdf7",
     "kinds": {
       "part def": { "fill": "#e8f0fe", "line": "#1a3a6b" },
       "requirement def": "#fdecea",
       "package": "#f6f6f6"
-    }
+    },
+    "relations": { "satisfy": "#8b1a10", "specialization": "#1a7f37" }
   },
   "dark": null
 }
@@ -44,6 +46,18 @@ note, which write none. A bare colour is a fill, which is what a reader
 usually means; `fill`, `line` and `text` say more. `page` is what a name
 written over a line is haloed in, so it wants to be the colour of
 whatever the drawing is put on rather than the colour of a box.
+
+A relation is the word the notation calls the line by -- `satisfy`,
+`composition`, `dependency`, `specialization` -- and painting one paints
+the marker on it too: a marker is referred to by name and takes no
+colour from the line that refers to it, so a drawing carries a copy of
+each marker it paints.
+
+`background` paints the canvas. Nothing leaves it transparent, which is
+what a drawing dropped into a page wants and what this has always
+written; a drawing meant to stand on its own -- saved, printed, pasted
+somewhere whose colour nobody chose -- wants one, and usually the same
+colour as `page`.
 
 Colour says nothing the SysML v2 notation defines: the shapes carry the
 meaning, and a skin never changes which marker means what. A drawing

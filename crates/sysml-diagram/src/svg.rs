@@ -13,41 +13,88 @@ use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 /// These are the notation's and not a skin's: which marker a line
 /// carries is what the line means, so [`crate::Skin`] paints them and
 /// never redraws them.
-pub(crate) fn markers() -> String {
-    let mut out = String::new();
-    writeln!(
-        out,
-        "<defs>\
-             <marker id=\"specialization\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
-             markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
-             <path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
-             <marker id=\"composition\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
-             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-             <path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
-             <marker id=\"subsetting\" viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" \
-             markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\">\
-             <path class=\"hollow\" d=\"M0,0 L12,5 L0,10 z\"/></marker>\
-             <marker id=\"redefinition\" viewBox=\"0 0 16 10\" refX=\"16\" refY=\"5\" \
-             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-             <path class=\"hollow\" d=\"M4,0 L16,5 L4,10 z\"/>\
-             <path class=\"tip\" d=\"M2,0 L2,10\"/></marker>\
-             <marker id=\"reference\" viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" \
-             markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\">\
-             <path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/></marker>\
-             <marker id=\"transition\" viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" \
-             markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\">\
-             <path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/></marker>\
-             <marker id=\"flow\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
-             markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
-             <path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/></marker>\
-             <marker id=\"message\" viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" \
-             markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\">\
-             <path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/></marker>\
-             <marker id=\"portion\" viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" \
-             markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\">\
-             <circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/></marker></defs>"
-    )
-    .unwrap();
+/// Every marker the notation draws, as a name, the shape of the space it
+/// is drawn in, and what is drawn there.
+///
+/// A table rather than one long string because a painted relation is
+/// drawn with a copy of its marker: a marker takes no colour from the
+/// line that refers to it, so a red line pointing at the common
+/// arrowhead would have a black head.
+const MARKERS: &[(&str, &str, &str)] = &[
+    (
+        "specialization",
+        "viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\"",
+        "<path class=\"arrow\" d=\"M0,0 L12,5 L0,10 z\"/>",
+    ),
+    (
+        "composition",
+        "viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\"",
+        "<path class=\"diamond\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/>",
+    ),
+    (
+        "subsetting",
+        "viewBox=\"0 0 12 10\" refX=\"12\" refY=\"5\" markerWidth=\"12\" markerHeight=\"10\" orient=\"auto\"",
+        "<path class=\"hollow\" d=\"M0,0 L12,5 L0,10 z\"/>",
+    ),
+    (
+        "redefinition",
+        "viewBox=\"0 0 16 10\" refX=\"16\" refY=\"5\" markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\"",
+        "<path class=\"hollow\" d=\"M4,0 L16,5 L4,10 z\"/><path class=\"tip\" d=\"M2,0 L2,10\"/>",
+    ),
+    (
+        "reference",
+        "viewBox=\"0 0 16 10\" refX=\"0\" refY=\"5\" markerWidth=\"16\" markerHeight=\"10\" orient=\"auto\"",
+        "<path class=\"hollow\" d=\"M0,5 L8,0 L16,5 L8,10 z\"/>",
+    ),
+    (
+        "transition",
+        "viewBox=\"0 0 10 8\" refX=\"10\" refY=\"4\" markerWidth=\"10\" markerHeight=\"8\" orient=\"auto\"",
+        "<path class=\"tip\" d=\"M0,0 L10,4 L0,8\"/>",
+    ),
+    (
+        "flow",
+        "viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\"",
+        "<path class=\"diamond\" d=\"M0,0 L10,4.5 L0,9 z\"/>",
+    ),
+    (
+        "message",
+        "viewBox=\"0 0 10 9\" refX=\"10\" refY=\"4.5\" markerWidth=\"10\" markerHeight=\"9\" orient=\"auto\"",
+        "<path class=\"tip\" d=\"M0,0 L10,4.5 L0,9 L2.5,4.5 z\"/>",
+    ),
+    (
+        "portion",
+        "viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\"",
+        "<circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/>",
+    ),
+];
+
+/// The markers a document carries: every one the notation draws, and a
+/// copy of each that a skin paints, carrying the relation's own class.
+pub(crate) fn markers(skin: &crate::Skin) -> String {
+    let mut out = String::from("<defs>");
+    for (name, space, drawn) in MARKERS {
+        let _ = write!(out, "<marker id=\"{name}\" {space}>{drawn}</marker>");
+    }
+    for relation in skin.painted_relations() {
+        let (Some(name), _) = marker_of(relation) else {
+            continue;
+        };
+        let (_, space, drawn) = MARKERS
+            .iter()
+            .find(|(marker, _, _)| *marker == name)
+            .expect("every marker a relation carries is one the notation draws");
+        // the same shape, told which relation it is drawn for
+        let drawn = drawn.replace(
+            "class=\"",
+            &format!("class=\"{} ", relation_class(relation)),
+        );
+        let _ = write!(
+            out,
+            "<marker id=\"{name}--{}\" {space}>{drawn}</marker>",
+            relation_slug(relation)
+        );
+    }
+    out.push_str("</defs>\n");
     out
 }
 
@@ -116,7 +163,7 @@ impl<'a> Canvas<'a> {
             departures: departures(diagram),
             lanes,
             placements,
-            out: markers(),
+            out: markers(&style.skin),
             ports: String::new(),
             landings: Vec::new(),
             anchors: Vec::new(),
@@ -231,10 +278,10 @@ impl<'a> Canvas<'a> {
                 Relation::Specialization if routed.is_some() => {
                     let walked = routed.expect("the arm this route matched");
                     note(&mut self.drawn, walked);
+                    let (marker, class) = pen(Relation::Specialization, &self.style.skin);
                     writeln!(
                         self.out,
-                        "<path class=\"edge\" fill=\"none\" d=\"{}\" \
-                         marker-end=\"url(#specialization)\"/>",
+                        "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
                         polyline(walked)
                     )
                 }
@@ -264,11 +311,11 @@ impl<'a> Canvas<'a> {
                                 &mut self.drawn,
                                 &[(x1, y1), (x1, channel), (x2, channel), (x2, y2)],
                             );
+                            let (marker, class) = pen(Relation::Specialization, &self.style.skin);
                             writeln!(
                                 self.out,
-                                "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                                 V {channel:.1} H {x2:.1} V {y2:.1}\" \
-                                 marker-end=\"url(#specialization)\"/>"
+                                "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} \
+                                 V {channel:.1} H {x2:.1} V {y2:.1}\"{marker}/>"
                             )
                         }
                         // no single gap reaches: go round the rows in between
@@ -288,21 +335,23 @@ impl<'a> Canvas<'a> {
                                         (x2, y2),
                                     ],
                                 );
+                                let (marker, class) =
+                                    pen(Relation::Specialization, &self.style.skin);
                                 writeln!(
                                     self.out,
-                                    "<path class=\"edge\" fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                                     V {:.1} H {column:.1} V {:.1} H {x2:.1} V {y2:.1}\" \
-                                     marker-end=\"url(#specialization)\"/>",
+                                    "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} \
+                                     V {:.1} H {column:.1} V {:.1} H {x2:.1} V {y2:.1}\"{marker}/>",
                                     bands.0, bands.1
                                 )
                             }
                             None => {
                                 note(&mut self.drawn, &[(x1, y1), (x2, y2)]);
+                                let (marker, class) =
+                                    pen(Relation::Specialization, &self.style.skin);
                                 writeln!(
                                     self.out,
-                                    "<line class=\"edge\" x1=\"{x1:.1}\" y1=\"{y1:.1}\" \
-                                     x2=\"{x2:.1}\" y2=\"{y2:.1}\" \
-                                     marker-end=\"url(#specialization)\"/>"
+                                    "<line{class} x1=\"{x1:.1}\" y1=\"{y1:.1}\" \
+                                     x2=\"{x2:.1}\" y2=\"{y2:.1}\"{marker}/>"
                                 )
                             }
                         },
@@ -317,7 +366,7 @@ impl<'a> Canvas<'a> {
                 Relation::Composition | Relation::Reference | Relation::Portion
                     if edge.from == edge.to =>
                 {
-                    let (marker, class) = pen(edge.relation);
+                    let (marker, class) = pen(edge.relation, &self.style.skin);
                     let bottom = from.y + from.height;
                     // a loop has no side to be shifted onto, so what tells
                     // two of them apart is which came first, not the signed
@@ -444,7 +493,7 @@ impl<'a> Canvas<'a> {
                     if !second_is_port {
                         (x2, y2) = slid(to, (x2, y2), second_away, shift);
                     }
-                    let (marker, class) = pen(edge.relation);
+                    let (marker, class) = pen(edge.relation, &self.style.skin);
                     // a straight line that runs under an unrelated box reads as
                     // a connection to that box, so step around it instead: both
                     // boxes are left downward and joined in a clear channel
@@ -1153,59 +1202,109 @@ fn through(rect: &Placed, (x1, y1): (f64, f64), (x2, y2): (f64, f64)) -> f64 {
     (leave - enter).max(0.0) * dx.hypot(dy)
 }
 
-/// The marker and the class a centre-to-centre relation is drawn with.
+/// The marker a centre-to-centre relation carries, and on which end.
 /// A specialization never comes this way: it draws along the layering,
 /// with its own hollow-triangle marker.
-fn pen(relation: Relation) -> (&'static str, &'static str) {
+fn marker_of(relation: Relation) -> (Option<&'static str>, bool) {
     match relation {
-        Relation::Composition => (" marker-start=\"url(#composition)\"", " class=\"edge\""),
+        // drawn along the layering rather than centre to centre, but
+        // the head it carries is a marker like any other
+        Relation::Specialization => (Some("specialization"), false),
+        Relation::Composition => (Some("composition"), true),
         // the same hollow triangle a subclassification carries, and for
         // a redefinition a bar across the line with it
-        Relation::Subsetting => (" marker-end=\"url(#subsetting)\"", " class=\"edge\""),
-        Relation::Redefinition => (" marker-end=\"url(#redefinition)\"", " class=\"edge\""),
+        Relation::Subsetting => (Some("subsetting"), false),
+        Relation::Redefinition => (Some("redefinition"), false),
         // what the owner refers to but is not made of: the same diamond,
         // left hollow, which is how a drawing has told the two apart
         // since long before SysML
-        Relation::Reference => (" marker-start=\"url(#reference)\"", " class=\"edge\""),
-        Relation::Transition => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
-        // `aflow-succession` is dashed where `transition` is plain: one
-        // step following another is not a machine changing state
-        Relation::Succession => (" marker-end=\"url(#transition)\" class=\"succession\"", ""),
-        // `allocate-relationship` draws the same open arrowhead a
-        // transition does, and says which it is with `«allocate»`
-        Relation::Allocation => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
-        // `assert-edge`, `assume-edge`, `require-edge`, `perform-edge`,
-        // `exhibit-edge` and `satisfy-edge` are one figure with six
-        // keywords: a plain line and the same open arrowhead
-        Relation::Assert
+        Relation::Reference => (Some("reference"), true),
+        // `aflow-succession` is dashed where `transition` is plain, and
+        // `binary-dependency` is the one dashed line in the notation;
+        // both carry the arrowhead a transition does. So do
+        // `allocate-relationship` and the six edges that are one figure
+        // with six keywords -- `assert`, `assume`, `require`, `perform`,
+        // `exhibit` and `satisfy`, which the specification draws solid.
+        Relation::Transition
+        | Relation::Succession
+        | Relation::Allocation
+        | Relation::Assert
         | Relation::Assume
         | Relation::Require
         | Relation::Perform
         | Relation::Exhibit
-        | Relation::Event => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
+        | Relation::Event
+        | Relation::Satisfy
+        | Relation::Dependency => (Some("transition"), false),
         // `portion-relationship` marks the whole the way a composition
         // does, with a filled glyph of its own
-        Relation::Portion => (" marker-start=\"url(#portion)\"", " class=\"edge\""),
+        Relation::Portion => (Some("portion"), true),
         // what flows has the filled head; a message has the open dart the
         // standard keeps for it
-        Relation::Flow | Relation::SuccessionFlow => {
-            (" marker-end=\"url(#flow)\"", " class=\"edge\"")
-        }
-        Relation::Message => (" marker-end=\"url(#message)\"", " class=\"edge\""),
-        // `satisfy-edge` is drawn the same way, and the specification
-        // draws it solid rather than dashed
-        Relation::Satisfy => (" marker-end=\"url(#transition)\"", " class=\"edge\""),
-        // `binary-dependency` is the one dashed line in the notation
-        Relation::Dependency => (" marker-end=\"url(#transition)\" class=\"dependency\"", ""),
-        // `annotation-link` is dashed too, and carries nothing at either
-        // end: which is the note is plain from the shapes. So is
+        Relation::Flow | Relation::SuccessionFlow => (Some("flow"), false),
+        Relation::Message => (Some("message"), false),
+        // `annotation-link` carries nothing at either end: which is the
+        // note is plain from the shapes. So does
         // `n-ary-dependency-client-link`, since the dot is not what the
-        // client depends on.
-        Relation::Annotation | Relation::Client => ("", " class=\"dependency\""),
-        // a connection, an interface and a binding are undirected and get
-        // no marker at all -- what each is, its label says
-        _ => ("", " class=\"edge\""),
+        // client depends on. A connection, an interface and a binding are
+        // undirected, and what each is, its label says.
+        _ => (None, false),
     }
+}
+
+/// The class the line itself is drawn in: what tells a dashed line from
+/// a plain one, which is the notation's and not a skin's.
+fn line_class(relation: Relation) -> &'static str {
+    match relation {
+        Relation::Succession => "succession",
+        Relation::Dependency | Relation::Annotation | Relation::Client => "dependency",
+        _ => "edge",
+    }
+}
+
+/// The word a painted relation is written under, spelled as one:
+/// `succession flow` is `succession-flow`.
+fn relation_slug(relation: Relation) -> String {
+    crate::skin::class_of(relation.name())
+        .trim_start_matches("kind-")
+        .to_string()
+}
+
+/// The class a painted relation is written under: `satisfy` is
+/// `rel-satisfy`.
+pub(crate) fn relation_class(relation: Relation) -> String {
+    format!("rel-{}", relation_slug(relation))
+}
+
+/// The marker attribute and the class a relation is drawn with.
+///
+/// Where a skin paints the relation, the line says which relation it is
+/// and points at the marker's own copy: a marker is referred to by name
+/// and takes no colour from the line that refers to it, so a painted
+/// line with the common marker would be a red line with a black head.
+fn pen(relation: Relation, skin: &crate::Skin) -> (String, String) {
+    let (marker, at_start) = marker_of(relation);
+    let painted = skin.paints(relation);
+    let marker = match marker {
+        Some(id) => {
+            let id = match painted {
+                true => format!("{id}--{}", relation_slug(relation)),
+                false => id.to_string(),
+            };
+            let side = if at_start { "start" } else { "end" };
+            format!(" marker-{side}=\"url(#{id})\"")
+        }
+        None => String::new(),
+    };
+    let class = match painted {
+        true => format!(
+            " class=\"{} {}\"",
+            line_class(relation),
+            relation_class(relation)
+        ),
+        false => format!(" class=\"{}\"", line_class(relation)),
+    };
+    (marker, class)
 }
 
 /// Wrap `body` in the SVG shell every view shares: the canvas, the font and
@@ -1221,6 +1320,16 @@ pub(crate) fn document(width: f64, height: f64, style: &Style, body: &str) -> St
     )
     .expect("writing to a String cannot fail");
     writeln!(out, "<style>\n{}</style>", style.skin.stylesheet()).unwrap();
+    // Painted before anything else, and only where a skin paints one: a
+    // drawing with no canvas of its own is transparent, which is what
+    // one dropped into a page wants and what this always wrote.
+    if style.skin.grounded() {
+        writeln!(
+            out,
+            "<rect class=\"ground\" x=\"0\" y=\"0\" width=\"{width:.0}\" height=\"{height:.0}\"/>"
+        )
+        .unwrap();
+    }
     out.push_str(body);
     writeln!(out, "</svg>").unwrap();
     out
@@ -1410,7 +1519,7 @@ fn interconnections(out: &mut String, node: &Node, inners: &[(f64, f64, f64, f64
         let (from, to) = (placed(link.from), placed(link.to));
         let first = border_point(&from, centre_of(&to));
         let second = border_point(&to, centre_of(&from));
-        let (marker, class) = pen(link.relation);
+        let (marker, class) = pen(link.relation, &style.skin);
         writeln!(
             out,
             "<path{class} fill=\"none\" d=\"M {:.1} {:.1} L {:.1} {:.1}\"{marker}/>",

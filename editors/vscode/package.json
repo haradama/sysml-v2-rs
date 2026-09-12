@@ -100,7 +100,7 @@
         },
         "sysml.diagram.skin": {
           "default": "default",
-          "description": "How the diagram preview is painted: the name of a skin that ships (`default`, `mono`, `contrast`), or an object saying what to paint it in -- `page`, `fill` and `ink` for the drawing, and `kinds` for the boxes painted otherwise, under the word the drawing writes in guillemets (`part def`, `requirement def`, `package`). Colour says nothing the SysML v2 notation defines; the shapes carry the meaning either way. Takes effect when the language server restarts.",
+          "description": "How the diagram preview is painted: the name of a skin that ships (`default`, `mono`, `contrast`), or an object saying what to paint it in. A palette takes `page` (what a name written over a line is haloed in), `fill` (the inside of a box), `ink` (every line and letter), `background` (the canvas, transparent where nothing says otherwise), `kinds` (boxes painted otherwise, under the word the drawing writes in guillemets -- `part def`, `requirement def`, `package`, `comment`) and `relations` (lines painted otherwise, under the word the notation calls them by -- `satisfy`, `composition`, `dependency`). Colour says nothing the SysML v2 notation defines; the shapes carry the meaning either way. Takes effect when the language server restarts.",
           "anyOf": [
             {
               "type": "string",

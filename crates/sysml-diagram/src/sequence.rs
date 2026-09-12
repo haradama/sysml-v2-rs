@@ -185,7 +185,7 @@ pub fn to_svg(sequence: &Sequence, style: &Style) -> String {
         style.margin + head_height + (sequence.moments.len() as f64 + 1.0) * step + style.margin;
     let foot = height - style.margin;
 
-    let mut body = markers();
+    let mut body = markers(&style.skin);
     for (at, line) in sequence.lifelines.iter().enumerate() {
         writeln!(
             body,
