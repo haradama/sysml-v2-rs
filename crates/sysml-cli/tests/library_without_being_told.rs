@@ -178,3 +178,70 @@ fn the_environment_names_a_library_as_the_command_line_does() {
     // tell one that was found from one that was built in
     assert_eq!(said["library"], dir.to_str().unwrap(), "{said}");
 }
+
+/// The constraints are put to the model, not to the library it is
+/// resolved against.
+///
+/// The library satisfies them -- a test says so every run -- and asking
+/// a hundred and thirty of them of its sixty-six thousand elements again
+/// was most of what `check` cost on a small model. A library file that
+/// does break one is reported only when it is handed over as a file to
+/// check, which is when it is the reader's own.
+#[test]
+fn the_rules_are_put_to_the_model_and_not_to_the_library() {
+    let dir = std::env::temp_dir().join(format!("sysml-rules-own-{}", std::process::id()));
+    let library = dir.join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    // enough of a library for the constraints to be asked at all
+    std::fs::write(
+        library.join("Base.kerml"),
+        "library package Base {\n\tabstract classifier Anything;\n}\n",
+    )
+    .unwrap();
+    let wrong = library.join("wrong.sysml");
+    std::fs::write(
+        &wrong,
+        "package Q {\n\tpart def Engine {\n\t\tobjective misplaced;\n\t}\n}\n",
+    )
+    .unwrap();
+    let model = dir.join("model.sysml");
+    std::fs::write(&model, "package M {\n\tpart def A;\n}\n").unwrap();
+
+    let out = sysml_with_library(
+        &library,
+        &["--format", "json", "check", model.to_str().unwrap()],
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["ok"], true, "{json}");
+    assert_eq!(
+        json["violations"].as_array().map(Vec::len),
+        Some(0),
+        "{json}"
+    );
+
+    // the same file, handed over as one of the reader's own, is checked
+    let out = sysml_with_library(
+        &library,
+        &[
+            "--format",
+            "json",
+            "check",
+            model.to_str().unwrap(),
+            wrong.to_str().unwrap(),
+        ],
+    );
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["ok"], false, "{json}");
+    // which constraint it trips first depends on how much of a library
+    // is there; that it is reported, and where, does not
+    assert_eq!(
+        json["violations"][0]["element"], "Q::Engine::misplaced",
+        "{json}"
+    );
+    assert_eq!(
+        json["violations"][0]["path"],
+        wrong.to_str().unwrap(),
+        "{json}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -115,6 +115,10 @@ pub struct Reference {
     pub name_range: TextRange,
     /// The element the name resolved to.
     pub target: ElementId,
+    /// The element whose text names it. What a model reaches is followed
+    /// from here: the references of what has been resolved, not every
+    /// reference the workspace has ever recorded.
+    pub from: ElementId,
 }
 
 /// What is wrong with a model, in the kinds a reader wants apart. A
@@ -392,6 +396,10 @@ pub struct Workspace {
     claimed: HashSet<ElementId>,
     unresolved: Vec<Unresolved>,
     references: Vec<Reference>,
+    /// Files every element of which has been resolved. A reach never
+    /// re-enters one: there is nothing left in it to find, and resolving
+    /// an element twice records its references twice.
+    settled: HashSet<usize>,
 }
 
 impl Clone for Workspace {
@@ -432,6 +440,7 @@ impl Clone for Workspace {
             semantic_bases: self.semantic_bases.clone(),
             members: self.members.clone(),
             claimed: HashSet::new(),
+            settled: self.settled.clone(),
             unresolved: self.unresolved.clone(),
             references: self.references.clone(),
         }
@@ -477,6 +486,7 @@ impl Workspace {
             semantic_bases: HashMap::new(),
             members: HashMap::new(),
             claimed: HashSet::new(),
+            settled: HashSet::new(),
             unresolved: Vec::new(),
             references: Vec::new(),
         }
@@ -646,21 +656,17 @@ impl Workspace {
     /// asked them of anything. The decision is made here and the front ends
     /// say what came of it.
     ///
-    /// `files` empty means every file, as it does for `findings`.
+    /// The constraints are put to `files` as named. Every front end names
+    /// the files it was asked about -- the command line what it was
+    /// handed, the servers the documents open -- and none names the
+    /// library under them, which satisfies the constraints and is not
+    /// what anyone asked about.
     pub fn diagnose(&mut self, files: &[usize]) -> Diagnosis {
         let found = self.findings(files);
         let settled =
             found.syntax.is_empty() && found.names.is_empty() && self.has_standard_library();
-        let every: Vec<usize>;
-        let asked = match files.is_empty() {
-            true => {
-                every = (0..self.file_count()).collect();
-                &every
-            }
-            false => files,
-        };
         let rules = match settled {
-            true => self.check_rules(asked),
+            true => self.check_rules(files),
             false => rules::Checked::default(),
         };
         Diagnosis {

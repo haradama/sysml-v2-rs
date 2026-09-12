@@ -36,9 +36,13 @@ impl Workspace {
             self.supertypes.remove(&id);
             self.semantic_bases.remove(&id);
         }
-        // the new file's members are members of the root namespace, and
-        // its own namespaces have none indexed yet
-        self.members.clear();
+        // The new file's members are members of the root namespace, and
+        // its own namespaces have none indexed yet. An index holds a
+        // namespace's own members and nothing else -- imports and
+        // inheritance are looked through at lookup time -- so the root's
+        // is the only one the file made stale, and every other index
+        // dropped here was rebuilt, unchanged, under the next lookup.
+        self.members.remove(&self.root);
         // And a name that answered to nothing from the root answered
         // against the files there were then. The one just added may be
         // the file it lives in -- which is how a workspace that asked
@@ -65,15 +69,20 @@ impl Workspace {
     /// uses a handful.
     pub fn resolve_reached(&mut self, files: &[usize]) -> ResolveStats {
         let mut stats = self.resolve_files(files);
-        let mut done: HashSet<ElementId> = self
-            .model
-            .ids()
-            .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
-            .collect();
+        let mut done: HashSet<ElementId> = self.elements_in(files).into_iter().collect();
         loop {
             let mut fresh = Vec::new();
             for reference in &self.references {
-                if done.contains(&reference.target) {
+                // reached from what this call resolved, and not into a
+                // file already resolved whole: the language server
+                // stands its documents on a resolved library, and a
+                // reach that re-entered it resolved most of it again
+                // and recorded every reference in it a second time
+                if !done.contains(&reference.from) || done.contains(&reference.target) {
+                    continue;
+                }
+                let elsewhere = self.elem_file.get(&reference.target).copied();
+                if elsewhere.is_some_and(|file| self.settled.contains(&file)) {
                     continue;
                 }
                 // A package is a place to look names up, not something
@@ -92,6 +101,11 @@ impl Workspace {
             }
             fresh.retain(|id| done.insert(*id));
             if fresh.is_empty() {
+                // once more over everything reached: what a round implied
+                // about an element was implied before the round after it
+                // resolved the supertypes that implication reads
+                let reached: Vec<ElementId> = done.into_iter().collect();
+                self.imply_for(&reached);
                 return stats;
             }
             // every element is resolved once, so nothing said about one
@@ -102,17 +116,65 @@ impl Workspace {
             stats.lookups += round.lookups;
         }
     }
+    /// What resolution implies about `ids`: the ends carried down from
+    /// what they redefine, the named ends related, the redefinitions,
+    /// participations and cross-subsettings the specification says
+    /// follow. Over the elements just resolved and no more -- each of
+    /// these walked every element of the workspace on every call, which
+    /// made the two references of a document being typed into cost a
+    /// walk over the whole library it stood on.
+    pub(crate) fn imply_for(&mut self, ids: &[ElementId]) {
+        let ids = self.with_what_they_own(ids);
+        self.carry_ends(&ids);
+        self.count_with_what_is_named(&ids);
+        self.relate_named_ends(&ids);
+        self.imply_end_redefinitions(&ids);
+        self.imply_end_participation(&ids);
+        self.imply_cross_subsettings(&ids);
+    }
+    /// `ids` and everything under them. Resolving an element reifies
+    /// what its text implies -- a transition's ends, a typing -- as
+    /// elements it owns, which no file lists and which want what follows
+    /// resolution as much as what was written down. Walked from the
+    /// elements that own nothing else in `ids`, so a whole workspace is
+    /// one walk rather than one per element.
+    fn with_what_they_own(&self, ids: &[ElementId]) -> Vec<ElementId> {
+        let given: HashSet<ElementId> = ids.iter().copied().collect();
+        let mut stack: Vec<ElementId> = ids
+            .iter()
+            .copied()
+            .filter(|&id| {
+                self.model
+                    .owner(id)
+                    .is_none_or(|owner| !given.contains(&owner))
+            })
+            .collect();
+        let mut seen: HashSet<ElementId> = HashSet::new();
+        let mut all = Vec::new();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            all.push(id);
+            stack.extend(self.model.owned(id).iter().copied());
+        }
+        all
+    }
+    /// Every element of `files`, from each file's own list rather than
+    /// by filtering every element of the workspace by its file.
+    fn elements_in(&self, files: &[usize]) -> Vec<ElementId> {
+        files
+            .iter()
+            .flat_map(|&file| self.files[file].elements.iter().copied())
+            .collect()
+    }
     /// Resolve everything in `files`, forgetting what those files said
     /// last time and leaving what their neighbours said standing.
     ///
     /// This is what an editor calls when a buffer changes: the library
     /// underneath is resolved once and never again.
     pub fn resolve_files(&mut self, files: &[usize]) -> ResolveStats {
-        let ids: Vec<ElementId> = self
-            .model
-            .ids()
-            .filter(|id| self.elem_file.get(id).is_some_and(|f| files.contains(f)))
-            .collect();
+        let ids = self.elements_in(files);
         self.resolve_ids(&ids, Clear::TheseFiles)
     }
     fn resolve_ids(&mut self, ids: &[ElementId], clear: Clear) -> ResolveStats {
@@ -128,6 +190,8 @@ impl Workspace {
                 .collect();
             self.unresolved.retain(|u| !touched.contains(&u.file));
             self.references.retain(|r| !touched.contains(&r.file));
+            // every element of these files is about to be resolved
+            self.settled.extend(touched);
         }
 
         let mut stats = ResolveStats::default();
@@ -283,7 +347,7 @@ impl Workspace {
                         Some(target) => {
                             stats.resolved += 1;
                             let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                            self.record(file, t.range, t.name_range, &t.at, target);
+                            self.record(id, file, t.range, t.name_range, &t.at, target);
                             // `chains source.target` names the steps of
                             // one chain, and each step is a chaining of
                             // its own: read as a single relationship the
@@ -358,7 +422,14 @@ impl Workspace {
                     let file = self.elem_file.get(&id).copied().unwrap_or(0);
                     let range = operand.text_range();
                     let name_range = last_name_range(&operand);
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    self.record(
+                        id,
+                        file,
+                        range,
+                        name_range,
+                        &operand_ranges(&operand),
+                        target,
+                    );
                     self.reify(id, false, SyntaxKind::REFERENCES, target);
                 }
             }
@@ -380,13 +451,8 @@ impl Workspace {
                 self.resolve_verification(id, &node, &mut stats);
             }
         }
-        self.carry_ends();
         self.resolve_expression_tree(ids);
-        self.count_with_what_is_named();
-        self.relate_named_ends();
-        self.imply_end_redefinitions();
-        self.imply_end_participation();
-        self.imply_cross_subsettings();
+        self.imply_for(ids);
         stats.lookups = self.lookups - began;
         stats
     }
@@ -403,8 +469,8 @@ impl Workspace {
     /// A dotted reference is a chain, and what the connector relates is the
     /// feature it ends at: a consumer asking what is connected to what wants
     /// the port, not the path to it.
-    fn relate_named_ends(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
+    fn relate_named_ends(&mut self, ids: &[ElementId]) {
+        for &elem in ids {
             if !self.model.kind(elem).is_a(ElementKind::Connector)
                 || self.model.maybe(elem, "relatedFeature").is_some()
             {

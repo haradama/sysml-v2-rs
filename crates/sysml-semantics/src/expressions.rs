@@ -463,8 +463,8 @@ impl Workspace {
     /// `validateMultiplicityRangeBoundResultTypes` reads what such a bound
     /// comes to. The builder keeps a named bound as text; until the name is
     /// looked up it refers to nothing.
-    pub(crate) fn count_with_what_is_named(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
+    pub(crate) fn count_with_what_is_named(&mut self, ids: &[ElementId]) {
+        for &elem in ids {
             if self.model.kind(elem) != ElementKind::FeatureReferenceExpression
                 || self.model.maybe(elem, "referent").is_some()
             {
@@ -525,7 +525,7 @@ impl Workspace {
             match self.resolve_operand(owner, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    self.record(file, range, name_range, &at, target);
+                    self.record(owner, file, range, name_range, &at, target);
                     // where the whole expression is that one name, the
                     // model reified it as a reference to a feature and
                     // this is the feature

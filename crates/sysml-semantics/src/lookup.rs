@@ -214,7 +214,7 @@ impl Workspace {
         match self.resolve_from(import, &segments) {
             Some(target) => {
                 stats.resolved += 1;
-                self.record(file, last, last, &at, target);
+                self.record(import, file, last, last, &at, target);
             }
             None => {
                 let whole = TextRange::new(first.start(), last.end());
@@ -244,7 +244,7 @@ impl Workspace {
                 Some(target) => {
                     stats.resolved += 1;
                     self.try_set(alias, "memberElement", Value::Ref(target));
-                    self.record(file, range, last_name_range(&qname), &at, target);
+                    self.record(alias, file, range, last_name_range(&qname), &at, target);
                 }
                 None => self.record_miss(file, range, &name_segments(&qname), stats),
             }
@@ -272,6 +272,7 @@ impl Workspace {
     /// declaration and leaves the mentions of it behind.
     pub(crate) fn record(
         &mut self,
+        from: ElementId,
         file: usize,
         range: TextRange,
         name_range: TextRange,
@@ -284,6 +285,7 @@ impl Workspace {
             range,
             name_range,
             target,
+            from,
         });
         // the last segment is the reference just recorded
         let earlier = walked.len().saturating_sub(1);
@@ -293,6 +295,7 @@ impl Workspace {
                 range,
                 name_range: range,
                 target: element,
+                from,
             });
         }
     }

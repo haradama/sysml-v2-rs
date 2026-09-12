@@ -1129,7 +1129,14 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     // `check` has always taken the library as one of its paths --
     // `sysml check model/ sysml.library` -- so what it was handed is
     // loaded first and `ensure_library` only fills a gap.
-    let library = match load_paths(&mut ws, paths).and_then(|()| ensure_library(&mut ws, bare)) {
+    let loaded = load_paths(&mut ws, paths);
+    // What was asked about is what was handed over; the library that
+    // follows is what it is resolved against. The constraints are put to
+    // the former alone: the library satisfies them, a test says so every
+    // run, and putting a hundred and thirty of them to its sixty-six
+    // thousand elements again was most of what `check` cost.
+    let own: Vec<usize> = (0..ws.file_count()).collect();
+    let library = match loaded.and_then(|()| ensure_library(&mut ws, bare)) {
         Ok(answered) => answered,
         Err(unreadable) => {
             unreadable.say();
@@ -1148,7 +1155,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     // running only `check` -- which is most of the reason it exists --
     // would be told a broken model was fine. Syntax comes first, as it
     // does in the MCP server's tool of the same name.
-    let syntax = ws.findings(&[]).syntax;
+    let syntax = ws.findings(&own).syntax;
     let texts = held_texts(&ws, &syntax);
     let mut broken = Vec::new();
     for finding in &syntax {
@@ -1201,7 +1208,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     };
     // the names are asked for after resolving, the syntax before it:
     // there is nothing to resolve in a file that did not parse
-    let diagnosed = ws.diagnose(&[]);
+    let diagnosed = ws.diagnose(&own);
     let found = &diagnosed.found;
     let names = &found.names;
     let shown = &names[..limit.min(names.len())];

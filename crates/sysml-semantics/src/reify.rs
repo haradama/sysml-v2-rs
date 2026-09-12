@@ -37,6 +37,7 @@ impl Workspace {
                     range: target.range,
                     name_range: target.name_range,
                     target: def,
+                    from: usage,
                 });
                 self.reify(usage, false, SyntaxKind::TYPING, def);
             }
@@ -231,7 +232,14 @@ impl Workspace {
             Some(target) => {
                 stats.resolved += 1;
                 let name_range = last_name_range(operand);
-                self.record(file, range, name_range, &operand_ranges(operand), target);
+                self.record(
+                    id,
+                    file,
+                    range,
+                    name_range,
+                    &operand_ranges(operand),
+                    target,
+                );
                 let reached = match chains {
                     true => self.chained(id, &segments, &operand_chain_steps(operand), target),
                     false => target,
@@ -276,7 +284,7 @@ impl Workspace {
                 match self.resolve_written(id, &t.segments, false, None) {
                     Some(target) => {
                         stats.resolved += 1;
-                        self.record(file, t.range, t.name_range, &t.at, target);
+                        self.record(id, file, t.range, t.name_range, &t.at, target);
                         let reached = match chains {
                             true => self.chained(id, &t.segments, &t.chain, target),
                             false => target,
@@ -321,7 +329,14 @@ impl Workspace {
             match self.resolve_from(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    self.record(
+                        id,
+                        file,
+                        range,
+                        name_range,
+                        &operand_ranges(&operand),
+                        target,
+                    );
                     related.push(target);
                     reached.push(Reached::Written(segments, operand_chain_steps(&operand)));
                 }
@@ -494,7 +509,7 @@ impl Workspace {
                         // the earlier steps of `a::b::c` are references too,
                         // and a rename has to reach every one of them
                         let at = segment_ranges(&qname);
-                        self.record(file, range, last_name_range(&operand), &at, target);
+                        self.record(id, file, range, last_name_range(&operand), &at, target);
                         self.reified(
                             id,
                             ElementKind::Annotation,
@@ -528,7 +543,7 @@ impl Workspace {
                 let file = self.elem_file.get(&id).copied().unwrap_or(0);
                 let range = qname.text_range();
                 let at = segment_ranges(&qname);
-                self.record(file, range, last_name_range(&qname), &at, target);
+                self.record(id, file, range, last_name_range(&qname), &at, target);
                 self.reify(id, false, SyntaxKind::TYPING, target);
             }
         }
@@ -574,7 +589,14 @@ impl Workspace {
                 Some(target) => {
                     stats.resolved += 1;
                     let name_range = last_name_range(&operand);
-                    self.record(file, range, name_range, &operand_ranges(&operand), target);
+                    self.record(
+                        id,
+                        file,
+                        range,
+                        name_range,
+                        &operand_ranges(&operand),
+                        target,
+                    );
                     if supplying {
                         &mut suppliers
                     } else {
@@ -643,7 +665,7 @@ impl Workspace {
             match ws.resolve_operand(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    ws.record(file, operand.text_range(), name_range, &at, target);
+                    ws.record(id, file, operand.text_range(), name_range, &at, target);
                     Some(target)
                 }
                 None => {
@@ -928,7 +950,7 @@ impl Workspace {
                 match self.resolve_written(transition, &t.segments, false, None) {
                     Some(target) => {
                         stats.resolved += 1;
-                        self.record(file, t.range, t.name_range, &t.at, target);
+                        self.record(transition, file, t.range, t.name_range, &t.at, target);
                         self.reified(
                             trigger,
                             ElementKind::FeatureTyping,
@@ -982,7 +1004,7 @@ impl Workspace {
             match self.resolve_operand(id, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
-                    self.record(file, range, range, &operand_ranges(&operand), target);
+                    self.record(id, file, range, range, &operand_ranges(&operand), target);
                     self.try_set(id, property, Value::Ref(target));
                 }
                 None => {
@@ -1015,7 +1037,7 @@ impl Workspace {
             return;
         };
         stats.resolved += 1;
-        self.record(file, range, range, &operand_ranges(&operand), target);
+        self.record(id, file, range, range, &operand_ranges(&operand), target);
 
         let mut scope = self.model.owner(id);
         while let Some(current) = scope {

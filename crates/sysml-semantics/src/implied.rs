@@ -27,8 +27,8 @@ impl Workspace {
     /// connector has four ends -- the two written and the two inherited -- and
     /// "a connector specializing a binary one is binary" is true of none of
     /// the eight hundred in the corpus.
-    pub(crate) fn imply_end_redefinitions(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
+    pub(crate) fn imply_end_redefinitions(&mut self, ids: &[ElementId]) {
+        for &elem in ids {
             let mine = self.own_ends(elem);
             if mine.is_empty() {
                 continue;
@@ -160,11 +160,11 @@ impl Workspace {
     /// `ConnectionTest.sysml`'s three-ended `abstract connection def C` was
     /// the one model in the corpus `validateAssociationEndTypes` reported, and
     /// it is sound.
-    pub(crate) fn imply_end_participation(&mut self) {
+    pub(crate) fn imply_end_participation(&mut self, ids: &[ElementId]) {
         let Some(participant) = self.named_globally("Links::Link::participant") else {
             return;
         };
-        for elem in self.model.ids().collect::<Vec<_>>() {
+        for &elem in ids {
             let kind = self.model.kind(elem);
             if !kind.is_a(ElementKind::Association) && !kind.is_a(ElementKind::Connector) {
                 continue;
@@ -194,8 +194,8 @@ impl Workspace {
     /// Feature, this Feature must subset the crossFeature of the redefined end
     /// Feature, if this exists." The association declares the cross feature and
     /// the redefinition and leaves what holds between them to the tool.
-    pub(crate) fn imply_cross_subsettings(&mut self) {
-        for elem in self.model.ids().collect::<Vec<_>>() {
+    pub(crate) fn imply_cross_subsettings(&mut self, ids: &[ElementId]) {
+        for &elem in ids {
             let Some(mine) = self.owned_cross_feature(elem) else {
                 continue;
             };
@@ -276,10 +276,10 @@ impl Workspace {
     /// `validateFeatureEndNotDerivedAbstractCompositeOrPortion` holds an end
     /// to not being composite. Redefinitions are resolved by now, so this is
     /// where both can be said.
-    pub(crate) fn carry_ends(&mut self) {
+    pub(crate) fn carry_ends(&mut self, ids: &[ElementId]) {
         loop {
             let mut carried = false;
-            for elem in self.model.ids().collect::<Vec<_>>() {
+            for &elem in ids {
                 if self.model.flag(elem, "isEnd") {
                     continue;
                 }
