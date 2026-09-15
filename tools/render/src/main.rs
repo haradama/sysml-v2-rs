@@ -75,4 +75,3 @@ fn render(input: &Path, output: &Path, scale: f32) -> Result<(), String> {
         .save_png(output)
         .map_err(|e| format!("cannot write {output:?}: {e}"))
 }
-

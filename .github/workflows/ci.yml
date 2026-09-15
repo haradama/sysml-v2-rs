@@ -115,7 +115,17 @@ jobs:
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # `cargo fmt --all` and `cargo clippy --workspace` reach the
+      # members, and this is not one: excluded from the workspace, it was
+      # the only Rust here that neither gate had ever read
+      - name: it is held to what the workspace is held to
+        run: |
+          set -eu
+          cargo fmt --manifest-path tools/render/Cargo.toml --check
+          cargo clippy --manifest-path tools/render/Cargo.toml --all-targets -- -D warnings
       - name: render corpus models and check the SVG is well-formed
         run: |
           set -eu
@@ -161,7 +171,21 @@ jobs:
         with:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Excluded from the workspace, so neither gate reached it -- and
+      # `src/generated.rs` is the one piece of `rustgen` output committed
+      # anywhere, which makes this the only place a reader would ever
+      # find out that what the generator writes is not what `cargo fmt`
+      # leaves. It was not: the header's `#![allow(...)]` came out one
+      # lint to a line where `rustfmt` joins them. This is what holds it.
+      - name: it is held to what the workspace is held to
+        working-directory: examples/arduino-uno
+        run: |
+          set -eu
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
       - name: the checked-in Rust is what rustgen writes
         working-directory: examples/arduino-uno
         run: |
