@@ -2,8 +2,9 @@
 //! from the OMG normative metamodel (vendor/metamodel/KerML.xmi +
 //! SysML.xmi). Do not edit by hand.
 //!
-//! The OCL of each rule below, and the sentence it states in words,
-//! are the specification's own: Copyright (c) Object Management
+//! The OCL of each rule below, the sentence it states in words, and
+//! the paragraph documenting each metaclass and enumeration, are
+//! the specification's own: Copyright (c) Object Management
 //! Group, Inc., reproduced under the terms of use the OMG grants
 //! with its specifications rather than under this crate's. See
 //! NOTICE.
@@ -12,183 +13,1035 @@
 /// Every metaclass of the KerML/SysML v2 abstract syntax.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ElementKind {
+    /// An AcceptActionUsage is an ActionUsage that specifies the acceptance
+    /// of an incomingTransfer from the Occurrence given by the result of its
+    /// receiverArgument Expression. (If no receiverArgument is provided, the
+    /// default is the this context of the AcceptActionUsage.) The payload of
+    /// the accepted Transfer is output on its payloadParameter. Which
+    /// Transfers may be accepted is determined by conformance to the typing
+    /// and (potentially) binding of the payloadParameter.
     AcceptActionUsage,
+    /// An ActionDefinition is a Definition that is also a Behavior that
+    /// defines an Action performed by a system or part of a system.
     ActionDefinition,
+    /// An ActionUsage is a Usage that is also a Step, and, so, is typed by a
+    /// Behavior. Nominally, if the type is an ActionDefinition, an
+    /// ActionUsage is a Usage of that ActionDefinition within a system.
+    /// However, other kinds of kernel Behaviors are also allowed, to permit
+    /// use of Behaviors from the Kernel Model Libraries.
     ActionUsage,
+    /// An ActorMembership is a ParameterMembership that identifies a
+    /// PartUsage as an actor parameter, which specifies a role played by an
+    /// external entity in interaction with the owningType of the
+    /// ActorMembership.
     ActorMembership,
+    /// An AllocationDefinition is a ConnectionDefinition that specifies that
+    /// some or all of the responsibility to realize the intent of the source
+    /// is allocated to the target instances. Such allocations define mappings
+    /// across the various structures and hierarchies of a system model,
+    /// perhaps as a precursor to more rigorous specifications and
+    /// implementations. An AllocationDefinition can itself be refined using
+    /// nested allocations that give a finer-grained decomposition of the
+    /// containing allocation mapping.
     AllocationDefinition,
+    /// An AllocationUsage is a usage of an AllocationDefinition asserting the
+    /// allocation of the source feature to the target feature.
     AllocationUsage,
+    /// An AnalysisCaseDefinition is a CaseDefinition for the case of carrying
+    /// out an analysis.
     AnalysisCaseDefinition,
+    /// An AnalysisCaseUsage is a Usage of an AnalysisCaseDefinition.
     AnalysisCaseUsage,
+    /// An AnnotatingElement is an Element that provides additional
+    /// description of or metadata on some other Element. An AnnotatingElement
+    /// is either attached to its annotatedElements by Annotation
+    /// Relationships, or it implicitly annotates its owningNamespace.
     AnnotatingElement,
+    /// An Annotation is a Relationship between an AnnotatingElement and the
+    /// Element that is annotated by that AnnotatingElement.
     Annotation,
+    /// An AssertConstraintUsage is a ConstraintUsage that is also an
+    /// Invariant and, so, is asserted to be true (by default). Unless it is
+    /// the AssertConstraintUsage itself, the asserted ConstraintUsage is
+    /// related to the AssertConstraintUsage by a ReferenceSubsetting
+    /// Relationship.
     AssertConstraintUsage,
+    /// An AssignmentActionUsage is an ActionUsage that is defined, directly
+    /// or indirectly, by the ActionDefinition AssignmentAction from the
+    /// Systems Model Library. It specifies that the value of the referent
+    /// Feature, relative to the target given by the result of the
+    /// targetArgument Expression, should be set to the result of the
+    /// valueExpression.
     AssignmentActionUsage,
+    /// An Association is a Relationship and a Classifier to enable
+    /// classification of links between things (in the universe). The
+    /// co-domains (types) of the associationEnd Features are the
+    /// relatedTypes, as co-domain and participants (linked things) of an
+    /// Association identify each other.
     Association,
+    /// An AssociationStructure is an Association that is also a Structure,
+    /// classifying link objects that are both links and objects. As objects,
+    /// link objects can be created and destroyed, and their non-end Features
+    /// can change over time. However, the values of the end Features of a
+    /// link object are fixed and cannot change over its lifetime.
     AssociationStructure,
+    /// An AttributeDefinition is a Definition and a DataType of information
+    /// about a quality or characteristic of a system or part of a system that
+    /// has no independent identity other than its value. All features of an
+    /// AttributeDefinition must be referential (non-composite). As a
+    /// DataType, an AttributeDefinition must specialize, directly or
+    /// indirectly, the base DataType Base::DataValue from the Kernel Semantic
+    /// Library.
     AttributeDefinition,
+    /// An AttributeUsage is a Usage whose type is a DataType. Nominally, if
+    /// the type is an AttributeDefinition, an AttributeUsage is a usage of a
+    /// AttributeDefinition to represent the value of some system quality or
+    /// characteristic. However, other kinds of kernel DataTypes are also
+    /// allowed, to permit use of DataTypes from the Kernel Model Libraries.
+    /// An AttributeUsage itself as well as all its nested features must be
+    /// referential (non-composite). An AttributeUsage must specialize,
+    /// directly or indirectly, the base Feature Base::dataValues from the
+    /// Kernel Semantic Library.
     AttributeUsage,
+    /// A Behavior coordinates occurrences of other Behaviors, as well as
+    /// changes in objects. Behaviors can be decomposed into Steps and be
+    /// characterized by parameters.
     Behavior,
+    /// A BindingConnector is a binary Connector that requires its
+    /// relatedFeatures to identify the same things (have the same values).
     BindingConnector,
+    /// A BindingConnectorAsUsage is both a BindingConnector and a
+    /// ConnectorAsUsage.
     BindingConnectorAsUsage,
+    /// A BooleanExpression is a Boolean-valued Expression whose type is a
+    /// Predicate. It represents a logical condition resulting from the
+    /// evaluation of the Predicate.
     BooleanExpression,
+    /// A CalculationDefinition is an ActionDefinition that also defines a
+    /// Function producing a result.
     CalculationDefinition,
+    /// A CalculationUsage is an ActionUsage that is also an Expression, and,
+    /// so, is typed by a Function. Nominally, if the type is a
+    /// CalculationDefinition, a CalculationUsage is a Usage of that
+    /// CalculationDefinition within a system. However, other kinds of kernel
+    /// Functions are also allowed, to permit use of Functions from the Kernel
+    /// Model Libraries.
     CalculationUsage,
+    /// A CaseDefinition is a CalculationDefinition for a process, often
+    /// involving collecting evidence or data, relative to a subject, possibly
+    /// involving the collaboration of one or more other actors, producing a
+    /// result that meets an objective.
     CaseDefinition,
+    /// A CaseUsage is a Usage of a CaseDefinition.
     CaseUsage,
+    /// A Class is a Classifier of things (in the universe) that can be
+    /// distinguished without regard to how they are related to other things
+    /// (via Features). This means multiple things classified by the same
+    /// Class can be distinguished, even when they are related other things in
+    /// exactly the same way.
     Class,
+    /// A Classifier is a Type that classifies: Things (in the universe)
+    /// regardless of how Features relate them. (These are interpreted
+    /// semantically as sequences of exactly one thing.) How the above things
+    /// are related by Features. (These are interpreted semantically as
+    /// sequences of multiple things, such that the last thing in the sequence
+    /// is also classified by the Classifier. Note that this means that a
+    /// Classifier modeled as specializing a Feature cannot classify
+    /// anything.)
     Classifier,
+    /// A CollectExpression is an OperatorExpression whose operator is
+    /// "collect", which resolves to the Function ControlFunctions::collect
+    /// from the Kernel Functions Library.
     CollectExpression,
+    /// A Comment is an AnnotatingElement whose body in some way describes its
+    /// annotatedElements.
     Comment,
+    /// A ConcernDefinition is a RequirementDefinition that one or more
+    /// stakeholders may be interested in having addressed. These stakeholders
+    /// are identified by the ownedStakeholdersof the ConcernDefinition.
     ConcernDefinition,
+    /// A ConcernUsage is a Usage of a ConcernDefinition. The ownedStakeholder
+    /// features of the ConcernUsage shall all subset the
+    /// ConcernCheck::concernedStakeholders feature. If the ConcernUsage is an
+    /// ownedFeature of a StakeholderDefinition or StakeholderUsage, then the
+    /// ConcernUsage shall have an ownedStakeholder feature that is bound to
+    /// the self feature of its owner.
     ConcernUsage,
+    /// A ConjugatedPortDefinition is a PortDefinition that is a
+    /// PortDefinition of its original PortDefinition. That is, a
+    /// ConjugatedPortDefinition inherits all the features of the original
+    /// PortDefinition, but input flows of the original PortDefinition become
+    /// outputs on the ConjugatedPortDefinition and output flows of the
+    /// original PortDefinition become inputs on the ConjugatedPortDefinition.
+    /// Every PortDefinition (that is not itself a ConjugatedPortDefinition)
+    /// has exactly one corresponding ConjugatedPortDefinition, whose
+    /// effective name is the name of the originalPortDefinition, with the
+    /// character ~ prepended.
     ConjugatedPortDefinition,
+    /// A ConjugatedPortTyping is a FeatureTyping whose type is a
+    /// ConjugatedPortDefinition. (This relationship is intended to be an
+    /// abstract-syntax marker for a special surface notation for conjugated
+    /// typing of ports.)
     ConjugatedPortTyping,
+    /// Conjugation is a Relationship between two types in which the
+    /// conjugatedType inherits all the Features of the originalType, but with
+    /// all input and output Features reversed. That is, any Features with a
+    /// direction in relative to the originalType are considered to have an
+    /// effective direction of out relative to the conjugatedType and,
+    /// similarly, Features with direction out in the originalType are
+    /// considered to have an effective direction of in in the conjugatedType.
+    /// Features with direction inout, or with no direction, in the
+    /// originalType, are inherited without change. A Type may participate as
+    /// a conjugatedType in at most one Conjugation relationship, and such a
+    /// Type may not also be the specific Type in any Specialization
+    /// relationship.
     Conjugation,
+    /// A ConnectionDefinition is a PartDefinition that is also an
+    /// AssociationStructure. The end Features of a ConnectionDefinition must
+    /// be Usages.
     ConnectionDefinition,
+    /// A ConnectionUsage is a ConnectorAsUsage that is also a PartUsage.
+    /// Nominally, if its type is a ConnectionDefinition, then a
+    /// ConnectionUsage is a Usage of that ConnectionDefinition, representing
+    /// a connection between parts of a system. However, other kinds of kernel
+    /// AssociationStructures are also allowed, to permit use of
+    /// AssociationStructures from the Kernel Model Libraries.
     ConnectionUsage,
+    /// A Connector is a usage of Associations, with links restricted
+    /// according to instances of the Type in which they are used (domain of
+    /// the Connector). The associations of the Connector restrict what kinds
+    /// of things might be linked. The Connector further restricts these links
+    /// to be between values of Features on instances of its domain.
     Connector,
+    /// A ConnectorAsUsage is both a Connector and a Usage. ConnectorAsUsage
+    /// cannot itself be instantiated in a SysML model, but it is a base class
+    /// for the concrete classes BindingConnectorAsUsage, SuccessionAsUsage,
+    /// ConnectionUsage and FlowConnectionUsage.
     ConnectorAsUsage,
+    /// A ConstraintDefinition is an OccurrenceDefinition that is also a
+    /// Predicate that defines a constraint that may be asserted to hold on a
+    /// system or part of a system.
     ConstraintDefinition,
+    /// A ConstraintUsage is an OccurrenceUsage that is also a
+    /// BooleanExpression, and, so, is typed by a Predicate. Nominally, if the
+    /// type is a ConstraintDefinition, a ConstraintUsage is a Usage of that
+    /// ConstraintDefinition. However, other kinds of kernel Predicates are
+    /// also allowed, to permit use of Predicates from the Kernel Model
+    /// Libraries.
     ConstraintUsage,
+    /// A ConstructorExpression is an InstantiationExpression whose result
+    /// specializes its instantiatedType, binding some or all of the features
+    /// of the instantiatedType to the results of its argument Expressions.
     ConstructorExpression,
+    /// A ControlNode is an ActionUsage that does not have any inherent
+    /// behavior but provides constraints on incoming and outgoing Successions
+    /// that are used to control other Actions. A ControlNode must be a
+    /// composite owned usage of an ActionDefinition or ActionUsage.
     ControlNode,
+    /// CrossSubsetting is a kind of Subsetting for end Features, as
+    /// identified by crossingFeature, to subset a chained Feature, identified
+    /// by crossedFeature. It navigates to instances of the end Feature’s type
+    /// from instances of other end Feature types on the same owningType (at
+    /// least two end Features are required for any of them to have a
+    /// CrossSubsetting). The crossedFeature of a CrossSubsetting must have a
+    /// feature chain of exactly two Features. The second Feature in the chain
+    /// is the crossFeature of the crossingFeature (end Feature), which has
+    /// the same type as the crossingFeature. When the owningType of the
+    /// crossingFeature has exactly two end Features, the first Feature in the
+    /// chain of the crossedFeature is the other end Feature. The
+    /// crossFeature’s featuringType in this case is the other end Feature.
+    /// When the owningType has more than two end Features, the first Feature
+    /// in the chain is a Feature that CrossMultiplies all the other end
+    /// Features, which is also the featuringType of the crossFeature. A
+    /// crossFeature must be owned by its featureCrossing (end Feature) when
+    /// the featureCrossing owningType has more than two end Features.
+    /// Otherwise, for exactly two end Features, the crossFeatures of each the
+    /// ends can instead optionally be inherited by the other end from one of
+    /// its types or a subsetted Feature.
     CrossSubsetting,
+    /// A DataType is a Classifier of things (in the universe) that can only
+    /// be distinguished by how they are related to other things (via
+    /// Features). This means multiple things classified by the same DataType
+    /// Cannot be distinguished when they are related to other things in
+    /// exactly the same way, even when they are intended to be about
+    /// different things. Can be distinguished when they are related to other
+    /// things in different ways, even when they are intended to be about the
+    /// same thing.
     DataType,
+    /// A DecisionNode is a ControlNode that makes a selection from its
+    /// outgoing Successions.
     DecisionNode,
+    /// A Definition is a Classifier of Usages. The actual kinds of Definition
+    /// that may appear in a model are given by the subclasses of Definition
+    /// (possibly as extended with user-defined SemanticMetadata). Normally, a
+    /// Definition has owned Usages that model features of the thing being
+    /// defined. A Definition may also have other Definitions nested in it,
+    /// but this has no semantic significance, other than the nested scoping
+    /// resulting from the Definition being considered as a Namespace for any
+    /// nested Definitions. However, if a Definition has isVariation = true,
+    /// then it represents a variation point Definition. In this case, all of
+    /// its members must be variant Usages, related to the Definition by
+    /// VariantMembership Relationships. Rather than being features of the
+    /// Definition, variant Usages model different concrete alternatives that
+    /// can be chosen to fill in for an abstract Usage of the variation point
+    /// Definition.
     Definition,
+    /// A Dependency is a Relationship that indicates that one or more client
+    /// Elements require one more supplier Elements for their complete
+    /// specification. In general, this means that a change to one of the
+    /// supplier Elements may necessitate a change to, or re-specification of,
+    /// the client Elements. Note that a Dependency is entirely a model-level
+    /// Relationship, without instance-level semantics.
     Dependency,
+    /// Differencing is a Relationship that makes its differencingType one of
+    /// the differencingTypes of its typeDifferenced.
     Differencing,
+    /// A Disjoining is a Relationship between Types asserted to have
+    /// interpretations that are not shared (disjoint) between them,
+    /// identified as typeDisjoined and disjoiningType. For example, a
+    /// Classifier for mammals is disjoint from a Classifier for minerals, and
+    /// a Feature for people&#39;s parents is disjoint from a Feature for
+    /// their children.
     Disjoining,
+    /// Documentation is a Comment that specifically documents a
+    /// documentedElement, which must be its owner.
     Documentation,
+    /// An Element is a constituent of a model that is uniquely identified
+    /// relative to all other Elements. It can have Relationships with other
+    /// Elements. Some of these Relationships might imply ownership of other
+    /// Elements, which means that if an Element is deleted from a model, then
+    /// so are all the Elements that it owns.
     Element,
+    /// ElementFilterMembership is a Membership between a Namespace and a
+    /// model-level evaluable Boolean-valued Expression, asserting that
+    /// imported members of the Namespace should be filtered using the
+    /// condition Expression. A general Namespace does not define any specific
+    /// filtering behavior, but such behavior may be defined for various
+    /// specialized kinds of Namespaces.
     ElementFilterMembership,
+    /// EndFeatureMembership is a FeatureMembership that requires its
+    /// memberFeature be owned and have isEnd = true.
     EndFeatureMembership,
+    /// An EnumerationDefinition is an AttributeDefinition all of whose
+    /// instances are given by an explicit list of enumeratedValues. This is
+    /// realized by requiring that the EnumerationDefinition have isVariation
+    /// = true, with the enumeratedValues being its variants.
     EnumerationDefinition,
+    /// An EnumerationUsage is an AttributeUsage whose attributeDefinition is
+    /// an EnumerationDefinition.
     EnumerationUsage,
+    /// An EventOccurrenceUsage is an OccurrenceUsage that represents another
+    /// OccurrenceUsage occurring as a suboccurrence of the containing
+    /// occurrence of the EventOccurrenceUsage. Unless it is the
+    /// EventOccurrenceUsage itself, the referenced OccurrenceUsage is related
+    /// to the EventOccurrenceUsage by a ReferenceSubsetting Relationship. If
+    /// the EventOccurrenceUsage is owned by an OccurrenceDefinition or
+    /// OccurrenceUsage, then it also subsets the timeEnclosedOccurrences
+    /// property of the Class Occurrence from the Kernel Semantic Library
+    /// model Occurrences.
     EventOccurrenceUsage,
+    /// An ExhibitStateUsage is a StateUsage that represents the exhibiting of
+    /// a StateUsage. Unless it is the StateUsage itself, the StateUsage to be
+    /// exhibited is related to the ExhibitStateUsage by a ReferenceSubsetting
+    /// Relationship. An ExhibitStateUsage is also a PerformActionUsage, with
+    /// its exhibitedState as the performedAction.
     ExhibitStateUsage,
+    /// An Expose is an Import of Memberships into a ViewUsage that provide
+    /// the Elements to be included in a view. Visibility is always ignored
+    /// for an Expose (i.e., isImportAll = true).
     Expose,
+    /// An Expression is a Step that is typed by a Function. An Expression
+    /// that also has a Function as its featuringType is a computational step
+    /// within that Function. An Expression always has a single result
+    /// parameter, which redefines the result parameter of its defining
+    /// function. This allows Expressions to be interconnected in tree
+    /// structures, in which inputs to each Expression in the tree are
+    /// determined as the results of other Expression in the tree.
     Expression,
+    /// A Feature is a Type that classifies relations between multiple things
+    /// (in the universe). The domain of the relation is the intersection of
+    /// the featuringTypes of the Feature. (The domain of a Feature with no
+    /// featuringTyps is implicitly the most general Type Base::Anything from
+    /// the Kernel Semantic Library.) The co-domain of the relation is the
+    /// intersection of the types of the Feature. In the simplest cases, the
+    /// featuringTypes and types are Classifiers and the Feature relates two
+    /// things, one from the domain and one from the range. Examples include
+    /// cars paired with wheels, people paired with other people, and cars
+    /// paired with numbers representing the car length. Since Features are
+    /// Types, their featuringTypes and types can be Features. In this case,
+    /// the Feature effectively classifies relations between relations, which
+    /// can be interpreted as the sequence of things related by the domain
+    /// Feature concatenated with the sequence of things related by the
+    /// co-domain Feature. The values of a Feature for a given instance of its
+    /// domain are all the instances of its co-domain that are related to that
+    /// domain instance by the Feature. The values of a Feature with
+    /// chainingFeatures are the same as values of the last Feature in the
+    /// chain, which can be found by starting with values of the first
+    /// Feature, then using those values as domain instances to obtain valus
+    /// of the second Feature, and so on, to values of the last Feature.
     Feature,
+    /// A FeatureChainExpression is an OperatorExpression whose operator is
+    /// ".", which resolves to the Function ControlFunctions::'.' from the
+    /// Kernel Functions Library. It evaluates to the result of chaining the
+    /// result Feature of its single argument Expression with its
+    /// targetFeature.
     FeatureChainExpression,
+    /// FeatureChaining is a Relationship that makes its target Feature one of
+    /// the chainingFeatures of its owning Feature.
     FeatureChaining,
+    /// A FeatureInverting is a Relationship between Features asserting that
+    /// their interpretations (sequences) are the reverse of each other,
+    /// identified as featureInverted and invertingFeature. For example, a
+    /// Feature identifying each person&#39;s parents is the inverse of a
+    /// Feature identifying each person&#39;s children. A person identified as
+    /// a parent of another will identify that other as one of their children.
     FeatureInverting,
+    /// A FeatureMembership is an OwningMembership between an
+    /// ownedMemberFeature and an owningType. If the ownedMemberFeature has
+    /// isVariable = false, then the FeatureMembership implies that the
+    /// owningType is also a featuringType of the ownedMemberFeature. If the
+    /// ownedMemberFeature has isVariable = true, then the FeatureMembership
+    /// implies that the ownedMemberFeature is featured by the snapshots of
+    /// the owningType, which must specialize the Kernel Semantic Library base
+    /// class Occurrence.
     FeatureMembership,
+    /// A FeatureReferenceExpression is an Expression whose result is bound to
+    /// a referent Feature.
     FeatureReferenceExpression,
+    /// FeatureTyping is Specialization in which the specific Type is a
+    /// Feature. This means the set of instances of the (specific)
+    /// typedFeature is a subset of the set of instances of the (general)
+    /// type. In the simplest case, the type is a Classifier, whereupon the
+    /// typedFeature has values that are instances of the Classifier.
     FeatureTyping,
+    /// A FeatureValue is a Membership that identifies a particular member
+    /// Expression that provides the value of the Feature that owns the
+    /// FeatureValue. The value is specified as either a bound value or an
+    /// initial value, and as either a concrete or default value. A Feature
+    /// can have at most one FeatureValue. The result of the value Expression
+    /// is bound to the featureWithValue using a BindingConnector. If
+    /// isInitial = false, then the featuringType of the BindingConnector is
+    /// the same as the featuringType of the featureWithValue. If isInitial =
+    /// true, then the featuringType of the BindingConnector is restricted to
+    /// its startShot. If isDefault = false, then the above semantics of the
+    /// FeatureValue are realized for the given featureWithValue. Otherwise,
+    /// the semantics are realized for any individual of the featuringType of
+    /// the featureWithValue, unless another value is explicitly given for the
+    /// featureWithValue for that individual.
     FeatureValue,
+    /// An Flow is a Step that represents the transfer of values from one
+    /// Feature to another. Flows can take non-zero time to complete.
     Flow,
+    /// A FlowDefinition is an ActionDefinition that is also an Interaction
+    /// (which is both a KerML Behavior and Association), representing flows
+    /// between Usages.
     FlowDefinition,
+    /// A FlowEnd is a Feature that is one of the connectorEnds giving the
+    /// source or target of a Flow. For Flows typed by FlowTransfer or its
+    /// specializations, FlowEnds must have exactly one ownedFeature, which
+    /// redefines Transfer::source::sourceOutput or
+    /// Transfer::target::targetInput and redefines the corresponding feature
+    /// of the relatedElement for its end.
     FlowEnd,
+    /// A FlowUsage is an ActionUsage that is also a ConnectorAsUsage and a
+    /// KerML Flow.
     FlowUsage,
+    /// A ForLoopActionUsage is a LoopActionUsage that specifies that its
+    /// bodyAction ActionUsage should be performed once for each value, in
+    /// order, from the sequence of values obtained as the result of the
+    /// seqArgument Expression, with the loopVariable set to the value for
+    /// each iteration.
     ForLoopActionUsage,
+    /// A ForkNode is a ControlNode that must be followed by successor Actions
+    /// as given by all its outgoing Successions.
     ForkNode,
+    /// A FramedConcernMembership is a RequirementConstraintMembership for a
+    /// framed ConcernUsage of a RequirementDefinition or RequirementUsage.
     FramedConcernMembership,
+    /// A Function is a Behavior that has an out parameter that is identified
+    /// as its result. A Function represents the performance of a calculation
+    /// that produces the values of its result parameter. This calculation may
+    /// be decomposed into Expressions that are steps of the Function.
     Function,
+    /// An IfActionUsage is an ActionUsage that specifies that the thenAction
+    /// ActionUsage should be performed if the result of the ifArgument
+    /// Expression is true. It may also optionally specify an elseAction
+    /// ActionUsage that is performed if the result of the ifArgument is
+    /// false.
     IfActionUsage,
+    /// An Import is an Relationship between its importOwningNamespace and
+    /// either a Membership (for a MembershipImport) or another Namespace (for
+    /// a NamespaceImport), which determines a set of Memberships that become
+    /// importedMemberships of the importOwningNamespace. If isImportAll =
+    /// false (the default), then only public Memberships are considered
+    /// "visible". If isImportAll = true, then all Memberships are considered
+    /// "visible", regardless of their declared visibility. If isRecursive =
+    /// true, then visible Memberships are also recursively imported from
+    /// owned sub-Namespaces.
     Import,
+    /// An IncludeUseCaseUsage is a UseCaseUsage that represents the inclusion
+    /// of a UseCaseUsage by a UseCaseDefinition or UseCaseUsage. Unless it is
+    /// the IncludeUseCaseUsage itself, the UseCaseUsage to be included is
+    /// related to the includedUseCase by a ReferenceSubsetting Relationship.
+    /// An IncludeUseCaseUsage is also a PerformActionUsage, with its
+    /// useCaseIncluded as the performedAction.
     IncludeUseCaseUsage,
+    /// An IndexExpression is an OperatorExpression whose operator is "#",
+    /// which resolves to the Function BasicFunctions::'#' from the Kernel
+    /// Functions Library.
     IndexExpression,
+    /// An InstantiationExpression is an Expression that instantiates its
+    /// instantiatedType, binding some or all of the features of that Type to
+    /// the results of its arguments. InstantiationExpression is abstract,
+    /// with concrete subclasses InvocationExpression and
+    /// ConstructorExpression.
     InstantiationExpression,
+    /// An Interaction is a Behavior that is also an Association, providing a
+    /// context for multiple objects that have behaviors that impact one
+    /// another.
     Interaction,
+    /// An InterfaceDefinition is a ConnectionDefinition all of whose ends are
+    /// PortUsages, defining an interface between elements that interact
+    /// through such ports.
     InterfaceDefinition,
+    /// An InterfaceUsage is a Usage of an InterfaceDefinition to represent an
+    /// interface connecting parts of a system through specific ports.
     InterfaceUsage,
+    /// Intersecting is a Relationship that makes its intersectingType one of
+    /// the intersectingTypes of its typeIntersected.
     Intersecting,
+    /// An Invariant is a BooleanExpression that is asserted to have a
+    /// specific Boolean result value. If isNegated = false, then the result
+    /// is asserted to be true. If isNegated = true, then the result is
+    /// asserted to be false.
     Invariant,
+    /// An InvocationExpression is an InstantiationExpression whose
+    /// instantiatedType must be a Behavior or a Feature typed by a single
+    /// Behavior (such as a Step). Each of the input parameters of the
+    /// instantiatedType are bound to the result of an argument Expression. If
+    /// the instantiatedType is a Function or a Feature typed by a Function,
+    /// then the result of the InvocationExpression is the result of the
+    /// invoked Function. Otherwise, the result is an instance of the
+    /// instantiatedType (essentially like a behavioral
+    /// ConstructorExpression).
     InvocationExpression,
+    /// An ItemDefinition is an OccurrenceDefinition of the Structure of
+    /// things that may themselves be systems or parts of systems, but may
+    /// also be things that are acted on by a system or parts of a system, but
+    /// which do not necessarily perform actions themselves. This includes
+    /// items that can be exchanged between parts of a system, such as water
+    /// or electrical signals.
     ItemDefinition,
+    /// An ItemUsage is a ItemUsage whose definition is a Structure.
+    /// Nominally, if the definition is an ItemDefinition, an ItemUsage is a
+    /// ItemUsage of that ItemDefinition within a system. However, other kinds
+    /// of Kernel Structures are also allowed, to permit use of Structures
+    /// from the Kernel Model Libraries.
     ItemUsage,
+    /// A JoinNode is a ControlNode that waits for the completion of all the
+    /// predecessor Actions given by incoming Successions.
     JoinNode,
+    /// A LibraryPackage is a Package that is the container for a model
+    /// library. A LibraryPackage is itself a library Element as are all
+    /// Elements that are directly or indirectly contained in it.
     LibraryPackage,
+    /// LiteralBoolean is a LiteralExpression that provides a Boolean value as
+    /// a result. Its result parameter must have type Boolean.
     LiteralBoolean,
+    /// A LiteralExpression is an Expression that provides a basic DataValue
+    /// as a result.
     LiteralExpression,
+    /// A LiteralInfinity is a LiteralExpression that provides the positive
+    /// infinity value (*). It's result must have the type Positive.
     LiteralInfinity,
+    /// A LiteralInteger is a LiteralExpression that provides an Integer value
+    /// as a result. Its result parameter must have the type Integer.
     LiteralInteger,
+    /// A LiteralRational is a LiteralExpression that provides a Rational
+    /// value as a result. Its result parameter must have the type Rational.
     LiteralRational,
+    /// A LiteralString is a LiteralExpression that provides a String value as
+    /// a result. Its result parameter must have the type String.
     LiteralString,
+    /// A LoopActionUsage is an ActionUsage that specifies that its bodyAction
+    /// should be performed repeatedly. Its subclasses WhileLoopActionUsage
+    /// and ForLoopActionUsage provide different ways to determine how many
+    /// times the bodyAction should be performed.
     LoopActionUsage,
+    /// A Membership is a Relationship between a Namespace and an Element that
+    /// indicates the Element is a member of (i.e., is contained in) the
+    /// Namespace. Any memberNames specify how the memberElement is identified
+    /// in the Namespace and the visibility specifies whether or not the
+    /// memberElement is publicly visible from outside the Namespace. If a
+    /// Membership is an OwningMembership, then it owns its memberElement,
+    /// which becomes an ownedMember of the membershipOwningNamespace.
+    /// Otherwise, the memberNames of a Membership are effectively aliases
+    /// within the membershipOwningNamespace for an Element with a separate
+    /// OwningMembership in the same or a different Namespace.
     Membership,
+    /// A MembershipExpose is an Expose
     MembershipExpose,
+    /// A MembershipImport is an Import that imports its importedMembership
+    /// into the importOwningNamespace. If isRecursive = true and the
+    /// memberElement of the importedMembership is a Namespace, then the
+    /// equivalent of a recursive NamespaceImport is also performed on that
+    /// Namespace.
     MembershipImport,
+    /// A MergeNode is a ControlNode that asserts the merging of its incoming
+    /// Successions. A MergeNode may have at most one outgoing Successions.
     MergeNode,
+    /// A Metaclass is a Structure used to type MetadataFeatures.
     Metaclass,
+    /// A MetadataAccessExpression is an Expression whose result is a sequence
+    /// of instances of Metaclasses representing all the MetadataFeature
+    /// annotations of the referencedElement. In addition, the sequence
+    /// includes an instance of the reflective Metaclass corresponding to the
+    /// MOF class of the referencedElement, with values for all the abstract
+    /// syntax properties of the referencedElement.
     MetadataAccessExpression,
+    /// A MetadataDefinition is an ItemDefinition that is also a Metaclass.
     MetadataDefinition,
+    /// A MetadataFeature is a Feature that is an AnnotatingElement used to
+    /// annotate another Element with metadata. It is typed by a Metaclass.
+    /// All its ownedFeatures must redefine features of its metaclass and any
+    /// feature bindings must be model-level evaluable.
     MetadataFeature,
+    /// A MetadataUsage is a Usage and a MetadataFeature, used to annotate
+    /// other Elements in a system model with metadata. As a MetadataFeature,
+    /// its type must be a Metaclass, which will nominally be a
+    /// MetadataDefinition. However, any kernel Metaclass is also allowed, to
+    /// permit use of Metaclasses from the Kernel Model Libraries.
     MetadataUsage,
+    /// A Multiplicity is a Feature whose co-domain is a set of natural
+    /// numbers giving the allowed cardinalities of each typeWithMultiplicity.
+    /// The cardinality of a Type is defined as follows, depending on whether
+    /// the Type is a Classifier or Feature. Classifier – The number of basic
+    /// instances of the Classifier, that is, those instances representing
+    /// things, which are not instances of any subtypes of the Classifier that
+    /// are Features. Features – The number of instances with the same
+    /// featuring instances. In the case of a Feature with a Classifier as its
+    /// featuringType, this is the number of values of Feature for each basic
+    /// instance of the Classifier. Note that, for non-unique Features, all
+    /// duplicate values are included in this count. Multiplicity co-domains
+    /// (in models) can be specified by Expression that might vary in their
+    /// results. If the typeWithMultiplicity is a Classifier, the domain of
+    /// the Multiplicity shall be Base::Anything. If the typeWithMultiplicity
+    /// is a Feature, the Multiplicity shall have the same domain as the
+    /// typeWithMultiplicity.
     Multiplicity,
+    /// A MultiplicityRange is a Multiplicity whose value is defined to be the
+    /// (inclusive) range of natural numbers given by the result of a
+    /// lowerBound Expression and the result of an upperBound Expression. The
+    /// result of these Expressions shall be of type Natural. If the result of
+    /// the upperBound Expression is the unbounded value *, then the specified
+    /// range includes all natural numbers greater than or equal to the
+    /// lowerBound value. If no lowerBound Expression, then the default is
+    /// that the lower bound has the same value as the upper bound, except if
+    /// the upperBound evaluates to *, in which case the default for the lower
+    /// bound is 0.
     MultiplicityRange,
+    /// A Namespace is an Element that contains other Elements, known as its
+    /// members, via Membership Relationships with those Elements. The members
+    /// of a Namespace may be owned by the Namespace, aliased in the
+    /// Namespace, or imported into the Namespace via Import Relationships. A
+    /// Namespace can provide names for its members via the memberNames and
+    /// memberShortNames specified by the Memberships in the Namespace. If a
+    /// Membership specifies a memberName and/or memberShortName, then those
+    /// are names of the corresponding memberElement relative to the
+    /// Namespace. For an OwningMembership, the ownedMemberName and
+    /// ownedMemberShortName are given by the Element name and shortName. Note
+    /// that the same Element may be the memberElement of multiple Memberships
+    /// in a Namespace (though it may be owned at most once), each of which
+    /// may define a separate alias for the Element relative to the Namespace.
     Namespace,
+    /// A NamespaceExpose is an Expose Relationship that exposes the
+    /// Memberships of a specific importedNamespace and, if isRecursive =
+    /// true, additional Memberships recursively.
     NamespaceExpose,
+    /// A NamespaceImport is an Import that imports Memberships from its
+    /// importedNamespace into the importOwningNamespace. If isRecursive =
+    /// false, then only the visible Memberships of the importedNamespace are
+    /// imported. If isRecursive = true, then, in addition, Memberships are
+    /// recursively imported from any ownedMembers of the importedNamespace
+    /// that are Namespaces.
     NamespaceImport,
+    /// A NullExpression is an Expression that results in a null value.
     NullExpression,
+    /// An ObjectiveMembership is a FeatureMembership that indicates that its
+    /// ownedObjectiveRequirement is the objective RequirementUsage for its
+    /// owningType, which must be a CaseDefinition or CaseUsage.
     ObjectiveMembership,
+    /// An OccurrenceDefinition is a Definition of a Class of individuals that
+    /// have an independent life over time and potentially an extent over
+    /// space. This includes both structural things and behaviors that act on
+    /// such structures. If isIndividual is true, then the
+    /// OccurrenceDefinition is constrained to have (at most) a single
+    /// instance that is the entire life of a single individual.
     OccurrenceDefinition,
+    /// An OccurrenceUsage is a Usage whose types are all Classes. Nominally,
+    /// if a type is an OccurrenceDefinition, an OccurrenceUsage is a Usage of
+    /// that OccurrenceDefinition within a system. However, other types of
+    /// Kernel Classes are also allowed, to permit use of Classes from the
+    /// Kernel Model Libraries.
     OccurrenceUsage,
+    /// An OperatorExpression is an InvocationExpression whose function is
+    /// determined by resolving its operator in the context of one of the
+    /// standard packages from the Kernel Function Library.
     OperatorExpression,
+    /// An OwningMembership is a Membership that owns its memberElement as a
+    /// ownedRelatedElement. The ownedMemberElement becomes an ownedMember of
+    /// the membershipOwningNamespace.
     OwningMembership,
+    /// A Package is a Namespace used to group Elements, without any
+    /// instance-level semantics. It may have one or more model-level
+    /// evaluable filterCondition Expressions used to filter its
+    /// importedMemberships. Any imported member must meet all of the
+    /// filterConditions.
     Package,
+    /// A ParameterMembership is a FeatureMembership that identifies its
+    /// memberFeature as a parameter, which is always owned, and must have a
+    /// direction. A ParameterMembership must be owned by a Behavior, a Step,
+    /// or the result parameter of a ConstructorExpression.
     ParameterMembership,
+    /// A PartDefinition is an ItemDefinition of a Class of systems or parts
+    /// of systems. Note that all parts may be considered items for certain
+    /// purposes, but not all items are parts that can perform actions within
+    /// a system.
     PartDefinition,
+    /// A PartUsage is a usage of a PartDefinition to represent a system or a
+    /// part of a system. At least one of the itemDefinitions of the PartUsage
+    /// must be a PartDefinition. A PartUsage must subset, directly or
+    /// indirectly, the base PartUsage parts from the Systems Model Library.
     PartUsage,
+    /// A PayloadFeature is the ownedFeature of a Flow that identifies the
+    /// things carried by the kinds of transfers that are instances of the
+    /// Flow.
     PayloadFeature,
+    /// A PerformActionUsage is an ActionUsage that represents the performance
+    /// of an ActionUsage. Unless it is the PerformActionUsage itself, the
+    /// ActionUsage to be performed is related to the PerformActionUsage by a
+    /// ReferenceSubsetting relationship. A PerformActionUsage is also an
+    /// EventOccurrenceUsage, with its performedAction as the eventOccurrence.
     PerformActionUsage,
+    /// A PortConjugation is a Conjugation Relationship between a
+    /// PortDefinition and its corresponding ConjugatedPortDefinition. As a
+    /// result of this Relationship, the ConjugatedPortDefinition inherits all
+    /// the features of the original PortDefinition, but input flows of the
+    /// original PortDefinition become outputs on the ConjugatedPortDefinition
+    /// and output flows of the original PortDefinition become inputs on the
+    /// ConjugatedPortDefinition.
     PortConjugation,
+    /// A PortDefinition defines a point at which external entities can
+    /// connect to and interact with a system or part of a system. Any
+    /// ownedUsages of a PortDefinition, other than PortUsages, must not be
+    /// composite.
     PortDefinition,
+    /// A PortUsage is a usage of a PortDefinition. A PortUsage itself as well
+    /// as all its nestedUsages must be referential (non-composite).
     PortUsage,
+    /// A Predicate is a Function whose result parameter has type Boolean and
+    /// multiplicity 1..1.
     Predicate,
+    /// Redefinition is a kind of Subsetting that requires the
+    /// redefinedFeature and the redefiningFeature to have the same values (on
+    /// each instance of the domain of the redefiningFeature). This means any
+    /// restrictions on the redefiningFeature, such as type or multiplicity,
+    /// also apply to the redefinedFeature (on each instance of the domain of
+    /// the redefiningFeature), and vice versa. The redefinedFeature might
+    /// have values for instances of the domain of the redefiningFeature, but
+    /// only as instances of the domain of the redefinedFeature that happen to
+    /// also be instances of the domain of the redefiningFeature. This is
+    /// supported by the constraints inherited from Subsetting on the domains
+    /// of the redefiningFeature and redefinedFeature. However, these
+    /// constraints are narrowed for Redefinition to require the owningTypes
+    /// of the redefiningFeature and redefinedFeature to be different and the
+    /// redefinedFeature to not be inherited into the owningNamespace of the
+    /// redefiningFeature.This enables the redefiningFeature to have the same
+    /// name as the redefinedFeature, if desired.
     Redefinition,
+    /// ReferenceSubsetting is a kind of Subsetting in which the
+    /// referencedFeature is syntactically distinguished from other Features
+    /// subsetted by the referencingFeature. ReferenceSubsetting has the same
+    /// semantics as Subsetting, but the referencedFeature may have a special
+    /// purpose relative to the referencingFeature. For instance,
+    /// ReferenceSubsetting is used to identify the relatedFeatures of a
+    /// Connector. ReferenceSubsetting is always an ownedRelationship of its
+    /// referencingFeature. A Feature can have at most one
+    /// ownedReferenceSubsetting.
     ReferenceSubsetting,
+    /// A ReferenceUsage is a Usage that specifies a non-compositional
+    /// (isComposite = false) reference to something. The definition of a
+    /// ReferenceUsage can be any kind of Classifier, with the default being
+    /// the top-level Classifier Base::Anything from the Kernel Semantic
+    /// Library. This allows the specification of a generic reference without
+    /// distinguishing if the thing referenced is an attribute value, item,
+    /// action, etc.
     ReferenceUsage,
+    /// A Relationship is an Element that relates other Element. Some of its
+    /// relatedElements may be owned, in which case those ownedRelatedElements
+    /// will be deleted from a model if their owningRelationship is. A
+    /// Relationship may also be owned by another Element, in which case the
+    /// ownedRelatedElements of the Relationship are also considered to be
+    /// transitively owned by the owningRelatedElement of the Relationship.
+    /// The relatedElements of a Relationship are divided into source and
+    /// target Elements. The Relationship is considered to be directed from
+    /// the source to the target Elements. An undirected Relationship may have
+    /// either all source or all target Elements. A "relationship Element" in
+    /// the abstract syntax is generically any Element that is an instance of
+    /// either Relationship or a direct or indirect specialization of
+    /// Relationship. Any other kind of Element is a "non-relationship
+    /// Element". It is a convention of that non-relationship Elements are
+    /// only related via reified relationship Elements. Any meta-associations
+    /// directly between non-relationship Elements must be derived from
+    /// underlying reified Relationship.
     Relationship,
+    /// A RenderingDefinition is a PartDefinition that defines a specific
+    /// rendering of the content of a model view (e.g., symbols, style,
+    /// layout, etc.).
     RenderingDefinition,
+    /// A RenderingUsage is the usage of a RenderingDefinition to specify the
+    /// rendering of a specific model view to produce a physical view
+    /// artifact.
     RenderingUsage,
+    /// A RequirementConstraintMembership is a FeatureMembership for an
+    /// assumed or required ConstraintUsage of a RequirementDefinition or
+    /// RequirementUsage.
     RequirementConstraintMembership,
+    /// A RequirementDefinition is a ConstraintDefinition that defines a
+    /// requirement used in the context of a specification as a constraint
+    /// that a valid solution must satisfy. The specification is relative to a
+    /// specified subject, possibly in collaboration with one or more external
+    /// actors.
     RequirementDefinition,
+    /// A RequirementUsage is a Usage of a RequirementDefinition.
     RequirementUsage,
+    /// A RequirementVerificationMembership is a
+    /// RequirementConstraintMembership used in the objective of a
+    /// VerificationCase to identify a RequirementUsage that is verified by
+    /// the VerificationCase.
     RequirementVerificationMembership,
+    /// A ResultExpressionMembership is a FeatureMembership that indicates
+    /// that the ownedResultExpression provides the result values for the
+    /// Function or Expression that owns it. The owning Function or Expression
+    /// must contain a BindingConnector between the result parameter of the
+    /// ownedResultExpression and the result parameter of the owning Function
+    /// or Expression.
     ResultExpressionMembership,
+    /// A ReturnParameterMembership is a ParameterMembership that indicates
+    /// that the ownedMemberParameter is the result parameter of a Function or
+    /// Expression. The direction of the ownedMemberParameter must be out.
     ReturnParameterMembership,
+    /// A SatisfyRequirementUsage is an AssertConstraintUsage that asserts, by
+    /// default, that a satisfied RequirementUsage is true for a specific
+    /// satisfyingFeature, or, if isNegated = true, that the RequirementUsage
+    /// is false. The satisfied RequirementUsage is related to the
+    /// SatisfyRequirementUsage by a ReferenceSubsetting Relationship.
     SatisfyRequirementUsage,
+    /// A SelectExpression is an OperatorExpression whose operator is
+    /// "select", which resolves to the Function ControlFunctions::select from
+    /// the Kernel Functions Library.
     SelectExpression,
+    /// A SendActionUsage is an ActionUsage that specifies the sending of a
+    /// payload given by the result of its payloadArgument Expression via a
+    /// MessageTransfer whose source is given by the result of the
+    /// senderArgument Expression and whose target is given by the result of
+    /// the receiverArgument Expression. If no senderArgument is provided, the
+    /// default is the this context for the action. If no receiverArgument is
+    /// given, then the receiver is to be determined by, e.g., outgoing
+    /// Connections from the sender.
     SendActionUsage,
+    /// Specialization is a Relationship between two Types that requires all
+    /// instances of the specific type to also be instances of the general
+    /// Type (i.e., the set of instances of the specific Type is a subset of
+    /// those of the general Type, which might be the same set).
     Specialization,
+    /// A StakeholderMembership is a ParameterMembership that identifies a
+    /// PartUsage as a stakeholderParameter of a RequirementDefinition or
+    /// RequirementUsage, which specifies a role played by an entity with
+    /// concerns framed by the owningType.
     StakeholderMembership,
+    /// A StateDefinition is the Definition of the Behavior of a system or
+    /// part of a system in a certain state condition. A StateDefinition may
+    /// be related to up to three of its ownedFeatures by
+    /// StateBehaviorMembership Relationships, all of different kinds,
+    /// corresponding to the entry, do and exit actions of the
+    /// StateDefinition.
     StateDefinition,
+    /// A StateSubactionMembership is a FeatureMembership for an entry, do or
+    /// exit ActionUsage of a StateDefinition or StateUsage.
     StateSubactionMembership,
+    /// A StateUsage is an ActionUsage that is nominally the Usage of a
+    /// StateDefinition. However, other kinds of kernel Behaviors are also
+    /// allowed as types, to permit use of Behaviors
     StateUsage,
+    /// A Step is a Feature that is typed by one or more Behaviors. Steps may
+    /// be used by one Behavior to coordinate the performance of other
+    /// Behaviors, supporting a steady refinement of behavioral descriptions.
+    /// Steps can be ordered in time and can be connected using Flows to
+    /// specify things flowing between their parameters.
     Step,
+    /// A Structure is a Class of objects in the modeled universe that are
+    /// primarily structural in nature. While such an object is not itself
+    /// behavioral, it may be involved in and acted on by Behaviors, and it
+    /// may be the performer of some of them.
     Structure,
+    /// Subclassification is Specialization in which both the specific and
+    /// general Types are Classifier. This means all instances of the specific
+    /// Classifier are also instances of the general Classifier.
     Subclassification,
+    /// A SubjectMembership is a ParameterMembership that indicates that its
+    /// ownedSubjectParameter is the subject of its owningType. The owningType
+    /// of a SubjectMembership must be a RequirementDefinition,
+    /// RequirementUsage, CaseDefinition, or CaseUsage.
     SubjectMembership,
+    /// Subsetting is Specialization in which the specific and general Types
+    /// are Features. This means all values of the subsettingFeature (on
+    /// instances of its domain, i.e., the intersection of its featuringTypes)
+    /// are values of the subsettedFeature on instances of its domain. To
+    /// support this the domain of the subsettingFeature must be the same or
+    /// specialize (at least indirectly) the domain of the subsettedFeature
+    /// (via Specialization), and the co-domain (intersection of the types) of
+    /// the subsettingFeature must specialize the co-domain of the
+    /// subsettedFeature.
     Subsetting,
+    /// A Succession is a binary Connector that requires its relatedFeatures
+    /// to happen separately in time.
     Succession,
+    /// A SuccessionAsUsage is both a ConnectorAsUsage and a Succession.
     SuccessionAsUsage,
+    /// A SuccessionFlow is a Flow that also provides temporal ordering. It
+    /// classifies Transfers that cannot start until the source Occurrence has
+    /// completed and that must complete before the target Occurrence can
+    /// start.
     SuccessionFlow,
+    /// A SuccessionFlowUsage is a FlowUsage that is also a KerML
+    /// SuccessionFlow.
     SuccessionFlowUsage,
+    /// A TerminateActionUsage is an ActionUsage that directly or indirectly
+    /// specializes the ActionDefinition TerminateAction from the Systems
+    /// Model Library, which causes a given terminatedOccurrence to end during
+    /// its performance. By default, the terminatedOccurrence is the featuring
+    /// instance (that) of the performance of the TerminateActionUsage,
+    /// generally the performance of its immediately containing
+    /// ActionDefinition or ActionUsage.
     TerminateActionUsage,
+    /// A TextualRepresentation is an AnnotatingElement whose body represents
+    /// the representedElement in a given language. The representedElement
+    /// must be the owner of the TextualRepresentation. The named language can
+    /// be a natural language, in which case the body is an informal
+    /// representation, or an artificial language, in which case the body is
+    /// expected to be a formal, machine-parsable representation. If the named
+    /// language of a TextualRepresentation is machine-parsable, then the body
+    /// text should be legal input text as defined for that language. The
+    /// interpretation of the named language string shall be case insensitive.
+    /// The following language names are defined to correspond to the given
+    /// standard languages: kerml Kernel Modeling Language ocl Object
+    /// Constraint Language alf Action Language for fUML Other specifications
+    /// may define specific language strings, other than those shown above, to
+    /// be used to indicate the use of languages from those specifications in
+    /// KerML TextualRepresentation. If the language of a
+    /// TextualRepresentation is "kerml", then the body text shall be a legal
+    /// representation of the representedElement in the KerML textual concrete
+    /// syntax. A conforming tool can use such a TextualRepresentation
+    /// Annotation to record the original KerML concrete syntax text from
+    /// which an Element was parsed. In this case, it is a tool responsibility
+    /// to ensure that the body of the TextualRepresentation remains correct
+    /// (or the Annotation is removed) if the annotated Element changes other
+    /// than by re-parsing the body text. An Element with a
+    /// TextualRepresentation in a language other than KerML is essentially a
+    /// semantically "opaque" Element specified in the other language.
+    /// However, a conforming KerML tool may interpret such an element
+    /// consistently with the specification of the named language.
     TextualRepresentation,
+    /// A TransitionFeatureMembership is a FeatureMembership for a trigger,
+    /// guard or effect of a TransitionUsage, whose transitionFeature is a
+    /// AcceptActionUsage, Boolean-valued Expression or ActionUsage, depending
+    /// on its kind.
     TransitionFeatureMembership,
+    /// A TransitionUsage is an ActionUsage representing a triggered
+    /// transition between ActionUsages or StateUsages. When triggered by a
+    /// triggerAction, when its guardExpression is true, the TransitionUsage
+    /// asserts that its source is exited, then its effectAction (if any) is
+    /// performed, and then its target is entered. A TransitionUsage can be
+    /// related to some of its ownedFeatures using TransitionFeatureMembership
+    /// Relationships, corresponding to the triggerAction, guardExpression and
+    /// effectAction of the TransitionUsage.
     TransitionUsage,
+    /// A TriggerInvocationExpression is an InvocationExpression that invokes
+    /// one of the trigger Functions from the Kernel Semantic Library Triggers
+    /// package, as indicated by its kind.
     TriggerInvocationExpression,
+    /// A Type is a Namespace that is the most general kind of Element
+    /// supporting the semantics of classification. A Type may be a Classifier
+    /// or a Feature, defining conditions on what is classified by the Type
+    /// (see also the description of isSufficient).
     Type,
+    /// A TypeFeaturing is a Featuring Relationship in which the featureOfType
+    /// is the source and the featuringType is the target.
     TypeFeaturing,
+    /// Unioning is a Relationship that makes its unioningType one of the
+    /// unioningTypes of its typeUnioned.
     Unioning,
+    /// A Usage is a usage of a Definition. A Usage may have nestedUsages that
+    /// model features that apply in the context of the owningUsage. A Usage
+    /// may also have Definitions nested in it, but this has no semantic
+    /// significance, other than the nested scoping resulting from the Usage
+    /// being considered as a Namespace for any nested Definitions. However,
+    /// if a Usage has isVariation = true, then it represents a variation
+    /// point Usage. In this case, all of its members must be variant Usages,
+    /// related to the Usage by VariantMembership Relationships. Rather than
+    /// being features of the Usage, variant Usages model different concrete
+    /// alternatives that can be chosen to fill in for the variation point
+    /// Usage.
     Usage,
+    /// A UseCaseDefinition is a CaseDefinition that specifies a set of
+    /// actions performed by its subject, in interaction with one or more
+    /// actors external to the subject. The objective is to yield an
+    /// observable result that is of value to one or more of the actors.
     UseCaseDefinition,
+    /// A UseCaseUsage is a Usage of a UseCaseDefinition.
     UseCaseUsage,
+    /// A VariantMembership is a Membership between a variation point
+    /// Definition or Usage and a Usage that represents a variant in the
+    /// context of that variation. The membershipOwningNamespace for the
+    /// VariantMembership must be either a Definition or a Usage with
+    /// isVariation = true.
     VariantMembership,
+    /// A VerificationCaseDefinition is a CaseDefinition for the purpose of
+    /// verification of the subject of the case against its requirements.
     VerificationCaseDefinition,
+    /// A VerificationCaseUsage is a Usage of a VerificationCaseDefinition.
     VerificationCaseUsage,
+    /// A ViewDefinition is a PartDefinition that specifies how a view
+    /// artifact is constructed to satisfy a viewpoint. It specifies a
+    /// viewConditions to define the model content to be presented and a
+    /// viewRendering to define how the model content is presented.
     ViewDefinition,
+    /// A ViewRenderingMembership is a FeatureMembership that identifies the
+    /// viewRendering of a ViewDefinition or ViewUsage.
     ViewRenderingMembership,
+    /// A ViewUsage is a usage of a ViewDefinition to specify the generation
+    /// of a view of the members of a collection of exposedNamespaces. The
+    /// ViewUsage can satisfy more viewpoints than its definition, and it can
+    /// specialize the viewRendering specified by its definition.
     ViewUsage,
+    /// A ViewpointDefinition is a RequirementDefinition that specifies one or
+    /// more stakeholder concerns that are to be satisfied by creating a view
+    /// of a model.
     ViewpointDefinition,
+    /// A ViewpointUsage is a Usage of a ViewpointDefinition.
     ViewpointUsage,
+    /// A WhileLoopActionUsage is a LoopActionUsage that specifies that the
+    /// bodyAction ActionUsage should be performed repeatedly while the result
+    /// of the whileArgument Expression is true or until the result of the
+    /// untilArgument Expression (if provided) is true. The whileArgument
+    /// Expression is evaluated before each (possible) performance of the
+    /// bodyAction, and the untilArgument Expression is evaluated after each
+    /// performance of the bodyAction.
     WhileLoopActionUsage,
 }
 
+/// Every metaclass, in one slice, for a caller that walks them all.
 pub const ELEMENT_KINDS: &[ElementKind] = &[
     ElementKind::AcceptActionUsage,
     ElementKind::ActionDefinition,
@@ -368,6 +1221,7 @@ pub const ELEMENT_KINDS: &[ElementKind] = &[
 ];
 
 impl ElementKind {
+    /// The metaclass's name, spelled as the specification spells it.
     pub fn name(self) -> &'static str {
         match self {
             ElementKind::AcceptActionUsage => "AcceptActionUsage",
@@ -548,6 +1402,8 @@ impl ElementKind {
         }
     }
 
+    /// The metaclass of that name, or nothing where the abstract
+    /// syntax has none.
     pub fn from_name(name: &str) -> Option<ElementKind> {
         Some(match name {
             "AcceptActionUsage" => ElementKind::AcceptActionUsage,
@@ -729,6 +1585,8 @@ impl ElementKind {
         })
     }
 
+    /// Whether the specification declares it abstract, so that no
+    /// element of a model is ever of this metaclass itself.
     pub fn is_abstract(self) -> bool {
         matches!(self,
              ElementKind::ConnectorAsUsage
@@ -1907,12 +2765,19 @@ impl ElementKind {
 /// Metadata for one structural feature of a metaclass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FeatureMeta {
+    /// The property's name, spelled as the specification spells it.
     pub name: &'static str,
     /// What the specification says the property is where a model
     /// says nothing, for the boolean flags that carry one.
     pub default: Option<bool>,
+    /// What it holds: a data value, one of the metamodel's
+    /// enumerations, or another element.
     pub ty: FeatureType,
+    /// Whether it holds any number of them rather than one, which
+    /// is every property whose upper bound is not 1.
     pub many: bool,
+    /// Whether the specification works it out from the rest of the
+    /// model rather than a model stating it. `DERIVATIONS` says how.
     pub derived: bool,
     /// The property this one redefines, where it redefines one:
     /// a model holds the redefining name, and a constraint may be
@@ -1920,35 +2785,71 @@ pub struct FeatureMeta {
     pub redefines: Option<&'static str>,
 }
 
+/// What one property of a metaclass holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeatureType {
+    /// A value of one of OCL's own primitive types.
     Data(PrimitiveType),
+    /// A literal of one of the metamodel's enumerations.
     Enumeration(EnumType),
+    /// Another element, of that metaclass or a subtype of it.
     Class(ElementKind),
 }
 
+/// The primitive types the metamodel writes its data properties in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)] // the five names are the whole of it
 pub enum PrimitiveType { Boolean, Integer, Real, String, UnlimitedNatural }
 
+/// The enumerations the metamodel declares, by name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnumType {
+    /// FeatureDirectionKind enumerates the possible kinds of direction that a
+    /// Feature may be given as a member of a Type.
     FeatureDirectionKind,
+    /// PortionKind is an enumeration of the specific kinds of Occurrence
+    /// portions that can be represented by an OccurrenceUsage.
     PortionKind,
+    /// A RequirementConstraintKind indicates whether a ConstraintUsage is an
+    /// assumption or a requirement in a RequirementDefinition or
+    /// RequirementUsage.
     RequirementConstraintKind,
+    /// A StateSubactionKind indicates whether the action of a
+    /// StateSubactionMembership is an entry, do or exit action.
     StateSubactionKind,
+    /// A TransitionActionKind indicates whether the transitionFeature of a
+    /// TransitionFeatureMembership is a trigger, guard or effect.
     TransitionFeatureKind,
+    /// TriggerKind enumerates the kinds of triggers that can be represented
+    /// by a TriggerInvocationExpression.
     TriggerKind,
+    /// VisibilityKind is an enumeration whose literals specify the visibility
+    /// of a Membership of an Element in a Namespace outside of that
+    /// Namespace. Note that "visibility" specifically restricts whether an
+    /// Element in a Namespace may be referenced by name from outside the
+    /// Namespace and only otherwise restricts access to an Element as
+    /// provided by specific constraints in the abstract syntax (e.g.,
+    /// preventing the import or inheritance of private Elements).
     VisibilityKind,
 }
 
+/// FeatureDirectionKind enumerates the possible kinds of direction that a
+/// Feature may be given as a member of a Type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FeatureDirectionKind {
+    /// Values of the Feature on each instance of its domain are determined
+    /// externally to that instance and used internally.
     In,
+    /// Values of the Feature on each instance are determined either as in or
+    /// out directions, or both.
     Inout,
+    /// Values of the Feature on each instance of its domain are determined
+    /// internally to that instance and used externally.
     Out,
 }
 
 impl FeatureDirectionKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             FeatureDirectionKind::In => "in",
@@ -1956,6 +2857,8 @@ impl FeatureDirectionKind {
             FeatureDirectionKind::Out => "out",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<FeatureDirectionKind> {
         Some(match s {
             "in" => FeatureDirectionKind::In,
@@ -1966,19 +2869,26 @@ impl FeatureDirectionKind {
     }
 }
 
+/// PortionKind is an enumeration of the specific kinds of Occurrence
+/// portions that can be represented by an OccurrenceUsage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PortionKind {
+    /// A time slice of an Occurrence (a portion over time).
     Timeslice,
+    /// A snapshot of an Occurrence (a time slice with zero duration).
     Snapshot,
 }
 
 impl PortionKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             PortionKind::Timeslice => "timeslice",
             PortionKind::Snapshot => "snapshot",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<PortionKind> {
         Some(match s {
             "timeslice" => PortionKind::Timeslice,
@@ -1988,19 +2898,29 @@ impl PortionKind {
     }
 }
 
+/// A RequirementConstraintKind indicates whether a ConstraintUsage is an
+/// assumption or a requirement in a RequirementDefinition or
+/// RequirementUsage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RequirementConstraintKind {
+    /// Indicates that a member ConstraintUsage of a RequirementDefinition or
+    /// RequirementUsage represents an assumption.
     Assumption,
+    /// Indicates that a member ConstraintUsage of a RequirementDefinition or
+    /// RequirementUsagerepresents an requirement.
     Requirement,
 }
 
 impl RequirementConstraintKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             RequirementConstraintKind::Assumption => "assumption",
             RequirementConstraintKind::Requirement => "requirement",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<RequirementConstraintKind> {
         Some(match s {
             "assumption" => RequirementConstraintKind::Assumption,
@@ -2010,14 +2930,22 @@ impl RequirementConstraintKind {
     }
 }
 
+/// A StateSubactionKind indicates whether the action of a
+/// StateSubactionMembership is an entry, do or exit action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StateSubactionKind {
+    /// Indicates that the action of a StateSubactionMembership is an
+    /// entryAction.
     Entry,
+    /// Indicates that the action of a StateSubactionMembership is a doAction.
     Do,
+    /// Indicates that the action of a StateSubactionMembership is an
+    /// exitAction.
     Exit,
 }
 
 impl StateSubactionKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             StateSubactionKind::Entry => "entry",
@@ -2025,6 +2953,8 @@ impl StateSubactionKind {
             StateSubactionKind::Exit => "exit",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<StateSubactionKind> {
         Some(match s {
             "entry" => StateSubactionKind::Entry,
@@ -2035,14 +2965,23 @@ impl StateSubactionKind {
     }
 }
 
+/// A TransitionActionKind indicates whether the transitionFeature of a
+/// TransitionFeatureMembership is a trigger, guard or effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TransitionFeatureKind {
+    /// Indicates that the transitionFeature of a TransitionFeatureMembership
+    /// is a triggerAction.
     Trigger,
+    /// Indicates that the transitionFeature of a TransitionFeatureMembership
+    /// is a guardExpression.
     Guard,
+    /// Indicates that the transitionFeature of a TransitionFeatureMembership
+    /// is an effectAction.
     Effect,
 }
 
 impl TransitionFeatureKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             TransitionFeatureKind::Trigger => "trigger",
@@ -2050,6 +2989,8 @@ impl TransitionFeatureKind {
             TransitionFeatureKind::Effect => "effect",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<TransitionFeatureKind> {
         Some(match s {
             "trigger" => TransitionFeatureKind::Trigger,
@@ -2060,14 +3001,23 @@ impl TransitionFeatureKind {
     }
 }
 
+/// TriggerKind enumerates the kinds of triggers that can be represented
+/// by a TriggerInvocationExpression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TriggerKind {
+    /// Indicates a change trigger, corresponding to the TriggerWhen Function
+    /// from the Triggers model in the Kernel Semantic Library.
     When,
+    /// Indicates an absolute time trigger, corresponding to the TriggerAt
+    /// Function from the Triggers model in the Kernel Semantic Library.
     At,
+    /// Indicates a relative time trigger, corresponding to the TriggerAfter
+    /// Function from the Triggers model in the Kernel Semantic Library.
     After,
 }
 
 impl TriggerKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             TriggerKind::When => "when",
@@ -2075,6 +3025,8 @@ impl TriggerKind {
             TriggerKind::After => "after",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<TriggerKind> {
         Some(match s {
             "when" => TriggerKind::When,
@@ -2085,14 +3037,31 @@ impl TriggerKind {
     }
 }
 
+/// VisibilityKind is an enumeration whose literals specify the visibility
+/// of a Membership of an Element in a Namespace outside of that
+/// Namespace. Note that "visibility" specifically restricts whether an
+/// Element in a Namespace may be referenced by name from outside the
+/// Namespace and only otherwise restricts access to an Element as
+/// provided by specific constraints in the abstract syntax (e.g.,
+/// preventing the import or inheritance of private Elements).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VisibilityKind {
+    /// Indicates a Membership is not visible outside its owning Namespace.
     Private,
+    /// An intermediate level of visibility between public and private. By
+    /// default, it is equivalent to private for the purposes of normal access
+    /// to and import of Elements from a Namespace. However, other
+    /// Relationships may be specified to include Memberships with protected
+    /// visibility in the list of memberships for a Namespace (e.g.,
+    /// Specialization).
     Protected,
+    /// Indicates that a Membership is publicly visible outside its owning
+    /// Namespace.
     Public,
 }
 
 impl VisibilityKind {
+    /// The literal's name, spelled as the specification spells it.
     pub fn literal(self) -> &'static str {
         match self {
             VisibilityKind::Private => "private",
@@ -2100,6 +3069,8 @@ impl VisibilityKind {
             VisibilityKind::Public => "public",
         }
     }
+    /// The literal of that name, or nothing where this
+    /// enumeration has none.
     pub fn from_literal(s: &str) -> Option<VisibilityKind> {
         Some(match s {
             "private" => VisibilityKind::Private,
@@ -8306,6 +9277,7 @@ pub const DERIVATIONS: &[Rule] = &[
 /// defines it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Operation {
+    /// The name a constraint calls it by.
     pub name: &'static str,
     /// The metaclass it is an operation of.
     pub metaclass: ElementKind,

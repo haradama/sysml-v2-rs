@@ -18,6 +18,12 @@ specification requires:
     65,000 characters
   * the sentence each constraint and derivation states in words
     (`Rule::says`), about 42,000
+  * the paragraph the specification writes about each of the 175
+    metaclasses and each enumeration and its literals, carried as the
+    doc comment on `ElementKind` and on the enumerations, about 54,000.
+    It is what the metamodel documents them with, wrapped to a width and
+    with the HTML it is marked up in taken out; no word of it was
+    written here
 
 Those portions are Copyright © Object Management Group, Inc. and the
 specification submitters, and are reproduced under the terms of use the

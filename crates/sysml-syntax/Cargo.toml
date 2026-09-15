@@ -28,3 +28,6 @@ rowan.workspace = true
 
 [dev-dependencies]
 sysmlv2-corpus.workspace = true
+
+[lints]
+workspace = true

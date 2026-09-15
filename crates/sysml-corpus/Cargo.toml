@@ -16,3 +16,6 @@ repository.workspace = true
 name = "sysml_corpus"
 
 [dependencies]
+
+[lints]
+workspace = true

@@ -20,11 +20,6 @@
 //! assert_eq!(def.name().unwrap().text(), "Vehicle");
 //! ```
 
-// This crate uses no `unsafe`, and the one place that did -- turning a
-// raw number back into a `SyntaxKind` -- rested on an invariant nothing
-// checked. It reads a table now, so the promise can be made to the
-// compiler rather than to the reader.
-#![forbid(unsafe_code)]
 pub mod ast;
 pub mod fmt;
 mod kind;
@@ -73,6 +68,10 @@ impl Dialect {
             .map_or(Dialect::SysML, Dialect::from_extension)
     }
 
+    /// Whether this dialect reads that kind as a keyword.
+    ///
+    /// The two disagree: `frame` is a name in KerML and a keyword in
+    /// SysML, `step` the other way round.
     pub fn is_keyword(self, kind: SyntaxKind) -> bool {
         match self {
             Dialect::SysML => kind.is_sysml_keyword(),
@@ -205,7 +204,9 @@ fn unquote_with(text: &str, quote: char) -> String {
 /// A parse or lex error with its byte range in the source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
+    /// Where in the source text it is about.
     pub range: TextRange,
+    /// What is wrong, said in one sentence.
     pub message: String,
 }
 

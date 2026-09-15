@@ -1,3 +1,9 @@
+//! The `sysml` tool: every subcommand a person types.
+//!
+//! What something other than a person drives -- the MCP server, the
+//! reporting a program reads -- is in the library beside this, so that
+//! its tests drive it rather than a subprocess.
+
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

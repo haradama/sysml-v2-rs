@@ -17,6 +17,14 @@ struct Class {
     is_abstract: bool,
     supers: Vec<String>,
     features: Vec<Feature>,
+    /// What the specification says the metaclass is, in prose.
+    ///
+    /// The metamodel writes one for every one of the 175, in the same
+    /// `ownedComment` a constraint's `says` comes from. Nothing read it
+    /// until now, and the crate whose whole subject is the abstract
+    /// syntax was the one crate on docs.rs with no sentence against any
+    /// of it.
+    says: String,
 }
 
 #[derive(Debug)]
@@ -47,7 +55,12 @@ enum FeatureTy {
 
 #[derive(Debug)]
 struct Enum {
-    literals: Vec<String>,
+    /// Each literal, and what the specification says it means. The
+    /// metamodel documents all nineteen of them, as it documents the
+    /// seven enumerations they belong to.
+    literals: Vec<(String, String)>,
+    /// What the specification says the enumeration is, in prose.
+    says: String,
 }
 
 /// One operation of the abstract syntax, as the specification defines it.
@@ -214,12 +227,7 @@ fn collect_rules(doc: &roxmltree::Document, xml: &str, of: &str, rules: &mut Vec
             .find(|up| xmi_type(up) == Some("uml:Class"))
             .and_then(|up| up.attribute("name"))
             .expect("a rule is written inside the class it constrains");
-        let says = node
-            .children()
-            .find(|c| c.has_tag_name("ownedComment"))
-            .and_then(|comment| comment.attribute("body"))
-            .map(plain)
-            .unwrap_or_default();
+        let says = documentation(&node);
         rules.push(Rule {
             name: name.to_string(),
             metaclass: metaclass.to_string(),
@@ -227,6 +235,22 @@ fn collect_rules(doc: &roxmltree::Document, xml: &str, of: &str, rules: &mut Vec
             says,
         });
     }
+}
+
+/// What a node's own `ownedComment` says, in prose, or nothing where it
+/// carries none.
+///
+/// A rule, a metaclass, an enumeration and one of its literals are all
+/// documented the same way and in the same place, so they are all read
+/// the same way. `children` rather than `descendants`: a class owns the
+/// comments of its own rules and properties too, and the first one down
+/// the tree is not the one about the class.
+fn documentation(node: &roxmltree::Node) -> String {
+    node.children()
+        .find(|c| c.has_tag_name("ownedComment"))
+        .and_then(|comment| comment.attribute("body"))
+        .map(plain)
+        .unwrap_or_default()
 }
 
 /// The prose of a comment, with the HTML the metamodel writes it in
@@ -243,6 +267,14 @@ fn plain(html: &str) -> String {
             _ => {}
         }
     }
+    // What the XML parser handed back was decoded once, and these were
+    // written twice over: `&amp;quot;` in the file reaches here as
+    // `&quot;`, which is prose about visibility with the quotation marks
+    // still spelled out. Sixteen of them across the two documents.
+    let out = out
+        .replace("&quot;", "\"")
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&");
     // one space between words, whatever the source wrapped with
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -318,6 +350,7 @@ fn collect_classifiers(
                         is_abstract: node.attribute("isAbstract") == Some("true"),
                         supers,
                         features,
+                        says: documentation(&node),
                     },
                 );
                 assert!(previous.is_none(), "duplicate metaclass {name}");
@@ -328,12 +361,21 @@ fn collect_classifiers(
                     .children()
                     .filter(|c| c.has_tag_name("ownedLiteral"))
                     .map(|l| {
-                        l.attribute("name")
-                            .expect("literal without name")
-                            .to_string()
+                        (
+                            l.attribute("name")
+                                .expect("literal without name")
+                                .to_string(),
+                            documentation(&l),
+                        )
                     })
                     .collect();
-                enums.insert(name.to_string(), Enum { literals });
+                enums.insert(
+                    name.to_string(),
+                    Enum {
+                        literals,
+                        says: documentation(&node),
+                    },
+                );
             }
             _ => {}
         }
@@ -435,6 +477,45 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+/// How wide a generated doc comment is allowed to get before it is
+/// broken at a space. `rustfmt` leaves comments alone, so nothing else
+/// would ever wrap these, and the specification writes some of them as
+/// whole paragraphs.
+const DOC_WIDTH: usize = 70;
+
+/// Write `says` as a doc comment indented by `indent` spaces, and
+/// nothing at all where the specification says nothing.
+///
+/// The prose is the OMG's, reproduced as written apart from the
+/// wrapping: `NOTICE` says which parts of the generated file are theirs
+/// and this is now among them.
+fn doc(w: &mut String, indent: usize, says: &str) {
+    if says.is_empty() {
+        return;
+    }
+    let pad = " ".repeat(indent);
+    let mut line = String::new();
+    for word in says.split_whitespace() {
+        // A `[` opens an intra-doc link, and `rustdoc` warns about every
+        // one of them that resolves to nothing. The metamodel writes one
+        // -- the BCP 47 tag in `Comment::language` -- which is not a link
+        // to anything and is escaped rather than have the whole crate
+        // documented with the lint turned off.
+        let word = word.replace('[', "\\[").replace(']', "\\]");
+        if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > DOC_WIDTH {
+            writeln!(w, "{pad}/// {line}").unwrap();
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&word);
+    }
+    if !line.is_empty() {
+        writeln!(w, "{pad}/// {line}").unwrap();
+    }
+}
+
 fn generate(
     classes: &BTreeMap<String, Class>,
     enums: &BTreeMap<String, Enum>,
@@ -457,8 +538,9 @@ fn generate(
         "//! from the OMG normative metamodel (vendor/metamodel/KerML.xmi +\n\
          //! SysML.xmi). Do not edit by hand.\n\
          //!\n\
-         //! The OCL of each rule below, and the sentence it states in words,\n\
-         //! are the specification's own: Copyright (c) Object Management\n\
+         //! The OCL of each rule below, the sentence it states in words, and\n\
+         //! the paragraph documenting each metaclass and enumeration, are\n\
+         //! the specification's own: Copyright (c) Object Management\n\
          //! Group, Inc., reproduced under the terms of use the OMG grants\n\
          //! with its specifications rather than under this crate's. See\n\
          //! NOTICE."
@@ -479,12 +561,18 @@ fn generate(
     )
     .unwrap();
     writeln!(w, "pub enum ElementKind {{").unwrap();
-    for name in classes.keys() {
+    for (name, class) in classes {
+        doc(w, 4, &class.says);
         writeln!(w, "    {name},").unwrap();
     }
     writeln!(w, "}}").unwrap();
     writeln!(w).unwrap();
 
+    writeln!(
+        w,
+        "/// Every metaclass, in one slice, for a caller that walks them all."
+    )
+    .unwrap();
     writeln!(w, "pub const ELEMENT_KINDS: &[ElementKind] = &[").unwrap();
     for name in classes.keys() {
         writeln!(w, "    ElementKind::{name},").unwrap();
@@ -494,6 +582,11 @@ fn generate(
 
     writeln!(w, "impl ElementKind {{").unwrap();
 
+    writeln!(
+        w,
+        "    /// The metaclass's name, spelled as the specification spells it."
+    )
+    .unwrap();
     writeln!(w, "    pub fn name(self) -> &'static str {{").unwrap();
     writeln!(w, "        match self {{").unwrap();
     for name in classes.keys() {
@@ -503,6 +596,12 @@ fn generate(
     writeln!(w, "    }}").unwrap();
     writeln!(w).unwrap();
 
+    writeln!(
+        w,
+        "    /// The metaclass of that name, or nothing where the abstract\n\
+         \x20   /// syntax has none."
+    )
+    .unwrap();
     writeln!(
         w,
         "    pub fn from_name(name: &str) -> Option<ElementKind> {{"
@@ -517,6 +616,12 @@ fn generate(
     writeln!(w, "    }}").unwrap();
     writeln!(w).unwrap();
 
+    writeln!(
+        w,
+        "    /// Whether the specification declares it abstract, so that no\n\
+         \x20   /// element of a model is ever of this metaclass itself."
+    )
+    .unwrap();
     writeln!(w, "    pub fn is_abstract(self) -> bool {{").unwrap();
     let abstracts: Vec<_> = classes
         .iter()
@@ -653,7 +758,12 @@ fn generate(
     writeln!(w, "/// Metadata for one structural feature of a metaclass.").unwrap();
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
     writeln!(w, "pub struct FeatureMeta {{").unwrap();
-    writeln!(w, "    pub name: &'static str,").unwrap();
+    writeln!(
+        w,
+        "    /// The property's name, spelled as the specification spells it.\n\
+         \x20   pub name: &'static str,"
+    )
+    .unwrap();
     writeln!(
         w,
         "    /// What the specification says the property is where a model\n\
@@ -661,9 +771,27 @@ fn generate(
          \x20   pub default: Option<bool>,"
     )
     .unwrap();
-    writeln!(w, "    pub ty: FeatureType,").unwrap();
-    writeln!(w, "    pub many: bool,").unwrap();
-    writeln!(w, "    pub derived: bool,").unwrap();
+    writeln!(
+        w,
+        "    /// What it holds: a data value, one of the metamodel's\n\
+         \x20   /// enumerations, or another element.\n\
+         \x20   pub ty: FeatureType,"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "    /// Whether it holds any number of them rather than one, which\n\
+         \x20   /// is every property whose upper bound is not 1.\n\
+         \x20   pub many: bool,"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "    /// Whether the specification works it out from the rest of the\n\
+         \x20   /// model rather than a model stating it. `DERIVATIONS` says how.\n\
+         \x20   pub derived: bool,"
+    )
+    .unwrap();
     writeln!(
         w,
         "    /// The property this one redefines, where it redefines one:\n\
@@ -674,23 +802,47 @@ fn generate(
     .unwrap();
     writeln!(w, "}}").unwrap();
     writeln!(w).unwrap();
+    writeln!(w, "/// What one property of a metaclass holds.").unwrap();
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
     writeln!(w, "pub enum FeatureType {{").unwrap();
+    writeln!(w, "    /// A value of one of OCL's own primitive types.").unwrap();
     writeln!(w, "    Data(PrimitiveType),").unwrap();
+    writeln!(
+        w,
+        "    /// A literal of one of the metamodel's enumerations."
+    )
+    .unwrap();
     writeln!(w, "    Enumeration(EnumType),").unwrap();
+    writeln!(
+        w,
+        "    /// Another element, of that metaclass or a subtype of it."
+    )
+    .unwrap();
     writeln!(w, "    Class(ElementKind),").unwrap();
     writeln!(w, "}}").unwrap();
     writeln!(w).unwrap();
+    writeln!(
+        w,
+        "/// The primitive types the metamodel writes its data properties in."
+    )
+    .unwrap();
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
+    writeln!(
+        w,
+        "#[allow(missing_docs)] // the five names are the whole of it"
+    )
+    .unwrap();
     writeln!(
         w,
         "pub enum PrimitiveType {{ Boolean, Integer, Real, String, UnlimitedNatural }}"
     )
     .unwrap();
     writeln!(w).unwrap();
+    writeln!(w, "/// The enumerations the metamodel declares, by name.").unwrap();
     writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
     writeln!(w, "pub enum EnumType {{").unwrap();
-    for name in enums.keys() {
+    for (name, e) in enums {
+        doc(w, 4, &e.says);
         writeln!(w, "    {name},").unwrap();
     }
     writeln!(w, "}}").unwrap();
@@ -698,24 +850,37 @@ fn generate(
 
     // --- metamodel enums ---
     for (name, e) in enums {
+        doc(w, 0, &e.says);
         writeln!(w, "#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]").unwrap();
         writeln!(w, "pub enum {name} {{").unwrap();
-        for lit in &e.literals {
+        for (lit, says) in &e.literals {
+            doc(w, 4, says);
             writeln!(w, "    {},", capitalize(lit)).unwrap();
         }
         writeln!(w, "}}").unwrap();
         writeln!(w).unwrap();
         writeln!(w, "impl {name} {{").unwrap();
+        writeln!(
+            w,
+            "    /// The literal's name, spelled as the specification spells it."
+        )
+        .unwrap();
         writeln!(w, "    pub fn literal(self) -> &'static str {{").unwrap();
         writeln!(w, "        match self {{").unwrap();
-        for lit in &e.literals {
+        for (lit, _) in &e.literals {
             writeln!(w, "            {name}::{} => \"{lit}\",", capitalize(lit)).unwrap();
         }
         writeln!(w, "        }}").unwrap();
         writeln!(w, "    }}").unwrap();
+        writeln!(
+            w,
+            "    /// The literal of that name, or nothing where this\n\
+             \x20   /// enumeration has none."
+        )
+        .unwrap();
         writeln!(w, "    pub fn from_literal(s: &str) -> Option<{name}> {{").unwrap();
         writeln!(w, "        Some(match s {{").unwrap();
-        for lit in &e.literals {
+        for (lit, _) in &e.literals {
             writeln!(w, "            \"{lit}\" => {name}::{},", capitalize(lit)).unwrap();
         }
         writeln!(w, "            _ => return None,").unwrap();
@@ -741,6 +906,7 @@ fn operations_of(operations: &[Operation], w: &mut String) {
          /// defines it.\n\
          #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n\
          pub struct Operation {{\n\
+         \x20   /// The name a constraint calls it by.\n\
          \x20   pub name: &'static str,\n\
          \x20   /// The metaclass it is an operation of.\n\
          \x20   pub metaclass: ElementKind,\n\

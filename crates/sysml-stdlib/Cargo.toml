@@ -30,3 +30,6 @@ name = "sysml_stdlib"
 # than `cargo test` here: nothing that depends on this crate builds it.
 [dev-dependencies]
 sysmlv2-semantics.workspace = true
+
+[lints]
+workspace = true

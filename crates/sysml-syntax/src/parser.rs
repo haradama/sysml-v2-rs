@@ -24,6 +24,10 @@ pub struct Parse {
 }
 
 impl Parse {
+    /// The tree itself, from its root.
+    ///
+    /// Lossless whatever the input was: its text is the text that was
+    /// parsed, byte for byte, trivia and all.
     pub fn syntax(&self) -> SyntaxNode {
         SyntaxNode::new_root(self.green.clone())
     }
@@ -37,10 +41,14 @@ impl Parse {
         self.dialect
     }
 
+    /// What the lexer and the parser had to say about the text, in the
+    /// order they said it. Parsing never fails, so this is how a caller
+    /// finds out that something was wrong.
     pub fn errors(&self) -> &[Diagnostic] {
         &self.errors
     }
 
+    /// Whether they had nothing to say.
     pub fn ok(&self) -> bool {
         self.errors.is_empty()
     }

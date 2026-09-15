@@ -22,8 +22,6 @@
 //! assert_eq!(model.owner(part), Some(pkg));
 //! ```
 
-// Nothing here needs `unsafe`, and saying so is what keeps it that way.
-#![forbid(unsafe_code)]
 mod build;
 /// What writes [`generated`] from the vendored metamodel. Behind the
 /// `codegen` feature: it is a development tool, not part of the model.
@@ -124,7 +122,9 @@ pub enum Role {
 /// `FeatureMembership`, and anything else behind an `OwningMembership`.
 ///
 /// The model holds ownership directly and keeps the membership's own facts
-/// on the member ([`MemberSide`]), so whatever needs the standard's view
+/// on the member -- its visibility and its role, read through
+/// [`Model::member_visibility`] and [`Model::member_role`] -- so whatever
+/// needs the standard's view
 /// -- an interchange writer, the constraint checker -- puts it back
 /// together from here rather than each its own way.
 pub fn membership_of(role: Role) -> ElementKind {
@@ -166,6 +166,14 @@ pub fn parameter_direction(role: Role) -> Option<&'static str> {
     }
 }
 
+/// The metaclass of the membership that owns `owned`.
+///
+/// The notation writes almost none of them: a member declared inside a
+/// namespace is owned through an `OwningMembership` and one declared as
+/// a parameter through a `ParameterMembership`, and the text says so by
+/// where it puts the member rather than by naming the relationship. The
+/// declared role decides it where there is one; otherwise the owner's
+/// own metaclass does.
 pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     if let Some(role) = model.member_role(owned) {
         return membership_of(role);
@@ -493,6 +501,8 @@ fn fits(meta: &FeatureMeta, value: &Value) -> bool {
 pub struct ElementId(u32);
 
 impl ElementId {
+    /// Its place in the arena that issued it, for a caller keeping a
+    /// table alongside the model.
     pub fn index(self) -> usize {
         self.0 as usize
     }
@@ -501,17 +511,25 @@ impl ElementId {
 /// A property value on an element.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
+    /// A `Boolean`.
     Bool(bool),
+    /// An `Integer`, or an `UnlimitedNatural` that is not `*`.
     Int(i64),
+    /// A `Real`.
     Real(f64),
+    /// A `String`.
     String(String),
     /// A literal of one of the metamodel enumerations (e.g. `"private"`).
     EnumLit(&'static str),
+    /// One other element.
     Ref(ElementId),
+    /// Any number of other elements, in the order the model holds them.
     RefList(Vec<ElementId>),
 }
 
 impl Value {
+    /// The text of a value that is text: a `String` or an enumeration
+    /// literal, and nothing for anything else.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
@@ -569,10 +587,13 @@ pub struct Model {
 }
 
 impl Model {
+    /// An empty model, holding no elements at all.
     pub fn new() -> Model {
         Model::default()
     }
 
+    /// Add an element of `kind`, owned by nothing and holding no
+    /// properties yet, and answer the id it was given.
     pub fn create(&mut self, kind: ElementKind) -> ElementId {
         let id = ElementId(u32::try_from(self.elements.len()).expect("model too large"));
         self.elements.push(ElementData {
@@ -585,6 +606,7 @@ impl Model {
         id
     }
 
+    /// How many elements it holds.
     pub fn len(&self) -> usize {
         self.elements.len()
     }
@@ -614,22 +636,27 @@ impl Model {
         self.elements[id.index()].membership.role
     }
 
+    /// Whether it holds none.
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
 
+    /// Every element, in the order they were created.
     pub fn ids(&self) -> impl Iterator<Item = ElementId> + '_ {
         (0..self.elements.len() as u32).map(ElementId)
     }
 
+    /// The metaclass `id` is of.
     pub fn kind(&self, id: ElementId) -> ElementKind {
         self.elements[id.index()].kind
     }
 
+    /// What owns `id`, or nothing where it is a root.
     pub fn owner(&self, id: ElementId) -> Option<ElementId> {
         self.elements[id.index()].owner
     }
 
+    /// What `id` owns, in the order it was given them.
     pub fn owned(&self, id: ElementId) -> &[ElementId] {
         &self.elements[id.index()].owned
     }
@@ -760,6 +787,11 @@ impl Model {
         }
     }
 
+    /// The properties written on `id`, in the order they were set.
+    ///
+    /// Only what a model states: a derived property is worked out from
+    /// the rest of the model rather than held, and `FeatureMeta::derived`
+    /// says which those are.
     pub fn props(&self, id: ElementId) -> impl Iterator<Item = (&'static str, &Value)> {
         self.elements[id.index()].props.iter().map(|(n, v)| (*n, v))
     }

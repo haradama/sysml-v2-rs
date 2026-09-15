@@ -182,7 +182,9 @@ pub(crate) enum Tok {
 /// A lexed token: kind plus byte range into the source text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
+    /// What it is.
     pub kind: SyntaxKind,
+    /// Where it is, in bytes from the start of the text.
     pub range: std::ops::Range<usize>,
 }
 

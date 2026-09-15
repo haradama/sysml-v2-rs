@@ -38,3 +38,6 @@ codegen = ["dep:roxmltree"]
 name = "sysml-codegen"
 path = "src/bin/sysml-codegen.rs"
 required-features = ["codegen"]
+
+[lints]
+workspace = true

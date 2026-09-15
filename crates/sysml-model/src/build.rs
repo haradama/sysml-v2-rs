@@ -13,7 +13,11 @@ use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 /// Result of building one file into a model: the file's root elements and a
 /// map from each created element back to the syntax node it came from.
 pub struct Built {
+    /// What the file declares at its top level, in the order it
+    /// declares them.
     pub roots: Vec<ElementId>,
+    /// The syntax node each element was built from, which is what puts a
+    /// finding about an element back on the text that wrote it.
     pub source: Vec<(ElementId, SyntaxNode)>,
     /// The elements the expression builder stood up, in the order it
     /// made them. A `RequirementUsage` is a kind of `BooleanExpression`

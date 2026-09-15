@@ -29,11 +29,6 @@
 //! Apache-2.0. Separate crates, so which files are under which licence is
 //! a question with a one-word answer. See `NOTICE`.
 
-// Nothing here needs `unsafe`, and saying so is what keeps it that way.
-#![forbid(unsafe_code)]
-// Every public item carries a line saying what it is for.
-#![warn(missing_docs)]
-
 include!(concat!(env!("OUT_DIR"), "/files.rs"));
 
 /// The release of the OMG SysML v2 pilot implementation these came from.

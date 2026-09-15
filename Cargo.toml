@@ -80,3 +80,28 @@ sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
 sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
 sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.0" }
 sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.1.1" }
+
+# What every crate here is held to, said once.
+#
+# These were inner attributes at the top of each `lib.rs`, with the same
+# paragraph of reasoning copied below them. Ten copies is nine chances to
+# go stale, and they had: the paragraph named the two crates that did not
+# turn `missing_docs` on and the reason each was exempt, and it went on
+# saying it in eight files after both had turned it on. A rule that holds
+# of the whole workspace belongs where the workspace is described.
+#
+# Each crate takes these with `[lints] workspace = true`; a lint one crate
+# genuinely needs otherwise is taken there, on the item it is about, where
+# a reader meets it with the code.
+[workspace.lints.rust]
+# Nothing here needs `unsafe`, and saying so is what keeps it that way.
+# `forbid` rather than `deny` so that it cannot be turned off further in.
+unsafe_code = "forbid"
+# Every public item carries a line saying what it is for. The last two to
+# turn this on were `sysml-model`, whose surface is generated and whose
+# lines the generator writes -- the metamodel documents all 175
+# metaclasses and every property, in the same comment a constraint's
+# `says` comes from, and nothing had read it -- and `sysml-syntax`, which
+# exempts the 279 syntax kinds, whose names are the documentation, and
+# nothing else.
+missing_docs = "warn"

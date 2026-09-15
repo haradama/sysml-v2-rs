@@ -6,9 +6,18 @@
 
 use crate::{SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken};
 
+/// A typed view of one node of the syntax tree.
+///
+/// Every view here is the node itself, of a kind this type stands for:
+/// casting is a check and a move, not a copy, and the tree a view came
+/// from is still reachable through [`AstNode::syntax`].
 pub trait AstNode: Sized {
+    /// Whether a node of this kind is one of these.
     fn can_cast(kind: SyntaxKind) -> bool;
+    /// This view of `node`, or nothing where `node` is something else.
     fn cast(node: SyntaxNode) -> Option<Self>;
+    /// The node itself, for reaching what this view does not offer:
+    /// the text, the trivia around it, what encloses it.
     fn syntax(&self) -> &SyntaxNode;
 }
 
@@ -32,33 +41,115 @@ macro_rules! ast_node {
     };
 }
 
-ast_node!(SourceFile, SOURCE_FILE);
-ast_node!(Package, PACKAGE);
-ast_node!(Body, BODY);
-ast_node!(Import, IMPORT);
-ast_node!(Alias, ALIAS);
-ast_node!(Documentation, DOCUMENTATION);
-ast_node!(CommentElem, COMMENT_ELEM);
-ast_node!(Definition, DEFINITION);
-ast_node!(Usage, USAGE);
-ast_node!(Name, NAME);
-ast_node!(QualifiedName, QUALIFIED_NAME);
-ast_node!(Typing, TYPING);
-ast_node!(Subsetting, SUBSETTING);
-ast_node!(Redefinition, REDEFINITION);
-ast_node!(Multiplicity, MULTIPLICITY);
-ast_node!(Value, VALUE);
-ast_node!(TypeRef, TYPE_REF);
+ast_node!(
+    /// A whole file: whatever it declares at its top level.
+    SourceFile,
+    SOURCE_FILE
+);
+ast_node!(
+    /// `package P { ... }`, and the `library package` the standard
+    /// library is written in.
+    Package,
+    PACKAGE
+);
+ast_node!(
+    /// What a declaration holds between its braces.
+    Body,
+    BODY
+);
+ast_node!(
+    /// `import P::*;` -- the path it names, however it ends.
+    Import,
+    IMPORT
+);
+ast_node!(
+    /// `alias N for P::Q;` -- a second name for something declared
+    /// elsewhere.
+    Alias,
+    ALIAS
+);
+ast_node!(
+    /// `doc /* ... */`, which is documentation of whatever owns it.
+    Documentation,
+    DOCUMENTATION
+);
+ast_node!(
+    /// `comment /* ... */`, which is a note about the model rather than
+    /// documentation of a part of it.
+    CommentElem,
+    COMMENT_ELEM
+);
+ast_node!(
+    /// `part def Vehicle { ... }` -- a definition of any kind. Which
+    /// kind is the keyword, read through [`Definition::kind_token`].
+    Definition,
+    DEFINITION
+);
+ast_node!(
+    /// `part engine : Engine[1];` -- a usage of any kind, which is a
+    /// definition used rather than declared.
+    Usage,
+    USAGE
+);
+ast_node!(
+    /// A declared name, as written: quoted where the notation had to
+    /// quote it.
+    Name,
+    NAME
+);
+ast_node!(
+    /// A name reached through the namespaces above it: `ISQ::MassValue`.
+    QualifiedName,
+    QUALIFIED_NAME
+);
+ast_node!(
+    /// `: Engine` -- what a usage is typed by.
+    Typing,
+    TYPING
+);
+ast_node!(
+    /// `:> PowerSource` -- what a feature specializes.
+    Subsetting,
+    SUBSETTING
+);
+ast_node!(
+    /// `:>> mass` -- what a feature redefines.
+    Redefinition,
+    REDEFINITION
+);
+ast_node!(
+    /// `[1..*]` -- how many of something there are.
+    Multiplicity,
+    MULTIPLICITY
+);
+ast_node!(
+    /// `= 4` or `:= expr` -- the value a usage is given.
+    Value,
+    VALUE
+);
+ast_node!(
+    /// One type named in a typing, a specialization or a redefinition,
+    /// with the `~` of a conjugated one.
+    TypeRef,
+    TYPE_REF
+);
 
 /// Any namespace member.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Member {
+    /// A nested package.
     Package(Package),
+    /// An import.
     Import(Import),
+    /// An alias.
     Alias(Alias),
+    /// Documentation of whatever this is a member of.
     Documentation(Documentation),
+    /// A comment.
     CommentElem(CommentElem),
+    /// A definition of any kind.
     Definition(Definition),
+    /// A usage of any kind.
     Usage(Usage),
 }
 
@@ -106,46 +197,57 @@ fn children<N: AstNode>(node: &SyntaxNode) -> impl Iterator<Item = N> {
 }
 
 impl SourceFile {
+    /// What the file declares at its top level, in order.
     pub fn members(&self) -> impl Iterator<Item = Member> {
         children(self.syntax())
     }
 }
 
 impl Package {
+    /// Its declared name, where it has one.
     pub fn name(&self) -> Option<Name> {
         child(self.syntax())
     }
 
+    /// What it holds, where it holds anything.
     pub fn body(&self) -> Option<Body> {
         child(self.syntax())
     }
 
+    /// Whether it is a `library package`, whose members are visible to
+    /// a model that never imported them.
     pub fn is_library(&self) -> bool {
         self.token(LIBRARY_KW).is_some()
     }
 
+    /// Whether it is a `standard library package`, which only the
+    /// standard library itself declares.
     pub fn is_standard(&self) -> bool {
         self.token(STANDARD_KW).is_some()
     }
 }
 
 impl Body {
+    /// What is declared inside, in order.
     pub fn members(&self) -> impl Iterator<Item = Member> {
         children(self.syntax())
     }
 }
 
 impl Import {
+    /// The path it imports, `::*` and `::**` included.
     pub fn target(&self) -> Option<QualifiedName> {
         child(self.syntax())
     }
 }
 
 impl Alias {
+    /// The name it declares.
     pub fn name(&self) -> Option<Name> {
         child(self.syntax())
     }
 
+    /// What that name is a name for.
     pub fn target(&self) -> Option<QualifiedName> {
         child(self.syntax())
     }
@@ -157,14 +259,18 @@ impl Definition {
         first_token_matching(self.syntax(), SyntaxKind::is_def_kind_kw)
     }
 
+    /// Its declared name, where it has one.
     pub fn name(&self) -> Option<Name> {
         child(self.syntax())
     }
 
+    /// What it holds, where it holds anything.
     pub fn body(&self) -> Option<Body> {
         child(self.syntax())
     }
 
+    /// Whether it is `abstract`, so that nothing is ever one of these
+    /// and not also one of something more particular.
     pub fn is_abstract(&self) -> bool {
         self.token(ABSTRACT_KW).is_some()
     }
@@ -181,28 +287,34 @@ impl Usage {
         first_token_matching(self.syntax(), SyntaxKind::is_def_kind_kw)
     }
 
+    /// Its declared name, where it has one -- a usage need not be named.
     pub fn name(&self) -> Option<Name> {
         child(self.syntax())
     }
 
+    /// What it is typed by, where the notation says.
     pub fn typing(&self) -> Option<Typing> {
         child(self.syntax())
     }
 
+    /// How many of it there are, where the notation says.
     pub fn multiplicity(&self) -> Option<Multiplicity> {
         child(self.syntax())
     }
 
+    /// What it is given as a value, where it is given one.
     pub fn value(&self) -> Option<Value> {
         child(self.syntax())
     }
 
+    /// What it holds, where it holds anything.
     pub fn body(&self) -> Option<Body> {
         child(self.syntax())
     }
 }
 
 impl TypeRef {
+    /// The name of the type it points at.
     pub fn name(&self) -> Option<QualifiedName> {
         child(self.syntax())
     }
@@ -214,18 +326,23 @@ impl TypeRef {
 }
 
 impl Typing {
+    /// Every type named, since a feature may be typed by more than one.
     pub fn targets(&self) -> impl Iterator<Item = QualifiedName> {
         children::<TypeRef>(self.syntax()).filter_map(|t| t.name())
     }
 }
 
 impl Subsetting {
+    /// Every type specialized, since a feature may specialize more than
+    /// one.
     pub fn targets(&self) -> impl Iterator<Item = QualifiedName> {
         children::<TypeRef>(self.syntax()).filter_map(|t| t.name())
     }
 }
 
 impl Redefinition {
+    /// Every feature redefined, since one declaration may redefine more
+    /// than one.
     pub fn targets(&self) -> impl Iterator<Item = QualifiedName> {
         children::<TypeRef>(self.syntax()).filter_map(|t| t.name())
     }

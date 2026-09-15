@@ -1,7 +1,7 @@
 //! The specification's well-formedness constraints, evaluated.
 //!
-//! [`sysml_model::RULES`] states them in OCL and [`crate::ocl`] reads
-//! them; this runs them over a resolved model and says which do not
+//! [`sysml_model::RULES`] states them in OCL and this crate's own reader
+//! parses it; this runs them over a resolved model and says which do not
 //! hold.
 //!
 //! **Three answers, not two.** The abstract syntax the constraints
@@ -9,7 +9,7 @@
 //! reach for `operator` or `result`, which the builder does not
 //! materialise. Answering `false` there would report a violation the
 //! model never had, and answering `true` would say a model is sound
-//! when nothing looked. So an unanswerable navigation is [`Val::Unknown`],
+//! when nothing looked. So an unanswerable navigation is *unknown*,
 //! anything it touches becomes unknown in turn, and a rule that comes
 //! out unknown is reported as *not evaluated* rather than as either.
 //! What can be checked is checked; what cannot is named.

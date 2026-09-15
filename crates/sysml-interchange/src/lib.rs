@@ -45,14 +45,6 @@
 //! Remaining simplification: derived properties beyond the ones named here
 //! are emitted at their defaults.
 
-// Nothing here needs `unsafe`, and saying so is what keeps it that way.
-#![forbid(unsafe_code)]
-// Every public item carries a line saying what it is for. The two
-// crates that do not turn this on are `sysml-syntax`, whose public
-// surface is two hundred and seventy-nine syntax kinds whose names are
-// the documentation, and `sysml-model`, whose is generated from the
-// metamodel and would want the generator to write it.
-#![warn(missing_docs)]
 use std::collections::HashMap;
 
 use serde_json::{json, Map, Value as Json};

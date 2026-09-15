@@ -6,6 +6,10 @@
 /// sentinel used by the parser and never appears in a tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(non_camel_case_types)]
+// Each name says what it is, and a line against every one of them would
+// be two hundred and seventy-nine restatements of the name. This is the
+// whole of what the crate's `missing_docs` exempts.
+#[allow(missing_docs)]
 #[repr(u16)]
 pub enum SyntaxKind {
     // --- trivia tokens
@@ -358,10 +362,15 @@ pub enum SyntaxKind {
 use SyntaxKind::*;
 
 impl SyntaxKind {
+    /// Whether it is whitespace or a note -- what the tree keeps so that
+    /// it reproduces the source, and what every reader of the tree skips.
     pub fn is_trivia(self) -> bool {
         matches!(self, WHITESPACE | LINE_NOTE | BLOCK_NOTE)
     }
 
+    /// Whether it is a keyword of either notation. Which of the two
+    /// reserve it is [`SyntaxKind::is_sysml_keyword`] and
+    /// [`SyntaxKind::is_kerml_keyword`].
     pub fn is_keyword(self) -> bool {
         (ABOUT_KW..=XOR_KW).contains(&self)
     }
@@ -445,6 +454,7 @@ impl SyntaxKind {
         )
     }
 
+    /// Whether it is `public`, `private` or `protected`.
     pub fn is_visibility_kw(self) -> bool {
         matches!(self, PUBLIC_KW | PRIVATE_KW | PROTECTED_KW)
     }
@@ -466,6 +476,9 @@ impl SyntaxKind {
         RESERVED_IN[self as usize]
     }
 
+    /// The keyword that identifier spells, or nothing where it spells
+    /// none. Neither notation is asked: a word either notation reserves
+    /// answers here, and which of them reserves it is a second question.
     pub fn from_keyword(ident: &str) -> Option<SyntaxKind> {
         KEYWORDS
             .binary_search_by_key(&ident, |(text, _, _)| text)
@@ -788,8 +801,11 @@ impl From<SyntaxKind> for rowan::SyntaxKind {
     }
 }
 
+/// A node of the tree: something with children, of a [`SyntaxKind`].
 pub type SyntaxNode = rowan::SyntaxNode<SysMLLanguage>;
+/// A token of the tree: a leaf, holding the text it was lexed from.
 pub type SyntaxToken = rowan::SyntaxToken<SysMLLanguage>;
+/// Either of the two, which is what walking a node's children yields.
 pub type SyntaxElement = rowan::SyntaxElement<SysMLLanguage>;
 
 /// Which of the two notations reserve a keyword.
@@ -799,6 +815,8 @@ pub type SyntaxElement = rowan::SyntaxElement<SysMLLanguage>;
 /// reserved by neither, because the specification's grammar spells them
 /// inline (`{ kind = 'guard' }`) rather than reserving them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// The three names are the documentation, as the kinds above are.
+#[allow(missing_docs)]
 pub enum Reserved {
     Both,
     SysML,
