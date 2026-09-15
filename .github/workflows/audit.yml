@@ -1,0 +1,56 @@
+# What this workspace depends on, checked against what it is allowed to
+# depend on.
+#
+# Nothing else here would notice either failure. An advisory is published
+# against a dependency, not against this repository: no commit lands,
+# every gate stays green, and the crates go on being installable. A
+# licence arrives the same way, through a dependency of a dependency that
+# nobody here chose. So this runs on a schedule as well as on a change to
+# what is depended on -- a weekly job that is silent for months is the
+# point of it, not a sign it is idle.
+#
+# No lockfile is checked in, which makes this say something more useful
+# rather than less: it reads a fresh resolve, which is what somebody
+# running `cargo install sysmlv2-cli` today actually gets. A pinned
+# lockfile would have it check what this repository was last built with,
+# which is nobody's install.
+#
+# `deny.toml` is what it checks against, and says why each licence is on
+# the list.
+
+name: audit
+
+on:
+  schedule:
+    # Mondays, early enough that a Friday advisory is answered before the
+    # week's work is built on it
+    - cron: "17 6 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "deny.toml"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "deny.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: no advisories, and every licence accounted for
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      # `cargo deny` reads a lockfile, and this repository keeps none
+      - name: resolve as a fresh install would
+        run: cargo generate-lockfile
+      # advisories, licenses, bans and sources, in that one call: which of
+      # the four failed is in its output
+      - run: cargo deny check

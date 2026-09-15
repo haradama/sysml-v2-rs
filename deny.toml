@@ -1,0 +1,87 @@
+# What this workspace is willing to depend on.
+#
+# Two questions, and neither is one `cargo test` can answer. Is anything
+# depended on known to be broken -- an advisory published against it, or
+# a version its own author withdrew? And is everything depended on under
+# a licence this may be distributed under?
+#
+# The second matters here more than it does in most repositories. This
+# ships two things that are not its own to license -- the OMG standard
+# library under EPL-2.0 and the specification's own wording under the
+# OMG's terms -- and says exactly which files each covers, in `NOTICE`
+# beside each. A dependency arriving under a licence nobody looked at
+# would make that careful accounting false without anyone noticing.
+#
+# Run it the way CI does:
+#
+#     cargo deny check
+
+[graph]
+all-features = true
+
+[advisories]
+# An advisory with no fixed version yet would be ignored here by name and
+# a line saying why. There are none, and an empty list is a claim.
+ignore = []
+# A crate its author withdrew is one nobody should be resolving to,
+# advisory or not
+yanked = "deny"
+
+[licenses]
+# Every licence anything in the tree is actually under, as of writing.
+# A list rather than a rule about categories: a new licence arriving
+# should be a decision somebody makes, not one a pattern makes for them.
+allow = [
+    # what almost everything in the Rust ecosystem is under, and what
+    # this workspace is under itself
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    # the ICU data and algorithms `url` reaches through `idna`
+    "Unicode-3.0",
+    # `ring`, `untrusted`, `rustls-webpki`: the TLS stack under `ureq`
+    "ISC",
+    # `sha1_smol`, `subtle`
+    "BSD-3-Clause",
+    # `webpki-roots` -- the Mozilla root store, which is data rather than
+    # code and is published under a data licence accordingly
+    "CDLA-Permissive-2.0",
+    # `zlib-rs` and `miniz_oxide`, under `flate2`
+    "Zlib",
+    # `adler2`
+    "0BSD",
+    # `memchr`
+    "Unlicense",
+]
+# A crate whose licence field says nothing has to be looked at rather
+# than guessed at, so nothing is confidence-scored past here.
+confidence-threshold = 0.93
+
+# EPL-2.0 for one crate and no other. `sysmlv2-stdlib` carries the OMG
+# standard library, which is under the Eclipse Public License and is the
+# whole reason that crate is separate: whoever takes it on knows exactly
+# what they are taking on. Written as an exception rather than added to
+# the list above so that EPL-2.0 arriving anywhere else is still a
+# decision somebody has to make.
+[[licenses.exceptions]]
+name = "sysmlv2-stdlib"
+allow = ["EPL-2.0"]
+
+[bans]
+# Two versions of one crate is ordinary in a tree this size and is not
+# itself a defect; `cargo tree --duplicates` is where to look at them.
+multiple-versions = "allow"
+# A dependency written as `*` is one whose version nobody chose. The one
+# exception is a path dependency, which every crate here takes on
+# `sysmlv2-corpus`: a path dev-dependency deliberately carries no version,
+# because that is what drops it from the manifest `cargo publish`
+# uploads, and it is what keeps an unpublished crate out of a published
+# one's dependencies.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Nothing here comes from anywhere but crates.io, and a dependency that
+# started to would be a thing to have said out loud.
+unknown-registry = "deny"
+unknown-git = "deny"

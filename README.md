@@ -142,11 +142,18 @@ needs configuring.
 cargo test
 cargo clippy --all-targets --all-features
 markdownlint-cli2
+cargo deny check
 ```
 
 CI runs those, the corpus regressions and a line-coverage gate;
 `.github/workflows/ci.yml` is the list, and it can be run locally with
 [act](https://github.com/nektos/act).
+
+`cargo deny check` is on its own schedule as well, because what it
+answers changes without anything here changing: an advisory is published
+against a dependency, and a licence arrives through a dependency of a
+dependency. [`deny.toml`](deny.toml) says which licences are allowed and
+why each is on the list.
 
 [`tools/render`](tools/render) rasterizes an SVG so a drawing can be
 looked at in a review. It sits outside the workspace on purpose: it
