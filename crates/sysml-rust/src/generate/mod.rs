@@ -150,11 +150,11 @@ pub fn generate(model: &Model, roots: &[ElementId]) -> Result<Generated, Rustgen
          // nobody edits. What the model declares is written whether or not\n\
          // the caller reaches for it, which is the other thing a lint would\n\
          // otherwise ask about.\n\
-         #![allow(\n\
-         \x20   dead_code,\n\
-         \x20   clippy::manual_range_contains,\n\
-         \x20   clippy::too_many_arguments\n\
-         )]"
+         // On one line because that is where `rustfmt` puts it, and a\n\
+         // generated file a reader never edits is still a file they run\n\
+         // `cargo fmt` over: written the other way, the first thing this\n\
+         // generator emits is the first thing that comes back as a diff.\n\
+         #![allow(dead_code, clippy::manual_range_contains, clippy::too_many_arguments)]"
     )
     .expect("writing to a String cannot fail");
 

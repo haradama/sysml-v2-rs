@@ -12,11 +12,11 @@
 // nobody edits. What the model declares is written whether or not
 // the caller reaches for it, which is the other thing a lint would
 // otherwise ask about.
-#![allow(
-    dead_code,
-    clippy::manual_range_contains,
-    clippy::too_many_arguments
-)]
+// On one line because that is where `rustfmt` puts it, and a
+// generated file a reader never edits is still a file they run
+// `cargo fmt` over: written the other way, the first thing this
+// generator emits is the first thing that comes back as a diff.
+#![allow(dead_code, clippy::manual_range_contains, clippy::too_many_arguments)]
 
 /// What runs on the board.
 /// SysML: `part def BlinkApp`
