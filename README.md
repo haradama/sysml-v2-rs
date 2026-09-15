@@ -21,6 +21,11 @@ specialization.
 
 ## Install
 
+A built `sysml` for Linux, macOS and Windows is attached to each
+[release](https://github.com/haradama/sysml-v2-rs/releases), with the
+checksums beside it. Unpack it and put the binary on your `PATH`; nothing
+else is needed. From source:
+
 ```sh
 cargo install sysmlv2-cli
 ```

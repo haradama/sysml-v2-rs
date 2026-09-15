@@ -1,0 +1,134 @@
+# The `sysml` tool, built for the machines people run it on.
+#
+# `cargo install sysmlv2-cli` wants a Rust toolchain, and the people this
+# is for are systems engineers rather than Rust programmers -- the README
+# tells them to put `sysml` in an MCP configuration, which they cannot do
+# until they have one. The extension has been shipping a built binary for
+# five platforms all along; this is the same five, for the tool.
+#
+# Tag `v<version>` to release; run it by hand to build the archives
+# without attaching them to anything.
+
+name: sysml CLI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          # cross-linked rather than built on an arm runner: the tool is
+          # pure Rust, so the cross linker is all it takes
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            apt: gcc-aarch64-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: .exe
+    steps:
+      - uses: actions/checkout@v4
+      # a released version is what the tag says it is
+      - name: the tag says what the manifest says
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -eu
+          manifest=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/sysml-cli/Cargo.toml | head -1)
+          tag="${GITHUB_REF_NAME#v}"
+          [ "$manifest" = "$tag" ] || {
+            echo "::error::tag says $tag, sysml-cli/Cargo.toml says $manifest" >&2
+            exit 1
+          }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+      - name: build
+        run: cargo build --release -p sysmlv2-cli --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          # a fifth of the binary is symbols nobody downloading it reads;
+          # the gates build without this, so a panic there still names
+          # the frames it came through
+          RUSTFLAGS: -C strip=symbols
+      # A binary that cannot say what standard library it carries is a
+      # binary whose answers cannot be reproduced, and cross-built ones
+      # are the ones nothing here ever runs. The two native targets say so
+      # here; the cross-linked ones are checked by whoever downloads them.
+      - name: it runs and says which library it is holding
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -eu
+          "target/${{ matrix.target }}/release/sysml${{ matrix.exe }}" --version
+          echo 'part def Engine;' > smoke.sysml
+          "target/${{ matrix.target }}/release/sysml${{ matrix.exe }}" check smoke.sysml
+      # the licences travel with the binary: the standard library inside
+      # it is the OMG's under EPL-2.0, and the metamodel wording the
+      # OMG's under its own terms
+      - name: package
+        shell: bash
+        run: |
+          set -eu
+          staged="sysml-${{ matrix.target }}"
+          mkdir "$staged"
+          cp "target/${{ matrix.target }}/release/sysml${{ matrix.exe }}" "$staged/"
+          cp LICENSE-MIT LICENSE-APACHE "$staged/"
+          cp crates/sysml-stdlib/NOTICE "$staged/NOTICE-stdlib"
+          cp crates/sysml-model/NOTICE "$staged/NOTICE-metamodel"
+          if [ -n "${{ matrix.exe }}" ]; then
+            7z a "$staged.zip" "$staged"
+          else
+            tar czf "$staged.tar.gz" "$staged"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sysml-${{ matrix.target }}
+          path: |
+            sysml-*.tar.gz
+            sysml-*.zip
+          if-no-files-found: error
+
+  attach:
+    name: attach them to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+      - name: checksums, so a download can be checked against the release
+        run: |
+          set -eu
+          cd archives
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - run: gh release create "$GITHUB_REF_NAME" archives/* --generate-notes ||
+          gh release upload "$GITHUB_REF_NAME" archives/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
