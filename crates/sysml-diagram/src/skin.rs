@@ -17,6 +17,24 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 
+/// What is wrong with a skin that will not read.
+///
+/// One sentence naming the key it is about, which is what a person
+/// fixing a settings file needs and all of it. It is a type rather than
+/// the `String` it wraps so that a caller can put it where an error goes
+/// -- `Box<dyn Error>`, a `?` in a function that returns one -- which a
+/// bare `String` cannot be put, being nobody's error but its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkinError(String);
+
+impl std::fmt::Display for SkinError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SkinError {}
+
 /// A colour, as `0xRRGGBB`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Colour(pub u32);
@@ -401,7 +419,15 @@ impl Palette {
 ///
 /// A name of one of the skins that ship stands for it, so a setting can
 /// hold either: `"mono"` and the object above are both skins.
-pub fn read(said: &Value) -> Result<Skin, String> {
+pub fn read(said: &Value) -> Result<Skin, SkinError> {
+    reading(said).map_err(SkinError)
+}
+
+/// The same, said in the `String` every helper below hands back. Wrapped
+/// once at the door rather than threaded through all of them: what a
+/// caller gets is the type, and what this file passes around is the
+/// sentence.
+fn reading(said: &Value) -> Result<Skin, String> {
     if let Some(name) = said.as_str() {
         return Skin::named(name).ok_or_else(|| {
             format!(
@@ -909,6 +935,7 @@ mod tests {
         assert_eq!(read(&json!("mono")).unwrap(), Skin::named("mono").unwrap());
         assert!(read(&json!("chartreuse"))
             .unwrap_err()
+            .to_string()
             .contains("the ones that ship are default, mono, contrast"));
     }
 
@@ -960,7 +987,7 @@ mod tests {
 
     #[test]
     fn a_relation_nobody_draws_is_refused() {
-        let refused = |said: Value| read(&said).unwrap_err();
+        let refused = |said: Value| read(&said).unwrap_err().to_string();
         let said = refused(json!({ "light": { "relations": { "inheritance": "#000" } } }));
         assert!(said.contains("no `inheritance` to paint"), "{said}");
         assert!(said.contains("specialization"), "{said}");
@@ -993,7 +1020,7 @@ mod tests {
 
     #[test]
     fn a_word_a_skin_is_not_written_with_is_refused() {
-        let refused = |said: Value| read(&said).unwrap_err();
+        let refused = |said: Value| read(&said).unwrap_err().to_string();
         assert!(refused(json!({ "colour": {} })).contains("no `colour`"));
         assert!(refused(json!({ "Light": {} })).contains("did you mean `light`?"));
         assert!(refused(json!({ "light": { "paper": "#fff" } })).contains("no `paper`"));

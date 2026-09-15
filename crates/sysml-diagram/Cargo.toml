@@ -1,9 +1,12 @@
 [package]
 name = "sysmlv2-diagram"
 description = "Definition/specialization diagrams rendered to SVG from sysml-model"
-# its own, now that it has one: a drawing is painted by a skin, and
-# the layout is ELK's, linked in rather than spawned
-version = "0.1.1"
+# 0.2.0 rather than 0.1.2: `skin::read` answers with a `SkinError` where
+# it answered with a `String`, and a caller that matched on the message
+# does not compile against this. It was the one public function in the
+# workspace whose error was a bare `String` -- which is nobody's error
+# but its own, and cannot be put where an error goes.
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

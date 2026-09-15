@@ -48,7 +48,7 @@ pub use graph::{
 };
 pub use layout::{layout, Layout, Placed};
 pub use sequence::{sequence_view, Lifeline, Moment, Sequence};
-pub use skin::{Colour, Palette, Skin, Tint};
+pub use skin::{Colour, Palette, Skin, SkinError, Tint};
 pub use svg::to_svg;
 
 /// Sizes and spacing shared by the layout and the renderer, and the

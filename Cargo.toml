@@ -79,7 +79,7 @@ sysmlv2-model = { path = "crates/sysml-model", version = "0.1.1" }
 sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
 sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
 sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.0" }
-sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.1.1" }
+sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.2.0" }
 
 # What every crate here is held to, said once.
 #
