@@ -2,8 +2,9 @@
 name = "sysmlv2-cli"
 description = "Command-line tools for SysML v2 models"
 # its own, as the crates under it are: what a number moves for is a
-# change in the crate it is on
-version = "0.1.3"
+# change in the crate it is on. 0.1.4 reads standard interchange back
+# with `sysml import`, which it could only write before.
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

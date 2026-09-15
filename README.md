@@ -60,6 +60,7 @@ nearly spelt as.
 | `sysml diagram <file>` | SVG: definitions, `--internal`, `--sequence`, `--browser`, `--skin` |
 | `sysml plan <paths>` | what the model implies for code, in no language in particular |
 | `sysml export <files>` | standard JSON interchange |
+| `sysml import <json>` | the same read back: what it holds, or `--diagram` to see it |
 | `sysml api …` | the SysML v2 API & Services REST client |
 | `sysml import-rust <json>` | a Rust crate's API as a SysML package |
 | `sysml rustgen <files>` | the Rust a model implies |

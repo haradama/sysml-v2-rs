@@ -172,6 +172,20 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Read standard interchange JSON back into a model: what `export`
+    /// writes, and what a SysML v2 API & Services model server hands out
+    Import {
+        /// The interchange document
+        json: PathBuf,
+        /// Draw it instead of counting it: the definitions it holds and
+        /// the specializations between them, as SVG
+        #[arg(long, value_name = "FILE")]
+        diagram: Option<PathBuf>,
+        /// How the drawing is painted: a skin that ships (`default`,
+        /// `mono`, `contrast`) or a JSON file saying what to paint it in
+        #[arg(long, value_name = "NAME|FILE", requires = "diagram")]
+        skin: Option<String>,
+    },
     /// Import a Rust crate's public API as a SysML package with `@code`
     /// binding metadata, from the JSON `cargo +nightly rustdoc --
     /// -Zunstable-options --output-format json` writes
@@ -355,6 +369,21 @@ fn main() -> ExitCode {
             width,
         } => fmt(&files, write, check, format, Layout { width }),
         Command::Check { paths, show } => check(&paths, show, format, bare),
+        Command::Import {
+            json,
+            diagram,
+            skin,
+        } => {
+            let painted = match skin.as_deref().map(read_skin) {
+                Some(Ok(skin)) => skin,
+                Some(Err(why)) => {
+                    eprintln!("error: {why}");
+                    return ExitCode::FAILURE;
+                }
+                None => sysml_diagram::Skin::default(),
+            };
+            import(&json, diagram.as_deref(), painted, format)
+        }
         Command::Plan { paths } => plan(&paths, format, bare),
         Command::Diagram {
             paths,
@@ -1145,6 +1174,126 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: 
             ExitCode::FAILURE
         }
     }
+}
+
+/// Read a standard interchange document back into a model.
+///
+/// `export` writes one and `sysml api` fetches one, and until now
+/// nothing here could read either back: `sysml_interchange::from_json`
+/// was written, round-trip tested over the whole standard library, and
+/// reachable from no front end at all. A document that came off a model
+/// server had nowhere to go.
+///
+/// What it can then do with the model is bounded by what a model on its
+/// own is enough for. Counting it is; drawing it is, since a diagram
+/// asks for elements and the relationships between them and nothing
+/// else. Checking the specification's constraints is not, and neither is
+/// writing the notation back out -- both want a workspace, which is
+/// files, and this document is not files. Rather than half-answer those,
+/// this does the two it can and says so.
+fn import(
+    path: &Path,
+    diagram: Option<&Path>,
+    skin: sysml_diagram::Skin,
+    format: Format,
+) -> ExitCode {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) => return Unreadable::refuse(path, err, "import", format),
+    };
+    let json: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(json) => json,
+        Err(why) => return refuse_import(path, &format!("not JSON: {why}"), format),
+    };
+    let objects = json.as_array().map_or(0, Vec::len);
+    let (model, roots) = match sysml_interchange::from_json(&json) {
+        Ok(read) => read,
+        // A document `export` wrote without `--include-library` names the
+        // library elements its model specializes and does not carry them:
+        // every definition implicitly specializes one, so this is what a
+        // reader meets first and what it would otherwise meet as an
+        // opaque UUID. The same shape is what a model server returns for
+        // a page of elements, whose neighbours are simply not in the page.
+        Err(sysml_interchange::ImportError::UnknownReference(id)) => {
+            return refuse_import(
+                path,
+                &format!(
+                    "it names element {id} and does not carry it, so this is \
+                     part of a model rather than one whole. \
+                     `sysml export --include-library` writes a document that \
+                     stands on its own"
+                ),
+                format,
+            )
+        }
+        Err(why) => return refuse_import(path, &why.to_string(), format),
+    };
+    if let Some(output) = diagram {
+        let drawing = sysml_diagram::definition_diagram(&model, &roots);
+        if drawing.nodes.is_empty() {
+            eprintln!("error: nothing to draw");
+            return ExitCode::FAILURE;
+        }
+        let style = sysml_diagram::Style {
+            skin,
+            ..Default::default()
+        };
+        let svg = sysml_diagram::render(&drawing, &style);
+        return emit(
+            &svg,
+            Some(output),
+            &format!(
+                "{} box(es) and {} line(s)",
+                drawing.nodes.len(),
+                drawing.edges.len()
+            ),
+        );
+    }
+    let mut counts: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    for id in model.ids() {
+        *counts.entry(model.kind(id).name()).or_default() += 1;
+    }
+    if format == Format::Json {
+        report(serde_json::json!({
+            "command": "import",
+            "ok": true,
+            "read": path.display().to_string(),
+            "objects": objects,
+            "elements": model.len(),
+            "roots": roots.len(),
+            "counts": counts,
+        }));
+    } else {
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        for (kind, n) in rows {
+            println!("{n:6}  {kind}");
+        }
+        // The document holds more objects than the model holds elements:
+        // a membership that only carries ownership is an object there and
+        // an edge here, which is what `export` counted on the way out.
+        println!(
+            "{:6}  total elements, {} owned by nothing, from {objects} object(s)",
+            model.len(),
+            roots.len()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// A document that will not read, said the way every other refusal here
+/// is said: the path, one sentence, and the same shape under `--format
+/// json` that `Unreadable` writes for a file that will not open.
+fn refuse_import(path: &Path, why: &str, format: Format) -> ExitCode {
+    match format {
+        Format::Json => report(serde_json::json!({
+            "command": "import",
+            "ok": false,
+            "unreadable": [{ "path": path.display().to_string(), "error": why }],
+        })),
+        Format::Text => eprintln!("error: {}: {why}", path.display()),
+    }
+    ExitCode::FAILURE
 }
 
 fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> ExitCode {
