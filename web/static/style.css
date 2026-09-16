@@ -1,0 +1,538 @@
+/* The page. Two panes, a strip above and a strip below, and as little
+   else as the job takes: what is worth looking at here is the drawing,
+   and a drawing loses to a decorated frame around it.
+
+   Both themes, chosen by the reader's system. The diagram chooses the
+   same way -- the SVG carries a palette for each and a media query
+   between them -- so the two never disagree. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --panel: #f6f6f7;
+  --line: #e0e0e4;
+  --ink: #18181b;
+  --muted: #6b6b76;
+  --accent: #2f6fd0;
+  --error: #c0392b;
+  --warning: #9a6b00;
+  --keyword: #8250c8;
+  --type: #1a6fb8;
+  --text: #0a7c53;
+  --number: #b2541a;
+  --tag: #9a6b00;
+  --note: #7b7b86;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --panel: #1e1e22;
+    --line: #2e2e34;
+    --ink: #e6e6ea;
+    --muted: #9a9aa5;
+    --accent: #6fa8f5;
+    --error: #f08a80;
+    --warning: #e0b64d;
+    --keyword: #c9a2f0;
+    --type: #7fb6ec;
+    --text: #6fc99b;
+    --number: #e0a273;
+    --tag: #e0b64d;
+    --note: #85858f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 var(--sans);
+}
+
+.grow {
+  flex: 1;
+}
+
+/* ------------------------------------------------------------- strips */
+
+header,
+footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--panel);
+}
+
+header {
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+footer {
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+footer a {
+  color: var(--muted);
+}
+
+.mark {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-right: 4px;
+}
+
+#state.trouble {
+  color: var(--error);
+}
+
+/* ----------------------------------------------------------- controls */
+
+button,
+select,
+input {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 8px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover,
+select:hover {
+  border-color: var(--muted);
+}
+
+/* A menu is as wide as its longest entry, and this one's longest entry
+   would take a third of the strip. The view menu is left alone: it has
+   three entries and clipping one of them says nothing useful. */
+#example {
+  max-width: 11em;
+}
+
+button:active {
+  background: var(--panel);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------- saving a file
+
+   Only for a browser with no picker of its own; everywhere else this
+   never opens. Placed over the page rather than in the flow, so that
+   what is behind it keeps its size and the drawing does not reflow
+   under the dialog asking to save it. */
+
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 35%);
+}
+
+.sheet[hidden] {
+  display: none;
+}
+
+.sheet form {
+  min-width: min(22em, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 25%);
+}
+
+.sheet h2 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sheet .row {
+  display: flex;
+  gap: 8px;
+}
+
+.sheet .row + .row {
+  margin-top: 12px;
+}
+
+.sheet .row.end {
+  justify-content: flex-end;
+}
+
+#save-name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+}
+
+/* -------------------------------------------------------------- panes */
+
+main {
+  display: grid;
+  /* `--left` is how much of the window the model takes, and the handle
+     between the two panes is what sets it. */
+  grid-template-columns: minmax(0, var(--left, 1fr)) auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The handle, which is also the border between the panes.
+
+   What is seen and what can be grabbed are not the same width. The line
+   is one pixel, like every other border here; the `::after` reaches
+   three pixels either side of it, catching the pointer over the edge of
+   both panes. A handle wide enough to aim at is not a reason to draw a
+   five-pixel line down the middle of the window. */
+#split {
+  position: relative;
+  z-index: 2;
+  width: 1px;
+  cursor: col-resize;
+  background: var(--line);
+  touch-action: none;
+  /* leaving is immediate; arriving waits, below */
+  transition: background-color 70ms linear;
+}
+
+#split::after {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+}
+
+/* A pointer crossing on its way somewhere else should not light the
+   window up. So the highlight waits, the way VSCode's sash does --
+   `workbench.sash.hoverDelay`, which is 300ms there too. */
+#split:hover {
+  background: var(--accent);
+  transition-delay: 300ms;
+}
+
+/* Reaching it by keyboard, or taking hold of it, is not a pointer
+   passing through: those say so at once. Both rules come after `:hover`
+   because both match alongside it and it is these that have to win. */
+#split:focus-visible,
+#split.dragging {
+  background: var(--accent);
+  transition-delay: 0s;
+  outline: 0;
+}
+
+/* Not merely a shorter wait: a drag begins under the pointer, so the
+   hover rule has already made the colour accent and only the waiting is
+   left. Nothing changes when the drag starts, so nothing restarts the
+   transition, and a quick grab would sit grey until the wait it did not
+   ask for ran out. Dropping the transition cancels it and the colour
+   lands. */
+#split.dragging {
+  transition: none;
+}
+
+.half {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
+
+
+/* At a phone's width two columns are two unreadable columns, so the
+   drawing goes under the model instead -- and there is nothing left for
+   the handle to divide, so it becomes the line between them. */
+@media (max-width: 720px) {
+  main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+
+  /* Stacked, there is nothing left to divide: the handle is the line
+     between them and nothing else, so it gives back the room it was
+     reaching into. */
+  #split {
+    width: auto;
+    height: 1px;
+    cursor: default;
+  }
+
+  #split::after {
+    display: none;
+  }
+}
+
+/* The numbers, the text and the colouring of it are three layers that
+   have to agree to the pixel: same box, same font, same metrics.
+   Anything set on one of them belongs on all of them, which is why they
+   are set together. `--gutter` is how wide the numbers are and is set
+   from the line count, since 1000 lines need a column 4 wide. */
+.editor {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+  --gutter: 2ch;
+}
+
+.editor > * {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 12px 10px calc(var(--gutter) + 24px);
+  font: 13px/1.6 var(--mono);
+  tab-size: 4;
+  white-space: pre;
+}
+
+/* The numbers sit in the padding the other two leave for them, and
+   scroll up and down with the text but never sideways -- a long line
+   must not carry the number it belongs to off the screen. */
+#gutter {
+  right: auto;
+  width: calc(var(--gutter) + 16px);
+  padding-right: 0;
+  padding-left: 8px;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  z-index: 1;
+}
+
+#source {
+  resize: none;
+  background: transparent;
+  color: var(--ink);
+  overflow: auto;
+}
+
+#source:focus-visible {
+  outline: 0;
+}
+
+/* scrolled to follow the textarea, never by itself, and never in the
+   way of a click */
+#painted {
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--ink);
+}
+
+/* Handed over only once there is something to hand over to. The caret
+   and the selection are still the textarea's; only its glyphs go. */
+.editor.painted #source {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--ink);
+}
+
+/* ------------------------------------------------------------ colours
+
+   Seven, against the grammar's sixteen scopes: `keyword.declaration`
+   and `keyword.control` are both a keyword to a reader. What maps to
+   what is in `src/highlight.ts`. */
+
+.t-note {
+  color: var(--note);
+  font-style: italic;
+}
+
+/* a `doc` is the model's own prose, not an aside, and reads as text */
+.t-doc {
+  color: var(--text);
+}
+
+.t-text {
+  color: var(--text);
+}
+
+.t-escape {
+  color: var(--number);
+}
+
+.t-number {
+  color: var(--number);
+}
+
+.t-tag {
+  color: var(--tag);
+}
+
+.t-type {
+  color: var(--type);
+}
+
+.t-keyword {
+  color: var(--keyword);
+}
+
+.t-operator {
+  color: var(--muted);
+}
+
+/* ----------------------------------------------------------- problems */
+
+#problems {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* Not a percentage: this is a grid row sized by its own content, so a
+     percentage height would resolve against that content and leave a
+     third of one line to scroll thirty problems in. */
+  max-height: 22vh;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+}
+
+/* nothing wrong is nothing to show */
+#problems:empty {
+  display: none;
+  border-top: 0;
+}
+
+#problems > li {
+  border-bottom: 1px solid var(--line);
+}
+
+#problems > li:last-child {
+  border-bottom: 0;
+}
+
+/* The whole row is the button: it moves the caret to the problem and
+   asks the server what the name might have meant. */
+.problem {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  text-align: left;
+}
+
+.problem:hover {
+  background: var(--bg);
+}
+
+#problems > li.error .where {
+  color: var(--error);
+}
+
+#problems > li.warning .where {
+  color: var(--warning);
+}
+
+.where {
+  flex: none;
+  font: 12px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the server offers about the problem above, once it has been
+   asked. Empty until then, and `:empty` keeps it out of the way. */
+.offers {
+  margin: 0;
+  padding: 0 10px 6px 10px;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.offers:empty {
+  display: none;
+}
+
+.fix {
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--accent);
+  border-color: var(--line);
+  background: var(--bg);
+}
+
+.nothing-near {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+/* ------------------------------------------------------------ drawing */
+
+#pane {
+  overflow: auto;
+  cursor: grab;
+  /* the drawing has no background of its own, and both themes' lines
+     are drawn to be read on this one */
+  background: var(--bg);
+}
+
+#pane.panning {
+  cursor: grabbing;
+}
+
+#canvas {
+  transform-origin: 0 0;
+}
+
+#canvas svg {
+  display: block;
+  max-width: none;
+}
+
+.nothing {
+  margin: 0;
+  padding: 14px;
+  color: var(--muted);
+}
+
+#zoombar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+#zoom {
+  min-width: 3.4em;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

@@ -7,6 +7,10 @@
 // Everything slow happens on this side of `postMessage` -- half a second
 // to read the standard library when the client says `initialize`, and
 // single-figure milliseconds a keystroke after that.
+//
+// The playground in `web/` bundles this file too: it is the whole of
+// what the module's four exports ask for, and what it may use is what a
+// worker has, not what VSCode has. Nothing VSCode-shaped belongs here.
 
 /// What the module exports. See `crates/sysml-wasm`.
 interface Server {

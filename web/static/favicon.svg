@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Two definitions and the specialization between them, which is the
+       smallest thing this draws. -->
+  <rect width="32" height="32" rx="6" fill="#2f6fd0"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2">
+    <rect x="10" y="4" width="12" height="7"/>
+    <rect x="4" y="21" width="11" height="7"/>
+    <rect x="18" y="21" width="11" height="7"/>
+    <path d="M9.5 21V16h13v5M16 16v-5"/>
+  </g>
+</svg>

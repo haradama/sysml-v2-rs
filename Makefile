@@ -11,20 +11,24 @@ NPX ?= npx
 CODE ?= code
 
 EXT_DIR := editors/vscode
+WEB_DIR := web
 # The WebAssembly module the extension ships, built with the profile the
 # root Cargo.toml keeps for it.
 WASM_TARGET := wasm32-unknown-unknown
 SERVER := target/$(WASM_TARGET)/wasm/sysml_wasm.wasm
 VSIX := $(EXT_DIR)/sysml-v2.vsix
 
-.PHONY: help lsp wasm vscode vscode-package vscode-clean
+.PHONY: help lsp wasm vscode vscode-package vscode-clean web web-serve web-clean
 
 help:
 	@echo "make vscode          build, package and install the VSCode extension"
 	@echo "make vscode-package  build the .vsix without installing it"
+	@echo "make web             build the playground into web/dist"
+	@echo "make web-serve       build it and serve it at http://localhost:8000"
 	@echo "make wasm            build the language server as a WebAssembly module"
 	@echo "make lsp             build the language server as a program"
 	@echo "make vscode-clean    remove the extension's build artifacts"
+	@echo "make web-clean       remove the playground's build artifacts"
 
 lsp:
 	$(CARGO) build --release -p sysmlv2-lsp
@@ -59,3 +63,17 @@ vscode-clean:
 	rm -rf $(EXT_DIR)/node_modules $(EXT_DIR)/out $(EXT_DIR)/server \
 		$(EXT_DIR)/library $(EXT_DIR)/*.vsix $(EXT_DIR)/package-lock.json \
 		$(EXT_DIR)/LICENSE.txt
+
+$(WEB_DIR)/node_modules: $(WEB_DIR)/package.json
+	cd $(WEB_DIR) && $(NPM) install --no-audit --no-fund
+
+# The playground: the same module the extension ships, in a page of its
+# own. `web/dist` is the whole site -- there is nothing to run beside it.
+web: wasm $(WEB_DIR)/node_modules
+	cd $(WEB_DIR) && $(NPM) run build
+
+web-serve: wasm $(WEB_DIR)/node_modules
+	cd $(WEB_DIR) && $(NPM) run serve
+
+web-clean:
+	rm -rf $(WEB_DIR)/node_modules $(WEB_DIR)/dist $(WEB_DIR)/package-lock.json

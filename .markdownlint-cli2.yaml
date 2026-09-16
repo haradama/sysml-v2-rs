@@ -8,3 +8,4 @@ ignores:
   # installed by `npm install` for the extension; CI lints a fresh
   # checkout and never sees these, so a local run should not either
   - editors/vscode/node_modules/**
+  - web/node_modules/**

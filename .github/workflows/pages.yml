@@ -1,0 +1,77 @@
+# The playground, published to GitHub Pages.
+#
+# A static site with a language server in it: `web/dist` is five files
+# and a `.wasm`, and everything that would normally need a server --
+# parsing, name resolution, the specification's constraints, the layout
+# and the drawing -- happens in the reader's tab.
+#
+# Pages has to be told to take its content from Actions: Settings →
+# Pages → Build and deployment → Source → GitHub Actions. Until it is,
+# this builds and the deploy step is refused.
+
+name: Playground
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # everything that can change what the site is
+      - "crates/**"
+      - "web/**"
+      - "editors/vscode/src/server.worker.ts"
+      - "Cargo.toml"
+      - "LICENSE-*"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# one site, and a second deploy would be publishing over the first
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # the same cache the extension's release fills, since it is the
+          # same module built the same way
+          key: wasm
+      # the `wasm` profile: link-time optimisation and no symbols, since
+      # every byte of this is downloaded and compiled again by a browser
+      - name: build the language server
+        run: cargo build -p sysmlv2-wasm --target wasm32-unknown-unknown --profile wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+        working-directory: web
+      # `npm test` builds the site and then types into the built page,
+      # against the `.wasm` that is about to be published: a site that
+      # cannot draw a model is not one to publish
+      - run: npm test
+        working-directory: web
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    name: deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.pages.outputs.page_url }}
+    steps:
+      - id: pages
+        uses: actions/deploy-pages@v4

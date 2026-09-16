@@ -3,6 +3,10 @@
 Rust libraries for [SysML v2](https://www.omg.org/sysml/sysmlv2/) — the OMG
 systems modeling language, adopted in 2025, built on KerML.
 
+**[Try it in a browser](https://haradama.github.io/sysml-v2-rs/)** —
+type a model, watch it drawn, share the link. No install, no server, no
+upload: the whole toolchain is a WebAssembly module in the page.
+
 The toolchain covers the textual notation end to end: an error-tolerant
 parser with a lossless syntax tree, an element model generated from the
 official metamodel, name resolution, the specification's well-formedness
@@ -117,6 +121,24 @@ code so an agent can write a language this toolchain has never heard of.
 
 ```json
 { "mcpServers": { "sysml": { "command": "sysml", "args": ["mcp"] } } }
+```
+
+## Playground
+
+[`web`](web) is the toolchain as a page:
+[haradama.github.io/sysml-v2-rs](https://haradama.github.io/sysml-v2-rs/).
+A model on the left, the diagram of it on the right, redrawn as you type
+— the PlantUML web server's arrangement, without the server. The parser,
+name resolution, the constraints, the layout and the renderer are the
+same `.wasm` the extension ships, running in the reader's tab, so nothing
+is uploaded and the whole site is five static files.
+
+The address bar carries the model, so a link is the whole thing a reader
+needs; a fragment is never sent, so sharing one is between the two people
+holding it.
+
+```sh
+make web-serve   # http://localhost:8000
 ```
 
 ## VSCode

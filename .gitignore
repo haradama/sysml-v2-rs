@@ -57,6 +57,15 @@ Cargo.lock
 /DESIGN.md
 *.svg
 
+# the playground's build artifacts; `web/dist` is built by CI and
+# published from there, so nothing about it is tracked
+/web/node_modules/
+/web/dist/
+/web/package-lock.json
+
+# ...except its icon, which `*.svg` above would otherwise take with it
+!/web/static/favicon.svg
+
 # VSCode extension build artifacts
 /editors/vscode/node_modules/
 /editors/vscode/out/

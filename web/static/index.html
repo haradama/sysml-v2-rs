@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SysML v2 Playground</title>
+    <meta
+      name="description"
+      content="Write SysML v2 and see it drawn as you type. The parser, name resolution and the renderer are a WebAssembly module in the page; nothing is uploaded."
+    />
+    <!--
+      The drawing is put on the page as SVG, so a model's names end up in
+      the document. The renderer escapes them and this allows no inline
+      script, which is two independent reasons a `<script>` written into
+      a model does not run. `wasm-unsafe-eval` is what lets the language
+      server be compiled at all.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header>
+      <span class="mark">SysML v2</span>
+      <select id="example" title="Load a model to start from">
+        <option value="" disabled selected>Examples</option>
+      </select>
+      <span class="grow"></span>
+      <select id="view" title="What the drawing shows">
+        <option value="definitions">Definitions</option>
+        <option value="internal">Internal structure</option>
+        <option value="browser">Tree</option>
+      </select>
+      <input
+        id="element"
+        hidden
+        size="14"
+        placeholder="element name"
+        title="The element the internal view is of"
+        spellcheck="false"
+      />
+      <button id="link" title="A link that carries the model in it">Copy link</button>
+      <button id="save" title="Save the model or the drawing to a file">Save&hellip;</button>
+    </header>
+
+    <!--
+      Where to put it, for a browser with no file picker of its own. One
+      that has `showSaveFilePicker` -- a secure context in Chrome or Edge
+      -- is asked instead, since its dialog can choose the folder as well
+      and is the one the reader already knows.
+    -->
+    <div id="saving" class="sheet" hidden>
+      <form id="save-as">
+        <h2>Save as</h2>
+        <div class="row">
+          <input
+            id="save-name"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="File name"
+          />
+          <select id="save-kind" aria-label="File type">
+            <option value="sysml">.sysml</option>
+            <option value="svg">.svg</option>
+            <option value="png">.png</option>
+          </select>
+        </div>
+        <div class="row end">
+          <button type="button" id="save-cancel">Cancel</button>
+          <button type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+
+    <main>
+      <section class="half">
+        <!--
+          The text is typed into the textarea and read off the layer
+          under it. Until the grammar has loaded the textarea is an
+          ordinary one and shows its own text; `painted` on the wrapper
+          is what hands the showing over -- so a grammar that never
+          arrives leaves a plain editor rather than an empty one.
+        -->
+        <div class="editor">
+          <div id="gutter" aria-hidden="true"></div>
+          <pre id="painted" aria-hidden="true"></pre>
+          <textarea
+            id="source"
+            wrap="off"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            autocorrect="off"
+            aria-label="The model. Tab indents; Escape moves on."
+          ></textarea>
+        </div>
+        <ul id="problems"></ul>
+      </section>
+
+      <div
+        id="split"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="How much of the window the model takes"
+        tabindex="0"
+        title="Drag, or use the arrow keys"
+      ></div>
+
+      <section class="half">
+        <div id="pane"><div id="sizer"><div id="canvas"></div></div></div>
+        <div id="zoombar">
+          <button id="out" title="Zoom out">&minus;</button>
+          <span id="zoom">100%</span>
+          <button id="in" title="Zoom in">+</button>
+          <button id="actual" title="Actual size">1:1</button>
+          <button id="fit" title="Fit to the pane">Fit</button>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <span id="state"></span>
+      <span class="grow"></span>
+      <a href="https://github.com/haradama/sysml-v2-rs">sysml-v2-rs</a>
+    </footer>
+  </body>
+</html>

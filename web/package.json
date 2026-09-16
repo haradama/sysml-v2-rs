@@ -1,0 +1,22 @@
+{
+  "name": "sysml-v2-playground",
+  "private": true,
+  "version": "0.1.0",
+  "description": "SysML v2 in a browser tab: the language server as WebAssembly, drawing as you type",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "serve": "node scripts/build.mjs --serve",
+    "watch": "node scripts/build.mjs --watch",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^30.0.1",
+    "typescript": "^5.4.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}

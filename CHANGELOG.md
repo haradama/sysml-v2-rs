@@ -91,6 +91,7 @@ published: it is the inside of the VSCode extension.
   `succession first [0..1] a then [1] b;` opens the succession's own
   clause — in both the keyword is doing its own job in the very position
   a name would take, and the official corpus writes both.
+
 ### What a name that resolved to nothing might have meant, in an editor
 
 `sysmlv2-lsp` **0.2.0**
@@ -104,6 +105,57 @@ published: it is the inside of the VSCode extension.
 - Asked rather than published. That walk is over every declared name,
   sixty thousand with the standard library loaded, which is nothing on
   the click that wants it and a stutter on every keystroke.
+
+### SysML v2 in a browser tab, with nothing behind it
+
+`web`, which is new, publishes no crate and is not on crates.io: it is a
+static site.
+
+- The toolchain as a page, at
+  [haradama.github.io/sysml-v2-rs](https://haradama.github.io/sysml-v2-rs/)
+  — a model on the left, the diagram of it on the right, redrawn as it is
+  typed. The PlantUML web server's arrangement without the server: the
+  same `.wasm` the VSCode extension ships runs in the reader's tab, so a
+  model is never uploaded and the whole site is five static files and a
+  module. The three views the preview has — definitions, internal
+  structure, tree — and the diagnostics under the editor, each naming
+  where it is written.
+- The address bar carries the model, so a link is the whole thing a
+  reader needs. It is a fragment, which a browser never sends.
+- One **Save** button in place of the two that wrote the drawing out, and
+  one dialog behind it — the page's own, in every browser. The box holds
+  a name and the menu beside it the extension: `.sysml` is the model as
+  it was typed, `.svg` and `.png` the drawing. `showSaveFilePicker` can
+  choose the folder as well and was what this used at first, but what it
+  does with the name is the browser's, and on at least one platform it
+  ignores the type the reader picks and hands back `model.sysml.sysml`
+  for a drawing asked for as SVG.
+- The panes are divided by a handle: drag it, double-click it for half
+  and half, or reach it with the keyboard and use the arrow keys.
+- What the page edits, a reader can take back. A textarea keeps its own
+  undo history and nothing written into `value` joins it, so applying a
+  fix and indenting with `Tab` both go through `execCommand` — deprecated,
+  and still the only edit a page can make that `Ctrl`+`Z` knows about.
+- The editor numbers its lines, and clicking a problem asks the server
+  what the name might have meant — `did you mean \`Garage::Wheel\`?` where
+  nothing declares it, `\`Garage::Wheel\`, declared elsewhere` where
+  something does and nothing brought it into scope. Clicking the answer
+  applies it, and `Escape` puts them away.
+- The editor is coloured by the grammar the VSCode extension ships, read
+  by the engine VSCode itself tokenises with — so the colouring is the
+  same in both and there is one grammar to keep right, held to the
+  lexer's own keyword table by the extension's test. It is a `<pre>`
+  under a transparent `<textarea>`; the layer is handed the showing only
+  once the grammar has arrived, so a grammar that does not load leaves a
+  plain editor rather than an empty one.
+- The worker that drives the module is the extension's own file, bundled
+  from where it lives rather than copied. Two copies of a binary
+  interface is one copy that quietly stops matching the `.wasm`.
+- `.github/workflows/pages.yml` builds the module, builds the site, types
+  into the built page against the module that is about to be published,
+  and deploys. `make web-serve` is the same thing at
+  `http://localhost:8000`.
+
 ### The standard interchange, read as well as written
 
 `sysmlv2-cli` **0.1.4**
