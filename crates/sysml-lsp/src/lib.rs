@@ -43,9 +43,10 @@ use lsp_server::{Connection, Message, Notification, Request, RequestId, Response
 use lsp_types::notification::Notification as _;
 use lsp_types::request::Request as _;
 use lsp_types::{
-    CompletionItemKind, CompletionOptions, Diagnostic, DiagnosticSeverity, DocumentSymbol,
-    NumberOrString, OneOf, PublishDiagnosticsParams, ServerCapabilities, SignatureHelpOptions,
-    SymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    CodeActionProviderCapability, CompletionItemKind, CompletionOptions, Diagnostic,
+    DiagnosticSeverity, DocumentSymbol, NumberOrString, OneOf, PublishDiagnosticsParams,
+    ServerCapabilities, SignatureHelpOptions, SymbolKind, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url,
 };
 use sysml_model::ElementKind;
 use sysml_semantics::Workspace;
@@ -73,6 +74,9 @@ pub fn server_capabilities() -> ServerCapabilities {
             ..Default::default()
         }),
         workspace_symbol_provider: Some(OneOf::Left(true)),
+        // what a name that resolved to nothing might have meant, as
+        // edits a client can apply
+        code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
         signature_help_provider: Some(SignatureHelpOptions {
             trigger_characters: Some(vec!["(".into(), ",".into()]),
             ..Default::default()
@@ -839,6 +843,13 @@ impl Server {
             Formatting::METHOD => {
                 let params = asked!(lsp_types::DocumentFormattingParams);
                 ok_response(id, self.format(&params.text_document.uri))
+            }
+            CodeActionRequest::METHOD => {
+                let params = asked!(lsp_types::CodeActionParams);
+                ok_response(
+                    id,
+                    self.code_actions(&params.text_document.uri, params.range),
+                )
             }
             // custom: the diagram of one open document, as a standalone
             // SVG -- what the `sysml diagram` CLI draws, served from the

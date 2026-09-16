@@ -91,6 +91,19 @@ published: it is the inside of the VSCode extension.
   `succession first [0..1] a then [1] b;` opens the succession's own
   clause — in both the keyword is doing its own job in the very position
   a name would take, and the official corpus writes both.
+### What a name that resolved to nothing might have meant, in an editor
+
+`sysmlv2-lsp` **0.2.0**
+
+- `textDocument/codeAction` answers with the spellings a dangling name
+  might have wanted, as edits. `Workspace::suggestions` has told the two
+  mistakes apart since `sysml check` and the MCP server first asked it —
+  a name nothing declares was mistyped, a name something declares was
+  never in scope here — and the server was the one front end that had
+  never asked. Both come back as `quickfix`, and the title says which.
+- Asked rather than published. That walk is over every declared name,
+  sixty thousand with the standard library loaded, which is nothing on
+  the click that wants it and a stutter on every keystroke.
 ### The standard interchange, read as well as written
 
 `sysmlv2-cli` **0.1.4**

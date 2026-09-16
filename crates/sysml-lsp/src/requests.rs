@@ -14,6 +14,18 @@ use sysml_syntax::TextSize;
 
 use crate::*;
 
+/// How many spellings are worth offering for one name. A list longer
+/// than this is a list nobody reads to the end of, and the nearest are
+/// first.
+const ENOUGH: usize = 4;
+
+/// Whether two ranges touch. A client asking about a diagnostic sends
+/// that diagnostic's own range, and one asking about a line sends the
+/// line.
+fn overlaps(one: TextRange, other: TextRange) -> bool {
+    one.start() <= other.end() && other.start() <= one.end()
+}
+
 impl Server {
     pub(crate) fn definition(
         &mut self,
@@ -439,6 +451,87 @@ impl Server {
             active_parameter: Some(active),
         })
     }
+    /// What a name that resolved to nothing might have meant, as edits a
+    /// client can apply.
+    ///
+    /// `Workspace::suggestions` tells two mistakes apart and this keeps
+    /// them apart: a name the workspace declares somewhere is a right one
+    /// that nothing brought into scope, and a name nothing declares is a
+    /// wrong one. Either way the edit is a name spelled from the root,
+    /// which is a name that resolves wherever it is written.
+    ///
+    /// Asked rather than published. The walk behind it is over every
+    /// declared name -- sixty thousand with the standard library loaded
+    /// -- which is nothing once, on the click that asks for it, and a
+    /// stutter on every keystroke.
+    pub(crate) fn code_actions(&mut self, uri: &Url, range: Range) -> Option<CodeActionResponse> {
+        let text = self.docs.get(uri)?.clone();
+        let index = LineIndex::new(&text);
+        let asked = TextRange::new(
+            index.offset(&text, range.start)?,
+            index.offset(&text, range.end)?,
+        );
+        let file = *self.analysis().doc_files.get(uri)?;
+        let ws = &self.analysis().ws;
+
+        // Every name that resolved to nothing under what the client
+        // pointed at. A client points at a diagnostic's range, which is
+        // one of these exactly; one that points at a line gets the lot.
+        let wanted: Vec<sysml_semantics::Unresolved> = ws
+            .unresolved()
+            .iter()
+            .filter(|it| it.file == file && overlaps(it.range, asked))
+            .cloned()
+            .collect();
+        if wanted.is_empty() {
+            return Some(Vec::new());
+        }
+        // one walk for all of them, which is what `suggestions` asks of
+        // whoever calls it
+        let names: Vec<String> = wanted.iter().map(|it| it.name.clone()).collect();
+        let suggested = self.analysis().ws.suggestions(&names);
+
+        let mut actions = Vec::new();
+        for (missing, may) in wanted.iter().zip(suggested) {
+            // Both lists are spelled from the root, so either replaces
+            // the whole of what was written -- `Parts::Wheeel` becomes
+            // `Parts::Wheel` without the qualifier being put back by
+            // hand. The two read differently because they are not the
+            // same mistake, and which one it is, is the useful half of
+            // the answer: a name nothing declares was mistyped, and a
+            // name something declares was simply never in scope here.
+            let near = may
+                .near
+                .iter()
+                .take(ENOUGH)
+                .map(|spelling| (format!("did you mean `{spelling}`?"), spelling));
+            let elsewhere = may
+                .elsewhere
+                .iter()
+                .take(ENOUGH)
+                .map(|spelling| (format!("`{spelling}`, declared elsewhere"), spelling));
+            for (title, spelling) in near.chain(elsewhere) {
+                let spelling = spelling.clone();
+                actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                    title,
+                    kind: Some(CodeActionKind::QUICKFIX),
+                    edit: Some(WorkspaceEdit {
+                        changes: Some(HashMap::from([(
+                            uri.clone(),
+                            vec![TextEdit {
+                                range: index.range(&text, missing.range),
+                                new_text: spelling,
+                            }],
+                        )])),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }));
+            }
+        }
+        Some(actions)
+    }
+
     /// The diagram of one open document: its definitions and their
     /// relationships by default, the internal structure of one element
     /// with `view: "internal"`, the membership tree with `view: "browser"`.
