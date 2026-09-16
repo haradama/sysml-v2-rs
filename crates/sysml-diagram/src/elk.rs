@@ -210,9 +210,11 @@ impl Built {
         // than it looks: it applies one to a nested node along its own
         // axis, so a frame told to be wide comes back tall.
         for frame in &mut packages {
+            // room for the name and for the corner the tab is cut off
+            // at, which the drawing would otherwise take out of it
             frame.width = frame
                 .width
-                .max(style.text_width(&frame.name) + 2.0 * style.padding);
+                .max(style.name_width(&frame.name) + 2.0 * style.padding + style.package_slant());
         }
         let canvas = &self.graph.node(self.graph.root).shape;
         let width = packages
@@ -475,10 +477,14 @@ mod tests {
         let diagram = definition_diagram(ws.model(), &[ws.root()]);
         let layout = laid_out(&diagram, &style);
 
-        // the one box it holds is far narrower than the name across its top
+        // the one box it holds is far narrower than the name across its
+        // top, which is measured as the bold it is drawn in
         let frame = &layout.packages[0];
         assert!(
-            frame.width >= style.text_width("AVeryLongPackageNameIndeed") + 2.0 * style.padding,
+            frame.width
+                >= style.name_width("AVeryLongPackageNameIndeed")
+                    + 2.0 * style.padding
+                    + style.package_slant(),
             "{frame:?}"
         );
         // and the canvas holds the frame it was widened to

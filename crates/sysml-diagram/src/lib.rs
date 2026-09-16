@@ -103,11 +103,33 @@ impl Style {
         self.padding + self.line_height
     }
 
+    /// How far the tab slants out as it descends.
+    ///
+    /// Beside [`Self::package_tab`] because the drawing and the layout
+    /// have to agree on it: the corner this cuts off comes out of the
+    /// top edge, where the name is written.
+    pub(crate) fn package_slant(&self) -> f64 {
+        0.3 * self.package_tab()
+    }
+
     /// Rough advance width of `text`. Boxes are sized without a font engine,
     /// so this assumes the average glyph of a sans-serif face is 0.6 em --
     /// wide enough for the ASCII identifiers SysML models are written with.
     pub(crate) fn text_width(&self, text: &str) -> f64 {
         columns(text) as f64 * self.font_size * 0.6
+    }
+
+    /// Rough advance width of `text` where it is drawn as a name.
+    ///
+    /// A name is set bold, and a bold face is about a tenth wider than
+    /// the regular one: `ArduinoCompatibleHardware` comes to 198 px in
+    /// DejaVu Sans Bold -- what a Linux box renders `Arial, Helvetica,
+    /// sans-serif` as, and the widest face this is likely to be drawn in
+    /// -- against the 180 px [`Self::text_width`] estimates. Boxes have
+    /// allowed for that since they were written; packages and swimlanes
+    /// did not, and their names hung over what was drawn round them.
+    pub(crate) fn name_width(&self, text: &str) -> f64 {
+        self.text_width(text) * 1.1
     }
 }
 

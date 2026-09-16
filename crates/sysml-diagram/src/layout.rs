@@ -175,7 +175,7 @@ fn swimlanes(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
             .nodes
             .iter()
             .map(|&at| sizes[at].0)
-            .fold(style.text_width(&lane.name), f64::max)
+            .fold(style.name_width(&lane.name), f64::max)
             + 2.0 * style.padding;
         let mut down = top + heading + style.padding;
         for &at in &lane.nodes {
@@ -220,8 +220,8 @@ pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
         // a note is sized by the text it holds, like a box with one line
         Shape::Note | Shape::Box => {}
     }
-    // the name is drawn bold, which the 0.6 em estimate does not account for
-    let mut width = (style.text_width(&node.name) * 1.1)
+    let mut width = style
+        .name_width(&node.name)
         .max(style.text_width(&format!("\u{ab}{}\u{bb}", node.keyword)));
     // a note draws its prose flush with its first line; a box indents a
     // line one step in from the label of the compartment holding it

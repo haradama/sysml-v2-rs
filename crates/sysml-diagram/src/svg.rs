@@ -184,8 +184,8 @@ impl<'a> Canvas<'a> {
             // so it reads as a tab of its own rather than as a step in the
             // outline -- the folder as PlantUML and the UML tools before it
             // have always drawn it.
-            let slant = 0.3 * tab;
-            let notch = (self.style.text_width(&frame.name) + 2.0 * self.style.padding)
+            let slant = self.style.package_slant();
+            let notch = (self.style.name_width(&frame.name) + 2.0 * self.style.padding)
                 .min(frame.width - slant)
                 .max(0.0);
             // a package writes no keyword, so a skin paints it under the
@@ -3430,6 +3430,43 @@ mod tests {
                 let named = &diagram.nodes[at].name;
                 assert!(placed.placed[at].y >= clear, "{named} is under the tab");
             }
+        }
+    }
+
+    /// The name is written one padding in, so the tab has to be wider
+    /// than the name by more than that -- and a bold face is a tenth
+    /// wider than what [`Style::text_width`] measures. Thirteen of the
+    /// fifty-seven package names in the corpus used to sit over the end
+    /// of their tabs.
+    #[test]
+    fn a_package_tab_is_wide_enough_for_the_name_in_it() {
+        let style = Style::default();
+        for name in [
+            "ArduinoCompatibleHardware",
+            "ParametersOfInterestMetadata",
+            "ISQThermodynamics",
+            "A",
+        ] {
+            let svg = svg_of(&format!("package {name} {{ part def P; }}\n"));
+            let tab = svg
+                .lines()
+                .find(|line| line.starts_with("<path class=\"box\" d=\"M "))
+                .unwrap_or_else(|| panic!("no package frame in {svg}"));
+            // `M x y H notch L ...`: the top edge runs to the notch
+            let mut walk = tab.split_whitespace().skip(3);
+            let left: f64 = walk.next().unwrap().parse().unwrap();
+            let notch: f64 = walk.nth(2).unwrap().parse().unwrap();
+            let written = svg
+                .lines()
+                .find(|line| line.starts_with("<text class=\"name\""))
+                .expect("the name is written in the tab");
+            let at = crate::svg::anchor_tests::number(written, " x=\"");
+            assert!(at >= left, "{name} is written left of its own frame");
+            assert!(
+                at + style.name_width(name) <= notch,
+                "{name} reaches {} and the tab ends at {notch}",
+                at + style.name_width(name)
+            );
         }
     }
 
