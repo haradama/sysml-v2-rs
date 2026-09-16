@@ -240,4 +240,60 @@ mod tests {
     fn nonsense_is_not_fatal() {
         assert!(handle(b"not a message") == b"[]");
     }
+
+    /// The four exports, called the way a browser calls them.
+    ///
+    /// A host writes through the pointer `take` hands back; a test
+    /// inside the crate reaches the same buffer directly, which is the
+    /// one thing about this it cannot do the way a host does.
+    #[test]
+    fn a_message_crosses_through_the_buffer_and_back() {
+        let message = br#"{"jsonrpc":"2.0","id":1,"method":"shutdown"}"#;
+        assert!(!exports::take(message.len()).is_null());
+        BUFFER.with(|buffer| *buffer.borrow_mut() = message.to_vec());
+
+        // before `initialize`, so the answer is the refusal the
+        // specification names rather than a shutdown
+        let length = exports::handle(message.len());
+        assert!(!exports::answers().is_null());
+        let said = BUFFER.with(|buffer| buffer.borrow()[..length].to_vec());
+        let said: Vec<serde_json::Value> = serde_json::from_slice(&said).expect("an array");
+        assert_eq!(said[0]["error"]["code"], -32002, "{said:?}");
+        assert_eq!(exports::finished(), 0);
+    }
+
+    /// `exit` where nothing was shut down is a failure, and a failure is
+    /// said in the one channel a client is listening on.
+    #[test]
+    fn a_session_that_ends_badly_says_so_before_it_goes() {
+        ask(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "capabilities": {}, "initializationOptions": { "noLibrary": true } },
+        }));
+        ask(serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+        let answers = ask(serde_json::json!({ "jsonrpc": "2.0", "method": "exit" }));
+        let logged = answers
+            .iter()
+            .find(|message| message["method"] == "window/logMessage")
+            .expect("the client is told why");
+        assert!(logged["params"]["message"]
+            .as_str()
+            .is_some_and(|said| said.contains("`exit` without a `shutdown`")));
+        assert!(over());
+    }
+
+    /// What a panic said, which is the only place it still exists once
+    /// the host has caught the trap.
+    #[test]
+    fn a_panic_leaves_its_message_where_the_host_can_read_it() {
+        // the hook goes in on the first thing a host does
+        assert!(!exports::take(0).is_null());
+        assert_eq!(exports::trap(), 0, "nothing has gone wrong yet");
+        let caught = std::panic::catch_unwind(|| panic!("a name for the trap"));
+        assert!(caught.is_err());
+        let length = exports::trap();
+        let said =
+            BUFFER.with(|buffer| String::from_utf8_lossy(&buffer.borrow()[..length]).into_owned());
+        assert!(said.contains("a name for the trap"), "{said}");
+    }
 }

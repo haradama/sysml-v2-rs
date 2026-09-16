@@ -279,10 +279,10 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
             Phase::Over,
             Flow::Over(Err("`exit` without a `shutdown` before it".into())),
         ),
-        Message::Notification(note) => match server.handle_notification(out, note) {
-            Ok(()) => (Phase::Open(server), Flow::Go),
-            Err(why) => (Phase::Over, Flow::Over(Err(why.to_string()))),
-        },
+        Message::Notification(note) => {
+            server.handle_notification(out, note);
+            (Phase::Open(server), Flow::Go)
+        }
         // this server asks the client nothing, so an answer is nothing
         // it is waiting for
         Message::Response(_) => (Phase::Open(server), Flow::Go),
@@ -533,16 +533,12 @@ fn taken<T: serde::de::DeserializeOwned>(note: Notification, out: &mut Vec<Messa
 }
 
 impl Server {
-    fn handle_notification(
-        &mut self,
-        out: &mut Vec<Message>,
-        note: Notification,
-    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    fn handle_notification(&mut self, out: &mut Vec<Message>, note: Notification) {
         use lsp_types::notification::*;
         match note.method.as_str() {
             DidOpenTextDocument::METHOD => {
                 let Some(params) = taken::<lsp_types::DidOpenTextDocumentParams>(note, out) else {
-                    return Ok(());
+                    return;
                 };
                 let uri = params.text_document.uri;
                 let language = params.text_document.language_id;
@@ -564,12 +560,12 @@ impl Server {
                     self.project = None;
                 }
                 self.analysis = None;
-                self.publish_diagnostics(out, Some(&uri))?;
+                self.publish_diagnostics(out, Some(&uri));
             }
             DidChangeTextDocument::METHOD => {
                 let Some(params) = taken::<lsp_types::DidChangeTextDocumentParams>(note, out)
                 else {
-                    return Ok(());
+                    return;
                 };
                 let uri = params.text_document.uri;
                 if let Some(text) = self.docs.get_mut(&uri) {
@@ -584,21 +580,21 @@ impl Server {
                     self.project = None;
                 }
                 self.analysis = None;
-                self.publish_diagnostics(out, Some(&uri))?;
+                self.publish_diagnostics(out, Some(&uri));
             }
             // a file written, renamed or deleted outside the editor
             // changes what the project is and what it says
             DidChangeWatchedFiles::METHOD => {
                 let Some(_) = taken::<lsp_types::DidChangeWatchedFilesParams>(note, out) else {
-                    return Ok(());
+                    return;
                 };
                 self.project = None;
                 self.analysis = None;
-                self.publish_diagnostics(out, None)?;
+                self.publish_diagnostics(out, None);
             }
             DidCloseTextDocument::METHOD => {
                 let Some(params) = taken::<lsp_types::DidCloseTextDocumentParams>(note, out) else {
-                    return Ok(());
+                    return;
                 };
                 self.docs.remove(&params.text_document.uri);
                 self.languages.remove(&params.text_document.uri);
@@ -620,7 +616,7 @@ impl Server {
                     diagnostics: Vec::new(),
                     version: None,
                 };
-                let cleared = serde_json::to_value(cleared)?;
+                let cleared = serde_json::to_value(cleared).expect("diagnostics serialize");
                 out.push(Message::Notification(lsp_server::Notification {
                     method: PublishDiagnostics::METHOD.into(),
                     params: cleared,
@@ -628,7 +624,7 @@ impl Server {
                 // what the closed file said reached the others: a
                 // sibling that imported it was reading the buffer and
                 // now reads the file, and nothing else would tell it so
-                self.publish_diagnostics(out, None)?;
+                self.publish_diagnostics(out, None);
             }
             // How the set the handshake brought changes afterwards: a
             // file written, renamed or deleted, or the files beside a
@@ -636,7 +632,7 @@ impl Server {
             // null is a file the client says is gone.
             "sysml/files" => {
                 let Some(params) = taken::<HandedFiles>(note, out) else {
-                    return Ok(());
+                    return;
                 };
                 let mut news = false;
                 for file in params.files {
@@ -648,12 +644,11 @@ impl Server {
                 if news {
                     self.project = None;
                     self.analysis = None;
-                    self.publish_diagnostics(out, None)?;
+                    self.publish_diagnostics(out, None);
                 }
             }
             _ => {}
         }
-        Ok(())
     }
 
     /// Say what is wrong with each open document, where that has changed.
@@ -663,11 +658,7 @@ impl Server {
     /// the keystroke it sent has to hear something. Every keystroke in one
     /// file used to republish every open file, and an editor takes each of
     /// those apart and lays it out again.
-    fn publish_diagnostics(
-        &mut self,
-        out: &mut Vec<Message>,
-        changed: Option<&Url>,
-    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    fn publish_diagnostics(&mut self, out: &mut Vec<Message>, changed: Option<&Url>) {
         let docs = self.docs.clone();
         let analysis = self.analysis();
         // Taken by value: what the constraints are asked of needs the
@@ -756,13 +747,12 @@ impl Server {
                 diagnostics,
                 version: None,
             };
-            let params = serde_json::to_value(params)?;
+            let params = serde_json::to_value(params).expect("diagnostics serialize");
             out.push(Message::Notification(Notification {
                 method: lsp_types::notification::PublishDiagnostics::METHOD.into(),
                 params,
             }));
         }
-        Ok(())
     }
 
     fn handle_request(&mut self, req: &Request) -> Response {
@@ -1058,4 +1048,252 @@ fn error_response(id: RequestId, err: impl std::fmt::Display) -> Response {
         lsp_server::ErrorCode::InvalidParams as i32,
         err.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sequence the specification describes, and what a message
+    /// that does not belong to the phase it arrives in does.
+    ///
+    /// Driven as a [`Session`] rather than over a connection: these are
+    /// the answers a client gets for talking out of turn, and none of
+    /// them needs a server that has read a library.
+    fn waiting() -> (Session, Vec<Message>) {
+        (Session::new(Files::handed()), Vec::new())
+    }
+
+    fn request(id: i32, method: &str, params: serde_json::Value) -> Message {
+        Message::Request(Request {
+            id: RequestId::from(id),
+            method: method.into(),
+            params,
+        })
+    }
+
+    fn notification(method: &str) -> Message {
+        Message::Notification(Notification {
+            method: method.into(),
+            params: serde_json::Value::Null,
+        })
+    }
+
+    /// What the server said, as JSON -- which is how a client reads it,
+    /// and how a test can look at it without a branch that never runs.
+    fn said(out: &[Message]) -> Vec<serde_json::Value> {
+        out.iter()
+            .map(|message| serde_json::to_value(message).expect("a message is JSON"))
+            .collect()
+    }
+
+    fn started(session: &mut Session, out: &mut Vec<Message>) {
+        let params = serde_json::json!({
+            "capabilities": {},
+            "initializationOptions": { "noLibrary": true },
+        });
+        session.handle(request(1, "initialize", params), out);
+        session.handle(notification("initialized"), out);
+        out.clear();
+    }
+
+    #[test]
+    fn a_question_before_the_handshake_is_answered_and_the_handshake_still_comes() {
+        let (mut session, mut out) = waiting();
+        let flow = session.handle(request(1, "shutdown", serde_json::Value::Null), &mut out);
+        assert!(matches!(flow, Flow::Go), "{flow:?}");
+        let answers = said(&out);
+        assert_eq!(
+            answers[0]["error"]["code"],
+            lsp_server::ErrorCode::ServerNotInitialized as i32,
+            "{answers:?}"
+        );
+        // and it is still a session: the client may say `initialize` now
+        out.clear();
+        started(&mut session, &mut out);
+        assert!(!session.over());
+    }
+
+    #[test]
+    fn a_notification_before_the_handshake_is_nobody_s_to_answer() {
+        let (mut session, mut out) = waiting();
+        let flow = session.handle(notification("$/setTrace"), &mut out);
+        assert!(matches!(flow, Flow::Go));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn exit_before_the_handshake_is_the_end_of_it() {
+        let (mut session, mut out) = waiting();
+        let flow = session.handle(notification("exit"), &mut out);
+        assert!(matches!(flow, Flow::Over(Err(_))), "{flow:?}");
+        assert!(session.over());
+    }
+
+    /// This server asks the client nothing, so an answer is an answer to
+    /// a question nobody asked.
+    #[test]
+    fn an_answer_nothing_asked_for_is_refused_before_the_handshake_and_ignored_after() {
+        let answer = || {
+            Message::Response(Response {
+                id: RequestId::from(9),
+                result: None,
+                error: None,
+            })
+        };
+        let (mut session, mut out) = waiting();
+        assert!(matches!(
+            session.handle(answer(), &mut out),
+            Flow::Over(Err(_))
+        ));
+
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        assert!(matches!(session.handle(answer(), &mut out), Flow::Go));
+    }
+
+    #[test]
+    fn a_handshake_that_cannot_be_read_is_answered_before_the_session_ends() {
+        let (mut session, mut out) = waiting();
+        let flow = session.handle(request(1, "initialize", serde_json::json!(7)), &mut out);
+        assert!(matches!(flow, Flow::Over(Err(_))), "{flow:?}");
+        // a client left waiting hears nothing about why
+        let answers = said(&out);
+        assert!(answers[0]["error"]["message"].is_string(), "{answers:?}");
+    }
+
+    #[test]
+    fn nothing_but_initialized_follows_the_handshake() {
+        let (mut session, mut out) = waiting();
+        let params = serde_json::json!({ "capabilities": {} });
+        session.handle(request(1, "initialize", params), &mut out);
+        let flow = session.handle(notification("textDocument/didSave"), &mut out);
+        assert!(matches!(flow, Flow::Over(Err(_))), "{flow:?}");
+    }
+
+    #[test]
+    fn nothing_but_exit_follows_a_shutdown() {
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        assert!(matches!(
+            session.handle(request(2, "shutdown", serde_json::Value::Null), &mut out),
+            Flow::Go
+        ));
+        let flow = session.handle(notification("initialized"), &mut out);
+        assert!(matches!(flow, Flow::Over(Err(_))), "{flow:?}");
+    }
+
+    /// The project is what the client hands over, and it may change
+    /// while the client is talking.
+    #[test]
+    fn a_handed_over_file_is_the_project_and_may_change() {
+        let handed = |uri: &str, text: &str| {
+            Message::Notification(Notification {
+                method: "sysml/files".into(),
+                params: serde_json::json!({ "files": [{ "uri": uri, "text": text }] }),
+            })
+        };
+        let (mut session, mut out) = waiting();
+        let params = serde_json::json!({
+            "capabilities": {},
+            "workspaceFolders": [{ "uri": "file:///m", "name": "m" }],
+            "initializationOptions": {
+                "noLibrary": true,
+                "files": [{ "uri": "file:///m/parts.sysml", "text": "part def Wheel;\n" }],
+            },
+        });
+        session.handle(request(1, "initialize", params), &mut out);
+        session.handle(notification("initialized"), &mut out);
+        out.clear();
+
+        // a document naming what the file beside it declares
+        session.handle(
+            Message::Notification(Notification {
+                method: "textDocument/didOpen".into(),
+                params: serde_json::json!({ "textDocument": {
+                    "uri": "file:///m/car.sysml",
+                    "languageId": "sysml",
+                    "version": 1,
+                    "text": "part def Car {\n    part w : Wheel[4];\n}\n",
+                }}),
+            }),
+            &mut out,
+        );
+        assert_eq!(said_about(&out, "file:///m/car.sysml").len(), 0, "{out:?}");
+
+        // where that name is declared is a file the client never opened,
+        // and the answer has to name it as the client would
+        out.clear();
+        session.handle(
+            request(
+                2,
+                "textDocument/references",
+                serde_json::json!({
+                    "textDocument": { "uri": "file:///m/car.sysml" },
+                    "position": { "line": 1, "character": 13 },
+                    "context": { "includeDeclaration": true },
+                }),
+            ),
+            &mut out,
+        );
+        let answers = said(&out);
+        let places = answers[0]["result"].as_array().cloned().unwrap_or_default();
+        assert!(
+            places
+                .iter()
+                .any(|place| place["uri"] == "file:///m/parts.sysml"),
+            "{answers:?}"
+        );
+
+        // the file changes under the client, which says so
+        out.clear();
+        session.handle(
+            handed("file:///m/parts.sysml", "part def Wheeel;\n"),
+            &mut out,
+        );
+        assert_eq!(said_about(&out, "file:///m/car.sysml").len(), 1, "{out:?}");
+
+        // and handing over what the server already has costs nothing
+        out.clear();
+        session.handle(
+            handed("file:///m/parts.sysml", "part def Wheeel;\n"),
+            &mut out,
+        );
+        assert!(out.is_empty(), "{out:?}");
+    }
+
+    /// The diagnostics published about one document, as they were last
+    /// published.
+    fn said_about(out: &[Message], uri: &str) -> Vec<serde_json::Value> {
+        said(out)
+            .iter()
+            .filter(|said| {
+                said["method"] == "textDocument/publishDiagnostics" && said["params"]["uri"] == uri
+            })
+            .map(|said| {
+                said["params"]["diagnostics"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .next_back()
+            .unwrap_or_default()
+    }
+
+    /// A client that goes on talking to a session that is over is
+    /// answered nothing, rather than panicked at.
+    #[test]
+    fn a_session_that_is_over_stays_over() {
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        session.handle(request(2, "shutdown", serde_json::Value::Null), &mut out);
+        assert!(matches!(
+            session.handle(notification("exit"), &mut out),
+            Flow::Over(Ok(()))
+        ));
+        out.clear();
+        let flow = session.handle(notification("textDocument/didSave"), &mut out);
+        assert!(matches!(flow, Flow::Over(Ok(()))), "{flow:?}");
+        assert!(out.is_empty());
+    }
 }

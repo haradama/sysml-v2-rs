@@ -258,6 +258,18 @@ mod tests {
         );
     }
 
+    /// A workspace file is declared under a name, and a handed-over
+    /// file's name is the URI it arrived under.
+    #[test]
+    fn a_name_is_the_uri_it_came_under() {
+        let files = handed(&[("file:///a/x.sysml", "part def X;")]);
+        assert_eq!(files.naming(), Naming::Handed);
+        assert_eq!(
+            files.naming().path_of("file:///a/x.sysml"),
+            PathBuf::from("file:///a/x.sysml")
+        );
+    }
+
     /// The scheme a workspace has where nobody has checked it out.
     #[test]
     fn a_virtual_workspace_is_read_the_same_way() {
