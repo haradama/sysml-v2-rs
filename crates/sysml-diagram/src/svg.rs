@@ -3462,10 +3462,13 @@ mod tests {
                 .expect("the name is written in the tab");
             let at = crate::svg::anchor_tests::number(written, " x=\"");
             assert!(at >= left, "{name} is written left of its own frame");
+            // named rather than said twice: an `assert!` evaluates its
+            // message only when it fails, so the same sum written there
+            // is a line that never runs while the test passes
+            let reaches = at + style.name_width(name);
             assert!(
-                at + style.name_width(name) <= notch,
-                "{name} reaches {} and the tab ends at {notch}",
-                at + style.name_width(name)
+                reaches <= notch,
+                "{name} reaches {reaches} and the tab ends at {notch}"
             );
         }
     }

@@ -534,3 +534,47 @@ fn an_internal_view_draws_the_element_in_front_of_you() {
     client.stop(handle);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A `sysml/files` this server cannot read.
+///
+/// The client is the only side that can read a workspace where there is
+/// no filesystem, so this notification is how the project changes there
+/// -- and a client with a bug of its own sending the wrong shape is not
+/// a reason to take the editor's language support away. It is said in
+/// the one channel a client is listening on, and the session goes on.
+#[test]
+fn a_handover_this_server_cannot_read_is_said_rather_than_obeyed() {
+    let (mut client, handle) = serving();
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+
+    // `files` is an array of `{ uri, text }`, and this is not
+    client.notify("sysml/files", json!({ "files": "everything, please" }));
+
+    // Nothing answers a notification, so what there is to read is the
+    // log it leaves: the server takes its messages in order, so this is
+    // the next thing it says.
+    let said = loop {
+        if let lsp_server::Message::Notification(note) = client.recv() {
+            if note.method == "window/logMessage" {
+                break note.params["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+            }
+        }
+    };
+    assert!(said.contains("sysml/files"), "{said}");
+    assert!(said.contains("cannot read"), "{said}");
+
+    // and the session is still a session
+    let symbols = client.request(
+        lsp_types::request::WorkspaceSymbolRequest::METHOD,
+        json!({ "query": "" }),
+    );
+    assert!(symbols.is_array(), "{symbols}");
+    client.stop(handle);
+}

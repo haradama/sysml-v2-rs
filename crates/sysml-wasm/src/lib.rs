@@ -234,6 +234,49 @@ mod tests {
         assert!(over());
     }
 
+    /// A buffer that is no file.
+    ///
+    /// An editor's untitled document sits beside nothing, so there is no
+    /// directory to go and read and no project to build again. On a
+    /// filesystem such a buffer has no path at all and never reaches
+    /// that question; here, where the client hands the files over, every
+    /// URI it can name has one -- and `untitled:` is the one that names
+    /// no directory. It is still diagnosed like any other document.
+    #[test]
+    fn a_buffer_that_is_no_file_is_no_project_to_go_and_read() {
+        ask(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "capabilities": {},
+                "initializationOptions": { "noLibrary": true },
+                "workspaceFolders": [{ "uri": "file:///m", "name": "m" }],
+            },
+        }));
+        ask(serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+
+        let answers = ask(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": "untitled:Untitled-1",
+                "languageId": "sysml",
+                "version": 1,
+                "text": "part def Car { part w : Wheeel; }\n",
+            }},
+        }));
+        let published = answers
+            .iter()
+            .find(|message| message["method"] == "textDocument/publishDiagnostics")
+            .expect("an untitled buffer is diagnosed like any other document");
+        assert_eq!(published["params"]["uri"], "untitled:Untitled-1");
+        let said = published["params"]["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(said.contains("Wheeel"), "{published}");
+    }
+
     /// A host with a bug of its own is not a reason to take the editor's
     /// language support away.
     #[test]

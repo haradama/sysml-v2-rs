@@ -209,6 +209,13 @@ static site.
 
 ### Housekeeping
 
+- Three lines nothing executed, which the coverage gate had not been
+  able to say so about: the gate runs after the measurement, and the
+  measurement was the job being killed. An `assert!` evaluates its
+  message only when it fails, so a sum written both as the condition and
+  as the message is a line that never runs while the test passes -- it
+  is named once now and said once. A `sysml/files` this server cannot
+  read, and a buffer that is no file, are both answered in a test.
 - The four tests that drive a whole interchange document take it in
   turns and share the one document. A document that carries the library
   is 754 MB, `export` peaks around 6.7 GB writing it and `import` around
