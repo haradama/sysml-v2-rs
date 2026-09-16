@@ -706,7 +706,13 @@ impl Parser<'_> {
         self.opt_prefix_metadata();
         self.opt_short_name();
         if node == DEFINITION {
-            self.opt_name();
+            // `def` has been read, and a definition's name is the only
+            // thing that belongs after it
+            if self.current().is_keyword() {
+                self.keyword_as_name();
+            } else {
+                self.opt_name();
+            }
         } else if is_metadata {
             self.opt_typing_name();
         } else {
@@ -1085,6 +1091,34 @@ impl Parser<'_> {
             self.bump();
             self.finish_node();
         }
+    }
+
+    /// A reserved word written where a definition's name belongs.
+    ///
+    /// Both notations reserve their keywords, and a name that collides
+    /// with one is written in single quotes: `part def 'frame';`. Bare,
+    /// the keyword used to fall through to [`Self::element_tail`], which
+    /// sweeps up loose keywords -- so the definition came out with no
+    /// name at all, and nothing was said, because nothing had asked for
+    /// one.
+    ///
+    /// Only after `def` (or a KerML classifier keyword), where a name is
+    /// the one thing that belongs. A usage's name is not so certain:
+    /// `return part : Engine;` is a return parameter that is a part, and
+    /// `succession first [0..1] a then b;` opens the succession's own
+    /// clause -- in both the keyword is doing its own job in the very
+    /// position a name would take, and the official corpus writes both.
+    ///
+    /// The word is taken as the name it was written as, so the rest of
+    /// the declaration still reads as one, and the message says how to
+    /// spell it.
+    fn keyword_as_name(&mut self) {
+        let word = &self.text[self.current_range()];
+        let message = format!("`{word}` is reserved; write `'{word}'` to use it as a name");
+        self.error(message);
+        self.start_node(NAME);
+        self.bump();
+        self.finish_node();
     }
 
     /// A name is only consumed when the following token confirms this is a
@@ -1669,6 +1703,48 @@ mod tests {
                 .unwrap();
             assert!(deepest <= MAX_DEPTH + 8, "{deepest} levels");
         }
+    }
+
+    /// A definition named after a reserved word used to lose its name:
+    /// `element_tail` swept the keyword up and nothing said so, because
+    /// nothing had asked for a name. The word is kept -- as the name it
+    /// was written as, so an editor can still find and rename it -- and
+    /// the message says how to spell it.
+    #[test]
+    fn a_reserved_word_where_a_definition_is_named() {
+        for (text, word) in [
+            ("part def frame;", "frame"),
+            ("part def action;", "action"),
+            // a word the modifier loop would otherwise have taken
+            ("part def end;", "end"),
+        ] {
+            let parse = parse(text);
+            assert_eq!(parse.syntax().text().to_string(), text, "lossless: {text}");
+            let said: Vec<&str> = parse.errors().iter().map(|e| e.message.as_str()).collect();
+            assert_eq!(
+                said,
+                [format!(
+                    "`{word}` is reserved; write `'{word}'` to use it as a name"
+                )],
+                "for {text}"
+            );
+            // kept, so the name is still there to resolve and to rename
+            let tree = format!("{:#?}", parse.syntax());
+            assert!(tree.contains("NAME@"), "no name node for {text}:\n{tree}");
+        }
+    }
+
+    /// And the same words where they are doing their own job in the very
+    /// position a name would take: `part` here is the parameter's kind,
+    /// and `first` opens the succession's own clause. Both are written
+    /// in the official corpus, which is why the check above is only
+    /// where a definition is named and not wherever a name may stand.
+    #[test]
+    fn a_keyword_in_a_name_s_place_that_is_not_a_name() {
+        check_ok("calc def C { in part : Engine; return part : Engine; }");
+        check_ok("action def A { succession first [0..1] a then [1] b; }");
+        // and a name that only needed quoting is taken as written
+        check_ok("part def 'frame';");
     }
 
     #[test]

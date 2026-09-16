@@ -1,0 +1,168 @@
+# Changelog
+
+Ten crates are published from this repository and each carries its own
+version, because what a number moves for is a change in the crate it is
+on. So an entry here names the crates it is about and the version each
+went to; a crate not named in an entry did not change in it.
+
+Dates are the day the tag was cut. Anything under **Unreleased** is on
+`main` and is not on crates.io yet.
+
+## Unreleased
+
+### A name is drawn in a face wider than the one it was measured in
+
+`sysmlv2-diagram` **0.2.1**
+
+- A package's name no longer hangs over the end of the tab it is written
+  in. A name is set bold, and a bold face is about a tenth wider than the
+  regular one at the same size, which boxes have allowed for since they
+  were written and packages and swimlanes had not.
+  `ArduinoCompatibleHardware` came to 198 px in DejaVu Sans Bold — what a
+  Linux box renders `Arial, Helvetica, sans-serif` as — and was given
+  190; thirteen of the fifty-seven package names in the corpus were over
+  their tabs the same way.
+- A frame now leaves room for the corner its tab is cut off at as well,
+  so a package holding one small box under a long name is not widened to
+  the name and then narrowed again by the cut.
+
+### A language server that runs where there is no machine
+
+`sysmlv2-lsp` **0.2.0**, and `sysmlv2-wasm`, which is new and is not
+published: it is the inside of the VSCode extension.
+
+- The server no longer reads its messages from a channel or its files
+  from a filesystem, because a browser has neither to offer.
+  `Session::handle` takes one message and hands back the messages that
+  answer it, and `Files` says where a project's files come from — a
+  disk, or the client, which in a browser is the only side of the
+  connection that can read a workspace. `run` over stdio is that session
+  with a loop around it; the binary and every other editor's client are
+  unchanged.
+- Two additions to what a client may say, for a client that has to do
+  the reading: `initializationOptions.files` is the set of files the
+  project starts as, and `sysml/files` is how it changes afterwards —
+  each `{ "uri", "text" }`, and a `text` of `null` a file that is gone.
+  The set travels in the handshake rather than after it so that the
+  first document opened is not diagnosed against a project of nothing.
+- `sysmlv2-wasm` compiles all of it to `wasm32-unknown-unknown`: 6.3 MiB,
+  1.7 MiB over the wire, holding the parser, the metamodel, name
+  resolution, the constraints, the diagrams and the standard library.
+  The toolchain is `rustup target add wasm32-unknown-unknown` and
+  `cargo build` — what crosses between the two languages is one string
+  each way, which is not worth a binding generator pinned to a crate's
+  version.
+- The VSCode extension (**0.2.0**) ships that module instead of five
+  platform binaries, and runs in a browser as well as on a machine. The
+  package is 1.8 MB where each platform's was 3.9 MB.
+- What the server wrote to standard error it now says in
+  `window/logMessage`. Standard error in a worker goes nowhere at all,
+  and a library path that would not open was a setting that went wrong
+  in silence.
+- One crate in the workspace does not take the workspace's
+  `unsafe_code = "forbid"`: `sysmlv2-wasm` keeps it at `deny`, with the
+  exception on the module holding the four exports, because
+  `#[no_mangle]` is itself an unsafe attribute and a `cdylib` has no
+  other way to name what it exports. Everything the model is actually
+  made of still forbids it.
+
+### A reserved word written as a name
+
+`sysmlv2-syntax` **0.1.3**, `sysmlv2-model` **0.1.2**
+
+- A role keyword is the role of the declaration it leads, and of no
+  other. It used to be whichever role keyword turned up anywhere in the
+  declaration — and a declaration collects loose keywords, because a
+  reserved word written as a name is swept up into it. So
+  `part frame : R;` came out as a framed concern, which the standard
+  makes a kind of requirement constraint, and
+  `validateRequirementConstraintMembershipIsComposite` and
+  `validateRequirementConstraintMembershipOwningType` were both violated
+  by a file that declares no requirement at all. Nothing in the message
+  pointed at the name, which is where the mistake was.
+- A definition named after a reserved word is reported, with the
+  quoting that fixes it: ``part def frame;`` now says ``` `frame` is
+  reserved; write `'frame'` to use it as a name ```. The word used to be
+  swept up the same way and the definition came out with no name, in
+  silence, because nothing had asked it for one. The word is kept as the
+  name it was written as, so an editor can still find and rename it.
+- Only where a definition is named. A usage's name is not so certain:
+  `return part : Engine;` is a return parameter that is a part, and
+  `succession first [0..1] a then [1] b;` opens the succession's own
+  clause — in both the keyword is doing its own job in the very position
+  a name would take, and the official corpus writes both.
+### The standard interchange, read as well as written
+
+`sysmlv2-cli` **0.1.4**
+
+- `sysml import <json>` reads a standard interchange document back into a
+  model and says what it holds, or draws it with `--diagram`. The reader
+  it calls has been round-trip tested over the whole standard library
+  since it was written and was reachable from no command at all, so a
+  document off a model server — which `sysml api` will fetch for you —
+  had nowhere to go.
+- A document that names elements it does not carry is refused in words
+  rather than by a bare UUID. That is what `sysml export` writes without
+  `--include-library`, since every definition implicitly specializes
+  something in the library, and it is also the shape a model server
+  returns for one page of elements.
+
+### A drawing's skin answers with an error, not with a string
+
+`sysmlv2-diagram` **0.2.0** (breaking), `sysmlv2-lsp`, `sysmlv2-cli`
+
+- `skin::read` answers `Result<Skin, SkinError>` where it answered
+  `Result<Skin, String>`. It was the one public function in the
+  workspace whose error was a bare `String`, which is nobody's error but
+  its own: it cannot go into a `Box<dyn Error>`, and `?` cannot carry it
+  into a function that returns one. `SkinError` displays the same
+  sentence, so a caller that only printed it needs no change; one that
+  matched on the text does.
+
+### What the specification says about each metaclass
+
+`sysmlv2-model`, `sysmlv2-syntax`
+
+- The generator lifts the paragraph the OMG metamodel writes about each
+  of the 175 metaclasses and each enumeration and its literals into the
+  doc comment on `ElementKind` and on the enumerations. It was there all
+  along, in the same comment a constraint's `says` is read from, and
+  nothing had read it. `NOTICE` says which parts of the generated file
+  are the OMG's and this is now among them.
+- `missing_docs` is on in every crate here. It had been off in
+  `sysmlv2-model`, whose surface is generated, and in `sysmlv2-syntax`,
+  where the argument was that the syntax kinds are their own
+  documentation — true of the kinds, and it had been excusing `AstNode`,
+  `Parse` and every accessor of the typed tree along with them. The
+  exemption is now taken on `SyntaxKind` itself, where it can only cover
+  what it was argued for.
+- Every crate takes its lints from `[workspace.lints]` rather than
+  repeating the same attributes and the same paragraph of reasoning in
+  ten `lib.rs` files, where it had gone stale in eight of them. The
+  binaries are held to them too, which the per-library attributes never
+  reached.
+
+### Housekeeping
+
+- `sysml rustgen` writes its `#![allow(...)]` header the way `rustfmt`
+  would, so the first thing it generates is no longer the first thing
+  that comes back as a diff.
+- `tools/render` and `examples/arduino-uno` are held to `cargo fmt` and
+  `cargo clippy` in CI. Both sit outside the workspace, so neither gate
+  had ever read them, and both were failing `fmt`.
+- The `sysml` tool is built for five platforms on each `v*` tag and
+  attached to the release with checksums. `cargo install` wants a
+  toolchain, and the people this is for are systems engineers.
+- `cargo deny check` runs weekly and on any change to what is depended
+  on: advisories, yanked crates, and the licence of everything in the
+  tree. What it answers changes without anything here changing, which is
+  why it has a schedule of its own. `deny.toml` names each licence and
+  what is under it — EPL-2.0 scoped to `sysmlv2-stdlib` alone, since
+  carrying the OMG library is the reason that crate exists.
+
+## Earlier
+
+The versions on crates.io before this were cut from `main` without a file
+like this one. What each number moved for is written beside it in
+`Cargo.toml` — the workspace manifest for the dependency floors, each
+crate's own for its version — and the commit that moved it says the rest.

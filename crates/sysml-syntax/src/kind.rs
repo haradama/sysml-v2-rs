@@ -371,6 +371,12 @@ impl SyntaxKind {
     /// Whether it is a keyword of either notation. Which of the two
     /// reserve it is [`SyntaxKind::is_sysml_keyword`] and
     /// [`SyntaxKind::is_kerml_keyword`].
+    ///
+    /// A keyword token in hand is always one the file's own notation
+    /// reserves: the lexer writes one only where that notation does, and
+    /// `frame` is `FRAME_KW` in SysML v2 and an `IDENT` in KerML. So the
+    /// parser can read this as "a name cannot be spelled that way here"
+    /// without asking which notation it is in.
     pub fn is_keyword(self) -> bool {
         (ABOUT_KW..=XOR_KW).contains(&self)
     }

@@ -2190,7 +2190,25 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
         }
     }
     with_wrapper(node).find_map(|scope| {
-        tokens(&scope).find_map(|token| match token {
+        // Every one of these leads the declaration it is the role of:
+        // `subject veh : Vehicle;`, `frame concern c;`, `return x;`.
+        // Only visibility may come before -- prefix metadata is a node
+        // of its own and no token of this scope at all, and a modifier
+        // cannot, since a member that opens with one is read as a
+        // declaration before any of these is looked for. Not the
+        // modifiers in general, at any rate: `variant` is one of them
+        // and is a role itself.
+        //
+        // Asked of every token instead, the answer was whichever role
+        // keyword turned up anywhere in the declaration -- and a
+        // declaration collects loose keywords, because a reserved word
+        // written as a name is swept up into it. `part frame : R;` came
+        // out as a framed concern, which the standard makes a kind of
+        // requirement constraint, so two of the specification's
+        // constraints about requirements were violated by a file that
+        // declares none.
+        let lead = tokens(&scope).find(|token| !token.is_trivia() && !token.is_visibility_kw())?;
+        match lead {
             SUBJECT_KW => Some(Role::Subject),
             ACTOR_KW => Some(Role::Actor),
             STAKEHOLDER_KW => Some(Role::Stakeholder),
@@ -2209,7 +2227,7 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
             // for saying so
             RENDER_KW => Some(Role::Render),
             _ => None,
-        })
+        }
     })
 }
 
@@ -2522,6 +2540,49 @@ fn string_token(node: &SyntaxNode) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A role keyword is the role of the declaration it leads, and of no
+    /// other.
+    ///
+    /// A declaration collects loose keywords -- a reserved word written
+    /// as a name is swept into it -- and the role used to be whichever
+    /// role keyword turned up anywhere among them. `part frame : R;`
+    /// came out as a framed concern, which the standard makes a kind of
+    /// requirement constraint, so two of the specification's constraints
+    /// about requirements were violated by a file that declares none.
+    #[test]
+    fn a_role_keyword_is_the_role_of_what_it_leads() {
+        let leading = [
+            ("requirement def R { subject v : V; }", Role::Subject),
+            ("requirement def R { actor a : V; }", Role::Actor),
+            ("requirement def R { frame concern c; }", Role::Frame),
+            ("requirement def R { require constraint c; }", Role::Require),
+            ("requirement def R { assume constraint c; }", Role::Assume),
+            ("calc def C { return x; }", Role::Return),
+            // and still the role where visibility comes before it
+            (
+                "requirement def R { private subject v : V; }",
+                Role::Subject,
+            ),
+        ];
+        for (text, role) in leading {
+            let (model, roots) = build_model(&sysml_syntax::parse(text));
+            let member = model.owned(roots[0])[0];
+            assert_eq!(model.member_role(member), Some(role), "for {text}");
+        }
+
+        // the same words swept up in the middle of a declaration, where
+        // they are the name somebody forgot to quote and nothing else
+        for text in [
+            "part def Q { part frame : R; }",
+            "part def Q { part subject : R; }",
+            "part def Q { item render : R; }",
+        ] {
+            let (model, roots) = build_model(&sysml_syntax::parse(text));
+            let member = model.owned(roots[0])[0];
+            assert_eq!(model.member_role(member), None, "for {text}");
+        }
+    }
+
     #[test]
     fn a_named_bound_is_kept_as_the_expression_it_denotes() {
         let (model, roots) = build_model(&sysml_syntax::parse(
