@@ -13,7 +13,12 @@ name: sysml CLI
 
 on:
   push:
-    tags: ["v*"]
+    # `v[0-9]*` and not `v*`: the extension's tags begin `vscode-v`, and
+    # a `v` followed by anything matches those too. This ran on one, got
+    # `scode-v0.2.0` out of `${GITHUB_REF_NAME#v}`, and failed the check
+    # that the tag says what the manifest says -- which is the check
+    # doing its job on a tag that was never its business.
+    tags: ["v[0-9]*"]
   workflow_dispatch:
 
 permissions:
