@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Quick fixes for a name that resolves to nothing: the spellings it might
-  have wanted, as edits. A name nothing declares was mistyped and the fix
-  is the nearest declared name; a name something declares was never in
-  scope here and the fix spells it from the root.
-
 ## 0.2.0
 
 - The language server is a WebAssembly module now, run in a worker.
@@ -29,6 +22,10 @@
 - What the server used to say on standard error -- a library path that
   would not open, a skin that would not read -- is said in the output
   channel, where the rest of its log already was.
+- Quick fixes for a name that resolves to nothing: the spellings it might
+  have wanted, as edits. A name nothing declares was mistyped and the fix
+  is the nearest declared name; a name something declares was never in
+  scope here and the fix spells it from the root.
 
 ## 0.1.1
 
