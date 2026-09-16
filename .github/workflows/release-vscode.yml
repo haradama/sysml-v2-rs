@@ -1,13 +1,13 @@
-# The VSCode extension, one package per platform.
+# The VSCode extension: one package, for everywhere.
 #
-# The extension carries the language server inside it, and a binary is
-# for one platform: so this builds `sysml-lsp` for each of the five the
-# Marketplace knows and packages a `.vsix` around each. VSCode installs
-# whichever matches the machine it is running on, which is what lets the
-# extension promise that nothing needs configuring.
+# The extension carries the language server inside it, and the server is
+# a WebAssembly module -- so there is nothing here to build per platform.
+# The same `.vsix` installs on Linux, macOS and Windows, and runs in a
+# browser at vscode.dev and github.dev, where there is no machine under
+# the editor at all.
 #
 # Tag `vscode-v<version>` to release; run it by hand to build the
-# packages without publishing them.
+# package without publishing it.
 
 name: VSCode extension
 
@@ -23,37 +23,13 @@ on:
 
 jobs:
   package:
-    name: ${{ matrix.vsce }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            vsce: linux-x64
-          # cross-linked rather than built on an arm runner: the server
-          # is pure Rust, so the cross linker is all it takes
-          - os: ubuntu-22.04
-            target: aarch64-unknown-linux-gnu
-            vsce: linux-arm64
-            apt: gcc-aarch64-linux-gnu
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            vsce: darwin-arm64
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            vsce: darwin-x64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            vsce: win32-x64
-            exe: .exe
+    name: package
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # a released version is what the tag says it is
       - name: the tag says what the manifest says
         if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         run: |
           set -eu
           manifest=$(node -p "require('./editors/vscode/package.json').version")
@@ -64,37 +40,35 @@ jobs:
           }
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
-      - if: matrix.apt != ''
-        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+          key: wasm
+      # the `wasm` profile: link-time optimisation and no symbols, since
+      # every byte of this is downloaded and compiled again by a browser
       - name: build the language server
-        run: cargo build --release -p sysmlv2-lsp --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          # a fifth of the binary is symbols nobody downloading it reads;
-          # the gates build without this, so a panic there still names
-          # the frames it came through
-          RUSTFLAGS: -C strip=symbols
+        run: cargo build -p sysmlv2-wasm --target wasm32-unknown-unknown --profile wasm
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
         working-directory: editors/vscode
-      # the server, the standard library, and the licences that have to
-      # travel with them
+      # the module, and the licences that have to travel with it
       - name: bundle
-        run: node scripts/bundle.mjs ../../target/${{ matrix.target }}/release/sysml-lsp${{ matrix.exe }}
+        run: node scripts/bundle.mjs ../../target/wasm32-unknown-unknown/wasm/sysml_wasm.wasm
+        working-directory: editors/vscode
+      # the server the package ships, answered through the worker's own
+      # code: a package that cannot resolve a name is not one to publish
+      - name: test
+        run: npm test
         working-directory: editors/vscode
       # `vsce package` runs `vscode:prepublish`, which compiles
       - name: package
-        run: npx --yes @vscode/vsce package --target ${{ matrix.vsce }} --out sysml-v2-${{ matrix.vsce }}.vsix
+        run: npx --yes @vscode/vsce package --out sysml-v2.vsix
         working-directory: editors/vscode
       - uses: actions/upload-artifact@v4
         with:
-          name: sysml-v2-${{ matrix.vsce }}
+          name: sysml-v2
           path: editors/vscode/*.vsix
           if-no-files-found: error
 
@@ -113,15 +87,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # every platform's package under one version, in one call: the
-      # Marketplace shows them as one extension either way
       - name: publish to the Marketplace
         run: npx --yes @vscode/vsce publish --packagePath packages/*.vsix
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-      # and the same files where somebody who does not use the
-      # Marketplace can install them by hand
-      - name: attach them to the release
+      # and the same file where somebody who does not use the
+      # Marketplace can install it by hand
+      - name: attach it to the release
         if: startsWith(github.ref, 'refs/tags/')
         run: gh release create "$GITHUB_REF_NAME" packages/*.vsix --generate-notes ||
           gh release upload "$GITHUB_REF_NAME" packages/*.vsix --clobber

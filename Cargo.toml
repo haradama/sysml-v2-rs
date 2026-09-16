@@ -14,6 +14,7 @@ members = [
     "crates/sysml-rust",
     "crates/sysml-diagram",
     "crates/sysml-lsp",
+    "crates/sysml-wasm",
     "crates/sysml-cli",
 ]
 # a development helper for looking at the generated diagrams: it pulls in a
@@ -81,6 +82,11 @@ sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.1.0" }
 sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.0" }
 sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.2.0" }
 
+# What the WebAssembly module wraps. No version, like the corpus above:
+# `sysmlv2-wasm` is not published, so a floor would be a promise to
+# nobody.
+sysmlv2-lsp = { path = "crates/sysml-lsp" }
+
 # What every crate here is held to, said once.
 #
 # These were inner attributes at the top of each `lib.rs`, with the same
@@ -105,3 +111,15 @@ unsafe_code = "forbid"
 # exempts the 279 syntax kinds, whose names are the documentation, and
 # nothing else.
 missing_docs = "warn"
+
+# What the WebAssembly module is built with. Every byte of it is
+# downloaded by whoever installs the VSCode extension and compiled again
+# by their browser, so the longer build is worth it: 7.3 MiB to 6.3 MiB,
+# and a minute rather than twenty seconds. A profile of its own so that
+# building the CLI and running the tests stay as quick as they were.
+[profile.wasm]
+inherits = "release"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

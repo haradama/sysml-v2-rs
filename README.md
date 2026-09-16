@@ -136,6 +136,15 @@ sibling is not reported as broken for having been opened alone. The
 server and the standard library travel inside the package, so nothing
 needs configuring.
 
+The server it ships is [`sysmlv2-wasm`](crates/sysml-wasm) — the same
+language server, compiled to WebAssembly and run in a worker. One
+package for Linux, macOS and Windows, and the same one in a browser, at
+vscode.dev or github.dev, where there is no machine under the editor to
+run a program on. The module holds the parser, the metamodel, name
+resolution, the constraints, the diagrams and the standard library:
+6.3 MiB, 1.7 MiB over the wire, half a second to load a library and
+single-figure milliseconds to answer a keystroke.
+
 ## Development
 
 ```sh

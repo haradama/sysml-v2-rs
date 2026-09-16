@@ -449,10 +449,12 @@ impl Server {
         let uri = Url::parse(&params.uri).ok()?;
         let directory = params.scope.as_deref() == Some("directory");
         let within = directory
-            .then(|| file_of(&uri))
+            .then(|| self.file_of(&uri))
             .flatten()
             .and_then(|path| path.parent().map(Path::to_path_buf));
         let skin = self.skin.clone();
+        // taken before the analysis is, which borrows the server whole
+        let naming = self.files.naming();
         let analysis = self.analysis();
         let file = *analysis.doc_files.get(&uri)?;
         let ws = &analysis.ws;
@@ -463,7 +465,9 @@ impl Server {
         // page. `scope: "directory"` draws the lot.
         let roots: Vec<sysml_model::ElementId> = match &within {
             Some(dir) => (0..ws.file_count())
-                .filter(|&other| other == file || file_named(ws.file_name(other)).starts_with(dir))
+                .filter(|&other| {
+                    other == file || naming.path_of(ws.file_name(other)).starts_with(dir)
+                })
                 .flat_map(|other| ws.file_roots(other).iter().copied())
                 .collect(),
             None => ws.file_roots(file).to_vec(),

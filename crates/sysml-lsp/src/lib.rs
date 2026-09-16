@@ -25,6 +25,15 @@
 //!
 //! Run the binary (`sysml-lsp`) over stdio, or drive [`run`] with an
 //! in-memory [`Connection`] for testing.
+//!
+//! # Two hosts
+//!
+//! Nothing here reads a message from anywhere. [`Session`] takes one
+//! message and hands back the messages that answer it; [`run`] is that
+//! session with `lsp_server`'s two threads and a channel around it, and
+//! `sysmlv2-wasm` is the same session in a browser's worker, which has
+//! one thread and may block it for nothing. Where the project's files
+//! come from differs the same way, and that is [`Files`].
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -32,6 +41,7 @@ use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::Notification as _;
+use lsp_types::request::Request as _;
 use lsp_types::{
     CompletionItemKind, CompletionOptions, Diagnostic, DiagnosticSeverity, DocumentSymbol,
     NumberOrString, OneOf, PublishDiagnosticsParams, ServerCapabilities, SignatureHelpOptions,
@@ -41,7 +51,9 @@ use sysml_model::ElementKind;
 use sysml_semantics::Workspace;
 use sysml_syntax::{TextRange, TextSize};
 
+mod files;
 mod line_index;
+pub use files::Files;
 use line_index::LineIndex;
 
 /// Capabilities advertised by this server.
@@ -69,14 +81,231 @@ pub fn server_capabilities() -> ServerCapabilities {
     }
 }
 
-/// Perform the initialize handshake on `connection` and serve until exit.
+/// Serve on `connection` until the client says to stop.
+///
 /// The standard-library directory comes from
 /// `initializationOptions.libraryPath` or `SYSML_LIBRARY_PATH`; with
 /// neither, the copy built into this binary is used, and
 /// `initializationOptions.noLibrary` asks for none at all.
 pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let init_params = connection.initialize(serde_json::to_value(server_capabilities())?)?;
-    let init: lsp_types::InitializeParams = serde_json::from_value(init_params)?;
+    let mut session = Session::new(Files::Disk);
+    let mut out = Vec::new();
+    for message in &connection.receiver {
+        let flow = session.handle(message, &mut out);
+        for answer in out.drain(..) {
+            connection.sender.send(answer)?;
+        }
+        if let Flow::Over(how) = flow {
+            return how.map_err(Into::into);
+        }
+    }
+    // the client hung up without saying so, which is not a failure: an
+    // editor that was closed takes its server with it
+    Ok(())
+}
+
+/// What a [`Session`] wants next.
+#[derive(Debug)]
+pub enum Flow {
+    /// Another message, whenever one comes.
+    Go,
+    /// Nothing more: the session is over.
+    ///
+    /// `Err` says it ended badly, which a program returns as its exit
+    /// status. The specification asks a server told to leave before it
+    /// was asked to shut down to fail, so that a client can tell a stop
+    /// it asked for from one it did not.
+    Over(Result<(), String>),
+}
+
+/// A language server driven one message at a time.
+///
+/// The conversation the specification describes is a sequence -- nothing
+/// before `initialize`, nothing but `initialized` after it, nothing but
+/// `exit` after `shutdown` -- so a session is that sequence, and a
+/// message that does not belong to the phase it arrives in ends it.
+pub struct Session {
+    phase: Phase,
+}
+
+/// How far through that conversation a session is.
+enum Phase {
+    /// Nothing has been agreed. What the client says in `initialize`
+    /// decides what the server is built with, so the files it will read
+    /// wait here until then.
+    Starting(Files),
+    /// `initialize` is answered, and `initialized` is what the
+    /// specification says comes next.
+    Greeting(Box<Server>),
+    /// Open for questions.
+    Open(Box<Server>),
+    /// `shutdown` is answered, and `exit` is what may follow it.
+    Closing,
+    /// Over. Nothing here answers anything.
+    Over,
+}
+
+impl Session {
+    /// A session that has yet to hear from a client, reading the
+    /// project's files from `files`.
+    pub fn new(files: Files) -> Session {
+        Session {
+            phase: Phase::Starting(files),
+        }
+    }
+
+    /// Whether the conversation is finished with.
+    pub fn over(&self) -> bool {
+        matches!(self.phase, Phase::Over)
+    }
+
+    /// Take one message and put whatever answers it in `out`.
+    pub fn handle(&mut self, message: Message, out: &mut Vec<Message>) -> Flow {
+        // Taken rather than borrowed, since what a message mostly does
+        // is move the session from one phase into the next and the
+        // server has to move with it. A phase that is not put back is
+        // `Over`, which is where a failure leaves it anyway.
+        let (phase, flow) = match std::mem::replace(&mut self.phase, Phase::Over) {
+            Phase::Starting(files) => starting(files, message, out),
+            Phase::Greeting(server) => greeting(server, message),
+            Phase::Open(server) => open(server, message, out),
+            Phase::Closing => (Phase::Over, closing(message)),
+            Phase::Over => (Phase::Over, Flow::Over(Ok(()))),
+        };
+        self.phase = phase;
+        flow
+    }
+}
+
+/// Before `initialize`: the one request that may come, and what the
+/// specification says to do with anything else.
+fn starting(files: Files, message: Message, out: &mut Vec<Message>) -> (Phase, Flow) {
+    match message {
+        Message::Request(req) if req.method == lsp_types::request::Initialize::METHOD => {
+            match begin(files, req.params) {
+                Ok(mut server) => {
+                    let result = serde_json::json!({ "capabilities": server_capabilities() });
+                    out.push(Response::new_ok(req.id, result).into());
+                    // what went wrong while the server was built, now
+                    // that there is a client to tell: nothing may be
+                    // said before the handshake is answered
+                    for complaint in std::mem::take(&mut server.complaints) {
+                        log(out, &complaint);
+                    }
+                    (Phase::Greeting(server), Flow::Go)
+                }
+                // the session is over either way, but a client left
+                // waiting for an answer reports a server that would not
+                // start and nothing about why
+                Err(why) => {
+                    out.push(
+                        Response::new_err(
+                            req.id,
+                            lsp_server::ErrorCode::InvalidParams as i32,
+                            why.clone(),
+                        )
+                        .into(),
+                    );
+                    (Phase::Over, Flow::Over(Err(why)))
+                }
+            }
+        }
+        // a client that asks something else first is told so, and may
+        // still say `initialize` afterwards
+        Message::Request(req) => {
+            out.push(
+                Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::ServerNotInitialized as i32,
+                    format!("expected an `initialize` request, got `{}`", req.method),
+                )
+                .into(),
+            );
+            (Phase::Starting(files), Flow::Go)
+        }
+        Message::Notification(note) if note.method == lsp_types::notification::Exit::METHOD => (
+            Phase::Over,
+            Flow::Over(Err("`exit` before `initialize`".into())),
+        ),
+        // anything else a client says before the handshake is not this
+        // server's to answer, and is not a reason to refuse to start
+        Message::Notification(_) => (Phase::Starting(files), Flow::Go),
+        Message::Response(_) => (
+            Phase::Over,
+            Flow::Over(Err(
+                "an answer before `initialize`, to a question nothing asked".into(),
+            )),
+        ),
+    }
+}
+
+/// Between `initialize` and `initialized`, where the specification lets
+/// nothing else through.
+fn greeting(server: Box<Server>, message: Message) -> (Phase, Flow) {
+    match message {
+        Message::Notification(note)
+            if note.method == lsp_types::notification::Initialized::METHOD =>
+        {
+            (Phase::Open(server), Flow::Go)
+        }
+        // `$/...` is the protocol's own traffic, which the
+        // specification says a server may ignore and a client may send
+        // whenever it likes: refusing to start over one would be a
+        // server some clients cannot start at all.
+        Message::Notification(note) if note.method.starts_with("$/") => {
+            (Phase::Greeting(server), Flow::Go)
+        }
+        other => (
+            Phase::Over,
+            Flow::Over(Err(format!("expected `initialized`, got {other:?}"))),
+        ),
+    }
+}
+
+/// Open: a question is answered, a notification is taken in, and `exit`
+/// without a `shutdown` before it is a failure.
+fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (Phase, Flow) {
+    match message {
+        Message::Request(req) if req.method == lsp_types::request::Shutdown::METHOD => {
+            out.push(Response::new_ok(req.id, ()).into());
+            (Phase::Closing, Flow::Go)
+        }
+        Message::Request(req) => {
+            let response = server.handle_request(&req);
+            out.push(Message::Response(response));
+            (Phase::Open(server), Flow::Go)
+        }
+        Message::Notification(note) if note.method == lsp_types::notification::Exit::METHOD => (
+            Phase::Over,
+            Flow::Over(Err("`exit` without a `shutdown` before it".into())),
+        ),
+        Message::Notification(note) => match server.handle_notification(out, note) {
+            Ok(()) => (Phase::Open(server), Flow::Go),
+            Err(why) => (Phase::Over, Flow::Over(Err(why.to_string()))),
+        },
+        // this server asks the client nothing, so an answer is nothing
+        // it is waiting for
+        Message::Response(_) => (Phase::Open(server), Flow::Go),
+    }
+}
+
+/// After `shutdown`, where `exit` is the message the specification names
+/// and no other is.
+fn closing(message: Message) -> Flow {
+    match message {
+        Message::Notification(note) if note.method == lsp_types::notification::Exit::METHOD => {
+            Flow::Over(Ok(()))
+        }
+        other => Flow::Over(Err(format!(
+            "expected `exit` after `shutdown`, got {other:?}"
+        ))),
+    }
+}
+
+/// Build the server the client's `initialize` asks for.
+fn begin(mut files: Files, params: serde_json::Value) -> Result<Box<Server>, String> {
+    let init: lsp_types::InitializeParams = serde_json::from_value(params)
+        .map_err(|err| format!("`initialize` cannot be read: {err}"))?;
 
     let option = |name: &str| {
         init.initialization_options
@@ -85,6 +314,20 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
             .and_then(|v| v.as_str())
             .map(String::from)
     };
+
+    // What the project is made of, where the host has no filesystem to
+    // find out for itself. In the handshake rather than a notification
+    // after it: files sent afterwards would race the client's own
+    // `didOpen`, and the document that opened would be diagnosed
+    // against a project of nothing.
+    if let Some(handed) = init
+        .initialization_options
+        .as_ref()
+        .and_then(|o| o.get("files"))
+    {
+        files.provide_all(handed_files(handed));
+    }
+
     let library_path = option("libraryPath").or_else(|| std::env::var("SYSML_LIBRARY_PATH").ok());
     // A client that wants no library at all says so, rather than naming
     // a path it hopes is unreadable.
@@ -108,7 +351,7 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         .flatten()
         .map(|folder| &folder.uri)
         .chain(init.root_uri.iter())
-        .filter_map(|uri| uri.to_file_path().ok())
+        .filter_map(|uri| files.path_of(uri))
         .collect();
 
     // a workspace may contain models that are not the project's own --
@@ -125,7 +368,10 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         .filter_map(|entry| entry.as_str())
         .flat_map(|entry| {
             let path = std::path::Path::new(entry);
-            if path.is_absolute() {
+            // an entry that is already a whole URI names one place, the
+            // way an absolute path does -- which is how a client says it
+            // where the workspace is not a filesystem
+            if path.is_absolute() || Url::parse(entry).is_ok() {
                 vec![path.to_path_buf()]
             } else {
                 // a relative entry is one per workspace folder, the way a
@@ -135,7 +381,7 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
         })
         .collect();
 
-    let mut server = Server::new(library, &roots, &excluded);
+    let mut server = Box::new(Server::new(files, library, &roots, &excluded));
     // How wide a line may be before formatting breaks it. Read once, as
     // the library path is: a client that changes it restarts the server,
     // which is what changing any of these takes.
@@ -151,9 +397,9 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
     }
     // How the preview is painted: the name of a skin, or one written
     // out. A skin that will not read leaves the drawing as it was and
-    // says why on stderr, which is the output channel an editor shows --
-    // a preview that came back unpainted and silent would be a setting
-    // nobody could debug.
+    // says why where the client collects this server's log -- a preview
+    // that came back unpainted and silent would be a setting nobody
+    // could debug.
     if let Some(said) = init
         .initialization_options
         .as_ref()
@@ -161,10 +407,39 @@ pub fn run(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> 
     {
         match sysml_diagram::skin::read(said) {
             Ok(skin) => server.skin = skin,
-            Err(why) => eprintln!("sysml-lsp: the skin is not read: {why}"),
+            Err(why) => server
+                .complaints
+                .push(format!("the skin is not read: {why}")),
         }
     }
-    server.serve(connection)
+    Ok(server)
+}
+
+/// The `[{ "uri": …, "text": … }]` a client hands a project's files over
+/// as, in `initializationOptions.files` and in `sysml/files`.
+fn handed_files(said: &serde_json::Value) -> Vec<(PathBuf, String)> {
+    serde_json::from_value::<Vec<HandedFile>>(said.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|file| Some((PathBuf::from(file.uri), file.text?)))
+        .collect()
+}
+
+/// Say something in the client's log.
+///
+/// This was `eprintln!`, and a worker has no standard error: what is
+/// written there goes nowhere, so a library path that would not open was
+/// a setting that went wrong in silence. VSCode shows this in the
+/// channel it showed standard error in.
+fn log(out: &mut Vec<Message>, said: &str) {
+    let params = serde_json::json!({
+        "type": lsp_types::MessageType::WARNING,
+        "message": format!("sysml-lsp: {said}"),
+    });
+    out.push(Message::Notification(Notification {
+        method: lsp_types::notification::LogMessage::METHOD.into(),
+        params,
+    }));
 }
 
 mod project;
@@ -174,6 +449,11 @@ mod requests;
 /// against, the documents the client holds open, and what was last
 /// published about each of them.
 pub struct Server {
+    /// where the project's own files are read from
+    files: Files,
+    /// what went wrong before there was a client to tell, said as soon
+    /// as the handshake is answered
+    complaints: Vec<String>,
     /// library workspace, parsed and fully resolved once at startup; the
     /// layers above clone it, resolution caches and all
     library: Workspace,
@@ -236,56 +516,32 @@ struct Placed {
 /// A client is not supposed to send such a thing, and one that does is not
 /// a reason to stop: an editor whose language server exits mid-session
 /// leaves the file without diagnostics or completion until the window is
-/// reloaded. The complaint goes to stderr, where a client collects a
-/// server's log.
-fn taken<T: serde::de::DeserializeOwned>(note: Notification) -> Option<T> {
+/// reloaded. The complaint goes to the client's log, which is where a
+/// client collects a server's.
+fn taken<T: serde::de::DeserializeOwned>(note: Notification, out: &mut Vec<Message>) -> Option<T> {
     let method = note.method.clone();
     match serde_json::from_value(note.params) {
         Ok(params) => Some(params),
         Err(err) => {
-            eprintln!("ignoring a `{method}` this server cannot read: {err}");
+            log(
+                out,
+                &format!("ignoring a `{method}` this server cannot read: {err}"),
+            );
             None
         }
     }
 }
 
 impl Server {
-    fn serve(&mut self, connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>> {
-        for msg in &connection.receiver {
-            match msg {
-                Message::Request(req) => {
-                    if connection.handle_shutdown(&req)? {
-                        return Ok(());
-                    }
-                    let response = self.handle_request(&req);
-                    connection.sender.send(Message::Response(response))?;
-                }
-                Message::Notification(note) => {
-                    // The spec: a server told to leave before it was
-                    // asked to shut down leaves with a failure, which is
-                    // how a client tells a stop it asked for from one it
-                    // did not. An `exit` that follows a `shutdown` never
-                    // reaches here -- `handle_shutdown` takes it.
-                    if note.method == lsp_types::notification::Exit::METHOD {
-                        return Err("`exit` without a `shutdown` before it".into());
-                    }
-                    self.handle_notification(connection, note)?;
-                }
-                Message::Response(_) => {}
-            }
-        }
-        Ok(())
-    }
-
     fn handle_notification(
         &mut self,
-        connection: &Connection,
+        out: &mut Vec<Message>,
         note: Notification,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
         use lsp_types::notification::*;
         match note.method.as_str() {
             DidOpenTextDocument::METHOD => {
-                let Some(params) = taken::<lsp_types::DidOpenTextDocumentParams>(note) else {
+                let Some(params) = taken::<lsp_types::DidOpenTextDocumentParams>(note, out) else {
                     return Ok(());
                 };
                 let uri = params.text_document.uri;
@@ -308,10 +564,11 @@ impl Server {
                     self.project = None;
                 }
                 self.analysis = None;
-                self.publish_diagnostics(connection, Some(&uri))?;
+                self.publish_diagnostics(out, Some(&uri))?;
             }
             DidChangeTextDocument::METHOD => {
-                let Some(params) = taken::<lsp_types::DidChangeTextDocumentParams>(note) else {
+                let Some(params) = taken::<lsp_types::DidChangeTextDocumentParams>(note, out)
+                else {
                     return Ok(());
                 };
                 let uri = params.text_document.uri;
@@ -327,20 +584,20 @@ impl Server {
                     self.project = None;
                 }
                 self.analysis = None;
-                self.publish_diagnostics(connection, Some(&uri))?;
+                self.publish_diagnostics(out, Some(&uri))?;
             }
             // a file written, renamed or deleted outside the editor
             // changes what the project is and what it says
             DidChangeWatchedFiles::METHOD => {
-                let Some(_) = taken::<lsp_types::DidChangeWatchedFilesParams>(note) else {
+                let Some(_) = taken::<lsp_types::DidChangeWatchedFilesParams>(note, out) else {
                     return Ok(());
                 };
                 self.project = None;
                 self.analysis = None;
-                self.publish_diagnostics(connection, None)?;
+                self.publish_diagnostics(out, None)?;
             }
             DidCloseTextDocument::METHOD => {
-                let Some(params) = taken::<lsp_types::DidCloseTextDocumentParams>(note) else {
+                let Some(params) = taken::<lsp_types::DidCloseTextDocumentParams>(note, out) else {
                     return Ok(());
                 };
                 self.docs.remove(&params.text_document.uri);
@@ -348,7 +605,8 @@ impl Server {
                 self.published.remove(&params.text_document.uri);
                 // the buffer that spoke for the file is gone, so the
                 // file on disk speaks for it again
-                if file_of(&params.text_document.uri)
+                if self
+                    .file_of(&params.text_document.uri)
                     .is_some_and(|path| self.substituted.contains(&path))
                 {
                     self.project = None;
@@ -363,17 +621,35 @@ impl Server {
                     version: None,
                 };
                 let cleared = serde_json::to_value(cleared)?;
-                let notification = lsp_server::Notification {
+                out.push(Message::Notification(lsp_server::Notification {
                     method: PublishDiagnostics::METHOD.into(),
                     params: cleared,
-                };
-                connection
-                    .sender
-                    .send(Message::Notification(notification))?;
+                }));
                 // what the closed file said reached the others: a
                 // sibling that imported it was reading the buffer and
                 // now reads the file, and nothing else would tell it so
-                self.publish_diagnostics(connection, None)?;
+                self.publish_diagnostics(out, None)?;
+            }
+            // How the set the handshake brought changes afterwards: a
+            // file written, renamed or deleted, or the files beside a
+            // document opened from outside the workspace. A `text` of
+            // null is a file the client says is gone.
+            "sysml/files" => {
+                let Some(params) = taken::<HandedFiles>(note, out) else {
+                    return Ok(());
+                };
+                let mut news = false;
+                for file in params.files {
+                    news |= self.files.provide(PathBuf::from(file.uri), file.text);
+                }
+                // a client may hand over what the server already has --
+                // a save of an unedited buffer, a watcher that fired
+                // twice -- and rebuilding for that costs the project
+                if news {
+                    self.project = None;
+                    self.analysis = None;
+                    self.publish_diagnostics(out, None)?;
+                }
             }
             _ => {}
         }
@@ -389,7 +665,7 @@ impl Server {
     /// those apart and lays it out again.
     fn publish_diagnostics(
         &mut self,
-        connection: &Connection,
+        out: &mut Vec<Message>,
         changed: Option<&Url>,
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
         let docs = self.docs.clone();
@@ -481,13 +757,10 @@ impl Server {
                 version: None,
             };
             let params = serde_json::to_value(params)?;
-            let notification = Notification {
+            out.push(Message::Notification(Notification {
                 method: lsp_types::notification::PublishDiagnostics::METHOD.into(),
                 params,
-            };
-            connection
-                .sender
-                .send(Message::Notification(notification))?;
+            }));
         }
         Ok(())
     }
@@ -638,51 +911,26 @@ fn element_named(ws: &Workspace, file: usize, name: &str) -> Option<sysml_model:
         .copied()
 }
 
-/// The file a URL names, with every link resolved -- the one spelling
-/// two clients' URLs for the same file agree on.
-///
-/// VSCode percent-encodes characters (`(`, `)`, `+`, `@`, `'`, `,`)
-/// that this crate's URL type leaves alone, and an editor may resolve a
-/// symlinked workspace folder where the scan did not. Compared as
-/// strings, one file then looks like two, and the project reads it from
-/// disk while a buffer declares it as well -- every name in it
-/// colliding with itself.
-fn file_of(url: &Url) -> Option<PathBuf> {
-    url.to_file_path().ok().map(|path| resolved(&path))
+impl Server {
+    /// The file a URL names, in the one spelling this host agrees on --
+    /// see [`Files::path_of`], which is where the two hosts differ.
+    fn file_of(&self, url: &Url) -> Option<PathBuf> {
+        self.files.path_of(url)
+    }
 }
 
-/// The model files directly in `dir`, without the tree below it.
-fn model_files_in(dir: &Path) -> Vec<PathBuf> {
-    // a buffer can stand where no directory does: a file the editor
-    // holds and has never written
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && sysml_semantics::is_model_file(path))
-        .collect()
+/// The parameters of the custom `sysml/files` notification.
+#[derive(serde::Deserialize)]
+struct HandedFiles {
+    files: Vec<HandedFile>,
 }
 
-/// The file a workspace file's name stands for.
-///
-/// The project layer names a file by its path and the layer above names
-/// a buffer by its URL, so a question about where a workspace file sits
-/// has both to answer for.
-fn file_named(name: &str) -> PathBuf {
-    let path = name
-        .strip_prefix("file://")
-        .and_then(|_| Url::parse(name).ok())
-        .and_then(|url| url.to_file_path().ok())
-        .unwrap_or_else(|| PathBuf::from(name));
-    resolved(&path)
-}
-
-/// `path` with every link resolved, or `path` itself when it names
-/// nothing on disk -- a document the editor holds but has never written.
-fn resolved(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+/// One file a client hands over: what it is called, and what it says --
+/// or nothing, where it says the file is gone.
+#[derive(serde::Deserialize)]
+struct HandedFile {
+    uri: String,
+    text: Option<String>,
 }
 
 /// Parameters of the custom `sysml/diagram` request.

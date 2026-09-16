@@ -212,14 +212,20 @@ jobs:
         working-directory: examples/arduino-uno
         run: cargo test
 
-  # the extension is the language server's only client, so an API change
+  # The extension is the language server's only client, so an API change
   # that breaks it would otherwise go unnoticed: nothing else compiles
-  # this TypeScript
+  # this TypeScript, and nothing else speaks to the WebAssembly module.
   vscode:
-    name: VSCode extension compiles and its preview page works
+    name: VSCode extension compiles, and the server it ships answers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
       # jsdom, which the preview page is driven under, runs on 22 and up
       - uses: actions/setup-node@v4
         with:
@@ -228,11 +234,18 @@ jobs:
       - name: install
         run: npm install --no-audit --no-fund
         working-directory: editors/vscode
+      # the module, and the licences that travel with it
+      - name: build the language server
+        run: |
+          cargo build -p sysmlv2-wasm --target wasm32-unknown-unknown --profile wasm
+          node editors/vscode/scripts/bundle.mjs \
+            target/wasm32-unknown-unknown/wasm/sysml_wasm.wasm
       - name: compile
         run: npm run compile
         working-directory: editors/vscode
       # the preview page is plain JavaScript that TypeScript never sees,
-      # so it is driven under a DOM instead
+      # so it is driven under a DOM; the server, through the worker's own
+      # code against the module that will ship
       - name: test
         run: npm test
         working-directory: editors/vscode

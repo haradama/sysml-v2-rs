@@ -2,7 +2,7 @@
   "name": "sysml-v2",
   "displayName": "SysML v2",
   "description": "SysML v2 / KerML language support: diagnostics, completion, navigation, formatting via sysml-lsp",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "haradama",
   "license": "MIT OR Apache-2.0",
   "repository": {
@@ -33,7 +33,14 @@
     "onLanguage:sysml",
     "onLanguage:kerml"
   ],
-  "main": "./out/extension.js",
+  "browser": "./out/extension.js",
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "The language server is a WebAssembly module in a worker. It reads the model files this extension hands it and runs nothing on the machine, so a workspace does not have to be trusted for names to resolve."
+    }
+  },
   "contributes": {
     "languages": [
       {
@@ -74,15 +81,10 @@
     "configuration": {
       "title": "SysML v2",
       "properties": {
-        "sysml.server.path": {
-          "type": "string",
-          "default": "",
-          "description": "Path to a sysml-lsp executable. Empty uses the server bundled into the extension, falling back to `sysml-lsp` on PATH."
-        },
         "sysml.library.path": {
           "type": "string",
           "default": "",
-          "description": "Path to a SysML standard library. Empty uses the copy bundled into the extension, falling back to SYSML_LIBRARY_PATH."
+          "description": "A SysML standard library to resolve names against, as a path or a URI. Empty uses the copy built into the language server, which is the release the extension was published from. A directory here is read by the editor and handed to the server, so it may be anywhere the editor can read -- including a workspace nobody has checked out."
         },
         "sysml.workspace.exclude": {
           "type": "array",
@@ -176,8 +178,9 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
+    "compile": "npm run typecheck && node scripts/build.mjs",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.worker.json",
+    "watch": "node scripts/build.mjs --watch",
     "package": "vsce package",
     "vscode:prepublish": "npm run compile",
     "test": "npm run compile && node --test test/*.test.mjs"
@@ -186,9 +189,9 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
     "jsdom": "^30.0.1",
+    "esbuild": "^0.25.0",
     "typescript": "^5.4.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.3.2"

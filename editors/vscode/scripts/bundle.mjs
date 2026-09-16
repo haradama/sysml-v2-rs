@@ -1,12 +1,13 @@
-// Put the language server and the standard library beside the
-// extension's own files, and write the licences that have to travel with
-// them.
+// Put the language server beside the extension's own files, and write
+// the licences that have to travel with it.
 //
-// `make vscode-package` and the release workflow both call this. The
-// workflow packages for Windows as well, where the Makefile's shell is
-// not there to do it.
+// `make vscode-package` and the release workflow both call this.
 //
-//   node scripts/bundle.mjs <path to the sysml-lsp binary>
+//   node scripts/bundle.mjs <path to sysml_wasm.wasm>
+//
+// One file for every machine and for none: no platform matrix here, and
+// no binary to mark executable. The standard library is inside the
+// module, which is why the licences below still have to travel.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -16,33 +17,31 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const extension = path.resolve(here, "..");
 const root = path.resolve(extension, "..", "..");
 
-const [binary] = process.argv.slice(2);
-if (!binary) {
-  console.error("usage: node scripts/bundle.mjs <path to sysml-lsp>");
+const [module] = process.argv.slice(2);
+if (!module) {
+  console.error("usage: node scripts/bundle.mjs <path to sysml_wasm.wasm>");
   process.exit(2);
 }
-if (!fs.existsSync(binary)) {
-  console.error(`no server binary at ${binary}; \`cargo build --release -p sysmlv2-lsp\` writes one`);
+if (!fs.existsSync(module)) {
+  console.error(
+    `no server at ${module}; \`cargo build --release -p sysmlv2-wasm ` +
+      "--target wasm32-unknown-unknown` writes one"
+  );
   process.exit(1);
 }
 
-// the extension looks for these two beside its own files before it falls
-// back to a setting or to PATH
+// where `src/extension.ts` looks for it
 const server = path.join(extension, "server");
 fs.rmSync(server, { recursive: true, force: true });
 fs.mkdirSync(server, { recursive: true });
-const named = path.extname(binary) === ".exe" ? "sysml-lsp.exe" : "sysml-lsp";
-fs.copyFileSync(binary, path.join(server, named));
-fs.chmodSync(path.join(server, named), 0o755);
+fs.copyFileSync(module, path.join(server, "sysml-lsp.wasm"));
 
-// the copy that ships is `sysml-stdlib`'s, not the submodule's: that
-// crate carries the standard library and the server has it built in, so
-// it is what the extension would be pointed at anyway
-const library = path.join(extension, "library", "sysml.library");
+// The library used to ship beside the server as files as well, for a
+// server that could be pointed at a directory. This one has no
+// filesystem to be pointed at, so they are gone from the package.
 fs.rmSync(path.join(extension, "library"), { recursive: true, force: true });
-fs.cpSync(path.join(root, "crates", "sysml-stdlib", "library"), library, { recursive: true });
 
-// Bundling `library/` makes this package a distributor of EPL-2.0
+// Carrying that library makes this package a distributor of EPL-2.0
 // content, and EPL-2.0 asks a distributor to pass the licence and the
 // notice along -- so this is not a tidiness question. The extension's
 // own two licences travel in the same file, which is also what stops
@@ -53,11 +52,12 @@ const said = [
   "under either of the Apache License 2.0 or the MIT license, at your",
   "option.",
   "",
-  "It also carries, under `library/`, the KerML and SysML v2 standard",
-  "model libraries, taken unchanged from the OMG SysML v2 Release",
+  "The language server it ships, `server/sysml-lsp.wasm`, carries inside",
+  "it the KerML and SysML v2 standard model libraries, taken unchanged",
+  "from the OMG SysML v2 Release",
   "(https://github.com/Systems-Modeling/SysML-v2-Release) and licensed",
-  "under the Eclipse Public License 2.0. Nothing in `library/` was",
-  "written here and nothing in it was changed.",
+  "under the Eclipse Public License 2.0. None of that library was written",
+  "here and none of it was changed.",
   "",
   "The text of all three follows, and then that library's own notice.",
   "",
@@ -69,15 +69,15 @@ const said = [
   "",
   read("LICENSE-APACHE"),
   "",
-  "=== Eclipse Public License 2.0 (for library/) ===",
+  "=== Eclipse Public License 2.0 (for the library inside the server) ===",
   "",
   read("crates", "sysml-stdlib", "LICENSE"),
   "",
-  "=== NOTICE (for library/) ===",
+  "=== NOTICE (for the library inside the server) ===",
   "",
   read("crates", "sysml-stdlib", "NOTICE"),
 ].join("\n");
 fs.writeFileSync(path.join(extension, "LICENSE.txt"), said);
 
-const files = fs.readdirSync(library, { recursive: true }).length;
-console.log(`bundled ${named} and ${files} library files`);
+const size = (fs.statSync(module).size / (1024 * 1024)).toFixed(1);
+console.log(`bundled sysml-lsp.wasm (${size} MiB)`);

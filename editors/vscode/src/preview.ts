@@ -2,7 +2,7 @@
 // language server draws for the active document, following unsaved edits.
 
 import * as vscode from "vscode";
-import { LanguageClient } from "vscode-languageclient/node";
+import { LanguageClient } from "vscode-languageclient/browser";
 import { page } from "./page";
 
 type View = "definitions" | "internal" | "browser";
@@ -17,6 +17,17 @@ type Scope = "file" | "directory";
 /// is none to show.
 type Drawing = { kind: "svg" | "message"; body: string };
 
+/// The bytes a base64 string stands for.
+///
+/// `Buffer` was what this used to say, and there is no `Buffer` where
+/// this now runs: the extension is loaded into a worker, on a desktop
+/// window as much as in a browser tab, and saving a diagram threw at the
+/// moment somebody asked for a PNG.
+function decoded(base64: string): Uint8Array {
+  const binary = atob(base64);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
 /// Whether a SysML or KerML document is what an editor is showing.
 function isModel(editor: vscode.TextEditor | undefined): boolean {
   const language = editor?.document.languageId;
@@ -29,7 +40,7 @@ export class Preview {
   private view: View = "definitions";
   private scope: Scope = "file";
   private element: string | undefined;
-  private timer: NodeJS.Timeout | undefined;
+  private timer: ReturnType<typeof setTimeout> | undefined;
   /// Closing the preview closes it: opening by itself must not undo
   /// that on the next keystroke in another file. Asking for it again
   /// says the reader has changed their mind.
@@ -193,11 +204,11 @@ export class Preview {
         );
         return;
       }
-      await vscode.workspace.fs.writeFile(target, Buffer.from(png, "base64"));
+      await vscode.workspace.fs.writeFile(target, decoded(png));
     } else {
       await vscode.workspace.fs.writeFile(
         target,
-        Buffer.from(this.drawing.body, "utf8")
+        new TextEncoder().encode(this.drawing.body)
       );
     }
     const name = target.path.split("/").pop();

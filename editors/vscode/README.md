@@ -19,16 +19,22 @@ comment. What a `comment` element holds is a comment, and reads as one.
 None. The language server and the standard library travel inside the
 extension, so the names in a model resolve the moment a file is opened.
 
-Manual override, when wanted: `sysml.server.path` points at another server
-binary, `sysml.library.path` at another standard library (else
-`SYSML_LIBRARY_PATH` is honoured), `sysml.format.width` says how wide a
-line may be before formatting breaks it -- 0 leaves every line as long as
-it comes -- `sysml.diagram.skin` says how the preview is painted (the
+The server is a WebAssembly module, run in a worker. One package
+installs on Linux, macOS and Windows, and the same one runs in a browser
+tab -- vscode.dev, github.dev, a `.dev` workspace nobody has checked out
+-- where there is no machine under the editor to run a program on.
+Nothing is spawned, nothing is installed, and a workspace does not have
+to be trusted for names to resolve.
+
+Manual override, when wanted: `sysml.library.path` points at another
+standard library, as a path or a URI, `sysml.format.width` says how wide
+a line may be before formatting breaks it -- 0 leaves every line as long
+as it comes -- `sysml.diagram.skin` says how the preview is painted (the
 name of a skin that ships, or an object of colours; see
 [`sysml-diagram`](https://github.com/haradama/sysml-v2-rs/tree/main/crates/sysml-diagram#skins)),
 and `sysml.trace.server` logs the traffic between VSCode and the server
-in the output channel. All of them are read when the server
-starts, so a window reload is what applies a change.
+in the output channel. All of them are read when the server starts, so a
+window reload is what applies a change.
 
 The preview is opened with `SysML: Open Diagram Preview`, or the button
 in the editor title bar, and then follows whichever model you are
@@ -62,7 +68,11 @@ you are looking at it in, so a dark theme saves the dark drawing.
 Every `.sysml`/`.kerml` file in the workspace folders is part of the
 model, whether or not it is open in a tab -- a file that imports a
 sibling resolves against it as it sits on disk, and against the buffer
-once you open it. `sysml.workspace.exclude` lists directories that are
+once you open it. The server has no filesystem of its own, so it is this
+extension that reads them and hands them over: the lot at startup, and
+each one again when it is written, renamed or deleted. A file the
+editor's own `files.exclude` or `search.exclude` hides is one it never
+sees. `sysml.workspace.exclude` lists directories that are
 not yours to edit (a vendored corpus, someone else's model): their names
 do not resolve and are not offered in completion, and the server does not
 pay to load them.
@@ -78,12 +88,20 @@ name.
 
 ## Development
 
-From the repository root, `make vscode` builds `sysml-lsp`, bundles it
-and the standard library, packages a `.vsix` and installs it. Inside
-this directory:
+From the repository root, `make vscode` builds the server as a
+WebAssembly module, bundles it, packages a `.vsix` and installs it.
+`rustup target add wasm32-unknown-unknown` is the whole toolchain it
+asks for. Inside this directory:
 
 ```sh
 npm install
-npm run compile   # or: press F5 in VSCode to launch an Extension Host
-npm test
+npm run compile   # type-check and bundle; or press F5 for an Extension Host
+npm test          # the preview page under a DOM, and the server itself
 ```
+
+`npm test` drives the module the extension ships through the worker's
+own code -- the handshake, a document, the diagnostics that come back,
+a drawing -- so it needs one built. `make vscode-package` (or `cargo
+build -p sysmlv2-wasm --target wasm32-unknown-unknown --profile wasm`
+and `node scripts/bundle.mjs`) puts it where the test looks; without it
+those tests say why they were skipped.

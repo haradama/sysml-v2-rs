@@ -1,0 +1,18 @@
+{
+  // The server's worker, which has a worker's globals and not a
+  // window's: `onmessage` and a `postMessage` that takes one argument.
+  // The two sets collide -- both declare `self`, both declare
+  // `postMessage`, and they disagree -- so TypeScript is given one file
+  // and the right `lib` for it rather than both at once.
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2021",
+    "lib": ["ES2021", "WebWorker"],
+    "strict": true,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "files": ["src/server.worker.ts"]
+}

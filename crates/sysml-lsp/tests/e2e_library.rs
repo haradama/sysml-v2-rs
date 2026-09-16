@@ -333,3 +333,35 @@ fn exit_before_shutdown_leaves_with_a_failure() {
     client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
     assert!(handle.join().unwrap().is_err());
 }
+
+/// The protocol's own traffic may arrive at any point, including in the
+/// one gap where the specification names the message that comes next.
+#[test]
+fn set_trace_before_initialized_does_not_stop_the_server() {
+    let (server_side, client_side) = Connection::memory();
+    let handle = std::thread::spawn(move || sysml_lsp::run(&server_side));
+    let mut client = Client::new(client_side);
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({ "capabilities": {}, "initializationOptions": { "noLibrary": true } }),
+    );
+    // between the handshake and `initialized`, which is where a server
+    // that took the specification's sequence too literally fell over
+    client.notify("$/setTrace", json!({ "value": "verbose" }));
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": {
+            "uri": "file:///traced.sysml",
+            "languageId": "sysml",
+            "version": 1,
+            "text": "part def Wheel;\n",
+        }}),
+    );
+    // it is still serving, which is the whole of what this asks
+    let diagnostics = client.wait_diagnostics();
+    assert_eq!(diagnostics["uri"], "file:///traced.sysml");
+    client.stop(std::thread::spawn(move || {
+        handle.join().unwrap().unwrap();
+    }));
+}

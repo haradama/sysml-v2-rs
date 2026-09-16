@@ -2,7 +2,11 @@
   "compilerOptions": {
     "module": "commonjs",
     "target": "ES2021",
-    "lib": ["ES2021"],
+    // The extension runs in a web worker wherever VSCode puts it -- a
+    // desktop window, a browser tab -- so what it may use is what a
+    // browser has, not what Node has. `DOM` is where `Worker`,
+    // `WebAssembly` and `TextDecoder` are declared.
+    "lib": ["ES2021", "DOM"],
     "outDir": "out",
     "rootDir": "src",
     "strict": true,
@@ -10,5 +14,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // the worker is checked against a worker's own globals, which are not
+  // a window's: see tsconfig.worker.json
+  "exclude": ["src/server.worker.ts"]
 }

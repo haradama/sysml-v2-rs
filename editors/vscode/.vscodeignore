@@ -2,17 +2,13 @@ src/**
 test/**
 scripts/**
 tsconfig.json
+tsconfig.worker.json
+# `out/` is bundled, so what used to be a list of packages to keep is
+# now a directory that never ships
 node_modules/**
-!node_modules/vscode-languageclient/**
-!node_modules/vscode-languageserver-protocol/**
-!node_modules/vscode-languageserver-types/**
-!node_modules/vscode-jsonrpc/**
-!node_modules/minimatch/**
-!node_modules/semver/**
-!node_modules/balanced-match/**
-!node_modules/brace-expansion/**
-!node_modules/lru-cache/**
-!node_modules/yallist/**
+# the page is bundled into the extension itself; this copy is for
+# `test/page.test.mjs`, which needs it as a module of its own
+out/page.js
 # a pattern with no slash in it is matched against the whole relative
 # path, so `*.map` never reached the ones under `out/`
 **/*.map

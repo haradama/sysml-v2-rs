@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use lsp_types::Url;
 use sysml_semantics::Workspace;
 
-use crate::{file_of, model_files_in, resolved, Analysis, Server};
+use crate::{Analysis, Files, Server};
 
 /// Where the standard library the server answers against comes from.
 pub(crate) enum Library {
@@ -39,12 +39,18 @@ pub(crate) enum Library {
 }
 
 impl Server {
-    pub(crate) fn new(wanted: Library, roots: &[PathBuf], excluded: &[PathBuf]) -> Server {
+    pub(crate) fn new(
+        files: Files,
+        wanted: Library,
+        roots: &[PathBuf],
+        excluded: &[PathBuf],
+    ) -> Server {
         let mut library = Workspace::new();
         let library_dir = match &wanted {
             Library::At(dir) => Some(dir.clone()),
             _ => None,
         };
+        let mut complaints = Vec::new();
         let built_in = |library: &mut Workspace| {
             for (name, text) in sysml_stdlib::FILES {
                 library.add_file(*name, text);
@@ -61,39 +67,68 @@ impl Server {
             // doing that; this was the one front end left where a wrong
             // path cost the editor every name in the model rather than
             // the library the client meant.
-            Library::At(dir) => match library.load_dir(dir) {
-                // the walk takes what it can reach, so a path that is
-                // not there is a directory with nothing under it
-                Ok(0) => {
-                    eprintln!(
-                        "sysml-lsp: no .sysml/.kerml files under the library at {}; \
-                         using the copy built in",
-                        dir.display()
-                    );
-                    built_in(&mut library);
+            Library::At(dir) => {
+                // Read before any of it is declared: half a library is
+                // worse than the copy built in, since the names it does
+                // declare resolve and the ones it does not are reported
+                // as though the model were wrong. The complaint names
+                // the file rather than the directory -- one unreadable
+                // file among a hundred is otherwise a refusal with
+                // nothing to act on.
+                //
+                // The walk takes what it can reach, so a path that is
+                // not there is a directory with nothing under it.
+                let mut read = Vec::new();
+                let mut unreadable = None;
+                for path in files.under(dir) {
+                    match files.read(&path) {
+                        Some(text) => read.push((path, text)),
+                        None => {
+                            unreadable = Some(path);
+                            break;
+                        }
+                    }
                 }
-                Ok(_) => {}
-                Err(err) => {
-                    eprintln!(
-                        "sysml-lsp: cannot load the standard library at {}: {err}; \
-                         using the copy built in",
-                        dir.display()
-                    );
-                    built_in(&mut library);
+                match unreadable {
+                    Some(path) => {
+                        complaints.push(format!(
+                            "cannot read {} from the library at {}; \
+                             using the copy built in",
+                            path.display(),
+                            dir.display()
+                        ));
+                        built_in(&mut library);
+                    }
+                    None if read.is_empty() => {
+                        complaints.push(format!(
+                            "no .sysml/.kerml files under the library at {}; \
+                             using the copy built in",
+                            dir.display()
+                        ));
+                        built_in(&mut library);
+                    }
+                    None => {
+                        for (path, text) in read {
+                            library.add_file(path.to_string_lossy(), &text);
+                        }
+                    }
                 }
-            },
+            }
             Library::BuiltIn => built_in(&mut library),
             Library::None => {}
         }
         // resolve the library once; the caches are cloned into every
         // layer above, so this cost is paid only at startup
         library.resolve_all();
+        // by the path with every link resolved, since what it is
+        // compared against is an open document's resolved path
+        let resolved_library_dir = library_dir.as_deref().map(|dir| files.resolved(dir));
         Server {
+            files,
+            complaints,
             library,
             roots: roots.to_vec(),
-            // by the path with every link resolved, since what it is
-            // compared against is an open document's resolved path
-            library_dir: library_dir.as_deref().map(resolved),
+            library_dir: resolved_library_dir,
             // the library is already loaded, so its own files are never
             // part of the project even when a workspace folder holds them
             excluded: library_dir
@@ -123,7 +158,7 @@ impl Server {
         let mut files: Vec<PathBuf> = self
             .roots
             .iter()
-            .flat_map(|root| sysml_semantics::model_files(root))
+            .flat_map(|root| self.files.under(root))
             .filter(|path| !self.excluded.iter().any(|dir| path.starts_with(dir)))
             .collect();
         files.sort();
@@ -133,7 +168,7 @@ impl Server {
         // it would then collide with itself. The scan's own spelling
         // wins, so a file the project already holds keeps its place.
         let mut seen = HashSet::new();
-        files.retain(|path| seen.insert(resolved(path)));
+        files.retain(|path| seen.insert(self.files.resolved(path)));
         files
     }
     /// The model files beside an open document.
@@ -154,7 +189,8 @@ impl Server {
             // A document that is no file -- an editor's untitled buffer
             // -- is beside nothing, and one of the library's own is
             // beside the library, which is loaded already.
-            let Some(dir) = file_of(url)
+            let Some(dir) = self
+                .file_of(url)
                 .filter(|path| !self.is_library_file(path))
                 .and_then(|path| path.parent().map(Path::to_path_buf))
             else {
@@ -179,9 +215,9 @@ impl Server {
             // behind it.
             let reaching_in = self.excluded.iter().any(|left| dir.starts_with(left));
             let beside = if pointed_at {
-                sysml_semantics::model_files(&dir)
+                self.files.under(&dir)
             } else {
-                model_files_in(&dir)
+                self.files.inside(&dir)
             };
             for path in beside {
                 if reaching_in || !self.excluded.iter().any(|left| path.starts_with(left)) {
@@ -201,9 +237,18 @@ impl Server {
     /// Whether an open document is a file the project layer does not
     /// hold, which is the moment the files beside it have yet to be read.
     pub(crate) fn outside_the_project(&self, uri: &Url) -> bool {
-        let Some(path) = file_of(uri) else {
+        let Some(path) = self.file_of(uri) else {
             return false;
         };
+        // A buffer that is no file -- an editor's untitled document --
+        // sits beside nothing, so there is no directory to go and read
+        // and no reason to build the layer below again. On a filesystem
+        // such a buffer has no path at all and never reached here; where
+        // the files are handed over, everything the client can name has
+        // one, and this is what tells the two apart.
+        if path.parent().is_none_or(|dir| dir.as_os_str().is_empty()) {
+            return false;
+        }
         !self.is_library_file(&path) && !self.project_index.contains_key(&path)
     }
     /// Library + every project file whose buffer, if it has one, still
@@ -224,7 +269,7 @@ impl Server {
             let open: HashMap<PathBuf, &String> = self
                 .docs
                 .iter()
-                .filter_map(|(url, text)| Some((file_of(url)?, text)))
+                .filter_map(|(url, text)| Some((self.file_of(url)?, text)))
                 .collect();
             let mut ws = self.library.clone();
             let mut added = Vec::new();
@@ -233,10 +278,10 @@ impl Server {
             for path in &self.project_files {
                 // a listed file can still be unreadable: gone since the
                 // scan, or never text in the first place
-                let Ok(text) = std::fs::read_to_string(path) else {
+                let Some(text) = self.files.read(path) else {
                     continue;
                 };
-                let real = resolved(path);
+                let real = self.files.resolved(path);
                 if open.get(&real).is_some_and(|buffer| **buffer != text) {
                     substituted.insert(real);
                     continue;
@@ -263,7 +308,10 @@ impl Server {
                 // A document the layer below already read, byte for
                 // byte, is that file rather than a second copy of it:
                 // declared twice, every name in it collides with itself.
-                match file_of(url).and_then(|path| self.project_index.get(&path)) {
+                match self
+                    .file_of(url)
+                    .and_then(|path| self.project_index.get(&path))
+                {
                     Some(file) => doc_files.insert(url.clone(), *file),
                     None => {
                         let file = ws.add_file(self.workspace_name(url), text);
@@ -303,7 +351,10 @@ impl Server {
     /// the buffer says, which is the moment that layer has to be built
     /// again without it.
     pub(crate) fn contradicted(&self, uri: &Url) -> bool {
-        let Some(file) = file_of(uri).and_then(|path| self.project_index.get(&path)) else {
+        let Some(file) = self
+            .file_of(uri)
+            .and_then(|path| self.project_index.get(&path))
+        else {
             return false;
         };
         // the layer holds that file only while it is built, and a
@@ -343,7 +394,7 @@ impl Server {
         let url = match spelled {
             Some(url) => url,
             // anything else is named by its path
-            None => Url::from_file_path(&name).ok()?,
+            None => self.files.url_of(std::path::Path::new(&name))?,
         };
         Some((url, text))
     }
