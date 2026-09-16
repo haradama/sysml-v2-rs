@@ -29,9 +29,13 @@ exclude = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-# the oldest toolchain the locked dependency set builds with (icu, via
-# url, asks for 1.86); CI checks it, so the number is a promise
-rust-version = "1.86"
+# The oldest toolchain a fresh resolve builds with; CI checks it, so the
+# number is a promise. It moves when something in the tree raises its
+# own, and that is not always something the tree declares: `yoke-derive`
+# 0.8.3, published on 2026-09-15, carries no `rust-version` for the
+# resolver to read and calls `str::from_utf8`, which is 1.87's. It
+# arrives under `url`, which both `lsp-types` and `ureq` want.
+rust-version = "1.87"
 repository = "https://github.com/haradama/sysml-v2-rs"
 readme = "README.md"
 keywords = ["sysml", "kerml", "mbse", "modeling", "parser"]
