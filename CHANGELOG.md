@@ -209,6 +209,15 @@ static site.
 
 ### Housekeeping
 
+- The four tests that drive a whole interchange document take it in
+  turns and share the one document. A document that carries the library
+  is 754 MB, `export` peaks around 6.7 GB writing it and `import` around
+  6.9 GB reading it back, and the test harness runs as many at once as
+  the machine has cores -- so four asked for 27 GB, which is more than a
+  CI runner has. What a runner does about that is kill the process, so
+  two jobs came back signalled with no test having failed and nothing
+  said about why. One at a time is 6.8 GB and 760 MB on disk.
+
 - `sysml rustgen` writes its `#![allow(...)]` header the way `rustfmt`
   would, so the first thing it generates is no longer the first thing
   that comes back as a diff.
