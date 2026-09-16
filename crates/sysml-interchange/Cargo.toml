@@ -1,7 +1,9 @@
 [package]
 name = "sysmlv2-interchange"
 description = "Standard JSON interchange (SysML v2 API & Services serialization) for sysml-model"
-version.workspace = true
+# its own, now that it has one: the lints it declared are the
+# workspace's
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

@@ -2,9 +2,9 @@
 name = "sysmlv2-syntax"
 description = "Lexer, parser and lossless syntax tree for the SysML v2 / KerML textual notation"
 # its own: the crates here move when what is in them moves, and what
-# moved is the formatter, which now opens a line too wide to read at
-# its joints and takes the width to open it at
-version = "0.1.2"
+# moved is the documentation -- every typed view of the tree carries the
+# line the workspace holds a public item to
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

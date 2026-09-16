@@ -1,9 +1,9 @@
 [package]
 name = "sysmlv2-semantics"
 description = "Name resolution and relationship reification for SysML v2 / KerML models"
-# its own, now that it has one: an edit costs what the edit is rather
-# than what the model is
-version = "0.1.1"
+# its own: the documentation no longer points a reader at items that
+# are this crate's private business
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

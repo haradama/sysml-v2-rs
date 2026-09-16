@@ -1,7 +1,10 @@
 [package]
 name = "sysmlv2-rust"
 description = "The Rust side of a SysML model, both ways: an existing Rust API surface imported as a SysML package, and Rust generated from a resolved model"
-version.workspace = true
+# its own, now that it has one: the preamble it generates is written
+# the way `rustfmt` writes it, so a generated file comes back from
+# `cargo fmt` unchanged
+version = "0.1.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

@@ -6,7 +6,9 @@ description = "The KerML and SysML v2 standard model libraries, as text a progra
 # crate is separate from the rest of sysml-v2-rs so that which files are
 # under which licence is a question with a one-word answer. See NOTICE.
 license = "EPL-2.0"
-version.workspace = true
+# its own, now that it has one: the lints it declared are the
+# workspace's
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true

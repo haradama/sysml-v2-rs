@@ -1,8 +1,9 @@
 [package]
 name = "sysmlv2-model"
 description = "In-memory element model (abstract syntax) for SysML v2 / KerML, generated from the official metamodel"
-# its own: it reads a comment's body through `sysmlv2-syntax` 0.1.1
-version = "0.1.1"
+# its own: all 175 metaclasses and every property document themselves
+# now, out of the same metamodel comment a constraint's `says` comes from
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
