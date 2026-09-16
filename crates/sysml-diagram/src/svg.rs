@@ -1822,7 +1822,7 @@ fn port_places<'a>(
                 // they alternate sides, so the left takes the odd one
                 // out; each side is then divided into as many equal
                 // steps as it has ports, plus one
-                let left = spare % 2 == 0;
+                let left = spare.is_multiple_of(2);
                 let down = placed.y
                     + (spare / 2 + 1) as f64 * placed.height
                         / (if left { free.div_ceil(2) } else { free / 2 } + 1) as f64;
