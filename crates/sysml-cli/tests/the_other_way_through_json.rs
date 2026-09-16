@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 
 fn sysml(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_sysml"))
@@ -36,34 +36,19 @@ fn written(name: &str, text: &str) -> PathBuf {
     at
 }
 
-/// The four tests that drive a whole document take it in turns.
-///
-/// A document that carries the library is not cheap to drive: `export`
-/// peaks around 6.7 GB writing the 754 MB of it, and `import` around
-/// 6.9 GB reading it back. The harness runs tests on as many threads as
-/// the machine has cores, so four at once asked for some 27 GB -- more
-/// than a CI runner has, and what a runner does about that is kill the
-/// process. No test failed; the job came back as signalled, twice, and
-/// said nothing about why.
-///
-/// One at a time is about 7 GB, which fits. What this costs is that the
-/// four run one after another, and they are the slow ones.
-fn in_turn<T>(what: impl FnOnce() -> T) -> T {
-    static TURN: Mutex<()> = Mutex::new(());
-    // A test that panicked while holding this poisoned it, and the next
-    // one failing on the poison would report the first one's mistake
-    // under its own name.
-    let _held = TURN.lock().unwrap_or_else(|held| held.into_inner());
-    what()
-}
-
-/// The document those four share, written once.
+/// The document the four tests below share, written once.
 ///
 /// Every one of them needs the library carried -- `import` refuses a
 /// document that points outside itself, which is what the test below is
 /// about -- and the library is all but the whole of the 754 MB. So they
 /// ask the same model of it: two part definitions, one specializing the
 /// other, and an `Engine` for the drawing to show.
+///
+/// Writing it costs 83 MB and reading it 862 MB, so the four may run at
+/// once, as the harness would have them. They could not always: the
+/// document used to be built whole as a `serde_json::Value` on the way
+/// out and again on the way in, which was 6.7 and 6.9 GB -- four at once
+/// asked a CI runner for 27 GB and were killed for it.
 fn whole_document() -> PathBuf {
     static AT: OnceLock<PathBuf> = OnceLock::new();
     AT.get_or_init(|| {
@@ -100,10 +85,8 @@ fn exported(name: &str, model: &str) -> PathBuf {
 
 #[test]
 fn a_document_this_tool_wrote_is_a_document_it_reads() {
-    let out = in_turn(|| {
-        let json = whole_document();
-        sysml(&["import", json.to_str().unwrap()])
-    });
+    let json = whole_document();
+    let out = sysml(&["import", json.to_str().unwrap()]);
     assert!(out.status.success());
     let said = String::from_utf8_lossy(&out.stdout);
     // the counts are the model's, the last number the document's: a
@@ -119,10 +102,8 @@ fn a_document_this_tool_wrote_is_a_document_it_reads() {
 /// command writes.
 #[test]
 fn it_says_the_same_to_a_program() {
-    let out = in_turn(|| {
-        let json = whole_document();
-        sysml(&["--format", "json", "import", json.to_str().unwrap()])
-    });
+    let json = whole_document();
+    let out = sysml(&["--format", "json", "import", json.to_str().unwrap()]);
     assert!(out.status.success());
     let said: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(said["command"], "import");
@@ -144,15 +125,13 @@ fn it_says_the_same_to_a_program() {
 #[test]
 fn what_it_read_can_be_drawn() {
     let svg = dir().join("drawn.svg");
-    let out = in_turn(|| {
-        let json = whole_document();
-        sysml(&[
-            "import",
-            json.to_str().unwrap(),
-            "--diagram",
-            svg.to_str().unwrap(),
-        ])
-    });
+    let json = whole_document();
+    let out = sysml(&[
+        "import",
+        json.to_str().unwrap(),
+        "--diagram",
+        svg.to_str().unwrap(),
+    ]);
     assert!(
         out.status.success(),
         "{}",
@@ -172,20 +151,18 @@ fn what_it_read_can_be_drawn() {
 #[test]
 fn it_is_painted_the_way_the_rest_of_the_tool_paints() {
     let svg = dir().join("painted.svg");
-    let (ok, refused) = in_turn(|| {
-        let json = whole_document();
-        let painted = |skin: &str| {
-            sysml(&[
-                "import",
-                json.to_str().unwrap(),
-                "--diagram",
-                svg.to_str().unwrap(),
-                "--skin",
-                skin,
-            ])
-        };
-        (painted("contrast"), painted("chartreuse"))
-    });
+    let json = whole_document();
+    let painted = |skin: &str| {
+        sysml(&[
+            "import",
+            json.to_str().unwrap(),
+            "--diagram",
+            svg.to_str().unwrap(),
+            "--skin",
+            skin,
+        ])
+    };
+    let (ok, refused) = (painted("contrast"), painted("chartreuse"));
     assert!(
         ok.status.success(),
         "{}",

@@ -207,6 +207,37 @@ static site.
   binaries are held to them too, which the per-library attributes never
   reached.
 
+### A document that is never a document
+
+`sysmlv2-interchange` **0.2.0**
+
+- `write_json` writes a model out an element at a time, and `read_json`
+  reads one back the same way. Between them, a document of the standard
+  library no longer has to exist whole as a `serde_json::Value`:
+
+  | | before | after |
+  | --- | --- | --- |
+  | `sysml export --include-library` | 6,746 MB | **83 MB** |
+  | `sysml import` of what it wrote | 6,938 MB | **862 MB** |
+
+  The model is 47 MB and the document is 754 MB of text. The six
+  gigabytes between them were the `Value` — a hundred and twenty times
+  the model, built only to be turned into text and dropped. What is left
+  on the way in is the text itself, which is what `@id` references are
+  resolved against.
+- Export is also quicker for it (79 s to 61 s), and the bytes it writes
+  are the same bytes. Import is 21% slower (38 s to 46 s): the array is
+  read twice, once for the two fields that pass one wants and once for
+  each element as pass two reaches it.
+- `ImportError::NotJson` says that text is not JSON at all, which is not
+  what `NotAnArray` says — JSON this reader can read but did not expect.
+  `serde` tells them apart and so does the message.
+- `sysml api push` still builds the document whole: it sends a body
+  rather than writes a file, so `to_json`/`from_json` stay as they are.
+- The four tests that drive a whole document run at once again, as the
+  harness would have them: 3.4 GB together, where they used to ask for
+  27 and be killed for it.
+
 ### Housekeeping
 
 - Three lines nothing executed, which the coverage gate had not been

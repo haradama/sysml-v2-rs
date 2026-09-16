@@ -72,6 +72,9 @@ pub enum ImportError {
     SharedOwnership(String),
     /// Ownership that runs in a circle, which no containment can.
     OwnershipCycle(String),
+    /// Text that is not JSON, which only [`read_json`] can meet: given a
+    /// `Json` the parsing is already somebody else's business.
+    NotJson(String),
 }
 
 impl std::fmt::Display for ImportError {
@@ -84,6 +87,7 @@ impl std::fmt::Display for ImportError {
             ImportError::MissingId(i) => write!(f, "element {i} has no \"@id\""),
             ImportError::DuplicateId(id) => write!(f, "two elements share the id {id:?}"),
             ImportError::UnknownReference(id) => write!(f, "reference to unknown element {id:?}"),
+            ImportError::NotJson(why) => write!(f, "not JSON: {why}"),
             ImportError::SharedOwnership(id) => write!(f, "two elements own {id:?}"),
             ImportError::OwnershipCycle(id) => {
                 write!(
@@ -654,7 +658,7 @@ impl Writing<'_> {
 
     /// Every element of the model, in arena order, each carrying the
     /// whole property set its metaclass declares.
-    fn elements(&self) -> Vec<Json> {
+    fn elements(&self) -> impl Iterator<Item = Json> + '_ {
         self.model
             .ids()
             .filter(|id| !self.extras.omitted.contains(id))
@@ -698,26 +702,23 @@ impl Writing<'_> {
                 }
                 Json::Object(object)
             })
-            .collect()
     }
 
     /// And the memberships synthesized between each owner and what it
     /// owns, in the order of what they bring in, carrying their whole
     /// property set like any other element.
-    fn bridges(&self, elements: &mut Vec<Json>) {
+    fn bridges(&self) -> impl Iterator<Item = Json> + '_ {
         // the memberships themselves, in the order of what they bring in,
         // carrying their whole property set like any other element
-        for id in self.model.ids() {
-            let Some(owner) = self.model.owner(id) else {
-                continue;
-            };
+        self.model.ids().filter_map(move |id| {
+            let owner = self.model.owner(id)?;
             if !bridged(self.model, id) {
-                continue;
+                return None;
             }
             // a membership of an element that is not in the document
             // brings nothing into it
             if self.extras.omitted.contains(&id) {
-                continue;
+                return None;
             }
             let kind = sysml_model::membership_kind(self.model, id);
             let uuid = self.bridge_uuids[&id].to_string();
@@ -818,8 +819,8 @@ impl Writing<'_> {
                 };
                 object.insert(meta.name.into(), value);
             }
-            elements.push(Json::Object(object));
-        }
+            Some(Json::Object(object))
+        })
     }
 
     /// What a name-driven derived property holds, when the model can say.
@@ -1208,6 +1209,12 @@ impl Writing<'_> {
 /// [`to_json`], with the resolver-derived facts filled in from
 /// [`Extras`].
 pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
+    let writing = writing(model, extras);
+    Json::Array(writing.elements().chain(writing.bridges()).collect())
+}
+
+/// Everything worked out about a model once, before anything is written.
+fn writing<'a>(model: &'a Model, extras: &'a Extras) -> Writing<'a> {
     let Identities {
         uuids,
         bridges: bridge_uuids,
@@ -1218,7 +1225,7 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
             .iter()
             .map(|&kind| (kind, all_features(kind)))
             .collect();
-    let writing = Writing {
+    Writing {
         model,
         extras,
         uuids,
@@ -1226,10 +1233,60 @@ pub fn to_json_with(model: &Model, extras: &Extras) -> Json {
         qualified,
         features,
         closures: Closures::new(model),
+    }
+}
+
+/// Write the document out, an element at a time.
+///
+/// The same bytes [`to_json_with`] would give [`serde_json::to_writer_pretty`],
+/// without the document ever existing whole. That matters more than it
+/// sounds: a model of the standard library is 47 MB, the document is 754
+/// MB of text, and the `serde_json::Value` between them is about six
+/// gigabytes -- a hundred and twenty times the model, built only to be
+/// turned into text and dropped. Here each element becomes a `Value`,
+/// is written, and goes.
+///
+/// The array is framed by the serializer rather than by hand, which is
+/// what keeps the indentation of what is inside it right.
+///
+/// # Errors
+///
+/// Whatever `out` gives back. Nothing here can fail to serialize.
+pub fn write_json<W: std::io::Write>(
+    model: &Model,
+    extras: &Extras,
+    out: W,
+) -> serde_json::Result<usize> {
+    let document = Document {
+        writing: &writing(model, extras),
+        written: std::cell::Cell::new(0),
     };
-    let mut elements = writing.elements();
-    writing.bridges(&mut elements);
-    Json::Array(elements)
+    serde_json::to_writer_pretty(out, &document)?;
+    Ok(document.written.get())
+}
+
+/// The document as a sequence, pulled from the model as it is written.
+struct Document<'a> {
+    writing: &'a Writing<'a>,
+    /// How many have gone by. The count is the walk, so there is nothing
+    /// to report until the walk is over -- and a caller that says how
+    /// many elements it wrote wants it.
+    written: std::cell::Cell<usize>,
+}
+
+impl serde::Serialize for Document<'_> {
+    fn serialize<S: serde::Serializer>(&self, out: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        // no length, for the same reason
+        let mut array = out.serialize_seq(None)?;
+        let mut written = 0;
+        for element in self.writing.elements().chain(self.writing.bridges()) {
+            array.serialize_element(&element)?;
+            written += 1;
+        }
+        self.written.set(written);
+        array.end()
+    }
 }
 
 /// What a property nothing sets or derives reads as: absent, empty or
@@ -1425,39 +1482,130 @@ fn fill_end(
 /// unknown metaclasses and dangling references are errors.
 pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
     let array = json.as_array().ok_or(ImportError::NotAnArray)?;
+    read_elements(&array.iter().map(Element::Built).collect::<Vec<_>>())
+}
+
+/// The same, from the text of a document rather than a document.
+///
+/// Read this way the elements are never all `Json` at once: each is
+/// parsed when it is wanted and dropped when it has been read. A
+/// document of the standard library is 754 MB of text, and as a
+/// `serde_json::Value` it is about six gigabytes -- for a model that is
+/// 47 MB when it is built. What stays here is the text, the borrows into
+/// it, and the model.
+///
+/// # Errors
+///
+/// [`ImportError::NotJson`] where the bytes are not an array of objects,
+/// and whatever [`from_json`] would say about the document they spell.
+///
+/// The count is how many objects the document holds, which is not how
+/// many elements the model holds -- a membership that only carries
+/// ownership is an object there and an edge here. [`from_json`] does not
+/// report it because its caller is holding the array already.
+pub fn read_json(bytes: &[u8]) -> Result<(Model, Vec<ElementId>, usize), ImportError> {
+    // Text that is not JSON and JSON that is not a document are not the
+    // same mistake, and `serde` says which: a shape it could read but
+    // did not expect is `Data`, and anything it could not read at all is
+    // the syntax. Told apart here, each reads as what it is.
+    let array: Vec<&serde_json::value::RawValue> =
+        serde_json::from_slice(bytes).map_err(|why| match why.classify() {
+            serde_json::error::Category::Data => ImportError::NotAnArray,
+            _ => ImportError::NotJson(why.to_string()),
+        })?;
+    let objects = array.len();
+    let (model, roots) = read_elements(&array.into_iter().map(Element::Text).collect::<Vec<_>>())?;
+    Ok((model, roots, objects))
+}
+
+/// One element of a document: a `Json` already built, or the text of one
+/// that is not built yet and need not stay built.
+#[derive(Clone, Copy)]
+enum Element<'a> {
+    Built(&'a Json),
+    Text(&'a serde_json::value::RawValue),
+}
+
+/// The three things the first pass asks of an element.
+///
+/// Asked without building the element, which is the point: text that is
+/// skipped is not allocated, so a pass that wants two strings does not
+/// pay for the forty properties beside them.
+#[derive(serde::Deserialize)]
+struct Head<'a> {
+    #[serde(rename = "@type", borrow, default)]
+    kind: Option<&'a str>,
+    #[serde(rename = "@id", borrow, default)]
+    uuid: Option<&'a str>,
+    #[serde(rename = "ownedRelatedElement", default)]
+    owned: Option<serde::de::IgnoredAny>,
+}
+
+impl<'a> Element<'a> {
+    /// What the first pass needs, and no more.
+    fn head(&self, at: usize) -> Result<Head<'a>, ImportError> {
+        match self {
+            Element::Built(json) => Ok(Head {
+                kind: json["@type"].as_str(),
+                uuid: json["@id"].as_str(),
+                owned: json
+                    .get("ownedRelatedElement")
+                    .map(|_| serde::de::IgnoredAny),
+            }),
+            Element::Text(raw) => {
+                serde_json::from_str(raw.get()).map_err(|_| ImportError::MissingType(at))
+            }
+        }
+    }
+
+    /// The element as a `Json`, borrowed where there is one to borrow.
+    fn read(&self, at: usize) -> Result<std::borrow::Cow<'a, Json>, ImportError> {
+        match self {
+            Element::Built(json) => Ok(std::borrow::Cow::Borrowed(json)),
+            Element::Text(raw) => serde_json::from_str(raw.get())
+                .map(std::borrow::Cow::Owned)
+                .map_err(|_| ImportError::MissingType(at)),
+        }
+    }
+}
+
+fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), ImportError> {
     let mut model = Model::new();
-    let mut by_uuid: HashMap<&str, ElementId> = HashMap::new();
+    let mut by_uuid: HashMap<String, ElementId> = HashMap::new();
     // a plain `OwningMembership` only carries ownership, which the model
     // holds directly: it becomes an edge rather than an element, whichever
     // tool wrote it
-    let mut bridges: HashMap<&str, &Json> = HashMap::new();
+    // Kept as they arrived rather than as they read. Pass two asks each
+    // of these what it brings in, once, so holding the read of it until
+    // then holds a third of the document in `Json` for nothing.
+    let mut bridges: HashMap<String, Element<'_>> = HashMap::new();
 
     // pass 1: create all elements
     let mut ids = Vec::new();
     let mut created = Vec::new();
-    for (index, object) in array.iter().enumerate() {
-        let type_name = object["@type"]
-            .as_str()
-            .ok_or(ImportError::MissingType(index))?;
+    for (index, source) in array.iter().enumerate() {
+        // Three fields, not forty. Only a bridge is built here, because
+        // pass two asks it what it brings in; every other element is
+        // built there instead, one at a time.
+        let head = source.head(index)?;
+        let type_name = head.kind.ok_or(ImportError::MissingType(index))?;
         let kind = ElementKind::from_name(type_name)
             .ok_or_else(|| ImportError::UnknownType(type_name.to_string()))?;
         if kind.is_abstract() {
             return Err(ImportError::AbstractType(type_name.to_string()));
         }
-        let uuid = object["@id"]
-            .as_str()
-            .ok_or(ImportError::MissingId(index))?;
-        if by_uuid.contains_key(uuid) || bridges.contains_key(uuid) {
-            return Err(ImportError::DuplicateId(uuid.to_string()));
+        let uuid = head.uuid.ok_or(ImportError::MissingId(index))?.to_string();
+        if by_uuid.contains_key(&uuid) || bridges.contains_key(&uuid) {
+            return Err(ImportError::DuplicateId(uuid));
         }
-        if FOLDED.contains(&kind) && object.get("ownedRelatedElement").is_some() {
-            bridges.insert(uuid, object);
+        if FOLDED.contains(&kind) && head.owned.is_some() {
+            bridges.insert(uuid, *source);
             continue;
         }
         let id = model.create(kind);
         by_uuid.insert(uuid, id);
         ids.push(id);
-        created.push(object);
+        created.push((index, source));
     }
 
     let resolve = |value: &Json| -> Result<ElementId, ImportError> {
@@ -1471,9 +1619,11 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
     // side, each keeping what the membership said about it
     let through = |model: &mut Model, value: &Json| -> Result<Vec<ElementId>, ImportError> {
         let uuid = value["@id"].as_str().unwrap_or_default();
-        let Some(bridge) = bridges.get(uuid) else {
+        let Some(source) = bridges.get(uuid) else {
             return Ok(vec![resolve(value)?]);
         };
+        let bridge = source.read(0)?;
+        let bridge = &bridge;
         let members: Vec<ElementId> = bridge["ownedRelatedElement"]
             .as_array()
             .into_iter()
@@ -1502,8 +1652,9 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
     // where a cycle would come from.
     let mut stated = std::collections::HashSet::new();
     let mut edges: Vec<(ElementId, ElementId)> = Vec::new();
-    for (object, id) in created.iter().zip(&ids) {
+    for (&(index, source), id) in created.iter().zip(&ids) {
         let kind = model.kind(*id);
+        let object = source.read(index)?;
         let object = object.as_object().expect("validated in pass 1");
         let mut own = |child: ElementId| {
             if stated.insert((*id, child)) {
@@ -1589,7 +1740,10 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
         }
     }
 
-    let spelled: HashMap<ElementId, &str> = by_uuid.iter().map(|(uuid, id)| (*id, *uuid)).collect();
+    let spelled: HashMap<ElementId, &str> = by_uuid
+        .iter()
+        .map(|(uuid, id)| (*id, uuid.as_str()))
+        .collect();
     ownership_is_a_tree(&edges, &spelled)?;
     for (owner, child) in edges {
         model.add_owned(owner, child);

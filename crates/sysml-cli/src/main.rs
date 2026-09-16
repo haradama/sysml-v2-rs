@@ -517,36 +517,60 @@ fn export(
     bare: bool,
     whole: bool,
 ) -> ExitCode {
-    let Some((json, elements, borrowed)) = exported(files, library, bare, whole) else {
+    let Some((ws, extras, borrowed)) = resolved(files, library, bare, whole) else {
         return ExitCode::FAILURE;
     };
-    let rendered = serde_json::to_string_pretty(&json).expect("serializable");
+    // Written straight out, an element at a time. A model of the standard
+    // library is 47 MB and the document of it is 754 MB of text; built
+    // whole in between, as a `serde_json::Value`, it is about six
+    // gigabytes. There is nothing to be done about how long the text is,
+    // and nothing that wants the six gigabytes.
     match output {
         Some(path) => {
-            if let Err(err) = std::fs::write(path, rendered) {
+            // A serde error over a writer carries the writer's own, so
+            // the one message covers a disk that filled halfway through
+            // as well as one that was never writable.
+            let wrote: serde_json::Result<usize> = std::fs::File::create(path)
+                .map_err(serde_json::Error::io)
+                .and_then(|file| {
+                    let mut out = std::io::BufWriter::new(file);
+                    let written = sysml_interchange::write_json(ws.model(), &extras, &mut out)?;
+                    std::io::Write::flush(&mut out).map_err(serde_json::Error::io)?;
+                    Ok(written)
+                });
+            let Ok(written) = wrote.inspect_err(|err| {
                 eprintln!("error: cannot write {}: {err}", path.display());
+            }) else {
                 return ExitCode::FAILURE;
-            }
-            eprintln!("wrote {elements} element(s) to {}", path.display());
+            };
+            eprintln!("wrote {written} element(s) to {}", path.display());
             if let Some(note) = library_share(borrowed) {
                 eprintln!("{note}");
             }
         }
-        None => println!("{rendered}"),
+        None => {
+            let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+            sysml_interchange::write_json(ws.model(), &extras, &mut out)
+                .expect("a model serializes");
+            // the line `println!` used to put on the end of it
+            let _ = std::io::Write::write_all(&mut out, b"\n");
+        }
     }
     ExitCode::SUCCESS
 }
 
-/// The model of `files`, resolved against `library`, as interchange JSON.
+/// The model of `files`, resolved against `library`, and what only the
+/// resolver knows about it.
+///
 /// `sysml export` writes this out and `sysml api push` sends it, so both
-/// mean the same thing by a model. The first count is the whole document,
-/// the second the part of it that is a library's rather than the model's.
-fn exported(
+/// mean the same thing by a model. The count is the part of it that is a
+/// library's rather than the model's.
+fn resolved(
     files: &[PathBuf],
     library: &[PathBuf],
     bare: bool,
     whole: bool,
-) -> Option<(serde_json::Value, usize, usize)> {
+) -> Option<(sysml_semantics::Workspace, sysml_interchange::Extras, usize)> {
     // resolve before serializing: the reified typings and specializations
     // are what the interchange derives inheritance and types from
     let mut ws = sysml_semantics::Workspace::new();
@@ -609,14 +633,27 @@ fn exported(
         extras.omitted = extras.library.clone();
     }
 
-    let model = ws.model();
     let borrowed = match whole {
         true => extras.library.len(),
         false => 0,
     };
+    Some((ws, extras, borrowed))
+}
+
+/// The model of `files` as interchange JSON, whole.
+///
+/// What `sysml api push` sends, which is a body rather than a file. The
+/// counts are the document's and the part of it that is a library's.
+fn exported(
+    files: &[PathBuf],
+    library: &[PathBuf],
+    bare: bool,
+    whole: bool,
+) -> Option<(serde_json::Value, usize, usize)> {
+    let (ws, extras, borrowed) = resolved(files, library, bare, whole)?;
     // what was written, rather than what was loaded: the library the
     // model resolved against is in the second and not the first
-    let json = sysml_interchange::to_json_with(model, &extras);
+    let json = sysml_interchange::to_json_with(ws.model(), &extras);
     let written = json.as_array().map_or(0, Vec::len);
     Some((json, written, borrowed))
 }
@@ -1197,16 +1234,14 @@ fn import(
     skin: sysml_diagram::Skin,
     format: Format,
 ) -> ExitCode {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
+    // The bytes, and never the whole document as `serde_json::Value`: the
+    // library's is 754 MB of text and about six gigabytes built, for a
+    // model that is 47 MB. `read_json` parses one element at a time.
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
         Err(err) => return Unreadable::refuse(path, err, "import", format),
     };
-    let json: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(json) => json,
-        Err(why) => return refuse_import(path, &format!("not JSON: {why}"), format),
-    };
-    let objects = json.as_array().map_or(0, Vec::len);
-    let (model, roots) = match sysml_interchange::from_json(&json) {
+    let (model, roots, objects) = match sysml_interchange::read_json(&bytes) {
         Ok(read) => read,
         // A document `export` wrote without `--include-library` names the
         // library elements its model specializes and does not carry them:

@@ -3,7 +3,7 @@ name = "sysmlv2-interchange"
 description = "Standard JSON interchange (SysML v2 API & Services serialization) for sysml-model"
 # its own, now that it has one: the lints it declared are the
 # workspace's
-version = "0.1.1"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -21,7 +21,15 @@ name = "sysml_interchange"
 [dependencies]
 sysmlv2-model.workspace = true
 sysmlv2-syntax.workspace = true
-serde_json = "1"
+# `raw_value` is what lets a document be read without becoming one: the
+# array comes back as borrows into the text, and each element is parsed
+# only while it is being read.
+serde_json = { version = "1", features = ["raw_value"] }
+# `Serialize` for the document written a piece at a time, so that a
+# model's JSON never has to exist whole, and `derive` for the three
+# fields a document's first pass reads -- which is what keeps that pass
+# from building each element only to drop it again.
+serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v5"] }
 
 [dev-dependencies]
