@@ -8,7 +8,13 @@ went to; a crate not named in an entry did not change in it.
 Dates are the day the tag was cut. Anything under **Unreleased** is on
 `main` and is not on crates.io yet.
 
-## Unreleased
+## 2026-09-17
+
+Nine of the ten went up together: `sysmlv2-syntax` 0.1.3, `sysmlv2-model`
+0.1.2, `sysmlv2-semantics` 0.1.2, `sysmlv2-stdlib` 0.1.1,
+`sysmlv2-interchange` 0.2.0, `sysmlv2-diagram` 0.2.1, `sysmlv2-rust`
+0.1.1, `sysmlv2-lsp` 0.2.0 and `sysmlv2-cli` 0.1.4. `sysmlv2-corpus` is
+not published and never was.
 
 ### A name is drawn in a face wider than the one it was measured in
 
