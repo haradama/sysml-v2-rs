@@ -6,8 +6,9 @@ description = "Definition/specialization diagrams rendered to SVG from sysml-mod
 # not compile against this. It was the one public function in the
 # workspace whose error was a bare `String` -- which is nobody's error
 # but its own, and cannot be put where an error goes. 0.2.1 draws a
-# package's name inside its tab.
-version = "0.2.1"
+# package's name inside its tab, and 0.2.2 steps one line over another
+# where the two cross.
+version = "0.2.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true

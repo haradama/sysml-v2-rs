@@ -8,6 +8,31 @@ went to; a crate not named in an entry did not change in it.
 Dates are the day the tag was cut. Anything under **Unreleased** is on
 `main` and is not on crates.io yet.
 
+## Unreleased
+
+### Two lines that cross are drawn crossing
+
+`sysmlv2-diagram` **0.2.2**
+
+- Where one line runs across another, the one drawn along the page now
+  steps over the one drawn down it: a small arc, a third of the font
+  across and as high, standing over the crossing. A crossing drawn flat
+  reads as a junction — which is what a port square and an n-ary dot are
+  drawn to say — so a drawing claimed a connection the model never had.
+  The eight examples in the corpus that have any crossings at all had
+  205 of them between them, 155 in the vehicle example alone.
+- A line that stops on another still meets it flat: two lines drawn to
+  one port touch at the square, and a line turning into a channel
+  another runs along meets it at the bend. Neither is a crossing. Two
+  crossings too close together for separate arcs are carried by one arc
+  wide enough for both, and a crossing with no room for the arc before
+  the bend at either end is left flat.
+- Every line is now written out after the last of them is worked out,
+  because what a line does where it meets another is a property of the
+  pair. A line with no bend in it is still a `<line>` where nothing
+  crosses it; the routes a layout engine hands back are now spelled with
+  `H` and `V` like the renderer's own detours, rather than with `L`.
+
 ## 2026-09-17
 
 Nine of the ten went up together: `sysmlv2-syntax` 0.1.3, `sysmlv2-model`

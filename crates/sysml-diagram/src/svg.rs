@@ -139,6 +139,11 @@ struct Canvas<'a> {
     /// And how far right a name set beside a line reached, for the same
     /// reason.
     verge: f64,
+    /// The lines, held back until every one of them is worked out.
+    /// Where a line goes is settled as it is worked out; what it does
+    /// where it meets another cannot be, because the other may not be
+    /// worked out yet.
+    wires: Vec<Wire>,
     /// Every run of every line, for the names set beside them.
     drawn: Vec<Leg>,
     /// And those names, held back until all the lines are down.
@@ -169,6 +174,7 @@ impl<'a> Canvas<'a> {
             anchors: Vec::new(),
             floor: 0.0,
             verge: 0.0,
+            wires: Vec::new(),
             drawn: Vec::new(),
             asides: Vec::new(),
             written: Vec::new(),
@@ -277,13 +283,13 @@ impl<'a> Canvas<'a> {
                 // runs from the subtype's top edge to the supertype's bottom
                 Relation::Specialization if routed.is_some() => {
                     let walked = routed.expect("the arm this route matched");
-                    note(&mut self.drawn, walked);
-                    let (marker, class) = pen(Relation::Specialization, &self.style.skin);
-                    writeln!(
-                        self.out,
-                        "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
-                        polyline(walked)
-                    )
+                    hold(
+                        &mut self.wires,
+                        &mut self.drawn,
+                        walked,
+                        pen(Relation::Specialization, &self.style.skin),
+                        false,
+                    );
                 }
                 Relation::Specialization => {
                     let (x1, y1) = (from.x + from.width / 2.0, from.y);
@@ -306,54 +312,39 @@ impl<'a> Canvas<'a> {
                         })
                         .flatten();
                     match channel {
-                        Some(channel) => {
-                            note(
-                                &mut self.drawn,
-                                &[(x1, y1), (x1, channel), (x2, channel), (x2, y2)],
-                            );
-                            let (marker, class) = pen(Relation::Specialization, &self.style.skin);
-                            writeln!(
-                                self.out,
-                                "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                                 V {channel:.1} H {x2:.1} V {y2:.1}\"{marker}/>"
-                            )
-                        }
+                        Some(channel) => hold(
+                            &mut self.wires,
+                            &mut self.drawn,
+                            &[(x1, y1), (x1, channel), (x2, channel), (x2, y2)],
+                            pen(Relation::Specialization, &self.style.skin),
+                            false,
+                        ),
                         // no single gap reaches: go round the rows in between
                         None => match blocked
                             .then(|| sidestep(self.layout, ((x1, y1), (x2, y2)), bands, self.style))
                             .flatten()
                         {
-                            Some(column) => {
-                                note(
-                                    &mut self.drawn,
-                                    &[
-                                        (x1, y1),
-                                        (x1, bands.0),
-                                        (column, bands.0),
-                                        (column, bands.1),
-                                        (x2, bands.1),
-                                        (x2, y2),
-                                    ],
-                                );
-                                let (marker, class) =
-                                    pen(Relation::Specialization, &self.style.skin);
-                                writeln!(
-                                    self.out,
-                                    "<path{class} fill=\"none\" d=\"M {x1:.1} {y1:.1} \
-                                     V {:.1} H {column:.1} V {:.1} H {x2:.1} V {y2:.1}\"{marker}/>",
-                                    bands.0, bands.1
-                                )
-                            }
-                            None => {
-                                note(&mut self.drawn, &[(x1, y1), (x2, y2)]);
-                                let (marker, class) =
-                                    pen(Relation::Specialization, &self.style.skin);
-                                writeln!(
-                                    self.out,
-                                    "<line{class} x1=\"{x1:.1}\" y1=\"{y1:.1}\" \
-                                     x2=\"{x2:.1}\" y2=\"{y2:.1}\"{marker}/>"
-                                )
-                            }
+                            Some(column) => hold(
+                                &mut self.wires,
+                                &mut self.drawn,
+                                &[
+                                    (x1, y1),
+                                    (x1, bands.0),
+                                    (column, bands.0),
+                                    (column, bands.1),
+                                    (x2, bands.1),
+                                    (x2, y2),
+                                ],
+                                pen(Relation::Specialization, &self.style.skin),
+                                false,
+                            ),
+                            None => hold(
+                                &mut self.wires,
+                                &mut self.drawn,
+                                &[(x1, y1), (x2, y2)],
+                                pen(Relation::Specialization, &self.style.skin),
+                                true,
+                            ),
                         },
                     }
                 }
@@ -410,15 +401,13 @@ impl<'a> Canvas<'a> {
                         legs[nth] = off_port(point, toward, true, self.style);
                     }
                     let ((sx, sy), (ex, ey)) = (legs[0], legs[1]);
-                    note(
+                    hold(
+                        &mut self.wires,
                         &mut self.drawn,
                         &[(sx, sy), (sx, band), (ex, band), (ex, ey)],
+                        (marker, class),
+                        false,
                     );
-                    writeln!(
-                        self.out,
-                        "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {band:.1} \
-                         H {ex:.1} V {ey:.1}\"{marker}/>"
-                    )
                 }
                 Relation::Composition
                 | Relation::Reference
@@ -539,13 +528,13 @@ impl<'a> Canvas<'a> {
                     // run it is written over.
                     let (first_toward, second_toward, run) = match route {
                         None => {
-                            writeln!(
-                                self.out,
-                                "<line{class} x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" \
-                                 y2=\"{y2:.1}\"{marker}/>"
-                            )
-                            .unwrap();
-                            note(&mut self.drawn, &[(x1, y1), (x2, y2)]);
+                            hold(
+                                &mut self.wires,
+                                &mut self.drawn,
+                                &[(x1, y1), (x2, y2)],
+                                (marker, class),
+                                true,
+                            );
                             ((x2, y2), (x1, y1), ((x1, y1), (x2, y2)))
                         }
                         Some(Detour::Channel(channel)) => {
@@ -554,17 +543,14 @@ impl<'a> Canvas<'a> {
                                 off_port((x1, y1), (x1, channel), first_is_port, self.style);
                             let (ex, ey) =
                                 off_port((x2, y2), (x2, channel), second_is_port, self.style);
-                            writeln!(
-                                self.out,
-                                "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {channel:.1} \
-                                 H {ex:.1} V {ey:.1}\"{marker}/>"
-                            )
-                            .unwrap();
-                            self.floor = self.floor.max(channel);
-                            note(
+                            hold(
+                                &mut self.wires,
                                 &mut self.drawn,
                                 &[(sx, sy), (sx, channel), (ex, channel), (ex, ey)],
+                                (marker, class),
+                                false,
                             );
+                            self.floor = self.floor.max(channel);
                             ((x1, channel), (x2, channel), ((x1, channel), (x2, channel)))
                         }
                         Some(Detour::Given(route)) => {
@@ -578,19 +564,19 @@ impl<'a> Canvas<'a> {
                             walked[0] = off_port(start, route[1], first_is_port, self.style);
                             walked[last] =
                                 off_port(finish, route[last - 1], second_is_port, self.style);
-                            writeln!(
-                                self.out,
-                                "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
-                                polyline(&walked)
-                            )
-                            .unwrap();
+                            hold(
+                                &mut self.wires,
+                                &mut self.drawn,
+                                &walked,
+                                (marker, class),
+                                false,
+                            );
                             (x1, y1) = start;
                             (x2, y2) = finish;
                             self.floor = self
                                 .floor
                                 .max(walked.iter().map(|&(_, y)| y).fold(0.0, f64::max));
                             let middle = walked.len() / 2;
-                            note(&mut self.drawn, &walked);
                             (
                                 route[1],
                                 route[last - 1],
@@ -604,14 +590,8 @@ impl<'a> Canvas<'a> {
                                 off_port((x1, y1), (x1, first), first_is_port, self.style);
                             let (ex, ey) =
                                 off_port((x2, y2), (x2, second), second_is_port, self.style);
-                            writeln!(
-                                self.out,
-                                "<path{class} fill=\"none\" d=\"M {sx:.1} {sy:.1} V {first:.1} \
-                                 H {column:.1} V {second:.1} H {ex:.1} V {ey:.1}\"{marker}/>"
-                            )
-                            .unwrap();
-                            self.floor = self.floor.max(first.max(second));
-                            note(
+                            hold(
+                                &mut self.wires,
                                 &mut self.drawn,
                                 &[
                                     (sx, sy),
@@ -621,7 +601,10 @@ impl<'a> Canvas<'a> {
                                     (ex, second),
                                     (ex, ey),
                                 ],
+                                (marker, class),
+                                false,
                             );
+                            self.floor = self.floor.max(first.max(second));
                             // the column can be hard against the margin, so the
                             // name is written along the gap the line sets out
                             // in instead
@@ -710,8 +693,37 @@ impl<'a> Canvas<'a> {
                             text: label.clone(),
                         });
                     }
-                    Ok(())
                 }
+            }
+        }
+        self.cross();
+    }
+
+    /// Write every line, each stepping over the ones it crosses.
+    ///
+    /// Held to the last because a crossing belongs to a pair: the first
+    /// line down cannot see the one that will later run across it, and a
+    /// line already written cannot be told about it.
+    fn cross(&mut self) {
+        let wires = std::mem::take(&mut self.wires);
+        let reach = hop_reach(self.style);
+        for (at, wire) in wires.iter().enumerate() {
+            let hops = hops_along(&wires, at, reach);
+            let (marker, class) = (&wire.marker, &wire.class);
+            match wire.straight && hops.iter().all(Vec::is_empty) {
+                true => {
+                    let ((x1, y1), (x2, y2)) = (wire.walked[0], wire.walked[1]);
+                    writeln!(
+                        self.out,
+                        "<line{class} x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" \
+                         y2=\"{y2:.1}\"{marker}/>"
+                    )
+                }
+                false => writeln!(
+                    self.out,
+                    "<path{class} fill=\"none\" d=\"{}\"{marker}/>",
+                    spelled(&wire.walked, &hops, reach)
+                ),
             }
             .unwrap();
         }
@@ -1045,16 +1057,170 @@ fn given(layout: &Layout, edge: usize) -> Option<&[(f64, f64)]> {
         .filter(|walked| walked.len() >= 2)
 }
 
-/// A run of points as an SVG path.
-fn polyline(walked: &[(f64, f64)]) -> String {
+/// One line worked out but not yet written.
+struct Wire {
+    walked: Vec<(f64, f64)>,
+    marker: String,
+    class: String,
+    /// Written as a `<line>` where nothing runs across it: it is what a
+    /// line with no bend in it has always been drawn as, and a `<path>`
+    /// saying the same thing would change every drawing that has none.
+    straight: bool,
+}
+
+/// Hold a line back until every line is known, remembering its runs for
+/// the names set beside them as [`note`] does.
+fn hold(
+    wires: &mut Vec<Wire>,
+    drawn: &mut Vec<Leg>,
+    walked: &[(f64, f64)],
+    (marker, class): (String, String),
+    straight: bool,
+) {
+    note(drawn, walked);
+    wires.push(Wire {
+        walked: walked.to_vec(),
+        marker,
+        class,
+        straight,
+    });
+}
+
+/// One crossing drawn as a hop: where along the run it stands, and how
+/// far it reaches to either side of that.
+struct Hop {
+    at: f64,
+    reach: f64,
+}
+
+/// How near two coordinates have to be to be the same one. The drawing
+/// is written to a tenth of a pixel, so two that round to one number are
+/// one number here as well.
+const SAME: f64 = 0.05;
+
+/// How far a hop reaches either side of the line it steps over, which is
+/// also how high it stands.
+///
+/// A third of the font, so it reads as a hop at the size the drawing is
+/// written at: smaller and it is a thickening of the line, larger and it
+/// is a bend the route never made.
+fn hop_reach(style: &Style) -> f64 {
+    style.font_size / 3.0
+}
+
+/// Is the run drawn along the page?
+fn level(one: (f64, f64), other: (f64, f64)) -> bool {
+    (one.1 - other.1).abs() < SAME && (one.0 - other.0).abs() > SAME
+}
+
+/// And is it drawn down it?
+fn upright(one: (f64, f64), other: (f64, f64)) -> bool {
+    (one.0 - other.0).abs() < SAME && (one.1 - other.1).abs() > SAME
+}
+
+/// Where other lines run across `wires[mine]`, run by run and in the
+/// order that run travels.
+///
+/// Only a level run hops. Which of two lines steps over the other has to
+/// be the same answer wherever they meet, or a crossing is drawn twice or
+/// not at all -- and level over upright is the way a hand draws it.
+fn hops_along(wires: &[Wire], mine: usize, reach: f64) -> Vec<Vec<Hop>> {
+    wires[mine]
+        .walked
+        .windows(2)
+        .map(|run| {
+            let (one, other) = (run[0], run[1]);
+            if !level(one, other) {
+                return Vec::new();
+            }
+            let (left, right) = (one.0.min(other.0), one.0.max(other.0));
+            let mut met: Vec<f64> = wires
+                .iter()
+                .enumerate()
+                .filter(|&(at, _)| at != mine)
+                .flat_map(|(_, wire)| wire.walked.windows(2))
+                .filter(|leg| upright(leg[0], leg[1]))
+                // A line that stops on this one meets it rather than
+                // crossing it: two lines drawn to one port touch at the
+                // square, and a hop there would say they do not. So the
+                // crossing has to fall inside the upright run, and far
+                // enough along this one that the arc has room before the
+                // bend at either end.
+                .filter(|leg| {
+                    let (top, bottom) = (leg[0].1.min(leg[1].1), leg[0].1.max(leg[1].1));
+                    one.1 > top + SAME
+                        && one.1 < bottom - SAME
+                        && leg[0].0 - reach > left
+                        && leg[0].0 + reach < right
+                })
+                .map(|leg| leg[0].0)
+                .collect();
+            met.sort_by(f64::total_cmp);
+            let mut hops: Vec<Hop> = Vec::new();
+            for at in met {
+                match hops.last_mut() {
+                    // two crossings near enough that their arcs would run
+                    // into one another are carried by a single arc wide
+                    // enough for both, which still reads as one hop where
+                    // two overlapping ones read as a scribble
+                    Some(last) if at - reach <= last.at + last.reach => {
+                        let from = last.at - last.reach;
+                        *last = Hop {
+                            at: (from + at + reach) / 2.0,
+                            reach: (at + reach - from) / 2.0,
+                        };
+                    }
+                    _ => hops.push(Hop { at, reach }),
+                }
+            }
+            // found left to right; a run travelling the other way meets
+            // them the other way round
+            if one.0 > other.0 {
+                hops.reverse();
+            }
+            hops
+        })
+        .collect()
+}
+
+/// A run of points as an SVG path, stepping over the lines that cross it.
+///
+/// A level or upright run is written with `H` or `V`, so that the numbers
+/// a reader follows are the ones the layout decided and only one of them
+/// changes at a time.
+fn spelled(walked: &[(f64, f64)], hops: &[Vec<Hop>], rise: f64) -> String {
     let mut out = String::new();
-    for (at, (x, y)) in walked.iter().enumerate() {
-        let step = if at == 0 { 'M' } else { 'L' };
-        write!(
-            out,
-            "{}{step} {x:.1} {y:.1}",
-            if at == 0 { "" } else { " " }
-        )
+    write!(out, "M {:.1} {:.1}", walked[0].0, walked[0].1).unwrap();
+    for (at, run) in walked.windows(2).enumerate() {
+        let (one, other) = (run[0], run[1]);
+        let rightwards = other.0 > one.0;
+        for hop in &hops[at] {
+            // An arc turning clockwise steps up out of a run travelling
+            // right, and one turning the other way up out of a run
+            // travelling left: a hop stands over the line it crosses
+            // whichever way the run is going. It is `reach` across and
+            // `rise` high rather than round, so one widened to carry two
+            // crossings is no taller than one carrying a single crossing.
+            let (before, after) = match rightwards {
+                true => (hop.at - hop.reach, hop.at + hop.reach),
+                false => (hop.at + hop.reach, hop.at - hop.reach),
+            };
+            write!(
+                out,
+                " H {before:.1} A {:.1} {rise:.1} 0 0 {} {after:.1} {:.1}",
+                hop.reach,
+                u8::from(rightwards),
+                one.1,
+            )
+            .unwrap();
+        }
+        if level(one, other) {
+            write!(out, " H {:.1}", other.0)
+        } else if upright(one, other) {
+            write!(out, " V {:.1}", other.1)
+        } else {
+            write!(out, " L {:.1} {:.1}", other.0, other.1)
+        }
         .unwrap();
     }
     out
@@ -2758,7 +2924,7 @@ mod tests {
         };
 
         let drawn = to_svg(&diagram, &bent, &style);
-        let spelled = "d=\"M 50.0 40.0 L 50.0 120.0 L 300.0 120.0 L 300.0 200.0\"";
+        let spelled = "d=\"M 50.0 40.0 V 120.0 H 300.0 V 200.0\"";
         assert_eq!(
             drawn.matches(spelled).count(),
             diagram.edges.len(),
@@ -2775,6 +2941,163 @@ mod tests {
         );
         // without a route the renderer decides for itself, as before
         assert!(!to_svg(&diagram, &straight, &style).contains(spelled));
+    }
+
+    /// Boxes in a column with a route given for every edge, so that
+    /// what the lines do where they meet is the only thing under test.
+    fn along_routes(diagram: &Diagram, routes: Vec<Vec<(f64, f64)>>) -> Layout {
+        Layout {
+            placed: (0..diagram.nodes.len())
+                .map(|at| place(at, 0.0, 160.0 * at as f64, 100.0, 50.0))
+                .collect(),
+            width: 600.0,
+            height: 700.0,
+            routes,
+            lanes: Vec::new(),
+            packages: Vec::new(),
+        }
+    }
+
+    /// Two definitions and their supertypes, once per pair: one edge per
+    /// pair, and every one of them a specialization, so a route given
+    /// for it is drawn as it stands.
+    fn pairs(many: usize) -> (Diagram, Style) {
+        let source: String = (0..many)
+            .map(|nth| {
+                let (sup, sub) = (
+                    (b'A' + 2 * nth as u8) as char,
+                    (b'A' + 2 * nth as u8 + 1) as char,
+                );
+                format!("part def {sup};\npart def {sub} :> {sup};\n")
+            })
+            .collect();
+        let ws = resolved(&source);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        assert_eq!(diagram.edges.len(), many, "one edge per pair");
+        (diagram, Style::default())
+    }
+
+    #[test]
+    fn a_line_that_crosses_another_steps_over_it() {
+        // Lines meeting at a point are lines that join there, which is
+        // what a port square or an n-ary dot is drawn to say. Two that
+        // merely cross say it too when the crossing is drawn flat, and
+        // the drawing then claims a connection the model never had.
+        let (diagram, style) = pairs(2);
+        let placed = along_routes(
+            &diagram,
+            vec![
+                vec![(200.0, 100.0), (200.0, 500.0)],
+                vec![(50.0, 300.0), (400.0, 300.0)],
+            ],
+        );
+        let svg = to_svg(&diagram, &placed, &style);
+        let reach = hop_reach(&style);
+
+        // the run along the page hops, standing over the crossing
+        assert!(
+            svg.contains(&format!(
+                "H {:.1} A {reach:.1} {reach:.1} 0 0 1 {:.1} 300.0 H 400.0",
+                200.0 - reach,
+                200.0 + reach
+            )),
+            "{svg}"
+        );
+        // and the run down it is drawn straight through: only one of the
+        // two may step, or the crossing is drawn twice
+        assert!(svg.contains("d=\"M 200.0 100.0 V 500.0\""), "{svg}");
+    }
+
+    #[test]
+    fn a_run_travelling_left_hops_the_same_way_up() {
+        let (diagram, style) = pairs(2);
+        let placed = along_routes(
+            &diagram,
+            vec![
+                vec![(200.0, 100.0), (200.0, 500.0)],
+                vec![(400.0, 300.0), (50.0, 300.0)],
+            ],
+        );
+        let svg = to_svg(&diagram, &placed, &style);
+        let reach = hop_reach(&style);
+
+        // the arc turns the other way round, which is what keeps it on
+        // the same side of a line drawn the other way round
+        assert!(
+            svg.contains(&format!(
+                "H {:.1} A {reach:.1} {reach:.1} 0 0 0 {:.1} 300.0 H 50.0",
+                200.0 + reach,
+                200.0 - reach
+            )),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_line_that_stops_on_another_does_not_step_over_it() {
+        // Two lines drawn to one port meet at its square, and a line
+        // that turns into a channel another one runs along meets it at
+        // the bend. A hop there would say they do not meet.
+        let (diagram, style) = pairs(2);
+        let placed = along_routes(
+            &diagram,
+            vec![
+                vec![(200.0, 300.0), (200.0, 500.0)],
+                vec![(50.0, 300.0), (400.0, 300.0)],
+            ],
+        );
+        let svg = to_svg(&diagram, &placed, &style);
+
+        assert!(svg.contains("d=\"M 50.0 300.0 H 400.0\""), "{svg}");
+        assert!(!svg.contains(" A "), "{svg}");
+    }
+
+    #[test]
+    fn two_crossings_too_close_to_hop_apart_are_carried_by_one_arc() {
+        // Arcs that overlap read as a scribble rather than as two hops,
+        // and the pair of lines under them is no clearer for it.
+        let (diagram, style) = pairs(3);
+        let reach = hop_reach(&style);
+        let placed = along_routes(
+            &diagram,
+            vec![
+                vec![(200.0, 100.0), (200.0, 500.0)],
+                vec![(200.0 + reach, 100.0), (200.0 + reach, 500.0)],
+                vec![(50.0, 300.0), (400.0, 300.0)],
+            ],
+        );
+        let svg = to_svg(&diagram, &placed, &style);
+
+        // one arc, from before the first crossing to after the second,
+        // and no taller than a single hop
+        let wide = (2.0 * reach + reach) / 2.0;
+        assert_eq!(svg.matches(" A ").count(), 1, "{svg}");
+        assert!(
+            svg.contains(&format!(
+                "H {:.1} A {wide:.1} {reach:.1} 0 0 1 {:.1} 300.0",
+                200.0 - reach,
+                200.0 + 2.0 * reach
+            )),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_crossing_with_no_room_for_the_arc_is_left_flat() {
+        // The arc has to fit inside the run: one drawn over a bend
+        // would take the corner with it.
+        let (diagram, style) = pairs(2);
+        let reach = hop_reach(&style);
+        let placed = along_routes(
+            &diagram,
+            vec![
+                vec![(200.0, 100.0), (200.0, 500.0)],
+                vec![(200.0 - reach / 2.0, 300.0), (400.0, 300.0)],
+            ],
+        );
+        let svg = to_svg(&diagram, &placed, &style);
+
+        assert!(!svg.contains(" A "), "{svg}");
     }
 
     fn three_rows() -> Layout {
@@ -4202,7 +4525,7 @@ mod tests {
             "{svg}"
         );
         assert!(
-            svg.contains(&format!("L {:.1} {:.1}\"", arrives.0, arrives.1 + clear)),
+            svg.contains(&format!("H {:.1} V {:.1}\"", arrives.0, arrives.1 + clear)),
             "{svg}"
         );
     }
