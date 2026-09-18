@@ -91,7 +91,13 @@ name.
 From the repository root, `make vscode` builds the server as a
 WebAssembly module, bundles it, packages a `.vsix` and installs it.
 `rustup target add wasm32-unknown-unknown` is the whole toolchain it
-asks for. Inside this directory:
+asks for.
+
+The install goes wherever `code` points, and in a checkout opened
+through a VSCode remote that is the server -- which has nowhere to put
+an extension with no `main`. `make vscode` says so and stops there:
+build the package with `make vscode-package` and install it on the
+machine the editor itself runs on. Inside this directory:
 
 ```sh
 npm install

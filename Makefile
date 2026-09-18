@@ -4,6 +4,12 @@
 # it -- zero configuration afterwards. One package covers every machine
 # and the browser, and the standard library is inside the module, so
 # this works in a checkout that never fetched the submodule.
+#
+# The install is the one step that cannot always be done from here: it
+# lands wherever this `code` points, and a checkout opened through a
+# VSCode remote points at the server. `make vscode-package` is then the
+# whole of what this machine can do, and the .vsix goes to the other
+# side by hand.
 
 CARGO ?= cargo
 NPM ?= npm
@@ -17,8 +23,16 @@ WEB_DIR := web
 WASM_TARGET := wasm32-unknown-unknown
 SERVER := target/$(WASM_TARGET)/wasm/sysml_wasm.wasm
 VSIX := $(EXT_DIR)/sysml-v2.vsix
+# What VSCode knows the extension by, and whether it has a Node entry
+# point -- read from the manifest so that neither can drift from it.
+# Without a `main` it is a web extension: it runs in the worker
+# extension host, which is on the side the editor itself runs on, and a
+# remote server has nowhere to put it.
+EXT_ID = $(shell node -p "const m = require('./$(EXT_DIR)/package.json'); m.publisher + '.' + m.name")
+EXT_ON_SERVER = $(shell node -p "!!require('./$(EXT_DIR)/package.json').main")
 
-.PHONY: help lsp wasm vscode vscode-package vscode-clean web web-serve web-clean
+.PHONY: help lsp wasm vscode vscode-package vscode-by-hand vscode-clean web \
+	web-serve web-clean
 
 help:
 	@echo "make vscode          build, package and install the VSCode extension"
@@ -49,15 +63,43 @@ vscode-package: wasm $(EXT_DIR)/node_modules
 	cd $(EXT_DIR) && $(NPX) --yes @vscode/vsce package --out sysml-v2.vsix
 	@echo "packaged $(VSIX)"
 
+# `code --install-extension` exits 0 whether or not it installed
+# anything: it prints what it refused and returns a success. So what
+# says whether this worked is the list of extensions afterwards, and
+# never the status.
 vscode: vscode-package
-	@if command -v $(CODE) >/dev/null 2>&1; then \
-		$(CODE) --install-extension $(VSIX) --force; \
-		echo "installed; reload VSCode windows to pick it up"; \
-	else \
+	@command -v $(CODE) >/dev/null 2>&1 || { \
 		echo "error: \`$(CODE)\` not on PATH -- install manually with:"; \
 		echo "  code --install-extension $(VSIX)"; \
 		exit 1; \
+	}
+	@if [ -n "$$VSCODE_AGENT_FOLDER" ] && [ "$(EXT_ON_SERVER)" != "true" ]; then \
+		echo "\`$(CODE)\` is the remote server's, and installs there. $(EXT_ID)"; \
+		echo "has no \`main\`, so it runs in the worker extension host on the"; \
+		echo "side the editor runs on and the server will not take it."; \
+		$(MAKE) --no-print-directory vscode-by-hand; \
+		exit 1; \
 	fi
+	-@$(CODE) --install-extension $(VSIX) --force
+	@if $(CODE) --list-extensions 2>/dev/null | grep -Fqx "$(EXT_ID)"; then \
+		echo "installed; reload VSCode windows to pick it up"; \
+	else \
+		echo "$(EXT_ID) is not installed: \`$(CODE)\` reported no error, and"; \
+		echo "does not list it either."; \
+		$(MAKE) --no-print-directory vscode-by-hand; \
+		exit 1; \
+	fi
+
+# What is left to do when the install could not be done from here. The
+# package itself is built and good: only the machine it goes on differs.
+vscode-by-hand:
+	@echo ""
+	@echo "The package is built:"
+	@echo "  $(VSIX)"
+	@echo "Copy it to the machine VSCode itself runs on and install it there:"
+	@echo "  code --install-extension sysml-v2.vsix"
+	@echo "From this side, \`make vscode-package\` is the whole of what there"
+	@echo "is to do."
 
 vscode-clean:
 	rm -rf $(EXT_DIR)/node_modules $(EXT_DIR)/out $(EXT_DIR)/server \
