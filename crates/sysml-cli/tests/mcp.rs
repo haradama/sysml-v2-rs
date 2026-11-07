@@ -132,7 +132,9 @@ fn a_client_handshakes_lists_and_calls() {
             "import_rust",
             "notation",
             "generation_plan",
-            "library_search"
+            "library_search",
+            "relations",
+            "find"
         ]
     );
     // a client builds its call from the schema, so it has to be there
@@ -1507,4 +1509,163 @@ fn a_plan_over_the_protocol_says_whether_the_model_resolves() {
     let plan = answered(&answers[0]);
     assert_eq!(plan["checked"]["ok"], false, "{plan}");
     assert_eq!(plan["checked"]["unresolved"][0], "MassValu", "{plan}");
+}
+
+/// A model that makes one of every link `relations` and `find` name, with
+/// one requirement nothing verifies and one function nothing is allocated.
+const LINKED: &str = "\
+package Linked {
+    part def Engine;
+    part def BigEngine :> Engine;
+    part def Car { part engine : Engine; }
+    requirement <'R-1'> fast;
+    requirement <'R-2'> cheap;
+    action drive { action start; action go; first start then go; }
+    part car : Car {
+        part :>> engine : BigEngine;
+        part wheel;
+        connect engine to wheel;
+    }
+    allocate drive.go to car.engine;
+    satisfy fast by car.engine;
+    verification <'T-1'> fastTest { objective { verify fast; } }
+}
+package User {
+    private import Linked::*;
+    part spare : Engine;
+}
+";
+
+/// The links of one element out of a `relations` answer, as
+/// `relation other-name` pairs.
+fn links(answer: &Value, side: &str) -> Vec<String> {
+    answer[side]
+        .as_array()
+        .unwrap_or_else(|| panic!("no `{side}` in {answer}"))
+        .iter()
+        .map(|it| {
+            format!(
+                "{} {}",
+                it["relation"].as_str().unwrap(),
+                it["element"]["name"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn relations_says_what_an_element_is_linked_to_both_ways() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut ask = |element: &str| {
+        answered(
+            &server
+                .handle(&call(
+                    "relations",
+                    json!({ "text": LINKED, "element": element }),
+                ))
+                .expect("a request is answered"),
+        )
+    };
+
+    // asked by its short name, the way a trace matrix names it
+    let fast = ask("R-1");
+    assert_eq!(fast["element"]["name"], "Linked::fast", "{fast}");
+    let incoming = links(&fast, "incoming");
+    assert!(
+        incoming.contains(&"satisfies Linked::car::engine".to_string()),
+        "{fast}"
+    );
+    assert!(
+        incoming.contains(&"verifies Linked::fastTest".to_string()),
+        "{fast}"
+    );
+    assert_eq!(fast["incoming"][0]["at"], "model.sysml:14", "{fast}");
+
+    let engine = ask("Linked::car::engine");
+    let outgoing = links(&engine, "outgoing");
+    for expected in [
+        "satisfies Linked::fast",
+        "typed_by Linked::BigEngine",
+        "redefines Linked::Car::engine",
+        "connected_to Linked::car::wheel",
+    ] {
+        assert!(
+            outgoing.contains(&expected.to_string()),
+            "{expected} missing from {engine}"
+        );
+    }
+    assert!(
+        links(&engine, "incoming").contains(&"allocated_to Linked::drive::go".to_string()),
+        "{engine}"
+    );
+
+    let big = ask("Linked::BigEngine");
+    assert!(
+        links(&big, "outgoing").contains(&"specializes Linked::Engine".to_string()),
+        "{big}"
+    );
+    assert!(links(&ask("Linked::drive::start"), "outgoing")
+        .contains(&"then Linked::drive::go".to_string()));
+
+    // who uses a definition, across packages and through an import
+    let users = links(&ask("Linked::Engine"), "incoming");
+    for expected in [
+        "specializes Linked::BigEngine",
+        "typed_by Linked::Car::engine",
+        "typed_by User::spare",
+    ] {
+        assert!(
+            users.contains(&expected.to_string()),
+            "{expected} missing from {users:?}"
+        );
+    }
+    assert!(links(&ask("User"), "outgoing").contains(&"imports Linked".to_string()));
+}
+
+#[test]
+fn relations_refuses_a_name_that_is_nothing() {
+    let answers = session(&[call(
+        "relations",
+        json!({ "text": LINKED, "element": "Nope" }),
+    )]);
+    assert_eq!(answers[0]["result"]["isError"], true, "{answers:?}");
+    let answers = session(&[call("relations", json!({ "text": LINKED }))]);
+    assert_eq!(answers[0]["result"]["isError"], true, "{answers:?}");
+}
+
+#[test]
+fn find_filters_by_kind_namespace_name_and_a_missing_link() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut find = |filters: Value| -> Vec<String> {
+        let mut arguments = filters;
+        arguments["text"] = json!(LINKED);
+        let found = answered(&server.handle(&call("find", arguments)).expect("answered"));
+        found["found"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{found}"))
+            .iter()
+            .map(|it| it["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        find(json!({ "kind": "requirement" })),
+        ["Linked::fast", "Linked::cheap"]
+    );
+    assert_eq!(
+        find(json!({ "kind": "PartDef" })),
+        ["Linked::Engine", "Linked::BigEngine", "Linked::Car"]
+    );
+    assert_eq!(
+        find(json!({ "kind": "RequirementUsage", "without": "verifies" })),
+        ["Linked::cheap"]
+    );
+    assert_eq!(
+        find(
+            json!({ "kind": "ActionUsage", "within": "Linked::drive", "without": "allocated_to" })
+        ),
+        ["Linked::drive::start"]
+    );
+    assert_eq!(find(json!({ "query": "R-2" })), ["Linked::cheap"]);
+    assert_eq!(find(json!({ "within": "User" })), ["User::spare"]);
+    assert_eq!(find(json!({ "kind": "PartUsage", "limit": 1 })).len(), 1);
 }

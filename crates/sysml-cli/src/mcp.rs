@@ -10,6 +10,8 @@
 //! - `library_search` -- what does the standard library actually offer?
 //! - `notation` -- how is this kind of thing written at all?
 //! - `generation_plan` -- what does this model imply for code?
+//! - `find` -- which elements are of this kind, here, or lack this link?
+//! - `relations` -- what is this element linked to, both ways?
 //!
 //! Where something can be derived exactly -- the Rust a model implies, the
 //! SysML a crate's API already is -- the tool says in the same answer what
@@ -55,6 +57,12 @@ shows how each construct is written with an example this toolchain has \
 checked, and `library_search` finds what the standard library already \
 declares. A model that spans several files resolves only when they are \
 given together, so pass the others as `alongside`.
+
+To read a model rather than write one, ask instead of opening files: \
+`find` lists elements by kind, namespace, name or a relation they lack \
+(an unverified requirement, an unallocated function), `relations` gives \
+everything one element is linked to in both directions, and `outline` \
+the resolved shape under a name.
 
 This holds for what you say as much as for what you write. Before \
 telling anyone that SysML v2 has something, or has not got it, ask: \
@@ -265,6 +273,8 @@ impl Server {
             "import_rust" => self.import_rust(&arguments),
             "notation" => notation(&arguments),
             "generation_plan" => self.generation_plan(&arguments),
+            "relations" => self.relations(&arguments),
+            "find" => self.find(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
         Ok(match answered {
@@ -715,6 +725,355 @@ impl Server {
         }
         Ok(json!({ "found": found, "searched": how }))
     }
+
+    /// What one element is linked to, both ways: what it satisfies,
+    /// verifies, is allocated to, performs, is typed by -- and what does
+    /// any of that to it. None of the incoming side is written where the
+    /// element is declared, which is why reading the file does not answer it.
+    fn relations(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let wanted = arguments
+            .get("element")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "`element` names what to ask about".to_string())?;
+        let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+        ws.resolve_files(&open);
+        let elem = element_named(&mut ws, &open, wanted)?;
+        let mut files = Texts::default();
+        let edges = edges(&ws, &open);
+        let mut outgoing = Vec::new();
+        let mut incoming = Vec::new();
+        for edge in edges
+            .iter()
+            .filter(|e| e.source == elem || e.target == elem)
+        {
+            let (list, other) = match edge.source == elem {
+                true => (&mut outgoing, edge.target),
+                false => (&mut incoming, edge.source),
+            };
+            let mut entry = json!({ "relation": edge.relation });
+            entry["element"] = summary(&ws, &mut files, other);
+            entry["at"] = files.place(&ws, edge.file, edge.offset);
+            list.push(entry);
+        }
+        Ok(json!({
+            "element": summary(&ws, &mut files, elem),
+            "outgoing": outgoing,
+            "incoming": incoming,
+        }))
+    }
+
+    /// The model's elements that pass a filter: of a kind, under a
+    /// namespace, named like something, or missing a relation -- the
+    /// last being how an unverified requirement or an unallocated function
+    /// is found.
+    fn find(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let text = |key: &str| arguments.get(key).and_then(Value::as_str);
+        let limit = arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .min(500) as usize;
+        let kind = text("kind").map(str::to_lowercase);
+        let query = text("query").map(str::to_lowercase);
+        let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+        ws.resolve_files(&open);
+        let candidates: Vec<ElementId> = match text("within") {
+            Some(within) => {
+                let root = element_named(&mut ws, &open, within)?;
+                ws.model().descendants(root).into_iter().skip(1).collect()
+            }
+            None => open
+                .iter()
+                .flat_map(|&file| ws.file_elements(file).to_vec())
+                .collect(),
+        };
+        let related: Option<HashSet<ElementId>> = text("without").map(|relation| {
+            edges(&ws, &open)
+                .into_iter()
+                .filter(|e| e.relation == relation)
+                .flat_map(|e| [e.source, e.target])
+                .collect()
+        });
+        let model = ws.model();
+        let passing: Vec<ElementId> = candidates
+            .into_iter()
+            .filter(|&elem| {
+                let names: Vec<String> = ["declaredName", "declaredShortName"]
+                    .iter()
+                    .filter_map(|p| model.get(elem, p).and_then(sysml_model::Value::as_str))
+                    .map(str::to_lowercase)
+                    .collect();
+                !names.is_empty()
+                    && kind.as_ref().is_none_or(|k| {
+                        model
+                            .kind(elem)
+                            .name()
+                            .to_lowercase()
+                            .starts_with(k.as_str())
+                    })
+                    && query
+                        .as_ref()
+                        .is_none_or(|q| names.iter().any(|n| n.contains(q.as_str())))
+                    && related.as_ref().is_none_or(|r| !r.contains(&elem))
+            })
+            .collect();
+        let mut files = Texts::default();
+        let found: Vec<Value> = passing
+            .iter()
+            .take(limit)
+            .map(|&elem| {
+                let mut entry = summary(&ws, &mut files, elem);
+                if let Some(doc) = ws.documentation_of(elem) {
+                    entry["documentation"] = json!(doc);
+                }
+                entry
+            })
+            .collect();
+        Ok(json!({ "found": found, "total": passing.len() }))
+    }
+}
+
+/// One link between two elements, and where the text says so.
+struct Edge {
+    source: ElementId,
+    relation: &'static str,
+    target: ElementId,
+    file: usize,
+    offset: usize,
+}
+
+/// Every link the opened files make, read off the resolved model.
+///
+/// Satisfy, verify, allocate, connect and succession are stored on the
+/// relationship element itself; everything else -- perform, typing,
+/// specialization, imports, metadata, a bare mention -- is a name that
+/// resolved, classified by what the naming element is.
+fn edges(ws: &Workspace, open: &[usize]) -> Vec<Edge> {
+    use sysml_model::Value as V;
+    let model = ws.model();
+    let mut edges = Vec::new();
+    // the relationship elements whose own references are already said by
+    // the edge they make
+    let mut said: HashSet<ElementId> = HashSet::new();
+    let elements: Vec<ElementId> = open
+        .iter()
+        .flat_map(|&file| ws.file_elements(file).iter().copied())
+        .collect();
+    for &elem in &elements {
+        let Some((file, range)) = ws.element_place(elem) else {
+            continue;
+        };
+        let mut add = |source, relation, target| {
+            edges.push(Edge {
+                source,
+                relation,
+                target,
+                file,
+                offset: range.start().into(),
+            })
+        };
+        let kind = model.kind(elem).name();
+        if let Some(V::Ref(requirement)) = model.maybe(elem, "satisfiedRequirement") {
+            let by = match model.maybe(elem, "satisfyingFeature") {
+                Some(V::Ref(by)) => *by,
+                _ => named_owner(model, elem),
+            };
+            let relation = match model.flag(elem, "isNegated") {
+                true => "does_not_satisfy",
+                false => "satisfies",
+            };
+            add(by, relation, *requirement);
+            said.insert(elem);
+        }
+        if let Some(V::RefList(requirements)) = model.maybe(elem, "verifiedRequirement") {
+            for &requirement in requirements {
+                add(elem, "verifies", requirement);
+            }
+        }
+        if let Some(V::RefList(ends)) = model.maybe(elem, "relatedFeature") {
+            if let [from, to] = ends[..] {
+                let relation = match kind {
+                    "AllocationUsage" | "AllocationDefinition" => "allocated_to",
+                    _ if kind.contains("Succession") => "then",
+                    _ => "connected_to",
+                };
+                add(from, relation, to);
+                said.insert(elem);
+            }
+        }
+    }
+    let typed: HashSet<(ElementId, ElementId)> =
+        edges.iter().map(|e| (e.source, e.target)).collect();
+
+    // A qualified name `a::b` resolves each segment, so `a` is recorded too;
+    // only the reference that reaches furthest is what was written.
+    let mut reach: std::collections::HashMap<(usize, ElementId, u32), u32> = Default::default();
+    for r in ws.references().iter().filter(|r| open.contains(&r.file)) {
+        let end = reach
+            .entry((r.file, r.from, r.range.start().into()))
+            .or_default();
+        *end = (*end).max(r.range.end().into());
+    }
+    for r in ws.references().iter().filter(|r| open.contains(&r.file)) {
+        if said.contains(&r.from)
+            || reach[&(r.file, r.from, r.range.start().into())] != u32::from(r.range.end())
+        {
+            continue;
+        }
+        // `perform x;` borrows the name `x`, but what performs it is its owner
+        let source = match model.kind(r.from) {
+            sysml_model::ElementKind::PerformActionUsage => {
+                named_owner(model, model.owner(r.from).unwrap_or(r.from))
+            }
+            _ => named_owner(model, r.from),
+        };
+        if typed.contains(&(source, r.target)) {
+            continue;
+        }
+        let relation = match model.kind(r.from).name() {
+            "NamespaceImport" | "MembershipImport" => "imports",
+            "MetadataUsage" => "annotated_by",
+            "PerformActionUsage" => "performs",
+            _ => how_named(model, r.from, r.target),
+        };
+        edges.push(Edge {
+            source,
+            relation,
+            target: r.target,
+            file: r.file,
+            offset: r.range.start().into(),
+        });
+    }
+    edges
+}
+
+/// What a reference from `from` to `target` is, by the relationship that
+/// carries it: `: T` is a typing, `:>` a specialization or subsetting,
+/// `:>>` a redefinition. A name used any other way is only mentioned.
+fn how_named(model: &sysml_model::Model, from: ElementId, target: ElementId) -> &'static str {
+    for &rel in model.owned(from) {
+        let points = model.props(rel).any(|(_, v)| {
+            v.as_id() == Some(target) || v.as_ids().is_some_and(|ids| ids.contains(&target))
+        });
+        if !points {
+            continue;
+        }
+        let kind = model.kind(rel).name();
+        if kind.ends_with("Typing") {
+            return "typed_by";
+        }
+        if kind == "Redefinition" {
+            return "redefines";
+        }
+        if kind == "ReferenceSubsetting" {
+            return "references";
+        }
+        if kind == "Subsetting" {
+            return "subsets";
+        }
+        if kind == "Subclassification" || kind == "Specialization" {
+            return "specializes";
+        }
+        if kind == "Conjugation" || kind == "PortConjugation" {
+            return "conjugates";
+        }
+    }
+    "mentions"
+}
+
+/// The element a relationship or anonymous usage belongs to: itself where it
+/// has a name -- its own, or the one `:>> engine` borrows -- else the nearest
+/// owner that does.
+fn named_owner(model: &sysml_model::Model, elem: ElementId) -> ElementId {
+    let mut at = elem;
+    loop {
+        match (model.naming_element(at).is_some(), model.owner(at)) {
+            (false, Some(up)) => at = up,
+            _ => return at,
+        }
+    }
+}
+
+/// An element by qualified name, or by short name -- `SR-001` is how a
+/// trace matrix and a review comment name it.
+fn element_named(ws: &mut Workspace, open: &[usize], name: &str) -> Result<ElementId, String> {
+    if let Some(found) = ws.named_globally(name) {
+        return Ok(found);
+    }
+    let short = name.trim_matches(|c| c == '<' || c == '>' || c == '\'');
+    let found: Vec<ElementId> = open
+        .iter()
+        .flat_map(|&file| ws.file_elements(file).iter().copied())
+        .filter(|&elem| {
+            ws.model().effective_short_name(elem) == Some(short)
+                // a redefinition answers to the name it borrows, which
+                // `named_globally` does not know
+                || qualified(ws, elem) == name
+        })
+        .collect();
+    match found[..] {
+        [one] => Ok(one),
+        [] => Err(format!(
+            "nothing is named `{name}`: give a qualified name (`find` lists them) or a short name"
+        )),
+        _ => Err(format!(
+            "`{name}` names {} elements: {}",
+            found.len(),
+            found
+                .iter()
+                .map(|&e| qualified(ws, e))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// An element as a list names it: what it is called, what it is, and where.
+fn summary(ws: &Workspace, files: &mut Texts, elem: ElementId) -> Value {
+    let model = ws.model();
+    let mut entry = json!({
+        "name": qualified(ws, elem),
+        "kind": model.kind(elem).name(),
+    });
+    if let Some(short) = model.effective_short_name(elem) {
+        entry["shortName"] = json!(short);
+    }
+    if let Some((file, range)) = ws.element_place(elem) {
+        entry["at"] = files.place(ws, file, range.start().into());
+    }
+    entry
+}
+
+/// The owner path by effective names, so `part :>> engine;` reads as the
+/// `engine` it is rather than `?`.
+fn qualified(ws: &Workspace, elem: ElementId) -> String {
+    let model = ws.model();
+    let mut segments = Vec::new();
+    let mut at = Some(elem);
+    while let Some(e) = at.filter(|&e| e != ws.root()) {
+        segments.push(model.effective_name(e).unwrap_or("?"));
+        at = model.owner(e);
+    }
+    segments.reverse();
+    segments.join("::")
+}
+
+/// The text of each file a call places something in, read once per call.
+#[derive(Default)]
+struct Texts(std::collections::HashMap<usize, String>);
+
+impl Texts {
+    /// `path:line`, which is what an editor and a person both open.
+    fn place(&mut self, ws: &Workspace, file: usize, offset: usize) -> Value {
+        let text = self
+            .0
+            .entry(file)
+            .or_insert_with(|| ws.file_parse(file).syntax().text().to_string());
+        let (line, _) = sysml_syntax::line_col(text, offset);
+        json!(format!("{}:{line}", ws.file_name(file)))
+    }
 }
 
 /// What one workspace answers to a search of the kind asked for.
@@ -1079,6 +1438,39 @@ fn tools() -> Value {
                     "alongside": source_properties["alongside"],
                 },
                 "required": ["query"],
+            },
+        },
+        {
+            "name": "relations",
+            "description": "Everything one element of the model is linked to, in both directions: `satisfies` / `does_not_satisfy`, `verifies`, `allocated_to`, `performs`, `connected_to`, `then` (succession), `typed_by`, `specializes`, `subsets`, `redefines`, `references`, `imports`, `annotated_by` (metadata), and `mentions` for a name used any other way. `incoming` is what a file cannot tell you -- which parts satisfy this requirement, which test verifies it, which component a function is allocated to, who uses this definition. Each link says where it is written (`path:line`). Only links written in the model's own files are listed, not the standard library's.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element": { "type": "string", "description": "A qualified name (`VehicleRequirements::range`) or a short name (`SR-001`)" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+                "required": ["element"],
+            },
+        },
+        {
+            "name": "find",
+            "description": "List the model's named elements that pass every filter given, each with its qualified name, metaclass, short name, documentation and `path:line`. `kind` matches the start of the metaclass, case-insensitively: `Requirement` finds requirement definitions and usages, `PartUsage` only part usages. `within` keeps what is nested under one element. `query` matches part of the name or short name. `without` keeps the elements that are on neither end of a relation `relations` names -- `kind: RequirementUsage, without: verifies` is every requirement no test verifies, `kind: ActionUsage, without: allocated_to` every function not allocated. `total` counts all matches, even past `limit`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kind": { "type": "string", "description": "The start of a metaclass name, case-insensitive" },
+                    "within": { "type": "string", "description": "A qualified or short name; only what is nested under it" },
+                    "query": { "type": "string", "description": "Part of the name or short name, case-insensitive" },
+                    "without": { "type": "string", "description": "A relation (as `relations` names them) the element must not take part in" },
+                    "limit": { "type": "integer", "description": "At most this many (default 50, at most 500)" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
             },
         },
     ])
