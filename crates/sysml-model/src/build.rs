@@ -745,9 +745,14 @@ fn value_expression(
         model.set(literal, "value", value);
         return literal;
     }
-    // `( a + b )` is what is inside it and nothing more
+    // `( a + b )` is what is inside it and nothing more; `(a, b, c)` is a
+    // sequence, and every element of it is kept
     if written.kind() == SyntaxKind::PAREN_EXPR {
-        if let Some(inner) = written.children().next() {
+        let items: Vec<SyntaxNode> = written.children().collect();
+        if items.len() > 1 {
+            return sequence_expression(model, membership, written, &items, built);
+        }
+        if let Some(inner) = items.into_iter().next() {
             return value_expression(model, membership, &inner, built);
         }
     }
@@ -835,6 +840,39 @@ fn value_expression(
     }
     let expression = model.create(ElementKind::Expression);
     model.add_owned(membership, expression);
+    represent_textually(model, expression, written.text().to_string().trim());
+    expression
+}
+
+/// `SequenceExpressionList : OperatorExpression = OwnedExpression ','
+/// SequenceExpressionListMember` -- `(a, b, c)` invokes `BaseFunctions::','`
+/// on `a` and on the sequence of the rest, nesting to the right.
+fn sequence_expression(
+    model: &mut Model,
+    membership: ElementId,
+    written: &SyntaxNode,
+    items: &[SyntaxNode],
+    built: &mut Built,
+) -> ElementId {
+    let expression = model.create(ElementKind::OperatorExpression);
+    model.add_owned(membership, expression);
+    built.source.push((expression, written.clone()));
+    built.expressions.push(expression);
+    model.set(expression, "operator", Value::String(",".to_string()));
+    hands_over(model, expression, None, &items[0], Some("in"), built);
+    // the rest has no node of its own to hand over, so it is built in place
+    let parameter = model.create(ElementKind::Feature);
+    model.add_owned(expression, parameter);
+    model.set(parameter, "direction", Value::EnumLit("in"));
+    let value = model.create(ElementKind::FeatureValue);
+    model.add_owned(parameter, value);
+    model.set(value, "featureWithValue", Value::Ref(parameter));
+    let rest = match &items[1..] {
+        [last] => value_expression(model, value, last, built),
+        more => sequence_expression(model, value, written, more, built),
+    };
+    model.set(value, "value", Value::Ref(rest));
+    results_in(model, expression);
     represent_textually(model, expression, written.text().to_string().trim());
     expression
 }
@@ -3239,6 +3277,28 @@ mod tests {
             !inside.contains(&ElementKind::SendActionUsage),
             "the effect is the transition's, not a member beside it: {inside:?}"
         );
+    }
+
+    /// `("a", "b", "c")` is a sequence, not a parenthesised `"a"`: every
+    /// element is kept, as `BaseFunctions::','` invoked on the first and the
+    /// rest (`SequenceExpressionList` nests to the right).
+    #[test]
+    fn a_parenthesised_sequence_keeps_every_element() {
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "attribute need = (\"a\", \"b\", \"c\");\n",
+        ));
+        let strings: Vec<&str> = model
+            .ids()
+            .filter(|&id| model.kind(id) == ElementKind::LiteralString)
+            .filter_map(|id| model.maybe(id, "value").and_then(Value::as_str))
+            .collect();
+        assert_eq!(strings, ["a", "b", "c"]);
+        let commas = model
+            .ids()
+            .filter(|&id| model.kind(id) == ElementKind::OperatorExpression)
+            .filter(|&id| model.maybe(id, "operator").and_then(Value::as_str) == Some(","))
+            .count();
+        assert_eq!(commas, 2);
     }
 
     #[test]
