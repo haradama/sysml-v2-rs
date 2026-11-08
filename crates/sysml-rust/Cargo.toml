@@ -1,10 +1,11 @@
 [package]
 name = "sysmlv2-rust"
-description = "The Rust side of a SysML model, both ways: an existing Rust API surface imported as a SysML package, and Rust generated from a resolved model"
-# its own, now that it has one: the preamble it generates is written
-# the way `rustfmt` writes it, so a generated file comes back from
-# `cargo fmt` unchanged
-version = "0.1.1"
+description = "The Rust side of a SysML model, both ways -- an existing crate imported as a SysML package, and Rust generated from a resolved model -- and the seam, stated as data in no language in particular, through which any other language is imported or generated"
+# its own, as the crates under it are: what a number moves for is a
+# change in the crate it is on. 0.1.2 opens the seam: `surface` is what
+# the import reads a crate as, and what an importer for any language
+# writes; `plan` is what a generator for any language reads.
+version = "0.1.2"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -19,13 +20,28 @@ categories.workspace = true
 [lib]
 name = "sysml_rust"
 
+[features]
+# The JSON schemas of a surface and a plan, for whoever writes an
+# importer or a generator: `sysml import-code --schema` and `sysml plan
+# --schema` print them, and the MCP server hands the surface's to a
+# client as the shape of a call. Behind a feature because they are
+# derived by a crate that nothing reading or writing either needs.
+schema = ["dep:schemars"]
+
 [dependencies]
 sysmlv2-model.workspace = true
 sysmlv2-syntax.workspace = true
+# the plan is read off a resolved workspace: what a feature bottoms out
+# in is a question about the library it was resolved against
+sysmlv2-semantics.workspace = true
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+schemars = { version = "1", optional = true }
 
 [dev-dependencies]
-sysmlv2-semantics.workspace = true
+# the plan's tests plan against the standard library, which is where
+# the answer to "what does this bottom out in" lives
+sysmlv2-stdlib.workspace = true
 
 [lints]
 workspace = true

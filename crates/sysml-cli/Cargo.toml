@@ -2,9 +2,11 @@
 name = "sysmlv2-cli"
 description = "Command-line tools for SysML v2 models"
 # its own, as the crates under it are: what a number moves for is a
-# change in the crate it is on. 0.1.4 reads standard interchange back
-# with `sysml import`, which it could only write before.
-version = "0.1.4"
+# change in the crate it is on. 0.1.5 imports any language with `sysml
+# import-code`, from a surface a tool for that language writes, and
+# generates any with `sysml codegen`, through a generator that reads the
+# plan.
+version = "0.1.5"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
@@ -34,11 +36,17 @@ sysmlv2-semantics.workspace = true
 # being handed a path first
 sysmlv2-stdlib.workspace = true
 sysmlv2-interchange.workspace = true
-sysmlv2-rust.workspace = true
+# `schema` for `import-code --schema`, `plan --schema` and the MCP tool,
+# which hand the author of an importer or a generator the shape of what
+# they have to write or read
+sysmlv2-rust = { workspace = true, features = ["schema"] }
 sysmlv2-diagram.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
+# `--via "python3 my tool.py"`: a command is split the way a shell splits
+# one, so a path with a space in it can be quoted
+shlex = "1"
 
 [dev-dependencies]
 sysmlv2-corpus.workspace = true

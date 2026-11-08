@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""Python from a plan, for `sysml codegen`.
+
+A generator for a language this toolchain has never heard of is a
+program that reads what `sysml plan` writes -- what the model implies
+for code, in no language in particular -- and prints the code. That is
+Doxygen's filter arrangement the other way round, and this is one such
+program, for Python. README.md beside it says what it maps.
+
+    sysml codegen --lang python model/            # sysml-gen-python on PATH
+    sysml codegen --via "python3 sysml-gen-python" model/
+    sysml --format json plan model/ | python3 sysml-gen-python
+
+A definition the model binds to Python with `@code { writtenIn =
+"python"; path = "sensors.Thermometer"; }` already exists, so it is
+imported rather than written again. What the model leaves open -- an
+expression to translate, a guard, an effect -- is left open here too,
+and listed at the end of the file and on standard error, so that what
+is still a person's to write is stated rather than missing.
+"""
+
+import json
+import keyword
+import sys
+
+PRIMITIVE = {
+    "Boolean": "bool",
+    "String": "str",
+    "Real": "float",
+    "Integer": "int",
+    "Natural": "int",
+    "Positive": "int",
+}
+
+
+def last(qualified):
+    return qualified.rsplit("::", 1)[-1]
+
+
+def ident(name):
+    """A name as Python can spell it: a reserved word gets an underscore."""
+    name = name.replace(".", "_").replace("'", "")
+    return name + "_" if keyword.iskeyword(name) else name
+
+
+def snake(name):
+    """`GetStock` -> `get_stock`, for what Python spells in lower case."""
+    out = ""
+    for i, ch in enumerate(name):
+        if ch.isupper() and i and (name[i - 1].islower() or name[i - 1].isdigit()):
+            out += "_"
+        out += ch.lower()
+    return ident(out)
+
+
+def literal(given):
+    """A declared value as Python source, or None where it is an expression."""
+    if given is None or "literal" not in given:
+        return None
+    value = given["literal"]
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    return repr(value)
+
+
+def many(feature):
+    m = feature.get("multiplicity")
+    return bool(m) and (m["upper"] is None or m["upper"] > 1)
+
+
+def optional(feature):
+    m = feature.get("multiplicity")
+    return bool(m) and m["upper"] == 1 and m["lower"] == 0
+
+
+class Generator:
+    def __init__(self, plan):
+        self.plan = plan
+        self.defined = {d["of"]: d for d in plan["definitions"]}
+        self.imports = set()
+        self.used = set()
+        self.open = []
+        self.lines = []
+
+    # -- what things are called ------------------------------------------
+
+    def bound(self, definition):
+        """The Python path a definition already exists at, if `@code` says so."""
+        for note in definition.get("annotations", []):
+            says = note.get("says", {})
+            if last(note["of"]) == "code" and literal(says.get("writtenIn")) == "'python'":
+                path = literal(says.get("path"))
+                if path:
+                    return path.strip("'")
+        return None
+
+    def name_of(self, qualified):
+        """How a definition is referred to: what it is imported as where it
+        exists already, its own name otherwise, nothing where the plan does
+        not have it."""
+        definition = self.defined.get(qualified)
+        if definition is None:
+            return None
+        path = self.bound(definition)
+        if path:
+            module, _, name = path.rpartition(".")
+            self.imports.add((module, name))
+            return name
+        return last(qualified)
+
+    def typed(self, feature, where):
+        name = self.name_of(feature["type"]) if feature.get("type") else None
+        if name is None:
+            name = PRIMITIVE.get(feature.get("primitive"))
+        if name is None:
+            self.open.append(f"{where}: no Python type for `{feature.get('type')}`")
+            name = "object"
+        if many(feature):
+            return f"list[{name}]"
+        if optional(feature):
+            return f"{name} | None"
+        return name
+
+    # -- writing ----------------------------------------------------------
+
+    def emit(self, *lines):
+        self.lines.extend(lines)
+
+    def doc(self, definition, indent="    ", extra=()):
+        said = [definition.get("documentation", "").strip()] if definition.get("documentation") else []
+        said.extend(extra)
+        if said:
+            text = "\n\n".join(said)
+            body = "\n".join(f"{indent}{line}" if line else "" for line in text.split("\n"))
+            self.emit(f'{indent}"""{body.lstrip()}"""')
+        return bool(said)
+
+    def value_of(self, feature, where):
+        """A declared default as Python source: a literal as it is, an
+        enumeration's member as the attribute it becomes, anything else
+        left open."""
+        given = feature.get("default")
+        if given is None:
+            return None
+        if "literal" in given:
+            return literal(given)
+        expression = given["expression"]
+        if "::" in expression:
+            enumeration, _, member = expression.rpartition("::")
+            for qualified, definition in self.defined.items():
+                if last(qualified) == enumeration and member in definition.get("values", []):
+                    return f"{self.name_of(qualified)}.{ident(member)}"
+        self.open.append(f"{where}: default `{expression}`")
+        return None
+
+    def definition(self, d):
+        name = last(d["of"])
+        path = self.bound(d)
+        if path:
+            self.name_of(d["of"])
+            self.emit(f"# `{name}` is `{path}`, imported above", "", "")
+            return
+        getattr(self, d["shape"].replace(" ", "_"))(d, name)
+
+    def record(self, d, name):
+        bases = [self.name_of(up) or last(up) for up in d.get("specializes", [])]
+        if d["shape"] == "abstract":
+            bases.append("ABC")
+            self.used.add("ABC")
+        self.used.add("dataclass")
+        self.emit("@dataclass(kw_only=True)")
+        self.emit(f"class {name}({', '.join(bases)}):" if bases else f"class {name}:")
+        wrote = self.doc(d)
+        for f in d.get("features", []):
+            line = f"    {ident(f['name'])}: {self.typed(f, f'{name}.{f['name']}')}"
+            given = self.value_of(f, f"{name}.{f['name']}")
+            if given is not None:
+                line += f" = {given}"
+            elif f.get("default"):
+                line += f"  # = {f['default']['expression']}"
+            elif many(f):
+                self.used.add("field")
+                line += " = field(default_factory=list)"
+            elif optional(f):
+                line += " = None"
+            self.emit(line)
+            wrote = True
+        for performed in d.get("performs", []):
+            self.emit("", f"    def {snake(performed['name'])}(self) -> None:")
+            self.doc(performed, "        ", [f"Performs `{performed.get('of', '?')}`."])
+            self.emit(f"        raise NotImplementedError({performed['name']!r})")
+            self.open.append(f"{name}.{performed['name']}: performs `{performed.get('of', '?')}`")
+            wrote = True
+        if not wrote:
+            self.emit("    pass")
+        self.emit("", "")
+
+    abstract = record
+
+    def value(self, d, name):
+        under = PRIMITIVE.get(d.get("primitive"), "object")
+        self.emit(f"class {name}({under}):")
+        if not self.doc(d):
+            self.emit("    pass")
+        self.emit("", "")
+
+    def enumeration(self, d, name):
+        self.used.add("Enum")
+        self.emit(f"class {name}(Enum):")
+        self.doc(d)
+        for value in d.get("values", []):
+            self.emit(f"    {ident(value)} = auto()")
+        if not d.get("values"):
+            self.emit("    pass")
+        self.emit("", "")
+
+    def variation(self, d, name):
+        arms = []
+        for variant in d.get("variants", []):
+            arm = self.name_of(variant["type"]) if variant.get("type") else None
+            arms.append(arm or "object")
+            self.emit(f"# {name}.{variant['name']}: {variant.get('type', 'untyped')}")
+        self.used.add("Union")
+        self.emit(f"{name} = Union[{', '.join(arms) or 'object'}]", "", "")
+
+    def port(self, d, name):
+        self.used.add("Protocol")
+        self.emit(f"class {name}(Protocol):")
+        wrote = self.doc(d)
+        for f in d.get("features", []):
+            self.emit(f"    {ident(f['name'])}: {self.typed(f, f'{name}.{f['name']}')}")
+            wrote = True
+        if not wrote:
+            self.emit("    pass")
+        self.emit("", "")
+
+    def signature(self, d, name):
+        params = [f for f in d.get("features", []) if f.get("direction") != "out"]
+        outs = [f for f in d.get("features", []) if f.get("direction") == "out"]
+        args = ", ".join(f"{ident(f['name'])}: {self.typed(f, f'{name}.{f['name']}')}" for f in params)
+        if d.get("returns"):
+            ret = self.typed(d["returns"], f"{name}.return")
+        elif len(outs) == 1:
+            ret = self.typed(outs[0], f"{name}.{outs[0]['name']}")
+        else:
+            ret = "None"
+        return f"def {snake(name)}({args}) -> {ret}:"
+
+    def function(self, d, name):
+        self.emit(self.signature(d, name))
+        self.doc(d)
+        expression = d.get("expression")
+        if expression:
+            self.emit(f"    # SysML: {expression}")
+            self.open.append(f"{name}: translate `{expression}`")
+        else:
+            self.open.append(f"{name}: no expression in the model")
+        self.emit(f"    raise NotImplementedError({name!r})", "", "")
+
+    def behaviour(self, d, name):
+        self.emit(self.signature(d, name))
+        ordered = []
+        pending = list(d.get("steps", []))
+        while pending:
+            ready = [s for s in pending if all(a in ordered for a in s.get("after", []))] or pending[:1]
+            for step in ready:
+                ordered.append(step["name"])
+                pending.remove(step)
+        steps = [f"Steps, in order: {', '.join(ordered)}."] if ordered else []
+        flows = [f"Flows: {', '.join(f'{f['from']} -> {f['to']}' for f in d['flows'])}."] if d.get("flows") else []
+        self.doc(d, extra=steps + flows)
+        self.open.append(f"{name}: the body of a behaviour")
+        self.emit(f"    raise NotImplementedError({name!r})", "", "")
+
+    def state_machine(self, d, name):
+        self.used.add("Enum")
+        self.emit(f"class {name}State(Enum):")
+        for state in d.get("states", []):
+            self.emit(f"    {ident(state)} = auto()")
+        if not d.get("states"):
+            self.emit("    pass")
+        self.emit("", "", f"class {name}:")
+        self.doc(d)
+        initial = d.get("initial") or (d["states"][0] if d.get("states") else None)
+        self.emit("    def __init__(self) -> None:")
+        self.emit(f"        self.state = {name}State.{ident(initial)}" if initial else "        self.state = None")
+        for t in d.get("transitions", []):
+            on = t.get("on")
+            params = "self" + (f", {ident(on['name'])}: {self.typed(on, f'{name}.{t['name']}')}" if on else "")
+            self.emit("", f"    def {snake(t['name'])}({params}) -> None:")
+            if t.get("guard"):
+                self.emit(f"        # if {t['guard']}")
+                self.open.append(f"{name}.{t['name']}: guard `{t['guard']}`")
+            if t.get("effect"):
+                self.open.append(f"{name}.{t['name']}: what happens on the way")
+            self.emit(f"        if self.state is {name}State.{ident(t['from'])}:")
+            self.emit(f"            self.state = {name}State.{ident(t['to'])}")
+        self.emit("", "")
+
+    def requirement(self, d, name):
+        subject = d.get("subject")
+        param = f"{ident(subject['name'])}: {self.typed(subject, f'{name}.subject')}" if subject else ""
+        self.emit(f"def check_{snake(name)}({param}) -> bool:")
+        extra = [f"Requires: {r}" for r in d.get("requires", [])]
+        extra += [f"Assumes: {a}" for a in d.get("assumes", [])]
+        self.doc(d, extra=extra)
+        self.open.append(f"{name}: the check itself")
+        self.emit(f"    raise NotImplementedError({name!r})", "", "")
+
+    # -- the whole ----------------------------------------------------------
+
+    def module(self):
+        # a class comes after what it derives from, whatever order the
+        # model declared them in
+        pending = list(self.plan["definitions"])
+        written = set()
+        while pending:
+            ready = [
+                d for d in pending
+                if all(up not in self.defined or up in written for up in d.get("specializes", []))
+            ] or pending
+            for d in ready:
+                self.definition(d)
+                written.add(d["of"])
+                pending.remove(d)
+        for constant in self.plan.get("constants", []):
+            name = ident(last(constant["name"]).upper())
+            given = self.value_of(constant, constant["name"])
+            if given is not None:
+                self.emit(f"{name}: {self.typed(constant, constant['name'])} = {given}")
+            else:
+                self.emit(f"# {name} = {constant.get('default', {}).get('expression', '?')}")
+        head = ["# generated by sysml-gen-python from `sysml plan` -- DO NOT EDIT", "from __future__ import annotations", ""]
+        if "ABC" in self.used:
+            head.append("from abc import ABC")
+        if self.used & {"dataclass", "field"}:
+            head.append("from dataclasses import " + ", ".join(sorted(self.used & {"dataclass", "field"})))
+        if "Enum" in self.used:
+            head.append("from enum import Enum, auto")
+        if self.used & {"Protocol", "Union"}:
+            head.append("from typing import " + ", ".join(sorted(self.used & {"Protocol", "Union"})))
+        for module, name in sorted(self.imports):
+            head.append(f"from {module} import {name}")
+        head.append("")
+        body = "\n".join(head + [""] + self.lines).rstrip("\n") + "\n"
+        if self.open:
+            body += "\n\n# left open -- what the model did not say, for a person to write:\n"
+            body += "".join(f"#   {line}\n" for line in self.open)
+        return body
+
+
+def main():
+    plan = json.load(sys.stdin)
+    if not plan.get("checked", {}).get("ok", True):
+        print("the model does not resolve; nothing generated", file=sys.stderr)
+        return 1
+    generator = Generator(plan)
+    sys.stdout.write(generator.module())
+    print(f"{len(generator.open)} thing(s) left open", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

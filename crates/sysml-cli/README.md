@@ -1,7 +1,8 @@
 # sysmlv2-cli
 
 `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`,
-`diagram`, `import-rust`, `rustgen`, `api`, `mcp`, `corpus`); `mcp`
+`diagram`, `import-rust`, `import-code`, `rustgen`, `api`, `mcp`,
+`corpus`); `mcp`
 speaks the Model Context Protocol over stdio, so an AI agent can ask
 whether a model parses and resolves, what names are legal at a point,
 what shape a definition has once it is resolved, and what the standard
@@ -49,6 +50,16 @@ reference into the library reads as unresolved.
 
 `--color auto|always|never` decides the colour; `auto` is what a
 terminal gets, and `NO_COLOR` is honoured.
+
+`sysml import-code` takes code in any language the way Doxygen takes a
+language it has never heard of: through a program that writes what the
+tool already reads. That is a surface -- what the code declares, as
+JSON, in no language in particular -- or the SysML itself; the importer
+is `sysml-import-<lang>` on `PATH`, named after the inputs' extension
+unless `--lang` or `--via` says otherwise, and what it writes is checked
+against the standard library before it is written out. `--schema` prints
+what a surface is, and `import-rust --surface` writes the one the Rust
+importer reads off a crate.
 
 `sysml plan` says what a model implies for code, in no language in
 particular: every definition's shape, its features with their

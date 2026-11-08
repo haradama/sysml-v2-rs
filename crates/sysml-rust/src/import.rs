@@ -2,49 +2,45 @@
 //!
 //! The input is what `rustdoc` writes with `--output-format json`: the one
 //! machine-readable statement of a crate's public API, re-exports resolved
-//! and macros expanded. [`rustdoc_to_sysml`] turns it into a package in
-//! which every definition carries a `@code { ... }` metadata usage naming
-//! the Rust item it binds to -- so a model can `import` the package, type
-//! its ports and `perform` its actions, and a generator can call the real
-//! API instead of inventing parallel types.
+//! and macros expanded. [`rustdoc_to_surface`] reads it as a
+//! [`Surface`] -- what any language's reader says about its code -- and
+//! [`rustdoc_to_sysml`] writes that as a package in which every definition
+//! carries a `@code { ... }` metadata usage naming the Rust item it binds
+//! to, so a model can `import` the package, type its ports and `perform`
+//! its actions, and a generator can call the real API instead of
+//! inventing parallel types. Only the reading is Rust's own: what a
+//! surface becomes in SysML is decided in [`crate::surface`], once, for
+//! every language.
 //!
 //! The mapping, deliberately monomorphic:
 //!
-//! - `struct` -> `item def`, each field an attribute; `Vec<T>` becomes
-//!   `[*]`, `Option<T>` becomes `[0..1]`, `Box`/`Arc`/`Rc` vanish
-//! - plain `enum` -> `enum def`
-//! - `trait` -> `port def`, each method an `action def` with `in`
-//!   parameters, an `out result` and -- for `Result` returns -- an
-//!   `out error [0..1]`
-//! - free `fn` -> `action def`
-//! - generic items, and anything else, are skipped and listed at the end
-//!   rather than dropped silently
+//! - `struct` -> record, each field a typed name; `Vec<T>` becomes `many`,
+//!   `Option<T>` becomes `optional`, `Box`/`Arc`/`Rc` vanish
+//! - plain `enum` -> enumeration
+//! - `trait` -> interface, each method a callable with its parameters,
+//!   its result and -- for `Result` returns -- its error
+//! - free `fn` -> function
+//! - generic items, and anything else, are skipped and listed rather
+//!   than dropped silently
 //!
 //! A scalar keeps the width the crate declared: `sysml rustgen` reads a
 //! `Natural` back as a `u64`, so a `u32` folded into `Natural` returns
 //! from the round trip as a type the crate's own functions refuse. Every
-//! other Rust scalar gets an `attribute def` of its own. For the same
-//! reason a borrow reads as a value only for `&str`, which is how Rust
-//! passes a string.
+//! other Rust scalar gets a scalar of its own. For the same reason a
+//! borrow reads as a value only for `&str`, which is how Rust passes a
+//! string.
 //!
 //! A container nested in a container -- `Option<Vec<u8>>` -- is refused:
 //! SysML says how many of a type there are once, and folding the two
 //! levels into one would say something the crate does not.
 //!
-//! Rust keeps types and functions in namespaces of their own and SysML
-//! does not, so `struct Config` and `fn config` both want to be `Config`.
-//! The type keeps the name, since signatures refer to it, and the action
-//! takes the name of the trait it belongs to as a prefix -- or a number,
-//! where it belongs to none.
-//!
 //! A `pub use` re-export is followed to the item it names. Nothing skipped
 //! is ever named by a signature: a definition whose parameters or result
 //! have no shape is skipped in turn, so every name resolves.
 //!
-//! Names that collide with SysML keywords are quoted (`'filter'`), and the
-//! output is deterministic. rustdoc's JSON is versioned, and this reads
-//! the format that spells a function's parameters as `sig`; an older
-//! document is refused rather than imported with no parameters at all.
+//! rustdoc's JSON is versioned, and this reads the format that spells a
+//! function's parameters as `sig`; an older document is refused rather
+//! than imported with no parameters at all.
 //!
 //! Regenerate an input with:
 //!
@@ -53,11 +49,12 @@
 //! ```
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 
+use crate::surface::{
+    Callable, Enumeration, Field, Imported, Interface, Item, Multiplicity, Primitive, Record,
+    Scalar, Surface, TypeRef,
+};
 use serde_json::Value as Json;
-
-use crate::binding;
 
 /// What can be wrong with a rustdoc JSON input.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +90,15 @@ impl std::error::Error for ImportError {}
 /// `package` names the generated package; left out, the crate names it
 /// (`inventory_store` -> `InventoryStoreApi`).
 pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, ImportError> {
+    Ok(crate::surface::to_sysml(
+        &rustdoc_to_surface(json)?,
+        package,
+    ))
+}
+
+/// One crate's rustdoc JSON as a surface: what the package will be
+/// written from, and what a reader of any other language writes.
+pub fn rustdoc_to_surface(json: &str) -> Result<Surface, ImportError> {
     let doc: Json = serde_json::from_str(json).map_err(|e| ImportError::NotJson(e.to_string()))?;
     let index = doc
         .get("index")
@@ -146,51 +152,22 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, I
             _ => members.push(id.clone()),
         }
     }
-    let members = &members;
 
-    let package_name = package.map_or_else(|| format!("{}Api", camel(&crate_name)), String::from);
-    let mut out = String::new();
-    let mut skipped: Vec<String> = Vec::new();
-    writeln!(
-        out,
-        "// generated from crate `{crate_name}` by `sysml import-rust` -- DO NOT EDIT"
-    )
-    .expect("writing to a String cannot fail");
-    writeln!(out, "package {package_name} {{").unwrap();
-    writeln!(out, "\tprivate import ScalarValues::*;\n").unwrap();
-    writeln!(
-        out,
-        "\t// how each definition binds to the Rust it came from"
-    )
-    .unwrap();
-    writeln!(out, "\tmetadata def {} {{", binding::DEF).unwrap();
-    for (name, ty) in binding::ALL {
-        writeln!(out, "\t\tattribute {name} : {ty};").unwrap();
-    }
-    writeln!(out, "\t}}").unwrap();
-
-    // Which types will end up in the model. A signature may name one
+    // Which types will end up in the surface. A signature may name one
     // that has no SysML shape -- an error enum carrying a payload, a
     // newtype over an id -- and writing `out error : ImportError` for a
     // definition that was refused leaves a name nothing answers to. So
     // settle the set first and let the signatures respect it.
-    let settled = written_types(index, &crate_name, members);
-    // Every name the package will declare, so that the second member to
-    // want one is renamed rather than left to shadow the first.
-    let mut taken: HashSet<String> = settled.clone();
-    taken.extend(EXACT.iter().map(|(_, name, _)| name.to_string()));
-
-    // The members go into a buffer of their own because what they name
-    // decides what has to be declared above them: which Rust scalars
-    // the crate turned out to use is known only once they are written.
-    let mut body = String::new();
+    let settled = settled(index, &members);
     let mut ctx = Context {
         index,
         crate_name: &crate_name,
-        written: Some(&settled),
+        written: &settled,
         exact: HashSet::new(),
+        skipped: Vec::new(),
     };
-    for id in members {
+    let mut items = Vec::new();
+    for id in &members {
         let Some(entry) = item(id) else {
             continue;
         };
@@ -200,69 +177,48 @@ pub fn rustdoc_to_sysml(json: &str, package: Option<&str>) -> Result<Imported, I
         let Some(inner) = entry.get("inner").and_then(Json::as_object) else {
             continue;
         };
-        match inner.keys().next().map(String::as_str).unwrap_or_default() {
-            "struct" => {
-                ctx.item_def(&mut body, name, entry, &mut skipped);
-            }
-            "enum" => {
-                ctx.enum_def(&mut body, name, entry, &mut skipped);
-            }
-            "trait" => {
-                ctx.port_def(&mut body, name, entry, &mut skipped, &mut taken);
-            }
+        let made = match inner.keys().next().map(String::as_str).unwrap_or_default() {
+            "struct" => ctx.record(name, entry).map(Item::Record),
+            "enum" => ctx.enumeration(name, entry).map(Item::Enumeration),
+            "trait" => ctx.interface(name, entry).map(Item::Interface),
             "function" => {
-                if !ctx.action_def(&mut body, name, entry, None, &mut taken) {
-                    skipped.push(format!("{name} -- unsupported signature"));
+                let made = ctx.callable(name, entry, None).map(Item::Function);
+                if made.is_none() {
+                    ctx.skipped.push(format!("{name} -- unsupported signature"));
                 }
+                made
             }
-            other => skipped.push(format!("{name} -- {other}")),
-        }
+            other => {
+                ctx.skipped.push(format!("{name} -- {other}"));
+                None
+            }
+        };
+        items.extend(made);
     }
 
-    if !ctx.exact.is_empty() {
-        writeln!(
-            out,
-            "\n\t// the Rust scalars this crate uses that no SysML one stands for exactly"
-        )
-        .unwrap();
-        for (rust, name, scalar) in EXACT.iter().filter(|(_, name, _)| ctx.exact.contains(name)) {
-            writeln!(
-                out,
-                "\tattribute def {name} :> {scalar} {{ @{} {{ :>> {} = \"{}\"; :>> {} = \"{rust}\"; :>> {} = \"{DERIVES}\"; }} }}",
-                binding::DEF,
-                binding::LANGUAGE,
-                binding::RUST,
-                binding::ITEM,
-                binding::CAPABILITIES
-            )
-            .unwrap();
-        }
-    }
-    out.push_str(&body);
-
-    if !skipped.is_empty() {
-        writeln!(out, "\n\t// not imported (no monomorphic SysML shape):").unwrap();
-        for line in &skipped {
-            writeln!(out, "\t//   {line}").unwrap();
-        }
-    }
-    writeln!(out, "}}").unwrap();
-    Ok(Imported {
-        sysml: out,
+    // The scalars the signatures turned out to name, each under the
+    // SysML scalar it is one of, in one order however the crate wrote.
+    let Context { exact, skipped, .. } = ctx;
+    let scalars = EXACT
+        .iter()
+        .filter(|(_, name, _)| exact.contains(name))
+        .map(|(rust, name, scalar)| Scalar {
+            name: (*name).to_string(),
+            of: *scalar,
+            path: (*rust).to_string(),
+            capabilities: DERIVES.iter().map(|it| (*it).to_string()).collect(),
+        })
+        .collect();
+    Ok(Surface {
+        language: crate::binding::RUST.to_string(),
+        module: crate_name,
+        unit: Some("crate".to_string()),
+        tool: Some("sysml import-rust".to_string()),
+        package: None,
+        scalars,
+        items,
         skipped,
     })
-}
-
-/// A crate's public API as SysML, and what of it had no SysML shape.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Imported {
-    /// The SysML the crate's API was read as.
-    pub sysml: String,
-    /// Every item that could not be stated, and why. The package says
-    /// them in comments too; this is for whoever has to model them by
-    /// hand, and a list to work through is a poor thing to have to find
-    /// by reading.
-    pub skipped: Vec<String>,
 }
 
 /// The Rust scalars this importer gives a name of their own, each with
@@ -270,41 +226,31 @@ pub struct Imported {
 /// and `Natural` come back out of the generator as `bool`, `String`,
 /// `f64`, `i64` and `u64`; anything else has to say what it is or it
 /// returns from the round trip as the wrong type.
-const EXACT: &[(&str, &str, &str)] = &[
-    ("u8", "RustU8", "Natural"),
-    ("u16", "RustU16", "Natural"),
-    ("u32", "RustU32", "Natural"),
-    ("u128", "RustU128", "Natural"),
-    ("usize", "RustUsize", "Natural"),
-    ("i8", "RustI8", "Integer"),
-    ("i16", "RustI16", "Integer"),
-    ("i32", "RustI32", "Integer"),
-    ("i128", "RustI128", "Integer"),
-    ("isize", "RustIsize", "Integer"),
-    ("f32", "RustF32", "Real"),
-    ("char", "RustChar", "String"),
-    ("&str", "RustStr", "String"),
+const EXACT: &[(&str, &str, Primitive)] = &[
+    ("u8", "RustU8", Primitive::Natural),
+    ("u16", "RustU16", Primitive::Natural),
+    ("u32", "RustU32", Primitive::Natural),
+    ("u128", "RustU128", Primitive::Natural),
+    ("usize", "RustUsize", Primitive::Natural),
+    ("i8", "RustI8", Primitive::Integer),
+    ("i16", "RustI16", Primitive::Integer),
+    ("i32", "RustI32", Primitive::Integer),
+    ("i128", "RustI128", Primitive::Integer),
+    ("isize", "RustIsize", Primitive::Integer),
+    ("f32", "RustF32", Primitive::Real),
+    ("char", "RustChar", Primitive::String),
+    ("&str", "RustStr", Primitive::String),
 ];
 
 /// What every Rust scalar can do. The generator says nothing about a
 /// type it did not write unless the model says what that type is
 /// capable of, and a primitive is capable of all of it.
-const DERIVES: &str = "Debug, Clone, PartialEq, Default";
+const DERIVES: [&str; 4] = ["Debug", "Clone", "PartialEq", "Default"];
 
-/// The names of the crate's types that become definitions, found by
-/// writing them and keeping the ones that came out. Asking the emitters
-/// rather than re-deciding here is what keeps the two answers the same.
-fn written_types(
-    index: &serde_json::Map<String, Json>,
-    crate_name: &str,
-    members: &[Json],
-) -> HashSet<String> {
-    let mut ctx = Context {
-        index,
-        crate_name,
-        written: None,
-        exact: HashSet::new(),
-    };
+/// The names of the crate's types that become definitions: the
+/// non-generic plain structs, plain enums and traits. Decided by the same
+/// tests the emitters apply, so that the two answers are the same.
+fn settled(index: &serde_json::Map<String, Json>, members: &[Json]) -> HashSet<String> {
     let mut names = HashSet::new();
     for id in members {
         let Some(entry) = index.get(&id_key(id)) else {
@@ -316,15 +262,13 @@ fn written_types(
         ) else {
             continue;
         };
-        // written to and thrown away: this pass asks the emitters what
-        // they make of an item, not what they write
-        let mut scratch = String::new();
-        let mut ignored = Vec::new();
-        let mut taken = HashSet::new();
         let made = match inner.keys().next().map(String::as_str) {
-            Some("struct") => ctx.item_def(&mut scratch, name, entry, &mut ignored),
-            Some("enum") => ctx.enum_def(&mut scratch, name, entry, &mut ignored),
-            Some("trait") => ctx.port_def(&mut scratch, name, entry, &mut ignored, &mut taken),
+            Some("struct") => {
+                !is_generic(&inner["struct"])
+                    && inner["struct"]["kind"]["plain"]["fields"].is_array()
+            }
+            Some("enum") => !is_generic(&inner["enum"]) && plain_variants(index, entry).is_some(),
+            Some("trait") => !is_generic(&inner["trait"]),
             _ => false,
         };
         if made {
@@ -334,15 +278,31 @@ fn written_types(
     names
 }
 
-/// The pieces every emitter needs at hand.
+/// The names of an enum's variants, where every one of them is a bare
+/// name -- a variant carrying a payload is a shape SysML's enumerations
+/// have not got.
+fn plain_variants(index: &serde_json::Map<String, Json>, entry: &Json) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for id in entry["inner"]["enum"]["variants"].as_array()? {
+        let variant = index.get(&id_key(id))?;
+        if variant["inner"]["variant"]["kind"].as_str() != Some("plain") {
+            return None;
+        }
+        names.push(variant.get("name")?.as_str()?.to_string());
+    }
+    Some(names)
+}
+
+/// The pieces every reader needs at hand.
 struct Context<'a> {
     index: &'a serde_json::Map<String, Json>,
     crate_name: &'a str,
-    /// The type names that will be in the model, or `None` while that is
-    /// still being worked out.
-    written: Option<&'a HashSet<String>>,
-    /// Which of [`EXACT`] the signatures written so far have named.
+    /// The type names that will be in the surface.
+    written: &'a HashSet<String>,
+    /// Which of [`EXACT`] the signatures read so far have named.
     exact: HashSet<&'static str>,
+    /// What had no shape, and why, in the order it was met.
+    skipped: Vec<String>,
 }
 
 impl<'a> Context<'a> {
@@ -350,109 +310,78 @@ impl<'a> Context<'a> {
         self.index.get(&id_key(id))
     }
 
-    /// `struct` -> `item def`, each field an attribute.
-    fn item_def(
-        &mut self,
-        out: &mut String,
-        name: &str,
-        entry: &Json,
-        skipped: &mut Vec<String>,
-    ) -> bool {
+    /// `struct` -> record, each field a typed name.
+    fn record(&mut self, name: &str, entry: &Json) -> Option<Record> {
         if is_generic(&entry["inner"]["struct"]) {
-            skipped.push(format!("{name} -- generic"));
-            return false;
+            self.skipped.push(format!("{name} -- generic"));
+            return None;
         }
         let Some(fields) = entry["inner"]["struct"]["kind"]["plain"]["fields"].as_array() else {
-            skipped.push(format!("{name} -- not a plain struct"));
-            return false;
+            self.skipped.push(format!("{name} -- not a plain struct"));
+            return None;
         };
-        docs(out, entry, 1, None);
-        writeln!(out, "\titem def {} {{", quoted(name)).unwrap();
-        self.binding(out, &format!("{}::{name}", self.crate_name), None, 2);
+        let mut record = Record {
+            name: name.to_string(),
+            path: format!("{}::{name}", self.crate_name),
+            doc: docs(entry),
+            ..Record::default()
+        };
         for id in fields {
             let Some(field) = self.item(id) else { continue };
             let Some(field_name) = field.get("name").and_then(Json::as_str) else {
                 continue;
             };
             match self.attribute_type(&field["inner"]["struct_field"]) {
-                Some((ty, multiplicity)) => {
-                    docs(out, field, 2, None);
-                    writeln!(
-                        out,
-                        "\t\tattribute {} : {ty}{multiplicity};",
-                        quoted(field_name)
-                    )
-                    .unwrap();
-                }
-                None => skipped.push(format!("{name}.{field_name} -- unmappable type")),
+                Some((of, multiplicity)) => record.fields.push(Field {
+                    name: field_name.to_string(),
+                    doc: docs(field),
+                    of,
+                    multiplicity,
+                }),
+                None => self
+                    .skipped
+                    .push(format!("{name}.{field_name} -- unmappable type")),
             }
         }
-        writeln!(out, "\t}}").unwrap();
-        true
+        Some(record)
     }
 
-    /// A plain `enum` -> `enum def`.
-    fn enum_def(
-        &self,
-        out: &mut String,
-        name: &str,
-        entry: &Json,
-        skipped: &mut Vec<String>,
-    ) -> bool {
+    /// A plain `enum` -> enumeration.
+    fn enumeration(&mut self, name: &str, entry: &Json) -> Option<Enumeration> {
         if is_generic(&entry["inner"]["enum"]) {
-            skipped.push(format!("{name} -- generic"));
-            return false;
+            self.skipped.push(format!("{name} -- generic"));
+            return None;
         }
-        let Some(names) = self.plain_variants(entry) else {
-            skipped.push(format!("{name} -- not a plain enum"));
-            return false;
+        let Some(values) = plain_variants(self.index, entry) else {
+            self.skipped.push(format!("{name} -- not a plain enum"));
+            return None;
         };
-        docs(out, entry, 1, None);
-        writeln!(out, "\tenum def {} {{", quoted(name)).unwrap();
-        self.binding(out, &format!("{}::{name}", self.crate_name), None, 2);
-        for variant in names {
-            writeln!(out, "\t\tenum {};", quoted(&variant)).unwrap();
-        }
-        writeln!(out, "\t}}").unwrap();
-        true
+        Some(Enumeration {
+            name: name.to_string(),
+            path: format!("{}::{name}", self.crate_name),
+            doc: docs(entry),
+            capabilities: Vec::new(),
+            values,
+        })
     }
 
-    /// The names of an enum's variants, where every one of them is a
-    /// bare name -- a variant carrying a payload is a shape SysML's
-    /// enumerations have not got.
-    fn plain_variants(&self, entry: &Json) -> Option<Vec<String>> {
-        let mut names = Vec::new();
-        for id in entry["inner"]["enum"]["variants"].as_array()? {
-            let variant = self.item(id)?;
-            if variant["inner"]["variant"]["kind"].as_str() != Some("plain") {
-                return None;
-            }
-            names.push(variant.get("name")?.as_str()?.to_string());
-        }
-        Some(names)
-    }
-
-    /// A `trait` -> `port def`, each method an `action def` beside it.
-    fn port_def(
-        &mut self,
-        out: &mut String,
-        name: &str,
-        entry: &Json,
-        skipped: &mut Vec<String>,
-        taken: &mut HashSet<String>,
-    ) -> bool {
+    /// A `trait` -> interface, each method a callable.
+    fn interface(&mut self, name: &str, entry: &Json) -> Option<Interface> {
         if is_generic(&entry["inner"]["trait"]) {
-            skipped.push(format!("{name} -- generic"));
-            return false;
+            self.skipped.push(format!("{name} -- generic"));
+            return None;
         }
-        docs(out, entry, 1, None);
-        writeln!(out, "\tport def {} {{", quoted(name)).unwrap();
-        self.binding(out, &format!("{}::{name}", self.crate_name), None, 2);
-        writeln!(out, "\t}}").unwrap();
-        let Some(methods) = entry["inner"]["trait"]["items"].as_array() else {
-            return true;
+        let mut interface = Interface {
+            name: name.to_string(),
+            path: format!("{}::{name}", self.crate_name),
+            doc: docs(entry),
+            ..Interface::default()
         };
-        for id in methods {
+        for id in entry["inner"]["trait"]["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
             let Some(method) = self.item(id) else {
                 continue;
             };
@@ -462,128 +391,78 @@ impl<'a> Context<'a> {
             // a trait holds associated types and constants as well as
             // methods, and only a method is something to perform
             if method["inner"].get("function").is_none() {
-                skipped.push(format!("{name}::{method_name} -- not a method"));
+                self.skipped
+                    .push(format!("{name}::{method_name} -- not a method"));
                 continue;
             }
-            if !self.action_def(out, method_name, method, Some(name), taken) {
-                skipped.push(format!("{name}::{method_name} -- unsupported signature"));
+            match self.callable(method_name, method, Some(name)) {
+                Some(callable) => interface.methods.push(callable),
+                None => self
+                    .skipped
+                    .push(format!("{name}::{method_name} -- unsupported signature")),
             }
         }
-        true
+        Some(interface)
     }
 
-    /// A callable -> `action def` with `in`/`out` parameters. `false` when
-    /// the signature cannot be written monomorphically.
-    fn action_def(
-        &mut self,
-        out: &mut String,
-        name: &str,
-        entry: &Json,
-        owner: Option<&str>,
-        taken: &mut HashSet<String>,
-    ) -> bool {
+    /// A callable with its parameters and what it returns, or nothing
+    /// where the signature cannot be written monomorphically.
+    fn callable(&mut self, name: &str, entry: &Json, owner: Option<&str>) -> Option<Callable> {
         let function = &entry["inner"]["function"];
         if is_generic(function) {
-            return false;
+            return None;
         }
-        let mut lines = Vec::new();
-        let mut takes_self = "";
+        let mut callable = Callable {
+            name: name.to_string(),
+            path: match owner {
+                Some(interface) => format!("{}::{interface}::{name}", self.crate_name),
+                None => format!("{}::{name}", self.crate_name),
+            },
+            doc: docs(entry),
+            is_async: function["header"]["is_async"].as_bool() == Some(true),
+            ..Callable::default()
+        };
         for input in function["sig"]["inputs"].as_array().into_iter().flatten() {
             let (Some(param), Some(ty)) = (input.get(0).and_then(Json::as_str), input.get(1))
             else {
                 continue;
             };
             if param == "self" {
-                takes_self = receiver(ty);
+                callable.receiver = receiver(ty).to_string();
                 continue;
             }
-            match self.attribute_type(ty) {
-                Some((mapped, multiplicity)) => {
-                    lines.push(format!("in {} : {mapped}{multiplicity};", quoted(param)));
-                }
-                None => return false,
-            }
+            let (of, multiplicity) = self.attribute_type(ty)?;
+            callable.parameters.push(Field {
+                name: param.to_string(),
+                doc: None,
+                of,
+                multiplicity,
+            });
         }
         let output = &function["sig"]["output"];
-        let mut fallible = false;
         if !output.is_null() {
             let (value, error) = match split_result(output) {
                 Some((value, error)) => {
-                    fallible = true;
+                    callable.fallible = true;
                     (value, Some(error))
                 }
                 None => (output, None),
             };
-            match self.attribute_type(value) {
-                Some((ty, multiplicity)) => lines.push(format!("out result : {ty}{multiplicity};")),
-                None => return false,
-            }
+            let (of, multiplicity) = self.attribute_type(value)?;
+            callable.result = Some(TypeRef { of, multiplicity });
             if let Some(error) = error {
-                match self.attribute_type(error) {
-                    Some((ty, _)) => lines.push(format!("out error : {ty}[0..1];")),
-                    None => return false,
-                }
+                let (of, _) = self.attribute_type(error)?;
+                callable.error = Some(of);
             }
         }
-
-        let path = match owner {
-            Some(port) => format!("{}::{port}::{name}", self.crate_name),
-            None => format!("{}::{name}", self.crate_name),
-        };
-        let wanted = camel(name);
-        let called = unclaimed(taken, &wanted, owner);
-        let renamed = (called != wanted).then(|| {
-            format!("`{path}` is imported as `{called}`: `{wanted}` is another member's name.")
-        });
-        docs(out, entry, 1, renamed.as_deref());
-        writeln!(out, "\taction def {} {{", quoted(&called)).unwrap();
-        let is_async = function["header"]["is_async"].as_bool() == Some(true);
-        self.binding(out, &path, Some((takes_self, is_async, fallible)), 2);
-        for line in lines {
-            writeln!(out, "\t\t{line}").unwrap();
-        }
-        writeln!(out, "\t}}").unwrap();
-        true
-    }
-
-    /// The `@code { ... }` usage binding one definition to its Rust item.
-    fn binding(
-        &self,
-        out: &mut String,
-        path: &str,
-        callable: Option<(&str, bool, bool)>,
-        indent: usize,
-    ) {
-        let tabs = "\t".repeat(indent);
-        write!(
-            out,
-            "{tabs}@{} {{ :>> {} = \"{}\"; :>> {} = \"{path}\"; :>> {} = \"{}\";",
-            binding::DEF,
-            binding::LANGUAGE,
-            binding::RUST,
-            binding::ITEM,
-            binding::MODULE,
-            self.crate_name
-        )
-        .unwrap();
-        if let Some((takes_self, is_async, fallible)) = callable {
-            write!(
-                out,
-                " :>> {} = \"{takes_self}\"; :>> {} = {is_async}; :>> {} = {fallible};",
-                binding::TAKES_SELF,
-                binding::IS_ASYNC,
-                binding::IS_FALLIBLE
-            )
-            .unwrap();
-        }
-        writeln!(out, " }}").unwrap();
+        Some(callable)
     }
 
     /// A rustdoc type as `(SysML type, multiplicity)`, or `None` for what
     /// has no monomorphic SysML shape.
-    fn attribute_type(&mut self, ty: &Json) -> Option<(String, String)> {
+    fn attribute_type(&mut self, ty: &Json) -> Option<(String, Multiplicity)> {
         if let Some(primitive) = ty.get("primitive").and_then(Json::as_str) {
-            return Some((self.scalar(primitive)?, String::new()));
+            return Some((self.scalar(primitive)?, Multiplicity::One));
         }
         // A `&str` is a type in its own right -- how Rust passes a
         // string -- and reads as one. Any other borrow is refused: what
@@ -594,7 +473,7 @@ impl<'a> Context<'a> {
             if borrowed["type"].get("primitive").and_then(Json::as_str) == Some("str")
                 && borrowed["is_mutable"].as_bool() != Some(true)
             {
-                return Some((self.scalar("&str")?, String::new()));
+                return Some((self.scalar("&str")?, Multiplicity::One));
             }
             return None;
         }
@@ -606,24 +485,23 @@ impl<'a> Context<'a> {
                 .and_then(|args| args.first())
                 .map(|arg| &arg["type"]);
             return match base {
-                "String" => Some(("String".to_string(), String::new())),
+                "String" => Some(("String".to_string(), Multiplicity::One)),
                 // the container becomes a multiplicity on the element
                 // type, and a multiplicity is said once: a container
                 // holding another has no second place to say it in, and
                 // folding the two into one would claim the crate takes
                 // something it does not
-                "Vec" => self.element(argument?, "[*]"),
-                "Option" => self.element(argument?, "[0..1]"),
+                "Vec" => self.element(argument?, Multiplicity::Many),
+                "Option" => self.element(argument?, Multiplicity::Optional),
                 "Box" | "Arc" | "Rc" => self.attribute_type(argument?),
                 "Result" => None,
                 _ => {
                     // a type of this crate, by the name its item declares
                     let local = self.item(&path["id"])?;
                     let declared = local.get("name")?.as_str()?;
-                    match self.written {
-                        Some(written) if !written.contains(declared) => None,
-                        _ => Some((quoted(declared), String::new())),
-                    }
+                    self.written
+                        .contains(declared)
+                        .then(|| (declared.to_string(), Multiplicity::One))
                 }
             };
         }
@@ -632,9 +510,13 @@ impl<'a> Context<'a> {
 
     /// What a container holds, under the multiplicity the container
     /// asks for, so long as the element wants no multiplicity of its own.
-    fn element(&mut self, argument: &Json, multiplicity: &str) -> Option<(String, String)> {
+    fn element(
+        &mut self,
+        argument: &Json,
+        multiplicity: Multiplicity,
+    ) -> Option<(String, Multiplicity)> {
         let (inner, nested) = self.attribute_type(argument)?;
-        nested.is_empty().then(|| (inner, multiplicity.to_string()))
+        nested.is_one().then_some((inner, multiplicity))
     }
 
     /// The SysML type one Rust scalar reads as, remembering the ones
@@ -667,24 +549,6 @@ fn is_generic(inner: &Json) -> bool {
         .is_some_and(|params| !params.is_empty())
 }
 
-/// The name to write a member under, given what the package has taken
-/// already. A trait method that cannot have its own name reads best
-/// under the trait's -- `Session::label` as `SessionLabel` -- and a free
-/// function, having no trait to be told apart by, is numbered.
-fn unclaimed(taken: &mut HashSet<String>, wanted: &str, owner: Option<&str>) -> String {
-    let base = match owner {
-        Some(trait_name) if taken.contains(wanted) => format!("{}{wanted}", camel(trait_name)),
-        _ => wanted.to_string(),
-    };
-    let mut name = base.clone();
-    let mut at = 1;
-    while !taken.insert(name.clone()) {
-        at += 1;
-        name = format!("{base}{at}");
-    }
-    name
-}
-
 /// `Result<T, E>` split into its two sides, if `ty` is one.
 fn split_result(ty: &Json) -> Option<(&Json, &Json)> {
     let path = ty.get("resolved_path")?;
@@ -707,50 +571,13 @@ fn receiver(ty: &Json) -> &'static str {
     }
 }
 
-/// The item's doc comment, as a SysML `doc` block, with whatever this
-/// importer had to say about the item after it.
-fn docs(out: &mut String, entry: &Json, indent: usize, note: Option<&str>) {
-    let text = entry.get("docs").and_then(Json::as_str).unwrap_or_default();
-    // `*/` inside would end the block early
-    let safe = text.replace("*/", "*\\/");
-    let said = [
-        safe.trim().replace('\n', " "),
-        note.unwrap_or_default().into(),
-    ]
-    .join(" ")
-    .trim()
-    .to_string();
-    if said.is_empty() {
-        return;
-    }
-    writeln!(out, "{}doc /* {said} */", "\t".repeat(indent)).unwrap();
-}
-
-/// A Rust identifier as a SysML name: as it is, quoted when it collides
-/// with a keyword.
-fn quoted(name: &str) -> String {
-    if sysml_syntax::SyntaxKind::from_keyword(name).is_some() {
-        format!("'{name}'")
-    } else {
-        name.to_string()
-    }
-}
-
-/// `get_stock` -> `GetStock`, for the actions a method becomes.
-fn camel(name: &str) -> String {
-    let mut out = String::new();
-    let mut upper = true;
-    for ch in name.chars() {
-        if ch == '_' || ch == '-' {
-            upper = true;
-        } else if upper {
-            out.extend(ch.to_uppercase());
-            upper = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    out
+/// The item's doc comment, where it has one.
+fn docs(entry: &Json) -> Option<String> {
+    entry
+        .get("docs")
+        .and_then(Json::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// Rustdoc ids appear both as numbers and as strings; the index keys are

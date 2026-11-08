@@ -10,6 +10,7 @@
 //! - `library_search` -- what does the standard library actually offer?
 //! - `notation` -- how is this kind of thing written at all?
 //! - `generation_plan` -- what does this model imply for code?
+//! - `import_code` -- what is this code, in any language, as a model?
 //!
 //! Where something can be derived exactly -- the Rust a model implies, the
 //! SysML a crate's API already is -- the tool says in the same answer what
@@ -263,6 +264,7 @@ impl Server {
             "generate_rust" => self.generate_rust(&arguments),
             "outline" => self.outline(&arguments),
             "import_rust" => self.import_rust(&arguments),
+            "import_code" => self.import_code(&arguments),
             "notation" => notation(&arguments),
             "generation_plan" => self.generation_plan(&arguments),
             _ => return Err(format!("no tool `{name}`")),
@@ -598,10 +600,43 @@ impl Server {
         let package = arguments.get("package").and_then(Value::as_str);
         let imported =
             sysml_rust::rustdoc_to_sysml(&json, package).map_err(|err| err.to_string())?;
+        Ok(self.imported(imported))
+    }
 
-        // The importer promises that every name in what it writes
-        // resolves. Proving it costs one pass and makes the answer
-        // something a client can act on without checking it first.
+    /// Code in any language, stated as SysML from a surface: what
+    /// `import_rust` reads off rustdoc, said as JSON by whoever read the
+    /// code -- a tool for the language, or the caller itself, for a
+    /// language no tool reads yet.
+    fn import_code(&mut self, arguments: &Value) -> Result<Value, String> {
+        let surface = match arguments.get("surface") {
+            Some(Value::String(text)) => {
+                sysml_rust::surface::read(text).map_err(|err| err.to_string())?
+            }
+            Some(given) => serde_json::from_value(given.clone())
+                .map_err(|err| format!("the input is not a surface: {err}"))?,
+            None => {
+                let path = arguments
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        "give either `surface` -- the JSON itself, as an object -- or `path` \
+                         to a file holding it. `sysml import-code --schema` prints its shape."
+                            .to_string()
+                    })?;
+                let text = std::fs::read_to_string(path)
+                    .map_err(|err| format!("cannot read `{path}`: {err}"))?;
+                sysml_rust::surface::read(&text).map_err(|err| err.to_string())?
+            }
+        };
+        let package = arguments.get("package").and_then(Value::as_str);
+        Ok(self.imported(sysml_rust::surface::to_sysml(&surface, package)))
+    }
+
+    /// An imported package, checked. The writer promises that every name
+    /// in what it writes resolves. Proving it costs one pass and makes
+    /// the answer something a client can act on without checking it
+    /// first.
+    fn imported(&self, imported: sysml_rust::surface::Imported) -> Value {
         let mut ws = self.base.clone();
         let file = ws.add_file("imported.sysml", &imported.sysml);
         ws.resolve_files(&[file]);
@@ -611,11 +646,11 @@ impl Server {
             .iter()
             .map(|finding| finding.what.clone())
             .collect();
-        Ok(json!({
+        json!({
             "sysml": imported.sysml,
             "skipped": imported.skipped,
             "checked": { "ok": unresolved.is_empty(), "unresolved": unresolved },
-        }))
+        })
     }
 
     /// What the model implies for code, in no language in particular.
@@ -643,7 +678,7 @@ impl Server {
                 .flat_map(|&file| ws.file_roots(file).to_vec())
                 .collect(),
         };
-        let planned = crate::plan::of(&mut ws, &roots);
+        let planned = sysml_rust::plan::of(&mut ws, &roots);
         serde_json::to_value(&planned).map_err(|why| why.to_string())
     }
 
@@ -968,6 +1003,19 @@ fn text(value: &Value) -> Value {
 
 /// What the server offers, and what each wants to be given.
 fn tools() -> Value {
+    // The shape of a surface is the shape of the `import_code` call, so
+    // the schema a front end's author reads is the one a client builds
+    // the call from. Its definitions move to the root of the call's
+    // schema, since that is where a `$ref` in it points.
+    let mut surface_schema = sysml_rust::surface::schema();
+    let surface_definitions = surface_schema
+        .as_object_mut()
+        .and_then(|schema| {
+            schema.remove("$schema");
+            schema.remove("title");
+            schema.remove("$defs")
+        })
+        .unwrap_or(json!({}));
     let source_properties = json!({
         "text": { "type": "string", "description": "The model source itself, where it is not on disk yet. Where the server holds a project and this names one of its files, this stands in for what is on disk, so an edit can be asked about before it is written." },
         "path": { "type": "string", "description": "A file to read instead of `text`. Give neither, and the call is about the whole project the server was started with." },
@@ -1037,6 +1085,19 @@ fn tools() -> Value {
                     "json": { "type": "string", "description": "The rustdoc JSON itself, where it is not on disk" },
                     "package": { "type": "string", "description": "What to call the package written (default: the crate's own name)" },
                 },
+            },
+        },
+        {
+            "name": "import_code",
+            "description": "State existing code in any language as a SysML package, the way `import_rust` states a crate: every definition carrying the `@code { ... }` metadata that names the language and the item it binds to, so a model can type its ports and `perform` its actions against what already exists. The input is a surface -- what a reader of the code says about it, in no language in particular: its records, enumerations, interfaces and functions, each with the name the code gives it and the path to it, typed with the five scalars, a scalar the surface declares as a kind of one, or a type the surface declares. `sysml import-rust --surface` shows the one written for a real crate. Write one yourself for a language no tool reads yet, from what you can see of the code; everything SysML decides -- which names are quoted, told apart, or refused for naming what nothing declares -- is decided here, not by you. `skipped` names what had no shape, and `checked` says whether every name in the package resolves.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "surface": surface_schema,
+                    "path": { "type": "string", "description": "A file holding the surface JSON, instead of `surface`" },
+                    "package": { "type": "string", "description": "What to call the package written (default: what the surface says, or derived from its module)" },
+                },
+                "$defs": surface_definitions,
             },
         },
         {

@@ -1,6 +1,6 @@
 //! What a model implies for code, in no language in particular.
 //!
-//! `generate_rust` answers this in Rust and hands back Rust. Whoever
+//! `sysml rustgen` answers this in Rust and hands back Rust. Whoever
 //! writes Python or C gets nothing from that, and reading the SysML
 //! instead means guessing at what it cannot see: whether `wheels :
 //! Wheel[4]` is an array or a list, whether a `part` is owned or
@@ -8,15 +8,35 @@
 //!
 //! So it is stated once, as data. Nothing here decides anything about a
 //! language: no identifier is spelled, no container named, no type
-//! mapped.
+//! mapped. A [`Plan`] is what `sysml plan` prints and what `sysml
+//! codegen` hands a generator on standard input -- a program for any
+//! language that reads the JSON and writes the code, found on `PATH` the
+//! way Doxygen finds a filter. The mirror of [`crate::surface`], which
+//! takes code in any language the other way; [`crate::generate`] is the
+//! generator that ships, and reads the model itself.
+//!
+//! ```
+//! let mut ws = sysml_semantics::Workspace::new();
+//! let file = ws.add_file("car.sysml", "part def Car { attribute mass : Real; }\n");
+//! ws.resolve_all();
+//! let roots = ws.file_roots(file).to_vec();
+//! let plan = sysml_rust::plan::of(&mut ws, &roots);
+//! assert_eq!(plan.definitions[0].of, "Car");
+//! assert_eq!(plan.definitions[0].shape, "record");
+//! // and back from the JSON a generator reads
+//! let json = serde_json::to_string(&plan).unwrap();
+//! let read: sysml_rust::plan::Plan = serde_json::from_str(&json).unwrap();
+//! assert_eq!(read, plan);
+//! ```
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_semantics::Workspace;
 
 /// Everything a generator would have to write.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Plan {
     /// Whether the model this was read off resolves.
     ///
@@ -29,12 +49,13 @@ pub struct Plan {
     /// What a package declares outright rather than inside a definition:
     /// `attribute ledPinNumber : Integer = 13;`. Without them a default
     /// that names one names nothing the plan contains.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constants: Vec<Feature>,
 }
 
 /// Whether the model resolves, and what did not.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Checked {
     /// Whether every name in the planned files found something, and
     /// every one of them parsed.
@@ -42,15 +63,16 @@ pub struct Checked {
     /// What the parser could not read. A file that does not parse is
     /// missing whole declarations rather than one type, so a plan built
     /// from it says nothing about what is not there.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub syntax: Vec<String>,
     /// The names that did not, as the model wrote them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unresolved: Vec<String>,
 }
 
 /// One definition, and what shape it has in code.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Definition {
     /// Its qualified name, as the model spells it.
     pub of: String,
@@ -58,20 +80,22 @@ pub struct Definition {
     /// `requirement def <'S.2'> PerceptiblePeriod` is `S.2` to everything
     /// that refers to it, and a reader given only the long name cannot
     /// follow what points at it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub short_name: Option<String>,
     /// The metaclass, for a reader that knows SysML.
-    pub kind: &'static str,
-    /// What it is in code, for one that does not.
-    pub shape: &'static str,
+    pub kind: String,
+    /// What it is in code, for one that does not: `record`, `value`,
+    /// `enumeration`, `variation`, `abstract`, `port`, `requirement`,
+    /// `state machine`, `function` or `behaviour`.
+    pub shape: String,
     /// What the definition itself bottoms out in, where it is a value
     /// with a primitive under it. `attribute def Millis :> Integer;` is
     /// an integer with a name, and writing an empty class for it is
     /// writing something the model does not say.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primitive: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primitive: Option<String>,
     /// What the model says it is for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
     /// What the model annotates it with, verbatim.
     ///
@@ -79,145 +103,147 @@ pub struct Definition {
     /// writtenIn = "rust"; :>> path = "crate::hal::Gpio"; }` says this
     /// port *is* a written type, and the actions whose paths begin the
     /// same way are its methods. Without it they belong to nothing.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub annotations: Vec<Annotation>,
     /// Whether the model forbids instances of it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_abstract: bool,
     /// What the model declares it specializes, qualified: the direct
     /// parent, not everything above it and not the library
     /// specialization every definition gets whether it asks or not.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub specializes: Vec<String>,
     /// Its own features: attributes, parts, ports, parameters.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<Feature>,
     /// The members of an enumeration.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
     /// What a requirement is about.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<Feature>,
     /// What a requirement demands, as the model wrote it. Without these
     /// a requirement arrives as a parameter list and a sentence, and
     /// whoever writes the check invents it.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
     /// What it takes as given before it demands anything.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumes: Vec<String>,
     /// The variants of a variation: exactly one of these, not all of
     /// them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<Variant>,
     /// The states of a state definition, in declaration order.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub states: Vec<String>,
     /// The one it starts in, which the model writes as `entry; then x;`
     /// and is not the same as the first one declared.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial: Option<String>,
     /// What happens on the way in, throughout, and on the way out.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_entry: Option<String>,
     /// What it does for as long as it is in the machine.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub during: Option<String>,
     /// What it does on the way out.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_exit: Option<String>,
     /// What moves it between them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transitions: Vec<Transition>,
     /// What a calculation or behaviour hands back, where it declares
     /// one.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub returns: Option<Feature>,
     /// What a calculation or constraint works out, as the model wrote
     /// it. Translating it is the reader's; this toolchain does not
     /// pretend to have done it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
     /// The behaviours it carries out, which is what makes a definition
     /// something that *does* anything: a part that performs an action
     /// is written, in a language with methods, as a method.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub performs: Vec<Performed>,
     /// The steps of an action, in the order the model puts them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
     /// What passes between them.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Flow>,
     /// What is joined to what inside it. `connect pump to tank;` is the
     /// whole of why the two parts are there together.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<Connection>,
 }
 
 /// One feature of a definition, with everything a generator must ask
 /// about it and nothing about how any language would write it.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Feature {
     /// What the model calls it. A `return : Real;` has no name and does
     /// not need one.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     /// The metaclass: `AttributeUsage`, `PartUsage`, `PortUsage`, and so
     /// on. What kind of thing it is, which decides more than its type
     /// does -- a part is a thing the whole is made of, a port is a place
     /// it connects.
-    pub kind: &'static str,
+    pub kind: String,
     /// What types it, qualified.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
     /// Whether it is one of the two sides a connection relates rather
     /// than something the definition holds. `connection def Pipe { end
     /// source : Pump; end target : Tank; }` is a pipe between a pump and
     /// a tank, not a pipe with a pump inside it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub end: bool,
     /// What that type bottoms out in, where it bottoms out in one of the
     /// standard library's primitives: `Real`, `Integer`, `Natural`,
     /// `Positive`, `Boolean`, `String`. `ISQ::MassValue` is a `Real`,
     /// and no amount of reading its name says so.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primitive: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primitive: Option<String>,
     /// How many of it there are. Absent is one of it, which is what
     /// everything is unless the model says otherwise.
-    #[serde(skip_serializing_if = "Multiplicity::is_one")]
+    #[serde(default, skip_serializing_if = "Multiplicity::is_one")]
     pub multiplicity: Multiplicity,
     /// Whether the whole owns it (`part`) or refers to it (`ref part`).
     /// Said only of what a whole can be made of: a value is owned by
     /// nobody.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composite: Option<bool>,
     /// Whether the collection keeps its order, and whether it may hold
     /// the same thing twice: a list, a set, or neither. Said only of
     /// collections, since one of a thing is in no order and is not two
     /// of anything.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordered: Option<bool>,
     /// Whether it may hold the same thing twice.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unique: Option<bool>,
     /// Which way a parameter goes: `in`, `out` or `inout`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
     /// The `= value` it was declared with.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Given>,
     /// The inherited feature it redefines, qualified: the same thing
     /// said again, not a second one.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redefines: Option<String>,
     /// What the model says it is for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
 }
 
 /// How many of it there are.
-#[derive(PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Multiplicity {
     /// The fewest there may be.
     pub lower: i64,
@@ -228,14 +254,31 @@ pub struct Multiplicity {
 impl Multiplicity {
     /// One of the thing, which is what everything is unless the model
     /// says otherwise -- and so what is not worth saying.
-    fn is_one(&self) -> bool {
+    pub fn is_one(&self) -> bool {
         self.lower == 1 && self.upper == Some(1)
     }
 }
 
+impl Default for Multiplicity {
+    /// One of it: what a plan that says nothing means.
+    fn default() -> Multiplicity {
+        Multiplicity {
+            lower: 1,
+            upper: Some(1),
+        }
+    }
+}
+
+/// The JSON schema of a [`Plan`], for whoever writes a generator.
+#[cfg(feature = "schema")]
+pub fn schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(Plan)).expect("a schema is JSON")
+}
+
 /// A value the model declared, whether or not this toolchain understood
 /// it.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Given {
     /// A literal, as JSON: a number, a string, a boolean.
@@ -245,31 +288,34 @@ pub enum Given {
 }
 
 /// One `@name { ... }` a definition carries, as the model wrote it.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Annotation {
     /// What is being said, by the name of the metadata definition:
     /// `rust`, `Safety`, whatever the model declared.
     pub of: String,
     /// What it sets, by property name.
-    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub says: std::collections::BTreeMap<String, Given>,
 }
 
 /// One variant of a variation.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Variant {
     /// What the model calls it.
     pub name: String,
     /// What it carries, where it carries something.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
     /// What the model says it is for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
 }
 
 /// One transition of a state machine.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
     /// What the model calls it.
     pub name: String,
@@ -278,76 +324,81 @@ pub struct Transition {
     /// The state it arrives in.
     pub to: String,
     /// What it waits for, where it waits for something.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on: Option<Trigger>,
     /// The condition, as the model wrote it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<String>,
     /// Whether the model says something happens on the way. What it is
     /// is the reader's to write.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub effect: bool,
 }
 
 /// The event a transition waits for, and what it carries.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Trigger {
     /// The name the payload is bound to.
     pub name: String,
     /// What the payload is.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
 }
 
 /// One behaviour a definition carries out. What it performs is named
 /// rather than described again: the behaviour is a definition of its
 /// own wherever the model declares it.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Performed {
     /// What the model calls it here.
     pub name: String,
     /// The behaviour performed, qualified.
-    #[serde(rename = "of", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "of", default, skip_serializing_if = "Option::is_none")]
     pub performed: Option<String>,
     /// What the model says it is for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
 }
 
 /// One step of an action.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Step {
     /// What the model calls it.
     pub name: String,
     /// What it performs.
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
     /// The steps that must finish before it starts.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
 }
 
 /// Two of a definition's parts, joined.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Connection {
     /// What the model calls it, where it calls it anything: `connect a
     /// to b;` names nothing, and the joining is the point.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// What kind of connection it is, qualified, where the model says.
-    #[serde(rename = "of", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "of", default, skip_serializing_if = "Option::is_none")]
     pub connected_by: Option<String>,
     /// The two sides, as dotted paths from the definition.
     pub from: String,
     /// The other side.
     pub to: String,
     /// What the model says it is for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub documentation: Option<String>,
 }
 
 /// One thing passing from one place to another.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Flow {
     /// Where it comes from, as a dotted path from the definition.
     pub from: String,
@@ -434,6 +485,18 @@ fn shape_of(ws: &mut Workspace, id: ElementId) -> Option<&'static str> {
     let under = primitive_of(ws, id).is_some();
     let model = ws.model();
     Some(match model.kind(id) {
+        // A metadata definition is the vocabulary an annotation is
+        // written in -- `metadata def code { attribute path : String; }`
+        // -- and a conjugated port is the other face of one the model
+        // declared, implied beside it and named `~Port`. Neither is a
+        // thing code is written for, and each was planned as a record:
+        // a generator wrote a class `code`, and a class it could not
+        // even name.
+        kind if kind.is_a(ElementKind::Metaclass)
+            || kind == ElementKind::ConjugatedPortDefinition =>
+        {
+            return None
+        }
         ElementKind::EnumerationDefinition => "enumeration",
         ElementKind::StateDefinition => "state machine",
         ElementKind::CalculationDefinition | ElementKind::ConstraintDefinition => "function",
@@ -488,9 +551,9 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
             .maybe(id, "declaredShortName")
             .and_then(Value::as_str)
             .map(str::to_string),
-        kind: ws.model().kind(id).name(),
-        shape,
-        primitive: primitive_of(ws, id),
+        kind: ws.model().kind(id).name().to_string(),
+        shape: shape.to_string(),
+        primitive: primitive_of(ws, id).map(str::to_string),
         documentation: ws.documentation_of(id),
         annotations: annotations(ws, &owned),
         // An enumeration and a variation are abstract by being what they
@@ -679,9 +742,11 @@ fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
             .or(borrowed)
             .unwrap_or_default()
             .to_string(),
-        kind: ws.model().kind(child).name(),
+        kind: ws.model().kind(child).name().to_string(),
         typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
-        primitive: typed.and_then(|ty| primitive_of(ws, ty)),
+        primitive: typed
+            .and_then(|ty| primitive_of(ws, ty))
+            .map(str::to_string),
         multiplicity: Multiplicity { lower, upper },
         // `declared_flag` rather than `flag`: silence about ordering or
         // uniqueness is the specification's answer, not `false`, and a

@@ -10,6 +10,77 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 
 ## Unreleased
 
+### Any language, both ways
+
+`sysmlv2-rust` **0.1.2**, `sysmlv2-cli` **0.1.5**
+
+Rust is the language that ships, as it was; every other is now yours to
+add. Both halves of the seam live in `sysmlv2-rust`, stated as data in
+no language in particular, rather than in crates of their own: the
+official support is for Rust, and the way to another language is part
+of it.
+
+- `sysml import-code` imports code in any language the way Doxygen
+  takes one it has never heard of: through a program that writes what
+  the tool already reads. What is already read is a *surface* — the
+  records, enumerations, interfaces and functions some code declares,
+  as JSON, in no language in particular — and one writer turns any
+  surface into a package whose every definition carries a `@code`
+  binding. Which names are quoted, how two members that want one name
+  are told apart, what is refused for naming a type nothing declares:
+  decided once, in `sysml_rust::surface`, and not by each importer
+  again.
+- The importer is found by name on `PATH`, as `cargo` and `git` find a
+  subcommand: `sysml-import-<lang>`, where the language is the inputs'
+  extension unless `--lang` names it or `--via` names the command. It
+  may write the surface or the SysML itself. Either way the package is
+  parsed and resolved against the standard library before it is
+  written out, and an importer that got a name wrong is told here
+  rather than by the first model that imports what it wrote.
+  `--schema` prints what a surface is.
+- `import-rust` now reads a crate as a surface and writes it through
+  the same writer, so the two subcommands cannot drift; `--surface`
+  writes that JSON instead of the SysML, which is the quickest way to
+  see what an importer for another language has to say. What the
+  fixture crate imports as is unchanged to the byte, except two
+  comment lines that no longer say `Rust`.
+- The MCP server's `import_code` takes a surface as an object, and its
+  input schema is the surface's own, so a client builds the call from
+  what a front end's author reads. An agent may write one itself, for
+  a language no tool reads yet: it says what it can see of the code,
+  and the answer is a checked package rather than a guess.
+- `examples/import-python` is such an importer, in two hundred lines
+  of Python, with the package it writes checked in beside it and held
+  there by a test.
+- `sysmlv2-rust` gains `surface`, `plan` and `binding` as public
+  modules, `rustdoc_to_surface`, and a `schema` feature that derives
+  the JSON schema of a surface and of a plan; nothing it had is
+  changed. It depends on `sysmlv2-semantics` now, since a plan is read
+  off a resolved workspace.
+- The same seam the other way: `sysml codegen --lang <lang>` hands the
+  plan — what the model implies for code, in no language in particular,
+  as `sysml plan` prints it — to `sysml-gen-<lang>` on `PATH` on
+  standard input, and takes what comes back as the code. `--lang rust`
+  is the generator built in, and writes what `rustgen` writes. A model
+  that does not resolve is refused before any generator runs, as
+  `rustgen` refuses it. `--via` names a command instead, and both it
+  and `import-code --via` now split the command as a shell would, so a
+  path with a space in it can be quoted.
+- The plan moved out of the tool into `sysml_rust::plan`, where a
+  generator written in Rust reads it back as a `Plan` rather than as
+  JSON; `sysml plan --schema` prints its schema for one written in
+  anything else.
+  The metaclass and shape a definition is planned with are `String`s
+  now, not borrowed for the life of the program. Two things are no
+  longer planned as records: a metadata definition, which is the
+  vocabulary an annotation is written in, and the conjugated port
+  implied beside every port definition, which a generator could not
+  even name — a class `code` and a class `~Gpio` came out of a model
+  that declared neither.
+- `examples/generate-python` is a generator for Python, with the module
+  it writes for a thermostat model checked in beside it and held there
+  by a test; it imports and runs as it is.
+
 ### Two lines that cross are drawn crossing
 
 `sysmlv2-diagram` **0.2.2**

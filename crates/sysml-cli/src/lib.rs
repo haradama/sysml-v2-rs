@@ -8,7 +8,6 @@
 
 pub mod mcp;
 pub mod notation;
-pub mod plan;
 pub mod report;
 
 /// A finding with its place in the text: where it starts and where it
