@@ -46,6 +46,18 @@ impl<'a> Generator<'a> {
                 self.action(def, out);
                 Ok(())
             }
+            Shape::Quantity => {
+                let spelled = self.model.name(def).expect("collected named");
+                writeln!(out, "\n/// SysML: `attribute def {spelled}`").unwrap();
+                if let Some(doc) = documentation(self.model, def) {
+                    doc_comment(&doc, "", out);
+                }
+                if let Some(counted) = crate::quantity::counted(self.model, def) {
+                    writeln!(out, "/// {counted}").unwrap();
+                }
+                writeln!(out, "pub type {} = f64;", type_ident(spelled)).unwrap();
+                Ok(())
+            }
             Shape::Flattened => {
                 let name = type_ident(self.model.name(def).expect("collected named"));
                 writeln!(
@@ -172,10 +184,7 @@ impl<'a> Generator<'a> {
         // KerML's rule for that -- which follows references as well as
         // redefinitions, and a chain of either -- is the model's own
         let name = self.model.effective_name(usage)?.to_string();
-        let target = self
-            .model
-            .type_of(usage)
-            .or_else(|| self.model.type_of(redefined(self.model, usage)?))?;
+        let target = held_type(self.model, usage)?;
         let ty = if let Some(bound) = binding(self.model, target) {
             FieldType::External(bound.get(binding::ITEM)?.clone())
         } else if matches!(
@@ -185,7 +194,7 @@ impl<'a> Generator<'a> {
             // a state machine or an abstract definition is not a value type
             FieldType::Generated(target)
         } else {
-            FieldType::Scalar(scalar_of(self.model.name(target)?)?)
+            FieldType::Scalar(scalar_type(self.model, target)?)
         };
         let container = multiplicity(self.model, usage);
         // anything but a Vec keeps the value inline, so a cycle needs a Box
@@ -350,6 +359,23 @@ impl<'a> Generator<'a> {
             }
             if let Some(doc) = documentation(model, field.usage) {
                 doc_comment(&doc, "    ", out);
+            }
+            if let Some(counted) = crate::quantity::counted_in(model, field.usage) {
+                writeln!(out, "    /// {counted}").unwrap();
+            }
+            // A value the model declared and this could not write starts
+            // the field at its type's default instead, and saying nothing
+            // made a declared `20 ['°C']` or `y * 2` read as a zero the
+            // model chose.
+            if let (None, Some(ValueClause::Text(declared))) =
+                (&field.default, value_clause(model, field.usage))
+            {
+                let why = format!(
+                    "`{}` starts at its type's default: `= {declared}` is beyond the simple subset",
+                    field.name
+                );
+                writeln!(out, "    // left open: {why}").unwrap();
+                self.open(OpenKind::Skipped, def_name.clone(), None, why);
             }
             writeln!(
                 out,

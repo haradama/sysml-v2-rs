@@ -8,10 +8,16 @@
 //! expression is over reals, so a model mixing types Rust will not mix
 //! surfaces as a type error rather than a silent coercion.
 //!
+//! A quantity written with its unit -- `2500 [g]`, `100 [km/h]` -- is
+//! the number of SI coherent units it comes to, where the caller knows
+//! what the unit is worth: `2.5`, `27.77777777777778`.
+//!
 //! Anything beyond the subset -- a call of something abstract or of
 //! nothing at all, a call naming only some of its arguments, an
 //! unresolvable reference -- makes the whole expression untranslatable,
 //! and the caller says so instead of approximating.
+
+use std::collections::HashMap;
 
 /// What a call resolves to: the function Rust spells it as, and the
 /// parameters it takes, in order, so that a call written with named
@@ -63,13 +69,22 @@ pub(crate) fn translate(
     resolve: &dyn Fn(&str) -> Option<String>,
     resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
-    translate_as(text, Numbers::AsWritten, resolve, resolve_call)
+    translate_as(
+        text,
+        Numbers::AsWritten,
+        &HashMap::new(),
+        resolve,
+        resolve_call,
+    )
 }
 
-/// [`translate`], saying how whole numbers should be spelled.
+/// [`translate`], saying how whole numbers should be spelled and what
+/// each unit written in brackets is worth, keyed by the unit as written
+/// with its spaces taken out.
 pub(crate) fn translate_as(
     text: &str,
     numbers: Numbers,
+    units: &HashMap<String, f64>,
     resolve: &dyn Fn(&str) -> Option<String>,
     resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
@@ -78,6 +93,7 @@ pub(crate) fn translate_as(
         tokens: &tokens,
         at: 0,
         numbers,
+        units,
         references: Vec::new(),
         resolve,
         resolve_call,
@@ -122,6 +138,8 @@ enum Token {
     Comma,
     Dot,
     Question,
+    /// `[km/h]`, as written with its spaces taken out.
+    Unit(String),
 }
 
 fn lex(text: &str) -> Option<Vec<Token>> {
@@ -212,6 +230,21 @@ fn lex(text: &str) -> Option<Vec<Token>> {
             tokens.push(Token::Str(chars[start..at].iter().collect()));
             continue;
         }
+        // what is in brackets is a unit, which the caller puts a number
+        // to; this keeps the text it will be asked by
+        if ch == '[' {
+            let start = at + 1;
+            while at < chars.len() && chars[at] != ']' {
+                at += 1;
+            }
+            if at >= chars.len() {
+                return None;
+            }
+            let written: String = chars[start..at].iter().collect();
+            tokens.push(Token::Unit(crate::quantity::spaceless(&written)));
+            at += 1;
+            continue;
+        }
         let two = (at + 1 < chars.len()).then(|| chars[at + 1]);
         let (token, width) = match (ch, two) {
             ('<', Some('=')) => (Token::Le, 2),
@@ -263,6 +296,7 @@ struct Parser<'a> {
     tokens: &'a [Token],
     at: usize,
     numbers: Numbers,
+    units: &'a HashMap<String, f64>,
     references: Vec<String>,
     resolve: &'a dyn Fn(&str) -> Option<String>,
     resolve_call: &'a dyn Fn(&str) -> Option<Callee>,
@@ -457,7 +491,53 @@ impl Parser<'_> {
                 boolean: true,
             });
         }
-        self.primary()
+        let operand = self.primary()?;
+        self.measured(operand)
+    }
+
+    /// `operand [unit]` -- the bracket binds tighter than any operator,
+    /// as KerML's grammar has it. A number is multiplied out here, so
+    /// `2500 [g]` is written `2.5`; anything else is multiplied in the
+    /// generated code, and by nothing at all where the unit is one the
+    /// SI counts in already.
+    fn measured(&mut self, operand: Node) -> Option<Node> {
+        let Some(Token::Unit(unit)) = self.tokens.get(self.at) else {
+            return Some(operand);
+        };
+        let factor = *self.units.get(unit)?;
+        self.at += 1;
+        // by its first character, since `inf` and `NaN` parse as numbers
+        // too and are names here
+        let number = operand
+            .rust
+            .starts_with(|ch: char| ch.is_ascii_digit())
+            .then(|| operand.rust.parse::<f64>().ok())
+            .flatten();
+        if let Some(number) = number {
+            // to fifteen significant digits, which is all a product of
+            // two decimals in a double has: `3 [ft]` is `0.9144` and not
+            // the `0.9144000000000001` the multiplication leaves behind
+            let product = format!("{:.14e}", number * factor)
+                .parse::<f64>()
+                .expect("a number Rust wrote reads back");
+            return Some(Node {
+                rust: crate::generate::real_literal(product),
+                atomic: true,
+                boolean: false,
+            });
+        }
+        if factor == 1.0 {
+            return Some(operand);
+        }
+        Some(Node {
+            rust: format!(
+                "{} * {}",
+                wrap(&operand),
+                crate::generate::real_literal(factor)
+            ),
+            atomic: false,
+            boolean: false,
+        })
     }
 
     fn primary(&mut self) -> Option<Node> {
@@ -553,7 +633,7 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{translate, Callee};
+    use super::{translate, translate_as, Callee, Numbers};
 
     /// Every name resolves to itself, and every call to a lowercase
     /// function of two parameters -- enough to exercise the shapes.
@@ -687,5 +767,47 @@ mod tests {
         assert_eq!(plain("F(b = 1, a = 2)").as_deref(), Some("f(2, 1)"));
         assert_eq!(plain("F(1, 2)").as_deref(), Some("f(1, 2)"));
         assert!(translate("Widen(1) > 0", &|n| Some(n.to_string()), &|_| None).is_none());
+    }
+    /// A unit in brackets is what the caller says it is worth, looked up
+    /// by its text with the spaces taken out.
+    #[test]
+    fn a_quantity_comes_to_its_number_of_si_units() {
+        let units: std::collections::HashMap<String, f64> = [
+            ("g".to_string(), 1e-3),
+            ("km/h".to_string(), 1000.0 / 3600.0),
+            ("ft".to_string(), 0.3048),
+            ("kg".to_string(), 1.0),
+        ]
+        .into();
+        let measured = |text: &str| {
+            translate_as(
+                text,
+                Numbers::AsWritten,
+                &units,
+                &|name| Some(name.to_string()),
+                &|_| None,
+            )
+            .map(|t| t.rust)
+        };
+        // a number is multiplied out, to the digits a double has
+        assert_eq!(measured("2500 [g]").as_deref(), Some("2.5"));
+        assert_eq!(measured("3 [ft]").as_deref(), Some("0.9144"));
+        assert_eq!(measured("2.5E3 [ g ]").as_deref(), Some("2.5"));
+        // and the bracket binds tighter than any operator
+        assert_eq!(measured("m + 500 [g]").as_deref(), Some("m + 0.5"));
+        // anything else is multiplied in the code, or not at all
+        assert_eq!(
+            measured("s [km / h]").as_deref(),
+            Some("s * 0.2777777777777778")
+        );
+        assert_eq!(measured("(a + b) [g]").as_deref(), Some("(a + b) * 0.001"));
+        assert_eq!(measured("m [kg]").as_deref(), Some("m"));
+        // `inf` is a name here, whatever `f64::from_str` makes of it
+        assert_eq!(measured("inf [g]").as_deref(), Some("inf * 0.001"));
+        // a unit the caller has no number for is no translation at all
+        assert!(measured("20 ['°C']").is_none());
+        assert!(measured("2 [kg").is_none());
+        // and with no units given, a bracket is beyond the subset
+        assert!(plain("2500 [g]").is_none());
     }
 }

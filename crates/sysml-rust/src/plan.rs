@@ -204,10 +204,19 @@ pub struct Feature {
     pub end: bool,
     /// What that type bottoms out in, where it bottoms out in one of the
     /// standard library's primitives: `Real`, `Integer`, `Natural`,
-    /// `Positive`, `Boolean`, `String`. `ISQ::MassValue` is a `Real`,
-    /// and no amount of reading its name says so.
+    /// `Positive`, `Boolean`, `String`. `ISQ::MassValue` is a `Real` --
+    /// the number of [`unit`](Self::unit)s it holds -- and no amount of
+    /// reading its name says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primitive: Option<String>,
+    /// What that number counts, where the type is a scalar quantity:
+    /// `kg`, `m/s`, `kg*m^2/s^3`. Always the SI coherent unit, whatever
+    /// unit the model wrote a value in, so a generator that writes the
+    /// number alone writes the same number for `2500 [g]` and `2.5
+    /// [kg]`. Read off the dimension the library gives the quantity, and
+    /// absent for one that counts in ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     /// How many of it there are. Absent is one of it, which is what
     /// everything is unless the model says otherwise.
     #[serde(default, skip_serializing_if = "Multiplicity::is_one")]
@@ -730,9 +739,7 @@ fn is_feature_kind(kind: ElementKind) -> bool {
 }
 
 fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
-    let typed = ws.model().type_of(child).or_else(|| {
-        sysml_model::redefined(ws.model(), child).and_then(|it| ws.model().type_of(it))
-    });
+    let typed = crate::generate::held_type(ws.model(), child);
     let (lower, upper) = bounds(ws, child);
     let borrowed = sysml_model::redefined(ws.model(), child).and_then(|it| ws.model().name(it));
     Feature {
@@ -747,6 +754,9 @@ fn feature(ws: &mut Workspace, child: ElementId) -> Feature {
         primitive: typed
             .and_then(|ty| primitive_of(ws, ty))
             .map(str::to_string),
+        unit: typed
+            .filter(|&ty| crate::quantity::is_scalar_quantity(ws.model(), ty))
+            .and_then(|ty| crate::quantity::si_unit(ws.model(), ty)),
         multiplicity: Multiplicity { lower, upper },
         // `declared_flag` rather than `flag`: silence about ordering or
         // uniqueness is the specification's answer, not `false`, and a
@@ -789,8 +799,14 @@ fn bounds(ws: &Workspace, usage: ElementId) -> (i64, Option<i64>) {
 }
 
 /// The standard library primitive a type bottoms out in, walking what it
-/// specializes. `ISQ::MassValue` is a `Real` five specializations up.
+/// specializes. A scalar quantity is a `Real`, though not by
+/// specializing one: `ISQ::MassValue` specializes `NumericalValue`,
+/// which is above `Real`, and *has* a `num : Real` -- the number of SI
+/// coherent units it is.
 fn primitive_of(ws: &mut Workspace, ty: ElementId) -> Option<&'static str> {
+    if crate::quantity::is_scalar_quantity(ws.model(), ty) {
+        return Some("Real");
+    }
     let mut seen = std::collections::HashSet::new();
     let mut queue = vec![ty];
     while let Some(next) = queue.pop() {

@@ -32,6 +32,11 @@ impl<'a> Generator<'a> {
                     ElementKind::CalculationDefinition => Shape::Calculation,
                     ElementKind::ConstraintDefinition => Shape::Calculation,
                     ElementKind::ActionDefinition => Shape::Action,
+                    ElementKind::AttributeDefinition
+                        if crate::quantity::is_scalar_quantity(model, id) =>
+                    {
+                        Shape::Quantity
+                    }
                     // an interface or a connection definition is a pair
                     // of ends and whatever they carry -- a struct like
                     // any other definition with features
@@ -432,9 +437,7 @@ impl<'a> Generator<'a> {
     /// Whether the type of `field` says it already has `trait_name`.
     /// Only a bound type is asked: what this generator wrote, it knows.
     fn field_type_claims(&self, field: &Field, trait_name: &str) -> bool {
-        self.model
-            .type_of(field.usage)
-            .or_else(|| self.model.type_of(redefined(self.model, field.usage)?))
+        held_type(self.model, field.usage)
             .and_then(|ty| binding(self.model, ty))
             .is_some_and(|bound| binding::claims(&bound, trait_name))
     }

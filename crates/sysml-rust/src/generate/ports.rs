@@ -244,12 +244,14 @@ impl<'a> Generator<'a> {
     pub(crate) fn parameter_shape(&self, usage: ElementId) -> Option<(String, Container)> {
         // a parameter bound by a usage -- `in previous = stateVector` --
         // declares no type of its own; it keeps the one it redefines
-        let declaring = self
-            .model
-            .type_of(usage)
-            .map(|_| usage)
-            .or_else(|| redefined(self.model, usage))?;
-        let ty = self.model.type_of(declaring)?;
+        //
+        // A subset does not borrow the multiplicity: `in m :> ISQ::mass`
+        // is one mass of the many `ISQ::mass` allows, and says so by
+        // saying nothing.
+        let ty = held_type(self.model, usage)?;
+        let declaring = redefined(self.model, usage)
+            .filter(|_| self.model.type_of(usage).is_none())
+            .unwrap_or(usage);
         // a parameter carries its multiplicity the way a field does: a
         // `[1..*]` of something is a `Vec` of it, not one of it
         let container = multiplicity(self.model, declaring);
@@ -265,6 +267,6 @@ impl<'a> Generator<'a> {
                 .name(ty)
                 .map(|name| (type_ident(name), container));
         }
-        Some((scalar_of(self.model.name(ty)?)?.to_string(), container))
+        Some((scalar_type(self.model, ty)?.to_string(), container))
     }
 }

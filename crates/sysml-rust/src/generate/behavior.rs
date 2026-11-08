@@ -399,9 +399,14 @@ impl<'a> Generator<'a> {
         };
         let translated = match &clause {
             Some(ValueClause::Text(text)) => {
-                translate_as(text, numbers_of(declared.as_deref()), &resolve, &|name| {
-                    self.callable(name)
-                })
+                let units = crate::quantity::units_under(model, def);
+                translate_as(
+                    text,
+                    numbers_of(declared.as_deref()),
+                    &units,
+                    &resolve,
+                    &|name| self.callable(name),
+                )
             }
             _ => None,
         };
@@ -559,9 +564,14 @@ impl<'a> Generator<'a> {
         let clause = result_clause(model, usage).or_else(|| value_clause(model, usage));
         let translated = match &clause {
             Some(ValueClause::Text(text)) => {
-                translate_as(text, numbers_of(Some(&returns)), &resolve, &|name| {
-                    self.callable(name)
-                })
+                let units = crate::quantity::units_under(model, usage);
+                translate_as(
+                    text,
+                    numbers_of(Some(&returns)),
+                    &units,
+                    &resolve,
+                    &|name| self.callable(name),
+                )
             }
             _ => None,
         };

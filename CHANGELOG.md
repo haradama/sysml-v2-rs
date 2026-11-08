@@ -81,6 +81,49 @@ of it.
   it writes for a thermostat model checked in beside it and held there
   by a test; it imports and runs as it is.
 
+### A quantity is a number
+
+`sysmlv2-rust` **0.1.2**, `sysmlv2-cli` **0.1.5**
+
+- A feature typed by a scalar quantity — `ISQ::MassValue`, or a
+  model's own `attribute def Payload :> MassValue` — is generated as
+  the `f64` of SI coherent units it holds, with the unit on the line
+  above it: `` /// `SpeedValue` in `m/s`. `` Before, it had no Rust
+  type and was left out, and so was every calculation with one among
+  its parameters. Over the corpus's examples and training models, the
+  features left out for want of a type go from 198 to 82 and the
+  definitions from 53 to 6, among them the four calculations of
+  `Dynamics.sysml`; every file generated still compiles.
+- A feature that names no type and subsets one that does holds what
+  that one holds: `attribute mass :> ISQ::mass;`, which is how the
+  corpus writes most of its quantities, is a `MassValue`, as is a
+  subset of it, however many subsets away. The multiplicity stays the
+  subset's own, so `in m :> ISQ::mass` is one mass and not the `[*]`
+  of them `ISQ::mass` allows. The generator and the plan ask this in
+  one place, where they used to each follow a redefinition one step
+  and stop. The unit is read off the
+  dimension the library gives the quantity, not off a list of names.
+- A value written with a unit is converted: `2500 [g]` is `2.5`,
+  `100 [km/h]` is `27.7777777777778`, `3 [ft]` is `0.9144`, and
+  `s [km/h]` over a parameter is `s * 0.2777777777777778`. A unit is
+  worth what the library says — `kW` is `kilo` times `W`, which is
+  `J/s`, down to `kg*m/s^2` — and its names are the ones resolved where
+  it is written. Degree Celsius and Fahrenheit are not converted: the
+  library makes them units of temperature *difference*, and `20
+  ['°C']` written for a temperature would come out twenty kelvin.
+- A model's own quantity definition is `pub type Payload = f64;`
+  rather than a struct of the library's machinery for a quantity
+  value.
+- A declared value the generator cannot write — `= y * 2`, or one of
+  those temperatures — still starts the field at its type's default,
+  but now says so on the line above the field and among what was left
+  open. It used to read as a zero the model chose.
+- The plan says a quantity is a `Real`, as its documentation always
+  claimed and its code never did — a quantity value specializes
+  `NumericalValue`, which is above `Real`, and the walk up its
+  supertypes never got there — and gains `unit`, the SI unit that
+  number counts.
+
 ### Two lines that cross are drawn crossing
 
 `sysmlv2-diagram` **0.2.2**

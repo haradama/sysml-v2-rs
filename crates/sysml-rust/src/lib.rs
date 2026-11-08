@@ -27,6 +27,7 @@ mod expr;
 mod generate;
 pub mod import;
 pub mod plan;
+mod quantity;
 pub mod surface;
 
 pub use generate::{generate, Generated, Open, OpenKind, RustgenError};
