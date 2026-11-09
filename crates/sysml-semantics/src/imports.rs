@@ -170,14 +170,31 @@ impl Workspace {
     /// A condition past what is evaluated here answers yes: a filter says
     /// which of the names already there to keep, so one that is not understood
     /// must not leave a name the model declares resolving to nothing.
+    ///
+    /// A condition asked again while it is being answered -- `@Safety`
+    /// where the only `Safety` there is would come in through this same
+    /// filtered import -- answers no. A name found only by supposing the
+    /// filter admits it is not found; without this, each round started
+    /// a fresh lookup with a fresh guard, and the search, branching at
+    /// every level down to the depth limit, never came back. The answer
+    /// is the recursion's and not the model's, so it is counted the way
+    /// the import guards count theirs, and nothing failed under it is
+    /// cached.
     pub(crate) fn admits(
         &mut self,
         member: ElementId,
         filters: &[(SyntaxNode, ElementId)],
     ) -> bool {
-        filters
-            .iter()
-            .all(|(condition, at)| self.condition_holds(condition, member, *at) != Some(false))
+        filters.iter().all(|(condition, at)| {
+            if self.filtering.contains(condition) {
+                self.blocked += 1;
+                return false;
+            }
+            self.filtering.push(condition.clone());
+            let holds = self.condition_holds(condition, member, *at);
+            self.filtering.pop();
+            holds != Some(false)
+        })
     }
     /// What one filter condition comes to for one candidate member, or
     /// `None` where the condition reaches past the operators that can be

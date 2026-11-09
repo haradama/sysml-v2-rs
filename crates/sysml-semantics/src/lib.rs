@@ -340,6 +340,12 @@ pub struct Workspace {
     /// bounds it: what a namespace specializes is written in the
     /// model, and the model can say it thousands of times over.
     walking: usize,
+    /// The import filter conditions being evaluated, from the outermost
+    /// in. A condition names something -- `@Safety` -- and finding that
+    /// name can lead back through the very import the condition filters,
+    /// to ask the same condition again. Each lookup starts a cycle guard
+    /// of its own, so nothing else notices.
+    filtering: Vec<SyntaxNode>,
     /// What was worked out while that count moved: an import or an
     /// alias that failed, a supertype list that came out short. The
     /// answer is remembered while the outermost lookup runs -- ten
@@ -419,6 +425,7 @@ impl Clone for Workspace {
             resolving: Vec::new(),
             blocked: 0,
             walking: 0,
+            filtering: Vec::new(),
             provisional: HashSet::new(),
             lookups: self.lookups,
             chain: Vec::new(),
@@ -465,6 +472,7 @@ impl Workspace {
             resolving: Vec::new(),
             blocked: 0,
             walking: 0,
+            filtering: Vec::new(),
             provisional: HashSet::new(),
             lookups: 0,
             chain: Vec::new(),
