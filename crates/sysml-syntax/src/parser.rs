@@ -614,8 +614,34 @@ impl Parser<'_> {
         self.start_node_at(cp, node);
         let led = self.current();
         self.bump();
+        self.opt_statement_name(led);
         self.element_tail_from(led);
         self.finish_node();
+    }
+
+    /// The name a relationship written as a statement of its own declares:
+    /// `specialization Gen subtype A specializes B;`, `dependency Use from
+    /// A to B;`. It is there only where the keyword that introduces what
+    /// is related follows it -- `specialization subtype A ...` names
+    /// nothing -- and read as a reference, it was a name that resolved to
+    /// nothing and a relationship with no name.
+    fn opt_statement_name(&mut self, led: SyntaxKind) {
+        let relates = |kind: SyntaxKind| match led {
+            SPECIALIZATION_KW => matches!(
+                kind,
+                SUBTYPE_KW | SUBCLASSIFIER_KW | SUBSET_KW | REDEFINITION_KW | TYPING_KW
+            ),
+            CONJUGATION_KW => kind == CONJUGATE_KW,
+            DISJOINING_KW => kind == DISJOINT_KW,
+            INVERTING_KW => kind == INVERSE_KW,
+            FEATURING_KW => kind == OF_KW,
+            DEPENDENCY_KW => kind == FROM_KW,
+            _ => false,
+        };
+        self.opt_short_name();
+        if self.at_name() && relates(self.nth(1)) {
+            self.opt_name();
+        }
     }
 
     /// `transition <shortName>? Name? first a then b;`

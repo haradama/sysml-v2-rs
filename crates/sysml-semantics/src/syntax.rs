@@ -465,7 +465,7 @@ pub(crate) fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Targ
                     SyntaxKind::TILDE => SyntaxKind::CONJUGATES_KW,
                     other => other,
                 };
-                matches!(
+                let relates = matches!(
                     lead,
                     SyntaxKind::UNIONS_KW
                         | SyntaxKind::INTERSECTS_KW
@@ -476,8 +476,11 @@ pub(crate) fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Targ
                         | SyntaxKind::DISJOINT_KW
                         // `feature h inverse of g;`
                         | SyntaxKind::INVERSE_KW
-                )
-                .then_some((lead, part))
+                        // `conjugation c conjugate A conjugates B;` -- the
+                        // conjugated type, which only a statement writes
+                        | SyntaxKind::CONJUGATE_KW
+                );
+                relates.then_some((lead, part))
             }
             _ => None,
         })
@@ -594,10 +597,6 @@ pub(crate) fn adapter_target(node: &SyntaxNode) -> Option<SyntaxNode> {
 /// `f` returns, so there is no namespace for `b` to be a member of.
 pub(crate) fn name_chains(node: &SyntaxNode, out: &mut Vec<SyntaxNode>) {
     match node.kind() {
-        // `list->select { in i; i > 2 }` declares `i` inside a body that
-        // is not built into the model, so the names there have a scope
-        // nothing here can see. Reporting them would be a false alarm.
-        SyntaxKind::BODY_EXPR => return,
         SyntaxKind::NAME_REF => {
             out.push(node.clone());
             return;
@@ -734,6 +733,8 @@ pub(crate) fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static s
         // `featuring f of g by T;` -- `g` is featured by `T`; nothing read
         // either name, and `by Nope` went unreported
         ElementKind::TypeFeaturing => (SyntaxKind::OF_KW, "featureOfType", "featuringType"),
+        // `conjugation c conjugate A conjugates B;` and `... conjugate A ~ B;`
+        ElementKind::Conjugation => (SyntaxKind::CONJUGATE_KW, "conjugatedType", "originalType"),
         _ => return None,
     };
     Some(ends)

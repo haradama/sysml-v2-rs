@@ -4104,3 +4104,64 @@ fn a_recursive_import_that_has_nothing_passes_the_name_on() {
     )]);
     assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }
+
+/// The KerML corpus wrote names in places nothing looked at: the ends of a
+/// conjugation statement, the parameters and names of a body expression,
+/// what `->` invokes, a member reached through a call or a cast, a filter
+/// statement's condition, a cast in a bracketed filter. Each is now looked
+/// up, so a name that is not there is reported -- and a relationship
+/// statement's own name is declared rather than looked up.
+#[test]
+fn every_name_a_kerml_model_writes_is_looked_up() {
+    let model = |nope: &str| -> String {
+        format!(
+            "package N {{
+                private import ControlFunctions::*;
+                private import ScalarValues::*;
+                class Original; class C1;
+                conjugation c1 conjugate C1 conjugates {nope}1;
+                conjugation c2 conjugate C1 ~ {nope}7;
+                feature x : Integer[*];
+                feature a = x->select {{in y; y > {nope}2}};
+                feature b = x.{{in y; {nope}3 + y}};
+                feature c = x->{nope}4 {{in y; y}};
+                behavior A {{ out y; }}
+                feature d = A().{nope}5;
+                metaclass M {{ feature level : Integer; }}
+                package Q {{ feature f; }}
+                package R {{ private import Q::*[(as M).{nope}6 > 1]; }}
+                specialization Gen subtype C1 specializes Original;
+                dependency Use from C1 to Original;
+            }}"
+        )
+    };
+    let missing = |text: &str| -> Vec<String> {
+        let mut ws = Workspace::default();
+        ws.add_file("n.kerml", text);
+        ws.load_dir(std::path::Path::new("../sysml-stdlib/library"))
+            .expect("the library loads");
+        ws.resolve_all();
+        let mut names: Vec<String> = ws
+            .unresolved()
+            .iter()
+            .filter(|it| it.file == 0)
+            .map(|it| it.name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    // spelled right, with the names the model declares standing in
+    let right = model("x")
+        .replace("x1", "Original")
+        .replace("x7", "Original")
+        .replace("x2", "0")
+        .replace("x3", "1")
+        .replace("x4", "collect")
+        .replace("x5", "y")
+        .replace("x6", "level");
+    assert_eq!(missing(&right), Vec::<String>::new(), "{right}");
+    assert_eq!(
+        missing(&model("nope")),
+        ["nope1", "nope2", "nope3", "nope4", "nope5", "nope6", "nope7"]
+    );
+}

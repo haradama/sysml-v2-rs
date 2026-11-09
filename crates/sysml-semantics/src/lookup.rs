@@ -276,7 +276,15 @@ impl Workspace {
         at: &[TextRange],
         target: ElementId,
     ) {
+        // the walk that reached `target`, and no other: a lookup that
+        // walks no qualified name leaves the last one's steps behind, and
+        // paired with these ranges they made `approved` in `(as A::T)
+        // .approved` a mention of `A`
         let walked = std::mem::take(&mut self.chain);
+        let walked = match walked.last() == Some(&target) {
+            true => walked,
+            false => Vec::new(),
+        };
         self.references.push(Reference {
             file,
             range,

@@ -1833,9 +1833,9 @@ mod tests {
         assert_eq!(
             conjugations,
             [
-                // written as a statement: the namespace's own, and the
-                // shape it writes its two types in is not read here
-                (Some("K"), None, None),
+                // written as a statement: the namespace's own, relating
+                // the type after `conjugate` to the one after `conjugates`
+                (Some("K"), Some("A"), Some("B")),
                 // written as a clause: B's own, relating B to A
                 (Some("B"), Some("B"), Some("A")),
             ]

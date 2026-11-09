@@ -256,10 +256,8 @@ impl Workspace {
         id: ElementId,
         node: &SyntaxNode,
         stats: &mut ResolveStats,
-    ) {
-        let Some((keyword, source_prop, target_prop)) = relation_ends(self.model.kind(id)) else {
-            return;
-        };
+    ) -> Option<()> {
+        let (keyword, source_prop, target_prop) = relation_ends(self.model.kind(id))?;
         // `subset a.b subsets c.d;` writes a chain on either side, and a
         // subsetting is the one relationship the abstract syntax stands
         // a chain feature under. A specialization or a typing relates
@@ -279,7 +277,10 @@ impl Workspace {
             // A` a part of its own -- so the part is the end this one
             // relationship reads as its source rather than its target.
             // `inverting i inverse a of b;` is read the same way
-            let prop = match matches!(part, SyntaxKind::DISJOINT_KW | SyntaxKind::INVERSE_KW) {
+            let prop = match matches!(
+                part,
+                SyntaxKind::DISJOINT_KW | SyntaxKind::INVERSE_KW | SyntaxKind::CONJUGATE_KW
+            ) {
                 true => source_prop,
                 false => target_prop,
             };
@@ -311,6 +312,7 @@ impl Workspace {
                 self.resolve_operand_into(id, &operand, target_prop, stats, chains);
             }
         }
+        Some(())
     }
     /// Resolve the operands of a `connect`/`bind`/`allocate` statement and
     /// record what they point at as the connector's `relatedFeature`s, so a

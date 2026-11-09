@@ -891,6 +891,22 @@ fn value_expression(
     }
     let expression = model.create(ElementKind::Expression);
     model.add_owned(membership, expression);
+    // `xs->select { in x; x > 0 }` -- a body expression declares the
+    // parameters it is handed, and what it says names them. Kept as text
+    // alone, `x` stood for nothing anywhere in the model.
+    if written.kind() == SyntaxKind::BODY_EXPR {
+        let declared = written
+            .children()
+            .filter(|it| it.kind() == SyntaxKind::USAGE)
+            .filter_map(|it| Some((declared_name(&it)?, it)));
+        for (name, declared) in declared {
+            let parameter = model.create(ElementKind::Feature);
+            model.add_owned(expression, parameter);
+            model.set(parameter, "declaredName", Value::String(name));
+            model.set(parameter, "direction", Value::EnumLit("in"));
+            built.source.push((parameter, declared));
+        }
+    }
     represent_textually(model, expression, written.text().to_string().trim());
     expression
 }
@@ -968,6 +984,16 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
             true => Some((ElementKind::IndexExpression, Some("#".to_string()))),
             false => Some((ElementKind::OperatorExpression, Some("[".to_string()))),
         },
+        // `xs.{ in x; ... }` and `xs.?{ in x; ... }` are a collect and a
+        // select written short: `CollectExpression = PrimaryArgumentMember
+        // '.' BodyArgumentMember` and the same with `.?`. Read as a chain,
+        // the body was a name the chain went to, and was never built.
+        PATH_EXPR if written.children().any(|it| it.kind() == BODY_EXPR) => {
+            match has_token(written, DOT_QUESTION) {
+                true => Some((ElementKind::SelectExpression, Some("select".to_string()))),
+                false => Some((ElementKind::CollectExpression, Some("collect".to_string()))),
+            }
+        }
         // `a.b` where `a` is not a name is a chain through what the
         // expression in front of it comes to
         PATH_EXPR => Some((ElementKind::FeatureChainExpression, Some(".".to_string()))),
@@ -1012,7 +1038,13 @@ fn invoked(written: &SyntaxNode) -> Option<(ElementKind, Option<String>)> {
 /// names the feature it reaches the same way, and `all T` names a type and
 /// hands over nothing.
 fn hands_over_only(written: &SyntaxNode) -> usize {
-    if written.kind() == SyntaxKind::PATH_EXPR {
+    // a chain hands over what it chains from; a collect or a select
+    // written with a dot hands over its body as well
+    if written.kind() == SyntaxKind::PATH_EXPR
+        && !written
+            .children()
+            .any(|it| it.kind() == SyntaxKind::BODY_EXPR)
+    {
         return 1;
     }
     let symbols: Vec<String> = written

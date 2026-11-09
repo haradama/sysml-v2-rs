@@ -50,7 +50,9 @@ impl Workspace {
             // membership of its own, beside the one naming the function
             if self.model.kind(elem) == ElementKind::Membership {
                 match self.model.owner(elem).map(|it| self.model.kind(it)) {
-                    Some(ElementKind::FeatureChainExpression) => self.chains_to(elem, &node),
+                    Some(ElementKind::FeatureChainExpression) => {
+                        self.chains_to(elem, &node, stats);
+                    }
                     _ => self.names_what_it_asks_about(elem, &node, stats),
                 }
                 continue;
@@ -83,21 +85,9 @@ impl Workspace {
                 // `new Nope()` was a model that resolved
                 (None, None) => {
                     let (segments, range, counted) = match invoked_through_arrow(&node) {
-                        // what `xs->f()` invokes is the name after the arrow
-                        Some(named) => {
-                            let written = node
-                                .children_with_tokens()
-                                .filter_map(|it| it.into_token())
-                                .skip_while(|it| it.kind() != SyntaxKind::ARROW)
-                                .find(|it| {
-                                    matches!(
-                                        it.kind(),
-                                        SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME
-                                    )
-                                })
-                                .map_or(node.text_range(), |it| it.text_range());
-                            (vec![named], written, false)
-                        }
+                        // what `xs->f()` invokes is looked up with the
+                        // names of the expression it is written in
+                        Some(named) => (vec![named], node.text_range(), true),
                         None => {
                             // `F(x)` writes `F` where the names of the
                             // expression are looked up already
@@ -120,14 +110,12 @@ impl Workspace {
                             // naming nothing
                             Some(target) => {
                                 stats.resolved += 1;
+                                // only a name written in front of the
+                                // arguments is counted here
                                 let callee = invoked_by_name(&node)
-                                    .filter(|_| invoked_through_arrow(&node).is_none());
-                                let (name_range, at) = match &callee {
-                                    Some(callee) => {
-                                        (last_name_range(callee), operand_ranges(callee))
-                                    }
-                                    None => (range, vec![range]),
-                                };
+                                    .expect("what is not counted names its callee");
+                                let at = operand_ranges(&callee);
+                                let name_range = last_name_range(&callee);
                                 self.record(elem, file, range, name_range, &at, target);
                             }
                             None => self.record_miss(file, range, &segments, stats),
@@ -321,15 +309,18 @@ impl Workspace {
     /// local Namespace is the result parameter of the argument Expression":
     /// `(that as SpatialItem).localClock` reads `localClock` from what `that
     /// as SpatialItem` comes to, which for a cast is the type it casts to.
-    fn chains_to(&mut self, membership: ElementId, node: &SyntaxNode) {
+    fn chains_to(
+        &mut self,
+        membership: ElementId,
+        node: &SyntaxNode,
+        stats: &mut ResolveStats,
+    ) -> Option<()> {
         let owner = self
             .model
             .owner(membership)
             .expect("the builder puts the membership on the expression it chains from");
         let mut segments = operand_segments(node);
-        let Some(name) = segments.pop() else {
-            return;
-        };
+        let name = segments.pop()?;
         let held: Vec<ElementId> = self
             .takes(owner)
             .into_iter()
@@ -358,6 +349,9 @@ impl Workspace {
                 scopes.extend(self.supertypes_of(result));
             }
         }
+        // where what the chain starts from is known and none of it has
+        // the name, the name is missing like any other: `A().nope`
+        let known = !scopes.is_empty();
         for scope in scopes {
             // a chain chains to a feature: `targetFeature` is null where
             // what the name reaches is not one, which is what the
@@ -366,6 +360,19 @@ impl Workspace {
                 .lookup(scope, &name, Reach::all(Access::External))
                 .filter(|&it| self.model.kind(it).is_a(ElementKind::Feature));
             if let Some(target) = found {
+                // a name like any other, which a rename has to follow:
+                // `A().y`, `c#(1).count`, `(as T).level`
+                stats.resolved += 1;
+                let file = self.file_of(membership);
+                let name_range = last_name_range(node);
+                self.record(
+                    membership,
+                    file,
+                    name_range,
+                    name_range,
+                    &[name_range],
+                    target,
+                );
                 self.try_set(membership, "memberElement", Value::Ref(target));
                 // `checkFeatureChainExpressionResultSpecialization` --
                 // what a chain comes to is what it chains to
@@ -383,9 +390,15 @@ impl Workspace {
                         .set(result, "isImpliedIncluded", Value::Bool(true));
                     self.supertypes.remove(&result);
                 }
-                return;
+                return Some(());
             }
         }
+        if known {
+            let file = self.file_of(membership);
+            let name_range = last_name_range(node);
+            self.record_miss(file, name_range, &[name], stats);
+        }
+        Some(())
     }
     /// Each argument redefines the parameter it is handed to.
     ///
@@ -571,10 +584,21 @@ impl Workspace {
         name_chains(expr, &mut chains);
         for chain in chains {
             let segments = operand_segments(&chain);
+            // a parameter of a body expression the name is written in:
+            // `{ in x; x > 0 }` names its own `x`, and where the body was
+            // built into no expression there is no `x` to name
+            let local = segments
+                .first()
+                .and_then(|first| self.body_parameter(file, &chain, expr, first));
+            let from = match local {
+                Some(Some(parameter)) => parameter,
+                Some(None) => continue,
+                None => owner,
+            };
             let at = operand_ranges(&chain);
             let name_range = *at.last().expect("a name chain spells a name");
             let range = chain.text_range();
-            match self.resolve_operand(owner, &segments) {
+            match self.resolve_operand(from, &segments) {
                 Some(target) => {
                     stats.resolved += 1;
                     self.record(owner, file, range, name_range, &at, target);
@@ -592,6 +616,7 @@ impl Workspace {
                 }
             }
         }
+        self.resolve_arrows(owner, expr, stats);
     }
     /// The usage a `perform`/`exhibit`/`include`/... or an `entry`/`do`/
     /// `exit` adapts, when it names one rather than declaring it: the
@@ -655,12 +680,18 @@ impl Workspace {
         stats: &mut ResolveStats,
     ) {
         let file = self.file_of(import);
-        for asked in filter.descendants().filter(|it| {
-            it.kind() == SyntaxKind::QUALIFIED_NAME
-                && it
-                    .parent()
-                    .is_some_and(|up| up.kind() == SyntaxKind::UNARY_EXPR)
-        }) {
+        // `[@Safety]` writes the metadata it asks about, and `[(as T).x]`
+        // the type it casts to, under the operator
+        let asked_about = |it: &SyntaxNode| {
+            it.ancestors()
+                .skip(1)
+                .find(|up| up.kind() != SyntaxKind::TYPE_REF)
+                .is_some_and(|up| up.kind() == SyntaxKind::UNARY_EXPR)
+        };
+        for asked in filter
+            .descendants()
+            .filter(|it| it.kind() == SyntaxKind::QUALIFIED_NAME && asked_about(it))
+        {
             let segments = name_segments(&asked);
             match self.resolve_from(import, &segments) {
                 Some(target) => {
@@ -675,6 +706,122 @@ impl Workspace {
         for condition in filter.children() {
             self.resolve_expression(import, &condition, stats);
         }
+        // `[(as T).level > 1]` reads `level` off what the member is cast
+        // to: a bracketed condition is built into no expression, so the
+        // chain is followed here, from the type the cast names
+        let cast_to = |chain: &SyntaxNode| {
+            let cast = chain
+                .children()
+                .next()
+                .filter(|it| it.kind() == SyntaxKind::PAREN_EXPR)?
+                .children()
+                .next()
+                .filter(|it| it.kind() == SyntaxKind::UNARY_EXPR)?;
+            let ty = cast
+                .descendants()
+                .find(|it| it.kind() == SyntaxKind::QUALIFIED_NAME)?;
+            let member = chain
+                .children_with_tokens()
+                .filter_map(|it| it.into_token())
+                .filter(|it| matches!(it.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+                .last()?;
+            Some((ty, member))
+        };
+        let casts: Vec<_> = filter
+            .descendants()
+            .filter(|it| it.kind() == SyntaxKind::PATH_EXPR)
+            .filter_map(|chain| cast_to(&chain))
+            .collect();
+        // where the type does not resolve, that is reported above
+        let resolved: Vec<_> = casts
+            .into_iter()
+            .filter_map(|(ty, member)| {
+                Some((self.resolve_from(import, &name_segments(&ty))?, member))
+            })
+            .collect();
+        for (ty, member) in resolved {
+            let name = sysml_syntax::unquote(member.text());
+            let range = member.text_range();
+            match self.lookup(ty, &name, Reach::all(Access::External)) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.record(import, file, range, range, &[range], target);
+                }
+                None => self.record_miss(file, range, &[name], stats),
+            }
+        }
+    }
+    /// What `xs->f(...)` invokes, looked up where the expression is
+    /// written: `select` and `collect` are the library's own, and any
+    /// other name is a function in scope. Counted here rather than with
+    /// the expression the builder made, since some expressions -- what
+    /// a function returns -- are kept as text.
+    fn resolve_arrows(&mut self, owner: ElementId, expr: &SyntaxNode, stats: &mut ResolveStats) {
+        let file = self.file_of(owner);
+        for arrow in expr
+            .descendants()
+            .filter(|it| it.kind() == SyntaxKind::ARROW_EXPR)
+        {
+            let Some(name) = arrow
+                .children_with_tokens()
+                .filter_map(|it| it.into_token())
+                .skip_while(|it| it.kind() != SyntaxKind::ARROW)
+                .find(|it| matches!(it.kind(), SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME))
+            else {
+                continue;
+            };
+            let spelled = sysml_syntax::unquote(name.text());
+            let range = name.text_range();
+            let found = match spelled.as_str() {
+                "select" | "collect" => {
+                    self.named_globally(&format!("ControlFunctions::{spelled}"))
+                }
+                _ => self.resolve_operand(owner, std::slice::from_ref(&spelled)),
+            };
+            match found {
+                Some(target) => {
+                    stats.resolved += 1;
+                    self.record(owner, file, range, range, &[range], target);
+                }
+                None => self.record_miss(file, range, &[spelled], stats),
+            }
+        }
+    }
+    /// Whether `first`, the first name of `chain`, is a parameter of a body
+    /// expression around it within `expr`: `None` where it is not, and
+    /// otherwise the parameter -- or nothing, where the body was built
+    /// into no expression and so declares no element to name.
+    fn body_parameter(
+        &self,
+        file: usize,
+        chain: &SyntaxNode,
+        expr: &SyntaxNode,
+        first: &str,
+    ) -> Option<Option<ElementId>> {
+        let bodies = chain
+            .ancestors()
+            .take_while(|it| it != expr)
+            .chain(std::iter::once(expr.clone()))
+            .filter(|it| it.kind() == SyntaxKind::BODY_EXPR);
+        for body in bodies {
+            let declared = body.children().find(|it| {
+                it.kind() == SyntaxKind::USAGE
+                    && it
+                        .children()
+                        .find(|part| part.kind() == SyntaxKind::NAME)
+                        .and_then(|part| part.first_token())
+                        .is_some_and(|name| sysml_syntax::unquote(name.text()) == first)
+            });
+            if let Some(declared) = declared {
+                let parameter = self.files[file]
+                    .elements
+                    .iter()
+                    .copied()
+                    .find(|it| self.source.get(it) == Some(&declared));
+                return Some(parameter);
+            }
+        }
+        None
     }
     /// Look up the names in what a control node asks and hands over,
     /// from where the node stands.

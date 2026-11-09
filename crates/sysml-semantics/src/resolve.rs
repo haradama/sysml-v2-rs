@@ -291,6 +291,15 @@ impl Workspace {
                 }
                 continue;
             }
+            // `filter Element::name == "System";` is a condition like any
+            // other, whose names are references: the `@` and `as` types in
+            // it are counted where its expression is, the rest only here
+            if node.kind() == SyntaxKind::FILTER {
+                for condition in node.children() {
+                    self.resolve_expression(id, &condition, &mut stats);
+                }
+                continue;
+            }
             // `alias Q for P;` is a membership whose member is the
             // element it renames. Nothing else asks for it -- a name
             // reached through the alias resolves to what it stands for

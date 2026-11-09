@@ -42,9 +42,11 @@ fn a_name_in_a_value_a_body_or_a_constraint_is_a_reference() {
 
 #[test]
 fn what_an_expression_names_elsewhere_is_left_alone() {
-    // Three shapes whose names are not looked up here: an argument names
-    // a parameter of what is called, a body expression declares its own,
-    // and a step off a call has no namespace to be a member of.
+    // An argument names a parameter of what is called, and is not looked
+    // up here; a body expression's names are its own parameters, which are
+    // looked up and found. What a step off a call names is looked for in
+    // what the call returns -- `whatever` is no member of it -- and `select`
+    // is the library's, which this workspace has none of.
     let unresolved = resolved(
         "package P {\n\
          \tattribute def Number;\n\
@@ -57,7 +59,7 @@ fn what_an_expression_names_elsewhere_is_left_alone() {
          \tattribute positional : Number = F(list);\n\
          }\n",
     );
-    assert!(unresolved.is_empty(), "{unresolved:?}");
+    assert_eq!(unresolved, ["select", "whatever"]);
 }
 
 #[test]
