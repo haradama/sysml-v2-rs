@@ -33,7 +33,7 @@ impl Workspace {
             Some(def) => {
                 stats.resolved += 1;
                 self.references.push(Reference {
-                    file: self.elem_file.get(&usage).copied().unwrap_or(0),
+                    file: self.file_of(usage),
                     range: target.range,
                     name_range: target.name_range,
                     target: def,
@@ -42,12 +42,7 @@ impl Workspace {
                 self.reify(usage, false, SyntaxKind::TYPING, def);
             }
             None => {
-                self.record_miss(
-                    self.elem_file.get(&usage).copied().unwrap_or(0),
-                    target.range,
-                    &target.segments,
-                    stats,
-                );
+                self.record_miss(self.file_of(usage), target.range, &target.segments, stats);
             }
         }
     }
@@ -225,7 +220,7 @@ impl Workspace {
         stats: &mut ResolveStats,
         chains: bool,
     ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         let segments = operand_segments(operand);
         let range = operand.text_range();
         match self.resolve_written(id, &segments, false, None) {
@@ -265,7 +260,7 @@ impl Workspace {
         // beneath either.
         let chains = self.model.kind(id).is_a(ElementKind::Subsetting)
             || self.model.kind(id) == ElementKind::Disjoining;
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         if let Some(operand) = operand_after(node, keyword) {
             self.resolve_operand_into(id, &operand, source_prop, stats, chains);
         }
@@ -312,7 +307,7 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         // What the connector relates, in the order it relates them, and
         // how each of them was reached. The ends are reified once that
         // order is settled: `connectorEnd->at(1)` is the one it runs
@@ -486,7 +481,7 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         let Some(about) = node
             .children()
             .find(|child| child.kind() == SyntaxKind::ABOUT)
@@ -538,13 +533,17 @@ impl Workspace {
             .filter(|child| child.kind() == SyntaxKind::QUALIFIED_NAME)
         {
             let segments = name_segments(&qname);
-            if let Some(target) = self.resolve_from(id, &segments) {
-                stats.resolved += 1;
-                let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                let range = qname.text_range();
-                let at = segment_ranges(&qname);
-                self.record(id, file, range, last_name_range(&qname), &at, target);
-                self.reify(id, false, SyntaxKind::TYPING, target);
+            let file = self.file_of(id);
+            let range = qname.text_range();
+            match self.resolve_from(id, &segments) {
+                Some(target) => {
+                    stats.resolved += 1;
+                    let at = segment_ranges(&qname);
+                    self.record(id, file, range, last_name_range(&qname), &at, target);
+                    self.reify(id, false, SyntaxKind::TYPING, target);
+                }
+                // `#nope part x;` annotates `x` with nothing at all
+                None => self.record_miss(file, range, &segments, stats),
             }
         }
     }
@@ -560,7 +559,7 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         let (mut clients, mut suppliers) = (Vec::new(), Vec::new());
         let mut supplying = false;
         for part in node.children_with_tokens() {
@@ -657,7 +656,7 @@ impl Workspace {
             ElementKind::AssignmentActionUsage => &[],
             _ => return,
         };
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         let mut resolve = |ws: &mut Self, operand: SyntaxNode| {
             let segments = operand_segments(&operand);
             let at = operand_ranges(&operand);
@@ -941,7 +940,7 @@ impl Workspace {
         else {
             return;
         };
-        let file = self.elem_file.get(&transition).copied().unwrap_or(0);
+        let file = self.file_of(transition);
         let typings = relationship_parts(node)
             .into_iter()
             .filter(|(part, _)| *part == SyntaxKind::TYPING);
@@ -980,7 +979,7 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         for (keyword, property) in [
             (SyntaxKind::SATISFY_KW, "satisfiedRequirement"),
             (SyntaxKind::BY_KW, "satisfyingFeature"),
@@ -1029,7 +1028,7 @@ impl Workspace {
         let Some(operand) = operand_after(node, SyntaxKind::VERIFY_KW) else {
             return;
         };
-        let file = self.elem_file.get(&id).copied().unwrap_or(0);
+        let file = self.file_of(id);
         let segments = operand_segments(&operand);
         let range = operand.text_range();
         let Some(target) = self.resolve_operand(id, &segments) else {

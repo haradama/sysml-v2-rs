@@ -234,24 +234,50 @@ impl Workspace {
                 let inner = operands.next()?;
                 Some(!self.condition_holds(&inner, member, at)?)
             }
+            // `[true]` and `[false]` say outright whether anything passes
+            SyntaxKind::LITERAL => match operator? {
+                SyntaxKind::TRUE_KW => Some(true),
+                SyntaxKind::FALSE_KW => Some(false),
+                _ => None,
+            },
             SyntaxKind::BINARY_EXPR => {
                 // The operator is read before the operands because one
                 // this cannot answer -- `==` and `>` are both in the
                 // corpus -- settles the condition whatever they are.
-                let combine: fn(bool, bool) -> bool = match operator? {
-                    SyntaxKind::AND_KW | SyntaxKind::AMP => |left, right| left && right,
-                    SyntaxKind::OR_KW | SyntaxKind::PIPE => |left, right| left || right,
-                    SyntaxKind::XOR_KW => |left, right| left != right,
-                    _ => return None,
-                };
+                let operator = operator?;
+                if !matches!(
+                    operator,
+                    SyntaxKind::AND_KW
+                        | SyntaxKind::AMP
+                        | SyntaxKind::OR_KW
+                        | SyntaxKind::PIPE
+                        | SyntaxKind::XOR_KW
+                ) {
+                    return None;
+                }
                 let left = operands.next()?;
                 let right = operands.next()?;
-                // Both sides are answered whichever operator it is: a
-                // condition half of which cannot be evaluated is not
-                // evaluated, rather than answered from the half that can.
-                let left = self.condition_holds(&left, member, at)?;
-                let right = self.condition_holds(&right, member, at)?;
-                Some(combine(left, right))
+                let left = self.condition_holds(&left, member, at);
+                let right = self.condition_holds(&right, member, at);
+                // A side that cannot be answered leaves the condition
+                // unanswered unless the other side settles it on its own:
+                // `@Safety and x == 1` does not hold for a member that is
+                // not annotated, whatever `x == 1` is. Answered as
+                // unknown instead, the whole filter fell away and admitted
+                // everything.
+                match operator {
+                    SyntaxKind::AND_KW | SyntaxKind::AMP => match (left, right) {
+                        (Some(false), _) | (_, Some(false)) => Some(false),
+                        (Some(true), Some(true)) => Some(true),
+                        _ => None,
+                    },
+                    SyntaxKind::OR_KW | SyntaxKind::PIPE => match (left, right) {
+                        (Some(true), _) | (_, Some(true)) => Some(true),
+                        (Some(false), Some(false)) => Some(false),
+                        _ => None,
+                    },
+                    _ => Some(left? != right?),
+                }
             }
             _ => None,
         }

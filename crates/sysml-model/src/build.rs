@@ -1224,6 +1224,8 @@ fn reify_accept_payload(
     owner: ElementId,
 ) -> Option<ElementId> {
     let mut after_accept = false;
+    // `accept cmd : Cmd` names the payload; `accept Cmd` only types it,
+    // and the payload is there all the same, with no name
     let mut name = None;
     for element in node.children_with_tokens() {
         match element.as_token() {
@@ -1234,9 +1236,19 @@ fn reify_accept_payload(
             Some(_) => {}
             None => {
                 let child = element.into_node().expect("checked for a token above");
-                if after_accept && child.kind() == SyntaxKind::NAME_REF {
-                    name = child.first_token().map(|t| unquote(t.text()));
-                    break;
+                if !after_accept {
+                    continue;
+                }
+                match child.kind() {
+                    SyntaxKind::NAME_REF => {
+                        name = Some(child.first_token().map(|t| unquote(t.text())));
+                        break;
+                    }
+                    SyntaxKind::TYPING => {
+                        name = Some(None);
+                        break;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1245,7 +1257,9 @@ fn reify_accept_payload(
     let name = name?;
     let payload = model.create(ElementKind::ReferenceUsage);
     model.add_owned(owner, payload);
-    model.set(payload, "declaredName", Value::String(name));
+    if let Some(name) = name {
+        model.set(payload, "declaredName", Value::String(name));
+    }
     Some(payload)
 }
 
@@ -1408,13 +1422,24 @@ fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 /// way SysML records any element in a concrete syntax, as a textual
 /// representation of the guard.
 fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
-    let Some(condition) = node
+    // `transition first a if g then b;` writes the guard as one node, and
+    // `if g then b;` in an action body as the statement's own `if`:
+    // `GuardedTargetSuccession = 'if' GuardExpressionMember 'then' ...`.
+    // Looking only for the first, the guard of the second was dropped and
+    // the branch read as taken whatever held.
+    let text = match node
         .children()
         .find(|child| child.kind() == SyntaxKind::COND_EXPR)
-    else {
-        return;
+    {
+        Some(condition) => condition.text().to_string(),
+        None if tokens(node).next() == Some(SyntaxKind::IF_KW) => node
+            .children_with_tokens()
+            .skip(1)
+            .take_while(|part| part.kind() != SyntaxKind::THEN_KW)
+            .map(|part| part.to_string())
+            .collect(),
+        None => return,
     };
-    let text = condition.text().to_string();
     let guard = model.create(ElementKind::Expression);
     model.add_owned(transition, guard);
     model.set(transition, "guardExpression", Value::RefList(vec![guard]));
@@ -1908,6 +1933,10 @@ fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
             kind,
             SyntaxKind::FIRST_KW
                 | SyntaxKind::THEN_KW
+                // `else a2;` names where the flow goes when no guard
+                // held, as `then a2;` does; read as a name, it declared
+                // a second `a2` beside the action it was meant to reach
+                | SyntaxKind::ELSE_KW
                 | SyntaxKind::ACCEPT_KW
                 | SyntaxKind::SEND_KW
                 | SyntaxKind::TERMINATE_KW
@@ -3128,7 +3157,7 @@ mod tests {
         let (model, roots) = build_model(&sysml_syntax::parse(
             "state def S {\n\
              \tstate off;\n\
-             \taccept go via q do send m via p then off;\n\
+             \taccept go : Go via q do send m via p then off;\n\
              }\n",
         ));
         let transition = model
@@ -3887,7 +3916,7 @@ mod tests {
             "state def S {\n\
              \tstate off;\n\
              \tstate on;\n\
-             \taccept go if ready do send m via p then on;\n\
+             \taccept go : Go if ready do send m via p then on;\n\
              }\n",
         ));
         let transition = model.owned(roots[0])[2];
@@ -3910,6 +3939,24 @@ mod tests {
         );
         let effect = reference_list(&model, transition, "effectAction")[0];
         assert_eq!(model.kind(effect), ElementKind::SendActionUsage);
+        // and `accept Go` with no name of its own waits for a `Go`: the
+        // name is the payload's type, `OwnedFeatureTyping`, and the
+        // payload is there all the same with no name
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "state def S {\n\
+             \tstate on;\n\
+             \taccept Go then on;\n\
+             }\n",
+        ));
+        let transition = model
+            .owned(roots[0])
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == ElementKind::TransitionUsage)
+            .expect("the accept before the then is a transition");
+        let trigger = reference_list(&model, transition, "triggerAction")[0];
+        let payload = crate::payload_parameter(&model, trigger).expect("a payload all the same");
+        assert_eq!(model.name(payload), None);
     }
 
     /// `StateActionUsage` is the action itself, not a wrapper around a

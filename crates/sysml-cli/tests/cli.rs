@@ -298,6 +298,17 @@ fn rustgen_generates_and_says_what_stopped_it() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("unresolved `Nowhere`"));
 
+    // and so is one that does not parse, whose names may all resolve:
+    // what it declares is what the parser guessed at
+    let unparsed = write(
+        &dir,
+        "unparsed.sysml",
+        "package P { part def A { attribute y : ScalarValues::Real = ; } part def C;",
+    );
+    let out = sysml(&["rustgen", unparsed.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("does not parse"));
+
     // unreadable inputs fail like everywhere else
     let out = sysml(&["rustgen", dir.join("absent.sysml").to_str().unwrap()]);
     assert!(!out.status.success());

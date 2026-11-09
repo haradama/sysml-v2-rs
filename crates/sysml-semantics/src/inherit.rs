@@ -170,10 +170,16 @@ impl Workspace {
                 .owned(elem)
                 .iter()
                 .copied()
-                .filter(|&owned| self.model.kind(owned) == ElementKind::FeatureTyping)
-                .filter_map(|owned| match self.model.get(owned, "type") {
-                    Some(Value::Ref(target)) => Some(*target),
-                    _ => None,
+                .filter_map(|owned| {
+                    // and a transition's `accepted` parameter subsets what
+                    // its trigger accepts, which is how `accept s : Sig if
+                    // s.ok` reaches the `ok` of a `Sig`
+                    let named = match self.model.kind(owned) {
+                        ElementKind::FeatureTyping => "type",
+                        ElementKind::Subsetting => "subsettedFeature",
+                        _ => return None,
+                    };
+                    self.model.maybe(owned, named).and_then(Value::as_id)
                 })
                 .collect();
             for target in typed {
@@ -196,31 +202,6 @@ impl Workspace {
                             push_supertype(&mut supers, elem, sibling);
                         }
                     }
-                }
-            }
-        }
-        // `variant manualTransmission;` names one of the usages the model already
-        // has; `variant part v;` declares a new one, and the difference is
-        // whether a kind keyword was written.
-        // An enumeration value is a variant that *declares* the value rather than
-        // naming one written elsewhere: `enum def E1 { a; b; c; }` has no `a`
-        // anywhere else, and looking for one reaches past the enumeration to
-        // whatever else the workspace calls `a`.
-        let enumerated = self.model.owner(elem).is_some_and(|owner| {
-            self.model
-                .kind(owner)
-                .is_a(ElementKind::EnumerationDefinition)
-        });
-        if supers.is_empty() && !enumerated && self.model.member_role(elem) == Some(Role::Variant) {
-            let bare = self.source.get(&elem).is_some_and(|node| {
-                !node
-                    .children_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .any(|t| t.kind().is_def_kind_kw())
-            });
-            if let (true, Some(name)) = (bare, self.model.name(elem).map(String::from)) {
-                if let Some(target) = self.resolve_from(elem, &[name]) {
-                    push_supertype(&mut supers, elem, target);
                 }
             }
         }

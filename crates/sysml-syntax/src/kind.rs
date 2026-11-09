@@ -362,6 +362,32 @@ pub enum SyntaxKind {
 use SyntaxKind::*;
 
 impl SyntaxKind {
+    /// Whether it opens a feature specialization or a typing, in either
+    /// of its spellings: `:` or `typed by`/`defined by`, `:>` or
+    /// `specializes`/`subsets`/`crosses`, `:>>` or `redefines`, `::>` or
+    /// `references`.
+    ///
+    /// The grammar gives each symbol a keyword that means the same, and a
+    /// lookahead that listed only the symbols read `x subsets y;` as an
+    /// expression and `x typed by T;` as an error, where `x :> y;` and
+    /// `x : T;` declared `x`.
+    pub fn specializes_a_feature(self) -> bool {
+        matches!(
+            self,
+            COLON
+                | TYPED_KW
+                | DEFINED_KW
+                | COLON_GT
+                | SPECIALIZES_KW
+                | SUBSETS_KW
+                | CROSSES_KW
+                | COLON_GT_GT
+                | REDEFINES_KW
+                | COLON_COLON_GT
+                | REFERENCES_KW
+        )
+    }
+
     /// Whether it is whitespace or a note -- what the tree keeps so that
     /// it reproduces the source, and what every reader of the tree skips.
     pub fn is_trivia(self) -> bool {

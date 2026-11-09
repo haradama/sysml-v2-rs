@@ -16,9 +16,12 @@ pub struct LineIndex {
 impl LineIndex {
     /// Index `text` once, for as long as it does not change.
     pub fn new(text: &str) -> LineIndex {
+        // `\n`, `\r\n` and a lone `\r` each end a line, as the protocol
+        // counts them
+        let bytes = text.as_bytes();
         let mut starts = vec![0];
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' || (b == b'\r' && bytes.get(i + 1) != Some(&b'\n')) {
                 starts.push(i + 1);
             }
         }
@@ -58,11 +61,10 @@ impl LineIndex {
             .starts
             .get(position.line as usize + 1)
             .map_or(text.len(), |&next| {
-                let end = next - 1;
-                if text[..end].ends_with('\r') {
-                    end - 1
+                if text[..next].ends_with("\r\n") {
+                    next - 2
                 } else {
-                    end
+                    next - 1
                 }
             });
         let mut utf16 = 0u32;
@@ -116,6 +118,17 @@ mod tests {
         assert_eq!(
             index.offset(text, Position::new(1, 99)).map(usize::from),
             Some(12)
+        );
+        // and a lone `\r` is a break too, as the protocol counts them
+        let text = "part x : A;\rpart y : B;\r";
+        let index = LineIndex::new(text);
+        assert_eq!(
+            index.position(text, TextSize::from(21)),
+            Position::new(1, 9)
+        );
+        assert_eq!(
+            index.offset(text, Position::new(0, 99)).map(usize::from),
+            Some(11)
         );
     }
 }

@@ -545,6 +545,20 @@ impl Server {
             open,
             focus,
         } = self.opened(arguments)?.about_something()?;
+        // What a file that does not parse declares is the parser's guess,
+        // and the code would be generated from the guess.
+        let broken: Vec<String> = open
+            .iter()
+            .filter(|&&file| !ws.file_parse(file).ok())
+            .map(|&file| ws.file_name(file).to_string())
+            .collect();
+        if !broken.is_empty() {
+            return Err(format!(
+                "{} does not parse, so what is generated would be generated from a guess. \
+                 Ask `check` for where.",
+                broken.join(", ")
+            ));
+        }
         let stats = ws.resolve_files(&open);
         // Generated code would silently miss whatever did not resolve --
         // a struct without the field whose type was misspelt reads as a

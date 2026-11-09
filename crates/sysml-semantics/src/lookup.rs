@@ -30,9 +30,11 @@ pub(crate) struct Reach {
     access: Access,
     /// Whether what the namespace inherits is searched.
     inherited: bool,
-    /// Whether what it imports is searched. A supertype's members are
-    /// inherited; what that supertype itself imports is not, so the
-    /// walk upward turns this off.
+    /// Whether what it imports is searched. What a supertype imports
+    /// publicly or protectedly is inherited with the rest of what it
+    /// has: `inheritableMemberships` takes the supertype's
+    /// `nonPrivateMemberships`, which are its own and its imported
+    /// memberships of that visibility (`membershipsOfVisibility`).
     imports: bool,
     /// A member the answer must not be -- the declaration whose own
     /// clause is being resolved, which would otherwise answer itself.
@@ -67,14 +69,6 @@ impl Reach {
     /// supertype imports does not.
     pub(crate) fn narrowed_to(self, access: Access) -> Reach {
         Reach { access, ..self }
-    }
-
-    /// ... and not what the namespace imports.
-    pub(crate) fn without_imports(self) -> Reach {
-        Reach {
-            imports: false,
-            ..self
-        }
     }
 }
 
@@ -210,7 +204,7 @@ impl Workspace {
         else {
             return;
         };
-        let file = self.elem_file.get(&import).copied().unwrap_or(0);
+        let file = self.file_of(import);
         match self.resolve_from(import, &segments) {
             Some(target) => {
                 stats.resolved += 1;
@@ -231,7 +225,7 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
-        let file = self.elem_file.get(&alias).copied().unwrap_or(0);
+        let file = self.file_of(alias);
         // An alias writes exactly one name -- the parser puts one there
         // even where the text does not, empty rather than missing.
         for qname in node
@@ -422,14 +416,19 @@ impl Workspace {
         self.lookup_guarded(ns, name, reach, &mut guard)
     }
 
+    /// The guard is kept per namespace *and* per way of searching it: a
+    /// subtype's walk meets its supertype first through the inheritance,
+    /// seeing what a subtype may, and an `import all A::*` of the same
+    /// supertype later asks for more. Keyed on the namespace alone, the
+    /// second search was refused as a cycle and the name went unfound.
     fn lookup_guarded(
         &mut self,
         ns: ElementId,
         name: &str,
         reach: Reach,
-        guard: &mut HashSet<ElementId>,
+        guard: &mut HashSet<(ElementId, Access, bool, bool)>,
     ) -> Option<ElementId> {
-        if !guard.insert(ns) {
+        if !guard.insert((ns, reach.access, reach.inherited, reach.imports)) {
             return None;
         }
         // A namespace inherits from a namespace that inherits from a
@@ -451,7 +450,7 @@ impl Workspace {
         ns: ElementId,
         name: &str,
         reach: Reach,
-        guard: &mut HashSet<ElementId>,
+        guard: &mut HashSet<(ElementId, Access, bool, bool)>,
     ) -> Option<ElementId> {
         // Direct members and aliases, in the order they are written.
         let mut candidates = self.members_named(ns, name);
@@ -495,12 +494,9 @@ impl Workspace {
             // candidate no other candidate specializes.
             let mut hits = Vec::new();
             for sup in self.supertypes_of(ns) {
-                if let Some(hit) = self.lookup_guarded(
-                    sup,
-                    name,
-                    reach.without_imports().narrowed_to(sub_access),
-                    guard,
-                ) {
+                if let Some(hit) =
+                    self.lookup_guarded(sup, name, reach.narrowed_to(sub_access), guard)
+                {
                     if !hits.contains(&hit) {
                         hits.push(hit);
                     }
@@ -519,10 +515,16 @@ impl Workspace {
             }
         }
         // imported members: all imports apply inside the namespace itself,
-        // only `public import`s re-export
-        if reach.imports && reach.access != Access::Inherited {
+        // only `public import`s re-export, and a subtype inherits what a
+        // supertype imports unless it imported it privately
+        if reach.imports {
             for import in self.imports_of(ns) {
-                if reach.access == Access::External && self.visibility(import) != Vis::Public {
+                let shown = match reach.access {
+                    Access::Internal => true,
+                    Access::Inherited => self.visibility(import) != Vis::Private,
+                    Access::External => self.visibility(import) == Vis::Public,
+                };
+                if !shown {
                     continue;
                 }
                 let Some(imp) = self.import_target(import) else {
@@ -726,6 +728,11 @@ impl Workspace {
                 .and_then(|named| self.model.name(named))
                 .map(String::from);
         };
+        // `do senseTemperature { out temp; }` is a statement rather than a
+        // usage, and answers to what it performs all the same
+        if node.kind() == SyntaxKind::CONTROL_STMT {
+            return adapter_target_segments(node).and_then(|segments| segments.last().cloned());
+        }
         if node.kind() != SyntaxKind::USAGE {
             return None;
         }

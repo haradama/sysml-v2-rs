@@ -116,7 +116,10 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
     ),
     (
         "a rendering belongs to a view",
-        "package P {\n\tpart def Q;\n\tpart q : Q {\n\t\trender asTree;\n\t}\n}\n",
+        // `render` names a rendering the library declares; `asTree`, which
+        // this once wrote, was never there, and went unreported only for
+        // as long as nothing looked the name up
+        "package P {\n\tpart def Q;\n\tpart q : Q {\n\t\trender Views::asTreeDiagram;\n\t}\n}\n",
         &["validateViewRenderingMembershipOwningType"],
     ),
     (
@@ -124,14 +127,17 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
         "package P {\n\tpart def Q;\n\taction def A {\n\t\tsubject s : Q;\n\t}\n}\n",
         &["validateSubjectMembershipOwningType"],
     ),
+    // `render r : R` renders the `r` there is: `ViewRenderingUsage =
+    // OwnedReferenceSubsetting FeatureSpecializationPart? ...`, and only
+    // `render rendering r : R` declares one
     (
         "a view renders one way",
-        "package P {\n\trendering def R;\n\tview def V {\n\t\trender r1 : R;\n\t\trender r2 : R;\n\t}\n}\n",
+        "package P {\n\trendering def R;\n\tview def V {\n\t\trender rendering r1 : R;\n\t\trender rendering r2 : R;\n\t}\n}\n",
         &["validateViewDefinitionOnlyOneViewRendering"],
     ),
     (
         "and so does a use of one",
-        "package P {\n\trendering def R;\n\tview def V;\n\tview v : V {\n\t\trender r1 : R;\n\t\trender r2 : R;\n\t}\n}\n",
+        "package P {\n\trendering def R;\n\tview def V;\n\tview v : V {\n\t\trender rendering r1 : R;\n\t\trender rendering r2 : R;\n\t}\n}\n",
         &["validateViewUsageOnlyOneViewRendering"],
     ),
     (

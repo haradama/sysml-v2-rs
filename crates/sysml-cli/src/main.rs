@@ -1269,6 +1269,23 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: 
     // rest of a library is loaded so names resolve, not to be worked
     // through
     let files: Vec<usize> = (0..own).collect();
+    // what a file that does not parse declares is what the parser
+    // guessed at, and the code would be generated from the guess: the
+    // `codegen` of every other language refuses it the same way
+    let broken: Vec<usize> = files
+        .iter()
+        .copied()
+        .filter(|&file| !ws.file_parse(file).ok())
+        .collect();
+    if !broken.is_empty() {
+        for file in broken {
+            eprintln!(
+                "error: {} does not parse; `sysml parse` says where",
+                ws.file_name(file)
+            );
+        }
+        return ExitCode::FAILURE;
+    }
     let stats = ws.resolve_reached(&files);
     if stats.unresolved > 0 {
         // generated code would silently miss whatever did not resolve

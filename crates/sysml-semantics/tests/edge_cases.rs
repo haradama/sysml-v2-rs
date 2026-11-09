@@ -559,9 +559,15 @@ fn degenerate_semantic_metadata_values() {
     // The self-referential base is skipped and the degenerate value
     // yields no base, so what those two usages redefine is nowhere to be
     // found -- which they now say. What matters is that both
-    // semantic_base edge branches executed.
+    // semantic_base edge branches executed. And `meta X` asks about an
+    // `X` this workspace does not have, which is a name like any other.
     let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
-    assert_eq!(names, ["nowhere", "nothere"], "{:?}", ws.unresolved());
+    assert_eq!(
+        names,
+        ["nowhere", "nothere", "X", "X", "X"],
+        "{:?}",
+        ws.unresolved()
+    );
 }
 
 #[test]
@@ -2115,6 +2121,9 @@ package R {
         part def Other { attribute fromOther; }
     }
 }
+package SysML {
+    metadata def Usage;
+}
 ",
     )]);
     // `P::A::Nothing` is the path that walks back into the type, and it
@@ -2262,7 +2271,7 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
         "attribute def S;\npart def P { port p; }\n\
          action def A {\n\tattribute v;\n\tpart hub : P;\n\taction x;\n\
          \tthen assign v := 1;\n\tthen send new S() via hub.p to x;\n\
-         \tthen accept s via hub.p;\n}\n",
+         \tthen accept S via hub.p;\n}\n",
     );
     ws.resolve_all();
     assert_eq!(ws.unresolved().len(), 0, "{:?}", ws.unresolved());
@@ -3717,4 +3726,255 @@ fn a_sequence_written_as_a_filter_is_not_its_first_element() {
     let ws = ws(&[("p.sysml", MODEL)]);
     let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
     assert_eq!(missing, ["One::b"]);
+}
+
+/// Every place the grammar writes a reference is looked up, and a name
+/// that resolves to nothing there is reported.
+///
+/// Each of these was a position nothing looked at: the summary said
+/// every name resolved because the misspelt one was never counted, so a
+/// model that performed, filtered by or branched on nothing passed as
+/// sound. Paired with the same model spelt right, which must resolve.
+#[test]
+fn a_name_resolves_to_nothing_wherever_it_is_written() {
+    const CASES: &[(&str, &str, &str)] = &[
+        (
+            "a performed action",
+            "action a { action ok; perform ok; }",
+            "action a { action ok; perform NOPE; }",
+        ),
+        (
+            "an exhibited state",
+            "part p { state ok; exhibit ok; }",
+            "part p { state ok; exhibit NOPE; }",
+        ),
+        (
+            "an included use case",
+            "use case u { use case ok; include ok; }",
+            "use case u { use case ok; include NOPE; }",
+        ),
+        (
+            "a framed concern",
+            "concern def C; viewpoint def vp { concern ok : C; frame ok; }",
+            "concern def C; viewpoint def vp { concern ok : C; frame NOPE; }",
+        ),
+        (
+            "what a state does",
+            "action ok; state def S { do ok; exit ok; }",
+            "action ok; state def S { do ok; exit NOPE; }",
+        ),
+        (
+            "a variant named rather than declared",
+            "part def W; part ok : W; variation part v : W { variant ok; }",
+            "part def W; part ok : W; variation part v : W { variant NOPE; }",
+        ),
+        (
+            "prefix metadata",
+            "metadata def ok; #ok part x;",
+            "metadata def ok; #NOPE part x;",
+        ),
+        (
+            "a bracketed import filter",
+            "metadata def ok; package Q { part x; } package R { private import Q::*[@ok]; }",
+            "metadata def ok; package Q { part x; } package R { private import Q::*[@NOPE]; }",
+        ),
+        (
+            "an if, a while, an until and a for",
+            "action a { attribute ok; if ok { } while ok { } loop { } until ok; for i in ok { } }",
+            "action a { attribute ok; if ok { } while ok { } loop { } until NOPE; for i in ok { } }",
+        ),
+        (
+            "a guard written as the statement's own if",
+            "action a { attribute ok; action b; first b; if ok then b; }",
+            "action a { attribute ok; action b; first b; if NOPE then b; }",
+        ),
+        (
+            "what is sent and what is assigned",
+            "action a { attribute ok; attribute v; send ok; assign v := ok; }",
+            "action a { attribute ok; attribute v; send ok; assign v := NOPE; }",
+        ),
+        (
+            "what a trigger waits for",
+            "attribute ok; action a { accept when ok; }",
+            "attribute ok; action a { accept when NOPE; }",
+        ),
+        (
+            "the type an accept waits for",
+            "attribute def Ok; action a { accept Ok; }",
+            "attribute def Ok; action a { accept NOPE; }",
+        ),
+        (
+            "the type a test asks about",
+            "part def Ok; attribute xs; attribute v = xs istype Ok;",
+            "part def Ok; attribute xs; attribute v = xs istype NOPE;",
+        ),
+        (
+            "the type a binary @ asks about",
+            "part def Ok; attribute xs; attribute v = xs @ Ok;",
+            "part def Ok; attribute xs; attribute v = xs @ NOPE;",
+        ),
+        (
+            "what an extent ranges over",
+            "part def Ok; attribute v = all Ok;",
+            "part def Ok; attribute v = all NOPE;",
+        ),
+        (
+            "what is constructed",
+            "part def Ok; attribute v = new Ok();",
+            "part def Ok; attribute v = new NOPE();",
+        ),
+        (
+            "what an arrow invokes and the function it hands over",
+            "calc def f { in a; in b; } calc def ok { in a; in b; } attribute xs; attribute v = xs->f ok;",
+            "calc def f { in a; in b; } calc def ok { in a; in b; } attribute xs; attribute v = xs->f NOPE;",
+        ),
+        (
+            "a feature a metadata body gives a value",
+            "metadata def M { attribute ok; } part q { @M { ok = 1; } }",
+            "metadata def M { attribute ok; } part q { @M { NOPE = 1; } }",
+        ),
+        (
+            "an end an n-ary connector names",
+            "part def W { part ok; } part w : W; connection c connect ([1] w.ok, [1] w.ok, [2] w.ok);",
+            "part def W { part ok; } part w : W; connection c connect ([1] w.ok, [1] w.ok, [2] w.NOPE);",
+        ),
+    ];
+    for (what, right, wrong) in CASES {
+        let unresolved = |body: &str| -> Vec<String> {
+            let mut ws = Workspace::default();
+            ws.add_file("m.sysml", &format!("package P {{ {body} }}"));
+            ws.resolve_all();
+            ws.unresolved()
+                .iter()
+                .filter(|it| it.file == 0)
+                .map(|it| it.name.clone())
+                .collect()
+        };
+        assert_eq!(unresolved(right), Vec::<String>::new(), "{what}: {right}");
+        let missed = unresolved(wrong);
+        assert!(
+            missed.iter().any(|name| name.ends_with("NOPE")),
+            "{what}: {wrong} reported {missed:?}"
+        );
+    }
+}
+
+/// What a supertype imports publicly or protectedly it gives its
+/// subtypes, as `inheritableMemberships` takes its `nonPrivateMemberships`
+/// -- and a namespace met once on the way up is still searched again when
+/// an import asks for more of it.
+#[test]
+fn a_subtype_inherits_what_its_supertype_imports() {
+    let unresolved = |body: &str| -> Vec<String> {
+        let ws = ws(&[(
+            "m.sysml",
+            &format!("package P {{ package Lib {{ part def Engine; }} {body} }}"),
+        )]);
+        ws.unresolved().iter().map(|it| it.name.clone()).collect()
+    };
+    let none: Vec<String> = Vec::new();
+    // public: inherited, and seen from outside through the subtype
+    assert_eq!(
+        unresolved("part def A { public import Lib::*; } part def B :> A { part e : Engine; } part d : B::Engine;"),
+        none
+    );
+    // protected: inherited, but not seen from outside
+    assert_eq!(
+        unresolved("part def A { protected import Lib::*; } part def B :> A { part e : Engine; } part d : B::Engine;"),
+        ["B::Engine"]
+    );
+    // private: neither
+    assert_eq!(
+        unresolved("part def A { private import Lib::*; } part def B :> A { part e : Engine; }"),
+        ["Engine"]
+    );
+    // the walk up through `A` sees what a subtype may; the `import all`
+    // of the same `A` asks for its private members too
+    assert_eq!(
+        unresolved("part def A { private part def Secret; } part def B :> A { import all A::*; part e : Secret; }"),
+        none
+    );
+}
+
+/// Where a name is the thing referred to and where it is the one being
+/// declared, read as the grammar says.
+#[test]
+fn a_name_is_declared_only_where_the_grammar_declares_it() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+            attribute def Sig;
+            metadata def M { attribute x; }
+            part def W;
+            part w : W;
+            action def A {
+                action a1; action a2;
+                decide; if true then a1; else a2;
+                accept Sig;
+            }
+            variation part v : W { variant w; }
+            part q { @M { x = 1; } }
+            part def B { part p; }
+            part def D :> B { y subsets p; }
+            part s { exhibit state st parallel { } }
+        }",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let model = ws.model();
+    let named = |name: &str| {
+        model
+            .ids()
+            .filter(|&id| {
+                model
+                    .get(id, "declaredName")
+                    .and_then(sysml_model::Value::as_str)
+                    == Some(name)
+            })
+            .count()
+    };
+    // `else a2;` goes to the `a2` there is rather than declaring another
+    assert_eq!(named("a2"), 1);
+    // `accept Sig;` waits for a `Sig` rather than calling the payload that
+    assert_eq!(named("Sig"), 1);
+    // `variant w;` is the `w` there is
+    assert_eq!(named("w"), 1);
+    // `x = 1;` in a metadata body gives `M::x` a value
+    assert_eq!(named("x"), 1);
+    // `y subsets p;` declares `y`, as `y :> p;` does
+    assert_eq!(named("y"), 1);
+    // and `exhibit state st parallel` declares `st`
+    assert_eq!(named("st"), 1);
+}
+
+/// `connector c (a, b, c);` connects three features: it does not
+/// declare three more beside its ends.
+#[test]
+fn an_nary_connector_lists_ends_and_declares_nothing_else() {
+    let ws = ws(&[(
+        "k.kerml",
+        "package P { classifier X { feature a; feature b; } feature x : X; feature a; feature b; \
+         connector c (a, b, x.a); connector ([1] x.a, e ::> b, a); }",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let model = ws.model();
+    for connector in model
+        .ids()
+        .filter(|&id| model.kind(id) == ElementKind::Connector)
+    {
+        let owned: Vec<_> = model
+            .owned(connector)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it).is_a(ElementKind::Feature))
+            .collect();
+        assert_eq!(owned.len(), 3, "three ends");
+        assert!(owned.iter().all(|&it| model.flag(it, "isEnd")));
+        assert_eq!(
+            model
+                .get(connector, "relatedFeature")
+                .and_then(sysml_model::Value::as_ids)
+                .map(|it| it.len()),
+            Some(3)
+        );
+    }
 }

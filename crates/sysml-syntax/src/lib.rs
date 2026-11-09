@@ -110,8 +110,12 @@ pub fn comment_text(raw: &str) -> String {
     let text = raw.strip_prefix("/*").unwrap_or(raw);
     let text = text.strip_suffix("*/").unwrap_or(text);
     let mut lines: Vec<&str> = text.lines().collect();
+    // Only a line written after `/*` itself goes without a margin; once
+    // a blank one has been dropped, the first line left is under it.
+    let mut after_opening = 1;
     while lines.first().is_some_and(|line| line.trim().is_empty()) {
         lines.remove(0);
+        after_opening = 0;
     }
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
         lines.pop();
@@ -121,7 +125,7 @@ pub fn comment_text(raw: &str) -> String {
     // neither, so it is taken as it comes.
     let under: Vec<&str> = lines
         .iter()
-        .skip(1)
+        .skip(after_opening)
         .copied()
         .filter(|line| !line.trim().is_empty())
         .collect();
@@ -141,6 +145,7 @@ pub fn comment_text(raw: &str) -> String {
                     None => rest.to_string(),
                 }
             } else {
+                // the first line, after `/*`, need not share it
                 line.strip_prefix(&margin)
                     .unwrap_or_else(|| line.trim_start())
                     .to_string()
@@ -153,13 +158,28 @@ pub fn comment_text(raw: &str) -> String {
 }
 
 /// The whitespace every one of `lines` begins with.
+///
+/// What they share, character by character, and not the length of the
+/// shortest indent: a tab under four spaces shares nothing with them,
+/// and the shortest indent measured in bytes cut a U+3000 or a NBSP in
+/// half. Being a prefix of every line is what lets each reader strip it
+/// the same way.
 pub(crate) fn shared_indent(lines: &[&str]) -> String {
-    let indent = |line: &str| line.len() - line.trim_start().len();
-    let shortest = lines.iter().map(|line| indent(line)).min().unwrap_or(0);
-    lines
-        .first()
-        .map(|line| line[..shortest].to_string())
-        .unwrap_or_default()
+    let mut lines = lines
+        .iter()
+        .map(|line| &line[..line.len() - line.trim_start().len()]);
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let shared = lines.fold(first, |shared, indent| {
+        let common = shared
+            .char_indices()
+            .zip(indent.chars())
+            .find(|((_, a), b)| a != b)
+            .map_or(shared.len().min(indent.len()), |((at, _), _)| at);
+        &shared[..common]
+    });
+    shared.to_string()
 }
 
 /// The text a string literal denotes.
@@ -285,6 +305,20 @@ mod comment_tests {
             comment_text("/*\n    first\n      indented\n    last\n*/"),
             "first\n  indented\nlast"
         );
+    }
+
+    #[test]
+    fn a_margin_is_what_the_lines_share_and_not_how_long_the_shortest_is() {
+        // measured in bytes, the shortest indent cut the U+3000 in half
+        assert_eq!(
+            comment_text("/* first\n\u{3000}wide\n  two\n    */"),
+            "first\n\u{3000}wide\n  two"
+        );
+        // a tab and four spaces share nothing, so neither is a margin
+        assert_eq!(comment_text("/* top\n\tA\n    B\n*/"), "top\n\tA\n    B");
+        // and when the body starts on the line under `/*`, that line has
+        // a margin like the rest: `\t` here, which leaves `B` indented
+        assert_eq!(comment_text("/*\n\t\tA\n\t  B\n*/"), "A\n  B");
     }
 
     #[test]

@@ -1146,12 +1146,13 @@ fn transition_label(model: &Model, transition: ElementId) -> Option<String> {
         // `TriggerAction : AcceptActionUsage = AcceptParameterPart` --
         // what the transition waits for is the accept action's first
         // parameter, and the action itself is written with no name
+        // and it is written as a flow's payload is: `accept Sig` waits
+        // for a `Sig` and names nothing, `accept s : Sig` names it too
         let waits = sysml_model::payload_parameter(model, trigger).unwrap_or(trigger);
-        let payload = model.name(waits).unwrap_or_default();
-        let typed = type_name(model, waits)
-            .map(|ty| format!(" : {ty}"))
-            .unwrap_or_default();
-        head.push(format!("accept {payload}{typed}"));
+        head.push(match payload_label(model, waits) {
+            Some(payload) => format!("accept {payload}"),
+            None => "accept".to_string(),
+        });
     }
     if let Some(guard) = guard_text(model, transition) {
         head.push(format!("[{guard}]"));
@@ -5370,16 +5371,18 @@ mod behaviour_tests {
             Some("t1 accept pub : P [pub != null] / send action")
         );
 
-        // an untyped payload still names what the transition waits for
+        // a payload written as its type alone is the type it waits for:
+        // `PayloadFeature = ... | OwnedFeatureTyping OwnedMultiplicity?`
         let untyped = internal(
-            "state def S {\n\
+            "attribute def Pub;\n\
+             state def S {\n\
              \tstate a;\n\
              \tstate b;\n\
-             \ttransition first a accept pub then b;\n\
+             \ttransition first a accept Pub then b;\n\
              }\n",
             "S",
         );
-        assert_eq!(untyped.edges[0].label.as_deref(), Some("accept pub"));
+        assert_eq!(untyped.edges[0].label.as_deref(), Some("accept Pub"));
     }
 
     #[test]

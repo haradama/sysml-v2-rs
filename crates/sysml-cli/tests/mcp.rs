@@ -829,7 +829,12 @@ fn an_outline_describes_the_library_with_no_model_at_all() {
 /// comes back second is the work list.
 #[test]
 fn generate_rust_says_what_the_model_left_for_a_person() {
+    // `->reduce` names a function like any other name, which has to be in
+    // scope -- the corpus imports `ControlFunctions::forAll` for the same --
+    // and this session reads no library
     let text = "package P {\n\
+                \tcalc def reduce { in xs; in f; }\n\
+                \tcalc def max { in a; in b; }\n\
                 \tattribute def Metres;\n\
                 \tabstract calc def Fade {\n\t\tin heat : Metres;\n\t\treturn : Metres;\n\t}\n\
                 \tcalc def Odd {\n\t\tin xs : Metres[*];\n\t\treturn : Metres = xs->reduce max;\n\t}\n\
@@ -887,6 +892,19 @@ fn generate_rust_refuses_a_model_that_does_not_resolve() {
     let why = answered(&refused[0])["error"].as_str().unwrap().to_string();
     assert!(why.contains("NoSuchType"), "{why}");
     assert!(why.contains("check"), "{why}");
+}
+
+/// Nor is a model the parser could only guess at: every name in it may
+/// resolve, and what it declares is still not what was written.
+#[test]
+fn generate_rust_refuses_a_model_that_does_not_parse() {
+    let refused = session(&[call(
+        "generate_rust",
+        json!({ "text": "package P { part def A { attribute y : ScalarValues::Real = ; } part def C;" }),
+    )]);
+    assert_eq!(refused[0]["result"]["isError"], true, "{refused:?}");
+    let why = answered(&refused[0])["error"].as_str().unwrap().to_string();
+    assert!(why.contains("does not parse"), "{why}");
 }
 
 /// The mapping from a Rust API to SysML is not obvious, and a model that

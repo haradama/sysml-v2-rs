@@ -72,6 +72,9 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         gave_up: false,
         plain_target: false,
         carries_payload: false,
+        in_metadata_body: false,
+        opens_metadata_body: false,
+        connector_ends: false,
     };
     parser.source_file();
     Parse {
@@ -114,6 +117,16 @@ struct Parser<'t> {
     /// KerML's `binding ab of a = b` writes the same shape and means a
     /// connector end, so which statement it is decides which it means.
     carries_payload: bool,
+    /// Inside the body of a metadata usage, where a bare `x = 1;` is
+    /// what `:>> x = 1;` says: `MetadataBodyUsage = 'ref'? (':>>' |
+    /// 'redefines')? OwnedRedefinition ...`. The name is the feature of
+    /// the metadata definition being given a value, not a new one.
+    in_metadata_body: bool,
+    /// The body the element being read opens, if it opens one, is such
+    /// a body.
+    opens_metadata_body: bool,
+    /// While reading the ends an n-ary connector lists.
+    connector_ends: bool,
 }
 
 impl Parser<'_> {
@@ -259,19 +272,11 @@ impl Parser<'_> {
     /// (`level = 3;`, `x : T;`, enum values `red;`).
     fn at_anonymous_usage(&self) -> bool {
         self.at_name()
-            && matches!(
-                self.nth(1),
-                COLON
-                    | COLON_GT
-                    | COLON_GT_GT
-                    | COLON_COLON_GT
-                    | EQ
-                    | COLON_EQ
-                    | SEMICOLON
-                    | L_BRACE
-                    | L_BRACKET
-                    | DEFAULT_KW
-            )
+            && (self.nth(1).specializes_a_feature()
+                || matches!(
+                    self.nth(1),
+                    EQ | COLON_EQ | SEMICOLON | L_BRACE | L_BRACKET | DEFAULT_KW
+                ))
     }
 
     /// Does `(` open a parameter list (rather than an expression)?
@@ -281,10 +286,43 @@ impl Parser<'_> {
             || k1.is_def_kind_kw()
             || k1 == L_BRACKET // `([1] myCart, [0..1] products)`
             || (matches!(k1, IDENT | UNRESTRICTED_NAME)
-                && matches!(
-                    self.nth(2),
-                    COLON | COLON_GT | COLON_GT_GT | COLON_COLON_GT | COLON_EQ | DEFAULT_KW
-                ))
+                && (self.nth(2).specializes_a_feature() || matches!(self.nth(2), COLON_EQ | DEFAULT_KW)))
+    }
+
+    /// The type an `accept` written with no payload name waits for.
+    ///
+    /// The name after `accept` is that type unless what follows it
+    /// declares it as the payload's name.
+    fn opt_accepted_type(&mut self) {
+        let names_the_payload = matches!(
+            self.nth(1),
+            COLON
+                | TYPED_KW
+                | DEFINED_KW
+                | COLON_GT
+                | SPECIALIZES_KW
+                | SUBSETS_KW
+                | CROSSES_KW
+                | COLON_GT_GT
+                | REDEFINES_KW
+                | COLON_COLON_GT
+                | REFERENCES_KW
+                | EQ
+                | COLON_EQ
+                | DEFAULT_KW
+                | L_BRACKET
+                | DOT
+                // `accept sig after 10[s]` names the payload a trigger
+                // gives a value: `Identification ... TriggerValuePart`
+                | WHEN_KW
+                | AT_KW
+                | AFTER_KW
+        );
+        if self.at_name() && !names_the_payload {
+            self.start_node(TYPING);
+            self.type_ref();
+            self.finish_node();
+        }
     }
 
     fn at_expr_start(&self) -> bool {
@@ -298,6 +336,8 @@ impl Parser<'_> {
                 | TRUE_KW
                 | FALSE_KW
                 | NULL_KW
+                // `ExtentExpression = 'all' TypeResultMember`
+                | ALL_KW
                 | L_PAREN
                 | MINUS
                 | PLUS
@@ -413,7 +453,17 @@ impl Parser<'_> {
             COLON_GT | COLON_GT_GT | COLON_COLON_GT | SPECIALIZES_KW | SUBSETS_KW
             | REDEFINES_KW | REFERENCES_KW | CROSSES_KW | EQ | COLON_EQ => {
                 self.start_node_at(cp, USAGE);
-                self.element_tail();
+                self.usage_tail();
+                self.finish_node();
+            }
+            // `x = 1;` in a metadata body gives a feature of the metadata
+            // definition its value, as `:>> x = 1;` would
+            _ if self.in_metadata_body && self.at_anonymous_usage() => {
+                self.start_node_at(cp, USAGE);
+                self.start_node(REDEFINITION);
+                self.type_ref();
+                self.finish_node();
+                self.usage_tail();
                 self.finish_node();
             }
             // `level = 3;` / `x : T;` — a kind-less (anonymous) usage
@@ -555,7 +605,7 @@ impl Parser<'_> {
         if self.at_name() {
             self.qualified_name_chain();
         }
-        self.element_tail();
+        self.metadata_tail();
         self.finish_node();
     }
 
@@ -593,7 +643,13 @@ impl Parser<'_> {
         if self.current().is_def_kind_kw() {
             self.def_kind_keywords();
             self.opt_short_name();
-            self.opt_decl_name();
+            // after a kind keyword the name is always the one declared --
+            // `ActionUsageDeclaration`, `'requirement' UsageDeclaration` --
+            // so whatever follows it says nothing about that: checked
+            // against the tokens a declaration is known to go on with,
+            // `exhibit state s parallel { ... }` lost its name to a
+            // reference that resolved to nothing
+            self.opt_name();
             if self.at(L_PAREN) {
                 self.param_list();
             }
@@ -609,7 +665,20 @@ impl Parser<'_> {
     /// `subject x : T;`, `return x;`, `variant part v;`, `render asTree;`
     fn kw_usage(&mut self, cp: Checkpoint) {
         self.start_node_at(cp, USAGE);
+        let led = self.current();
         self.bump();
+        // `variant w;` names a usage the model already has: `VariantReference
+        // = OwnedReferenceSubsetting FeatureSpecialization* UsageBody`, and
+        // only a kind keyword -- `variant part w;` -- declares one. Read as a
+        // declaration, it made a second `w` that refers to nothing.
+        if led == VARIANT_KW && self.at_name() {
+            self.plain_target = true;
+            self.expression();
+            self.plain_target = false;
+            self.element_tail();
+            self.finish_node();
+            return;
+        }
         // `ActorUsage : PartUsage = 'actor' UsageExtensionKeyword* Usage`,
         // and the same shape for `subject`, `stakeholder`, `objective`,
         // `return` and `variant`: the keyword comes first and the
@@ -694,6 +763,7 @@ impl Parser<'_> {
         // out in front of it. `metadata Classified { ... }` says what
         // `@Classified { ... }` says.
         let is_metadata = self.at(METADATA_KW);
+        let is_connector = self.at(CONNECTOR_KW);
         self.def_kind_keywords();
         let node = if self.at(DEF_KW) || is_classifier {
             DEFINITION
@@ -720,10 +790,17 @@ impl Parser<'_> {
             // `flow p1.torque to p2.torque;` keeps `p1.torque` an expression
             self.opt_decl_name();
         }
-        if self.at(L_PAREN) {
+        if self.at(L_PAREN) && is_connector {
+            // KerML's `connector c (a, b, c);` lists the ends it connects
+            self.connector_ends();
+        } else if self.at(L_PAREN) {
             self.param_list();
         }
-        self.element_tail();
+        if is_metadata && node == USAGE {
+            self.metadata_tail();
+        } else {
+            self.element_tail();
+        }
         self.carries_payload = false;
         self.finish_node();
     }
@@ -745,9 +822,13 @@ impl Parser<'_> {
         // the lead-in, so `then action { ... }` reads alike whether the
         // `then` opened the statement or came part-way through it.
         let mut previous = led;
+        if led == ACCEPT_KW {
+            self.opt_accepted_type();
+        }
         loop {
             let here = self.current();
             let after_flow = matches!(previous, THEN_KW | ELSE_KW | FIRST_KW);
+            let after_connect = matches!(previous, CONNECT_KW | ALLOCATE_KW);
             previous = here;
             match here {
                 SEMICOLON => {
@@ -784,6 +865,8 @@ impl Parser<'_> {
                 ABOUT_KW => self.about_part(),
                 // `( cause1 ::> causer1, ... )` is a parameter list;
                 // `for n in (1, 2, 3)` is an expression
+                // `connect ([1] w.a, [1] w.b, [2] w.c)` lists the ends
+                L_PAREN if self.at_param_list() && after_connect => self.connector_ends(),
                 L_PAREN if self.at_param_list() => self.param_list(),
                 L_PAREN => self.expression(),
                 // statement continuation keywords and misc glue
@@ -794,8 +877,17 @@ impl Parser<'_> {
                 // where what follows `of` is a multiplicity rather than the
                 // payload's type
                 OF_KW if self.nth_is_name(1) => self.payload_part(),
-                OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | ACCEPT_KW
-                | AT_KW | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
+                // `accept S;` waits for an `S`: `PayloadFeature = ... |
+                // OwnedFeatureTyping OwnedMultiplicity?`. A lone name is the
+                // type, since naming the payload takes the `:` (or a value)
+                // that `accept s : S` writes after it. Read as a name, the
+                // payload was called `S` and typed by nothing.
+                ACCEPT_KW => {
+                    self.bump();
+                    self.opt_accepted_type();
+                }
+                OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | AT_KW
+                | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
                 | PARALLEL_KW | ASSIGN_KW | SEND_KW | MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW
                 | TERMINATE_KW | LOOP_KW | FOR_KW | NEW_KW | ORDERED_KW | NONUNIQUE_KW
                 | CONNECT_KW | BIND_KW | MESSAGE_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW
@@ -880,11 +972,32 @@ impl Parser<'_> {
     fn body(&mut self) {
         self.start_node(BODY);
         self.bump();
+        let outer = self.in_metadata_body;
+        self.in_metadata_body = std::mem::take(&mut self.opens_metadata_body);
         while !matches!(self.current(), R_BRACE | EOF) {
             self.member();
         }
+        self.in_metadata_body = outer;
         self.expect(R_BRACE);
         self.finish_node();
+    }
+
+    /// The rest of a kind-less usage, whose body is a metadata body when
+    /// it is itself written in one.
+    fn usage_tail(&mut self) {
+        if self.in_metadata_body {
+            self.metadata_tail();
+        } else {
+            self.element_tail();
+        }
+    }
+
+    /// Read the rest of an element whose body, if it has one, is the body
+    /// of a metadata usage.
+    fn metadata_tail(&mut self) {
+        self.opens_metadata_body = true;
+        self.element_tail();
+        self.opens_metadata_body = false;
     }
 
     /// A comma continues a type-reference list only when what follows looks
@@ -898,6 +1011,9 @@ impl Parser<'_> {
     fn continues_ref_list(&self) -> bool {
         self.at(COMMA)
             && (self.nth_is_name(1) || self.nth(1) == TILDE)
+            // only the symbols: `subsets step, usage subsets M::items`
+            // continues the list and then opens another clause, which a
+            // keyword here would have read as a declaration of `usage`
             && !matches!(
                 self.nth(2),
                 COLON | COLON_GT | COLON_GT_GT | COLON_COLON_GT | COLON_EQ | DEFAULT_KW
@@ -925,7 +1041,11 @@ impl Parser<'_> {
         self.start_node(kind);
         self.bump();
         self.type_ref();
-        while self.continues_ref_list() {
+        // `References = REFERENCES OwnedReferenceSubsetting` names one
+        // feature and no list: in `connect (a ::> w.a, b references w.b)`
+        // the comma ends the connector end, and taken as a second target
+        // it swallowed the next end's name
+        while kind != REFERENCES && self.continues_ref_list() {
             self.bump();
             self.type_ref();
         }
@@ -950,18 +1070,18 @@ impl Parser<'_> {
                      // it, not a payload named `CallGiveItems`: a declaration must say
                      // what the payload specializes -- or, in a flow, give it a value,
                      // which is `PayloadFeature = Identification ValuePart`.
-        let declared = matches!(
-            self.nth(1),
-            COLON | COLON_GT | COLON_GT_GT | TYPED_KW | DEFINED_KW
-        ) || (self.carries_payload
-            && matches!(self.nth(1), EQ | COLON_EQ | DEFAULT_KW));
+        let declared = self.nth(1).specializes_a_feature()
+            || (self.carries_payload && matches!(self.nth(1), EQ | COLON_EQ | DEFAULT_KW));
         if declared {
             self.opt_name();
             loop {
                 match self.current() {
                     COLON | TYPED_KW | DEFINED_KW => self.typing_part(),
-                    COLON_GT | SPECIALIZES_KW | SUBSETS_KW => self.relationship_part(SUBSETTING),
+                    COLON_GT | SPECIALIZES_KW | SUBSETS_KW | CROSSES_KW => {
+                        self.relationship_part(SUBSETTING)
+                    }
                     COLON_GT_GT | REDEFINES_KW => self.relationship_part(REDEFINITION),
+                    COLON_COLON_GT | REFERENCES_KW => self.relationship_part(REFERENCES),
                     L_BRACKET => self.multiplicity(),
                     EQ | COLON_EQ | DEFAULT_KW => self.value_part(),
                     _ => break,
@@ -1062,6 +1182,19 @@ impl Parser<'_> {
         self.finish_node();
     }
 
+    /// `( end, end, ... )`: what an n-ary connector connects.
+    ///
+    /// Read as a parameter list, with one difference: an end names a
+    /// feature it references, and declares a name of its own only with
+    /// `references` -- `ConnectorEnd = OwnedCrossMultiplicityMember? (
+    /// NAME REFERENCES )? OwnedReferenceSubsetting`. Read as a parameter,
+    /// `connector c (a, b, cc);` declared three features beside its ends.
+    fn connector_ends(&mut self) {
+        self.connector_ends = true;
+        self.param_list();
+        self.connector_ends = false;
+    }
+
     fn param(&mut self) {
         self.start_node(USAGE);
         while self.current().is_modifier_kw() {
@@ -1073,6 +1206,19 @@ impl Parser<'_> {
         if self.at(L_BRACKET) {
             // `[1] myCart` — multiplicity before the parameter name
             self.multiplicity();
+        }
+        // `connect ([1] w.a, [1] w.b)`: a connector end may write the
+        // feature it references as a chain, and a chain is never the name
+        // of a declaration -- `ConnectorEnd = OwnedCrossMultiplicityMember?
+        // ( NAME REFERENCES )? OwnedReferenceSubsetting`
+        let referenced = matches!(self.nth(1), DOT | COLON_COLON)
+            || (self.connector_ends && !matches!(self.nth(1), COLON_COLON_GT | REFERENCES_KW));
+        if self.at_name() && referenced {
+            self.start_node(REFERENCES);
+            self.type_ref();
+            self.finish_node();
+            self.finish_node();
+            return;
         }
         self.opt_short_name();
         self.opt_name();
@@ -1427,7 +1573,21 @@ impl Parser<'_> {
                     match self.current() {
                         L_PAREN => self.arg_list(),
                         L_BRACE => self.body_expr(),
-                        UNRESTRICTED_NAME | STRING => self.bump(),
+                        // `xs->reduce max` and `xs->reduce '+'` hand over the
+                        // function they name: `FunctionReferenceExpression =
+                        // FunctionReferenceMember`, a reference like any
+                        // other. Left outside the expression, `max` was
+                        // looked up by nothing.
+                        IDENT | UNRESTRICTED_NAME => {
+                            self.start_node(NAME_REF);
+                            self.bump();
+                            while self.at(COLON_COLON) && self.nth_is_name(1) {
+                                self.bump();
+                                self.bump();
+                            }
+                            self.finish_node();
+                        }
+                        STRING => self.bump(),
                         _ => {}
                     }
                     self.finish_node();
@@ -1533,7 +1693,10 @@ fn binary_bp(kind: SyntaxKind) -> Option<(u8, bool)> {
         XOR_KW => (4, false),
         AND_KW | AMP => (5, false),
         EQ_EQ | NOT_EQ | EQ_EQ_EQ | NOT_EQ_EQ => (6, false),
-        ISTYPE_KW | HASTYPE_KW | AS_KW | META_KW => (7, true),
+        // `ClassificationTestOperator = 'istype' | 'hastype' | '@'` and
+        // `MetaClassificationTestOperator = '@@'`: left out, `xs @ T` read
+        // as `xs` with a stray annotation after it, and `T` went unread
+        ISTYPE_KW | HASTYPE_KW | AS_KW | META_KW | AT | AT_AT => (7, true),
         LT | GT | LT_EQ | GT_EQ => (8, false),
         DOT_DOT => (9, false),
         PLUS | MINUS => (10, false),

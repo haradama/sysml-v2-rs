@@ -329,7 +329,8 @@ impl Formatter {
             } else {
                 // every line written here shares the margin, by the way
                 // the margin was arrived at
-                self.out.push_str(&line[margin.len()..]);
+                self.out
+                    .push_str(line.strip_prefix(margin.as_str()).unwrap_or(line));
             }
         }
         if closes {
@@ -620,6 +621,35 @@ mod tests {
             "package P {\n    part def V {\n        doc\n        /*\n        first\n          indented\n        */\n    }\n}\n";
         assert_eq!(fmt(input), expected);
         assert_eq!(fmt(expected), expected);
+    }
+
+    /// What the formatter takes off the lines of a body is what the
+    /// model takes off them, so the doc says the same thing afterwards;
+    /// a margin of bytes rather than of characters panicked besides.
+    #[test]
+    fn a_body_says_after_formatting_what_it_said_before() {
+        for body in [
+            "/* first\n\u{3000}wide\n  two\n    */",
+            "/*\n  two\n\u{3000}wide\n*/",
+            "/* top\n\tA\n      B\n  */",
+            "/* x\n\t\tA\n    B\n\t\t  C */",
+            "/* x\n\u{a0}\u{a0}A\n\u{a0} B */",
+        ] {
+            let input = format!("part def A {{\n  doc {body}\n}}\n");
+            let said = |text: &str| {
+                let parse = crate::parse(text);
+                let token = parse
+                    .syntax()
+                    .descendants_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == crate::SyntaxKind::COMMENT_BODY)
+                    .unwrap();
+                crate::comment_text(token.text())
+            };
+            let formatted = fmt(&input);
+            assert_eq!(said(&formatted), said(&input), "{input:?}");
+            assert_eq!(fmt(&formatted), formatted, "{input:?}");
+        }
     }
 
     #[test]

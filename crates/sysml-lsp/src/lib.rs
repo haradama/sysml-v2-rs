@@ -1013,25 +1013,19 @@ struct DiagramResult {
 
 /// Apply one LSP content change (ranged or whole-document) to `text`.
 fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentChangeEvent) {
-    match change.range {
-        Some(range) => {
-            let index = LineIndex::new(text);
-            let (Some(start), Some(end)) = (
-                index.offset(text, range.start),
-                index.offset(text, range.end),
-            ) else {
-                *text = change.text;
-                return;
-            };
-            let (start, end) = (usize::from(start), usize::from(end));
-            if start <= end && end <= text.len() {
-                text.replace_range(start..end, &change.text);
-            } else {
-                *text = change.text;
-            }
-        }
-        None => *text = change.text,
-    }
+    let Some(range) = change.range else {
+        *text = change.text;
+        return;
+    };
+    // A position past the last line is the end of the document, and a
+    // range written back to front is the same range, as the reference
+    // `TextDocument` reads both. Taken as a whole-document change
+    // instead, one edit that landed past the end left the buffer
+    // holding nothing but the text that edit inserted.
+    let index = LineIndex::new(text);
+    let at = |position| index.offset(text, position).map_or(text.len(), usize::from);
+    let (start, end) = (at(range.start), at(range.end));
+    text.replace_range(start.min(end)..start.max(end), &change.text);
 }
 
 /// Whether the name written at `at` in `file` is looked up in the scope
@@ -1122,6 +1116,31 @@ fn error_response(id: RequestId, err: impl std::fmt::Display) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_edit_past_the_end_lands_at_the_end_rather_than_replacing_everything() {
+        let edit = |text: &str, from: (u32, u32), to: (u32, u32), with: &str| {
+            let mut text = text.to_string();
+            apply_change(
+                &mut text,
+                lsp_types::TextDocumentContentChangeEvent {
+                    range: Some(lsp_types::Range::new(
+                        lsp_types::Position::new(from.0, from.1),
+                        lsp_types::Position::new(to.0, to.1),
+                    )),
+                    range_length: None,
+                    text: with.to_string(),
+                },
+            );
+            text
+        };
+        let text = "part a;\npart b;\n";
+        assert_eq!(edit(text, (5, 0), (5, 0), "!!"), "part a;\npart b;\n!!");
+        assert_eq!(edit(text, (1, 0), (9, 0), ""), "part a;\n");
+        // back to front is the same range
+        assert_eq!(edit(text, (0, 6), (0, 5), "X"), "part X;\npart b;\n");
+        assert_eq!(edit(text, (0, 5), (0, 6), "c"), "part c;\npart b;\n");
+    }
 
     /// The sequence the specification describes, and what a message
     /// that does not belong to the phase it arrives in does.

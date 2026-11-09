@@ -28,15 +28,13 @@ fn lex_note(lex: &mut logos::Lexer<'_, Tok>) -> Note {
             }
         }
     } else {
-        let mut i = rem.find('\n').unwrap_or(rem.len());
-        // On a CRLF file the `\r` belongs to the line ending, not to the
-        // note. Keeping it inside the token carries it through the
-        // formatter, which writes `\n` for every break it makes itself and
-        // would otherwise leave the file with two kinds of line ending.
-        if rem[..i].ends_with('\r') {
-            i -= 1;
-        }
-        lex.bump(i);
+        // A `\r` ends the line as well, whether a `\n` follows it or not:
+        // a lone `\r` is a line break to every editor, and a note that ran
+        // on past one swallowed the declaration written on the next line.
+        // On a CRLF file it belongs to the line ending, not to the note;
+        // kept inside the token it was carried through the formatter,
+        // which writes `\n` for every break it makes itself.
+        lex.bump(rem.find(['\n', '\r']).unwrap_or(rem.len()));
         Note::Line
     }
 }
@@ -57,7 +55,8 @@ fn lex_comment_body(lex: &mut logos::Lexer<'_, Tok>) -> bool {
 
 #[derive(Logos, Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Tok {
-    #[regex(r"[ \t\r\n]+")]
+    // `WHITESPACE = ' ' | '\t' | '\f' | LINE_TERMINATOR`
+    #[regex(r"[ \t\x0C\r\n]+")]
     // A byte order mark is what an editor on Windows puts in front of a
     // file it saved as UTF-8; it says how to read the bytes and nothing
     // about the model, so the grammar may skip it as it skips a space.
@@ -367,8 +366,12 @@ mod tests {
             vec![LINE_NOTE, WHITESPACE, IDENT]
         );
         assert_eq!(&text[tokens[0].range.clone()], "// note");
-        // a lone `\r` is not a line ending, so it stays in the note
-        assert_eq!(&lex("// note\rx").0[0].range, &(0..9));
+        // a lone `\r` ends the line too: kept in the note, it took the
+        // declaration on the next line in with it
+        let (tokens, _) = lex("// note\rpart x : Nope;");
+        assert_eq!(&tokens[0].range, &(0..7));
+        assert_eq!(tokens[1].kind, WHITESPACE);
+        assert_eq!(tokens[2].kind, PART_KW);
     }
 
     #[test]

@@ -212,7 +212,7 @@ struct File {
 }
 
 /// How a namespace's members are being accessed during lookup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Access {
     /// From inside the namespace (or a nested scope): everything visible.
     Internal,
@@ -1907,7 +1907,7 @@ mod tests {
         let (ws, stats) = resolved_workspace(&[
             (
                 "lib.sysml",
-                "library package Lib {\n  attribute def Real;\n  metadata def SemanticMetadata { attribute baseType; }\n  part def CauseBase { attribute probability : Real; }\n  part causes : CauseBase;\n  metadata def cause :> SemanticMetadata {\n    :>> baseType = causes meta SysML::Usage;\n  }\n}",
+                "library package SysML {\n  metadata def Usage;\n}\nlibrary package Lib {\n  attribute def Real;\n  metadata def SemanticMetadata { attribute baseType; }\n  part def CauseBase { attribute probability : Real; }\n  part causes : CauseBase;\n  metadata def cause :> SemanticMetadata {\n    :>> baseType = causes meta SysML::Usage;\n  }\n}",
             ),
             (
                 "m.sysml",

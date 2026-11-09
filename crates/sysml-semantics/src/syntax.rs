@@ -314,6 +314,60 @@ pub(crate) fn invoked_through_arrow(node: &SyntaxNode) -> Option<String> {
         .map(|token| token.text().to_string())
 }
 
+/// What a control node asks, or hands over, written as expressions.
+///
+/// The condition of `if g then a;`, `while g { ... }` and `until g;`, the
+/// collection `for i in xs` walks, the guard of a transition (`if g`), the
+/// time or condition a trigger waits for (`accept when g`, `at t`, `after
+/// d`) and what `send x via p` sends. The model keeps several of these as
+/// the text they were written as, and their names were never looked up:
+/// `if nope { ... }` passed as a model with every name resolved.
+pub(crate) fn asked_expressions(node: &SyntaxNode) -> Vec<SyntaxNode> {
+    use SyntaxKind::*;
+    let is_expression = |kind| {
+        matches!(
+            kind,
+            LITERAL
+                | NAME_REF
+                | PAREN_EXPR
+                | UNARY_EXPR
+                | BINARY_EXPR
+                | COND_EXPR
+                | CALL_EXPR
+                | PATH_EXPR
+                | INDEX_EXPR
+                | METADATA_ACCESS_EXPR
+                | ARROW_EXPR
+        )
+    };
+    let mut asking = false;
+    // `in` asks only in a `for`: elsewhere it is a direction
+    let mut looping = false;
+    let mut asked = Vec::new();
+    for part in node.children_with_tokens() {
+        if let Some(token) = part.as_token() {
+            match token.kind() {
+                kind if kind.is_trivia() => {}
+                FOR_KW => looping = true,
+                IN_KW => asking = looping,
+                IF_KW | WHILE_KW | UNTIL_KW | WHEN_KW | AT_KW | AFTER_KW | SEND_KW => {
+                    asking = true;
+                }
+                _ => asking = false,
+            }
+            continue;
+        }
+        let child = part.into_node().expect("checked for a token above");
+        // a transition's `if g` is one node, guard and keyword both
+        if (asking || child.kind() == COND_EXPR) && is_expression(child.kind()) {
+            asked.push(child);
+        } else {
+            asking = false;
+        }
+    }
+    asked
+}
+
 /// The name an invocation writes in front of its arguments.
 ///
 /// `new Foo(1)` writes `new` in front of the name, and what it
@@ -472,6 +526,27 @@ pub(crate) fn adapter_target_segments(node: &SyntaxNode) -> Option<Vec<String>> 
 /// The operand a `perform`/`exhibit`/`assert`/... usage adapts, when it
 /// names one rather than declaring it.
 pub(crate) fn adapter_target(node: &SyntaxNode) -> Option<SyntaxNode> {
+    // `entry a;`, `do a;` and `exit a;` perform the action they name:
+    // `StatePerformActionUsage = PerformActionUsageDeclaration ...`. Only
+    // a name right after the keyword is that action -- `do send x via p`
+    // sends `x` rather than performing it.
+    if node.kind() == SyntaxKind::CONTROL_STMT {
+        let mut parts = node
+            .children_with_tokens()
+            .filter(|part| !part.kind().is_trivia());
+        let performs = parts.next().is_some_and(|lead| {
+            matches!(
+                lead.kind(),
+                SyntaxKind::ENTRY_KW | SyntaxKind::DO_KW | SyntaxKind::EXIT_KW
+            )
+        });
+        let operand = parts
+            .next()
+            .and_then(|part| part.into_node())
+            .filter(|_| performs)
+            .filter(|it| matches!(it.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))?;
+        return (!operand_segments(&operand).is_empty()).then_some(operand);
+    }
     if node.kind() != SyntaxKind::USAGE {
         return None;
     }
@@ -493,6 +568,7 @@ pub(crate) fn adapter_target(node: &SyntaxNode) -> Option<SyntaxNode> {
                     | SyntaxKind::VERIFY_KW
                     | SyntaxKind::FRAME_KW
                     | SyntaxKind::RENDER_KW
+                    | SyntaxKind::VARIANT_KW
                     | SyntaxKind::NOT_KW
             )
         });

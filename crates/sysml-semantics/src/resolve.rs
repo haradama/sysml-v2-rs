@@ -218,6 +218,30 @@ impl Workspace {
                 self.resolve_connector_ends(id, &node, &mut stats);
                 self.resolve_trigger_type(id, &node, &mut stats);
                 self.resolve_action_arguments(id, &node, &mut stats);
+                // `do senseTemperature { ... }` performs what it names
+                self.resolve_adapted(id, &node, &mut stats);
+                // what it asks and what it hands over -- `if g then a;`,
+                // `send x via p`, and the value `assign v := x` gives
+                self.resolve_asked(id, &node, &mut stats);
+                // `loop { ... } until done;` parses as two statements, and
+                // the builder folds the second into the loop it closes
+                if let Some(until) = node.next_sibling().filter(|next| {
+                    next.kind() == SyntaxKind::CONTROL_STMT
+                        && next
+                            .first_token()
+                            .is_some_and(|it| it.kind() == SyntaxKind::UNTIL_KW)
+                }) {
+                    self.resolve_asked(id, &until, &mut stats);
+                }
+                let inside = self.inside(id);
+                for clause in node
+                    .children()
+                    .filter(|child| child.kind() == SyntaxKind::VALUE)
+                {
+                    for written in clause.children() {
+                        self.resolve_expression(inside, &written, &mut stats);
+                    }
+                }
                 continue;
             }
             // `comment about A, B /* ... */` and `metadata m : M about
@@ -256,6 +280,13 @@ impl Workspace {
             // pointing at a package that is no longer there.
             if matches!(node.kind(), SyntaxKind::IMPORT | SyntaxKind::EXPOSE) {
                 self.record_import(id, &node, &mut stats);
+                // `import Q::*[@Safety];` names `Safety` as much as the
+                // statement form `filter @Safety;` does, which is an
+                // element whose condition is resolved like any other; the
+                // bracketed one is not, and `[@Nope]` went unread
+                for filter in node.children().filter(|it| it.kind() == SyntaxKind::FILTER) {
+                    self.resolve_filter_names(id, &filter, &mut stats);
+                }
                 continue;
             }
             // `alias Q for P;` is a membership whose member is the
@@ -300,6 +331,8 @@ impl Workspace {
             // parses as a usage rather than as a control statement --
             // and what it assigns is a name to look up either way
             self.resolve_action_arguments(id, &node, &mut stats);
+            // `action aLoop while c { ... }` names itself and asks the same
+            self.resolve_asked(id, &node, &mut stats);
             // `attribute pin : PinNumber = ledPinNumber;` -- the value is
             // an expression like any other, and the name in it is a
             // reference like any other. `binding a = b;` writes the same
@@ -353,7 +386,7 @@ impl Workspace {
                     match found {
                         Some(target) => {
                             stats.resolved += 1;
-                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                            let file = self.file_of(id);
                             self.record(id, file, t.range, t.name_range, &t.at, target);
                             // `chains source.target` names the steps of
                             // one chain, and each step is a chaining of
@@ -401,45 +434,13 @@ impl Workspace {
                             self.reify(id, is_definition, part_kind, reached);
                         }
                         None => {
-                            let file = self.elem_file.get(&id).copied().unwrap_or(0);
+                            let file = self.file_of(id);
                             self.record_miss(file, t.range, &t.segments, &mut stats);
                         }
                     }
                 }
             }
-            // `perform w;`, `exhibit s;`, `assert c;`, `include u;` -- the reference
-            // is what the usage is *about*, and without it the model says only that
-            // something is performed.
-            //
-            // A name that does not resolve is left alone rather than reported:
-            // `satisfy requirement viewpointConformance by that;` writes the same
-            // shape and *declares* that name, so a finding here would be false.
-            //
-            // `satisfy r by p;` and `verify r;` have resolvers of their own that
-            // record the same operand; recording it here too would give a rename two
-            // edits over one name.
-            let handled = self
-                .model
-                .kind(id)
-                .is_a(ElementKind::SatisfyRequirementUsage)
-                || self.model.member_role(id) == Some(Role::Verify);
-            if let Some(operand) = adapter_target(&node).filter(|_| !handled) {
-                if let Some(target) = self.resolve_from(id, &operand_segments(&operand)) {
-                    stats.resolved += 1;
-                    let file = self.elem_file.get(&id).copied().unwrap_or(0);
-                    let range = operand.text_range();
-                    let name_range = last_name_range(&operand);
-                    self.record(
-                        id,
-                        file,
-                        range,
-                        name_range,
-                        &operand_ranges(&operand),
-                        target,
-                    );
-                    self.reify(id, false, SyntaxKind::REFERENCES, target);
-                }
-            }
+            self.resolve_adapted(id, &node, &mut stats);
             // `connection c : L connect a to b;` is written as a usage, so
             // its ends arrive here rather than through a connector
             // statement -- and so is KerML's `connector c from a to b;`,
@@ -458,7 +459,7 @@ impl Workspace {
                 self.resolve_verification(id, &node, &mut stats);
             }
         }
-        self.resolve_expression_tree(ids);
+        self.resolve_expression_tree(ids, &mut stats);
         self.imply_for(ids);
         stats.lookups = self.lookups - began;
         stats
