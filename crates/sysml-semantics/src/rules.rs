@@ -623,11 +623,19 @@ impl Workspace {
                     .push((rule.name, refused.clone().expect("refused, or it parsed")));
                 continue;
             };
-            let about: Vec<(ElementId, Val)> = by_kind
+            // in the order the model holds them: gathered from a hash map,
+            // the same model reported its violations in a different order
+            // from one run to the next
+            let mut about: Vec<(&str, ElementId, Val)> = by_kind
                 .iter()
                 .filter(|(kind, _)| kind.is_a(rule.metaclass))
-                .flat_map(|(_, them)| them.iter().cloned())
+                .flat_map(|(kind, them)| {
+                    them.iter()
+                        .map(|(elem, it)| (kind.name(), *elem, it.clone()))
+                })
                 .collect();
+            about.sort_by_key(|&(kind, elem, _)| (elem, kind));
+            let about = about.into_iter().map(|(_, elem, it)| (elem, it));
             let mut asked = false;
             let mut unknown = None;
             for (elem, it) in about {
@@ -1443,7 +1451,7 @@ impl Scope<'_> {
                 }
                 memberships.push((up, member));
             }
-            for member in self.ws.imported_members(up) {
+            for member in self.ws.inheritable_imported_members(up) {
                 memberships.push((up, member));
             }
             queue.extend(self.ws.supertypes(up));

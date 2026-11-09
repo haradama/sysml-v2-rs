@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 
-use sysml_model::{ElementId, ElementKind};
+use sysml_model::{ElementId, ElementKind, Vis};
 use sysml_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::syntax::*;
@@ -54,7 +54,40 @@ impl Workspace {
     pub fn imported_members(&mut self, ns: ElementId) -> Vec<ElementId> {
         let mut out = Vec::new();
         let mut seen: HashSet<ElementId> = self.model.owned(ns).iter().copied().collect();
+        let mut walked = HashSet::from([ns]);
+        self.imported_into(ns, Access::Internal, &mut out, &mut seen, &mut walked);
+        out
+    }
+    /// The members the imports of `ns` give a type that specializes it:
+    /// what its public and protected imports bring in, and not what it
+    /// imports privately (`nonPrivateMemberships`).
+    pub fn inheritable_imported_members(&mut self, ns: ElementId) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        let mut seen: HashSet<ElementId> = self.model.owned(ns).iter().copied().collect();
+        let mut walked = HashSet::from([ns]);
+        self.imported_into(ns, Access::Inherited, &mut out, &mut seen, &mut walked);
+        out
+    }
+    /// What the imports of `ns` that `access` can see bring in, appended
+    /// to `out`: all of them from inside `ns`, its public ones from
+    /// outside, which is what `visibleMemberships` re-exports.
+    fn imported_into(
+        &mut self,
+        ns: ElementId,
+        access: Access,
+        out: &mut Vec<ElementId>,
+        seen: &mut HashSet<ElementId>,
+        walked: &mut HashSet<ElementId>,
+    ) {
         for import in self.imports_of(ns) {
+            let shown = match access {
+                Access::Internal => true,
+                Access::Inherited => self.visibility(import) != Vis::Private,
+                Access::External => self.visibility(import) == Vis::Public,
+            };
+            if !shown {
+                continue;
+            }
             let Some(imp) = self.import_target(import) else {
                 continue;
             };
@@ -70,23 +103,32 @@ impl Workspace {
                 out.push(imp.target);
             }
             if imp.scope.brings_its_members() {
-                self.visible_members_into(imp.target, access, &imp.filters, &mut out, &mut seen);
+                let mut from = vec![imp.target];
                 if imp.scope.reaches_below() {
-                    for below in self.nested_visible(imp.target, access) {
-                        if self.model.kind(below).is_a(ElementKind::Namespace) {
-                            self.visible_members_into(
-                                below,
-                                access,
-                                &imp.filters,
-                                &mut out,
-                                &mut seen,
-                            );
-                        }
+                    from.extend(
+                        self.nested_visible(imp.target, access)
+                            .into_iter()
+                            .filter(|&below| self.model.kind(below).is_a(ElementKind::Namespace)),
+                    );
+                }
+                for target in from {
+                    self.visible_members_into(target, access, &imp.filters, out, seen);
+                    // and what that namespace's own public imports bring
+                    // it: `import Q::*` reaches the `Engine` that `Q`
+                    // has through `public import Lib::*`, as a name
+                    // written there resolves to
+                    if walked.insert(target) {
+                        let mut further = Vec::new();
+                        self.imported_into(target, Access::External, &mut further, seen, walked);
+                        out.extend(
+                            further
+                                .into_iter()
+                                .filter(|&it| self.admits(it, &imp.filters)),
+                        );
                     }
                 }
             }
         }
-        out
     }
     /// Append the members of `ns` that `access` can see, each once.
     fn visible_members_into(

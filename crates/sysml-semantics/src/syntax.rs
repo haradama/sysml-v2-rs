@@ -474,6 +474,8 @@ pub(crate) fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Targ
                         | SyntaxKind::CONJUGATES_KW
                         | SyntaxKind::FEATURED_KW
                         | SyntaxKind::DISJOINT_KW
+                        // `feature h inverse of g;`
+                        | SyntaxKind::INVERSE_KW
                 )
                 .then_some((lead, part))
             }
@@ -688,6 +690,9 @@ pub(crate) fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
         // the very name being declared
         SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW => !is_definition,
         SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES => true,
+        // `feature outsideOfOccurrences ... inverse of outsideOfOccurrences`:
+        // a symmetric relation is its own inverse
+        SyntaxKind::INVERSE_KW => true,
         _ => false,
     }
 }
@@ -719,6 +724,16 @@ pub(crate) fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static s
         ),
         ElementKind::FeatureTyping => (SyntaxKind::TYPING_KW, "typedFeature", "type"),
         ElementKind::Disjoining => (SyntaxKind::DISJOINT_KW, "typeDisjoined", "disjoiningType"),
+        // `inverting i inverse a of b;` -- the feature after `inverse` is
+        // inverted, the one after `of` inverts it
+        ElementKind::FeatureInverting => (
+            SyntaxKind::INVERSE_KW,
+            "featureInverted",
+            "invertingFeature",
+        ),
+        // `featuring f of g by T;` -- `g` is featured by `T`; nothing read
+        // either name, and `by Nope` went unreported
+        ElementKind::TypeFeaturing => (SyntaxKind::OF_KW, "featureOfType", "featuringType"),
         _ => return None,
     };
     Some(ends)

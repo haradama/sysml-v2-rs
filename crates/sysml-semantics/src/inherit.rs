@@ -186,12 +186,17 @@ impl Workspace {
                 push_supertype(&mut supers, elem, target);
             }
         }
-        // A feature can redeclare an inherited one by naming it the
+        // A parameter can redeclare an inherited one by naming it the
         // same: `in p { ... }` inside a specialization stands for the
-        // `p` its supertype declares, and inherits what that one has.
-        // Only where nothing else was written about it -- an explicit
-        // typing or subsetting is the whole story.
-        if supers.is_empty() {
+        // `p` its supertype declares, and inherits what that one has --
+        // the standard implies that redefinition for the parameters of a
+        // behaviour. Only where nothing else was written about it -- an
+        // explicit typing or subsetting is the whole story -- and only for
+        // a parameter: a `part m;` that happens to share an inherited
+        // name redefines nothing, and reading it as though it did walked
+        // a specialization the model does not have.
+        let is_parameter = self.model.maybe(elem, "direction").is_some();
+        if supers.is_empty() && is_parameter {
             if let (Some(name), Some(owner)) = (
                 self.model.name(elem).map(String::from),
                 self.model.owner(elem),

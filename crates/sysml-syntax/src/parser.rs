@@ -876,7 +876,14 @@ impl Parser<'_> {
                 // KerML also writes `binding instant[n] of [0..1] a = ...`,
                 // where what follows `of` is a multiplicity rather than the
                 // payload's type
-                OF_KW if self.nth_is_name(1) => self.payload_part(),
+                // `inverting i inverse a of b;` and `featuring f of g by T;`
+                // relate the feature after `of`, and carry no payload
+                OF_KW
+                    if self.nth_is_name(1)
+                        && !matches!(led, INVERTING_KW | INVERSE_KW | FEATURING_KW) =>
+                {
+                    self.payload_part()
+                }
                 // `accept S;` waits for an `S`: `PayloadFeature = ... |
                 // OwnedFeatureTyping OwnedMultiplicity?`. A lone name is the
                 // type, since naming the payload takes the `:` (or a value)

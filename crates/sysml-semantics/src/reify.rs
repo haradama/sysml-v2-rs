@@ -136,6 +136,13 @@ impl Workspace {
             // after `from` was looked at by nothing: a typo in one was a
             // model this toolchain called sound.
             SyntaxKind::DISJOINT_KW => (ElementKind::Disjoining, "typeDisjoined", "disjoiningType"),
+            // `feature h inverse of g;` -- what `h` is the inverse of, which
+            // fell through to the typing below and was read as `h : g`
+            SyntaxKind::INVERSE_KW => (
+                ElementKind::FeatureInverting,
+                "featureInverted",
+                "invertingFeature",
+            ),
             // A cross subsetting is a subsetting, so the end that
             // declares it is its `subsettingFeature` like any other;
             // what it crosses to is the narrower name. Its
@@ -271,7 +278,8 @@ impl Workspace {
             // B;` names the relationship first, which leaves `disjoint
             // A` a part of its own -- so the part is the end this one
             // relationship reads as its source rather than its target.
-            let prop = match part == SyntaxKind::DISJOINT_KW {
+            // `inverting i inverse a of b;` is read the same way
+            let prop = match matches!(part, SyntaxKind::DISJOINT_KW | SyntaxKind::INVERSE_KW) {
                 true => source_prop,
                 false => target_prop,
             };
@@ -292,8 +300,14 @@ impl Workspace {
         }
         // and the end after `from` has no part of its own in either
         // shape: only the keyword standing before it says where it is.
-        if self.model.kind(id) == ElementKind::Disjoining {
-            if let Some(operand) = operand_after(node, SyntaxKind::FROM_KW) {
+        let after = match self.model.kind(id) {
+            ElementKind::Disjoining => Some(SyntaxKind::FROM_KW),
+            ElementKind::FeatureInverting => Some(SyntaxKind::OF_KW),
+            ElementKind::TypeFeaturing => Some(SyntaxKind::BY_KW),
+            _ => None,
+        };
+        if let Some(keyword) = after {
+            if let Some(operand) = operand_after(node, keyword) {
                 self.resolve_operand_into(id, &operand, target_prop, stats, chains);
             }
         }

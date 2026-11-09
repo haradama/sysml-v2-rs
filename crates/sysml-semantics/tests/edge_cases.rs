@@ -3978,3 +3978,86 @@ fn an_nary_connector_lists_ends_and_declares_nothing_else() {
         );
     }
 }
+
+/// `feature h inverse of g;`, `inverting i inverse h of g;` and
+/// `featuring f of g by T;` relate two features, and both ends are names
+/// that are looked up -- a symmetric relation being its own inverse.
+#[test]
+fn inverting_and_featuring_relate_what_they_name() {
+    let ws = ws(&[(
+        "k.kerml",
+        "package P { feature g; feature h inverse of g; feature s inverse of s; \
+         inverting i inverse h of g; classifier A; feature f; featuring of f by A; \
+         feature k inverse of nope1; featuring of f by nope2; }",
+    )]);
+    let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
+    assert_eq!(missing, ["nope1", "nope2"]);
+    let model = ws.model();
+    let name = |id: Option<&sysml_model::Value>| {
+        id.and_then(sysml_model::Value::as_id)
+            .and_then(|it| model.name(it))
+            .map(str::to_string)
+    };
+    let pairs =
+        |kind: ElementKind, from: &str, to: &str| -> Vec<(Option<String>, Option<String>)> {
+            model
+                .ids()
+                .filter(|&id| model.kind(id) == kind)
+                .map(|id| (name(model.get(id, from)), name(model.get(id, to))))
+                .collect()
+        };
+    let some = |a: &str, b: &str| (Some(a.to_string()), Some(b.to_string()));
+    let inverted = pairs(
+        ElementKind::FeatureInverting,
+        "featureInverted",
+        "invertingFeature",
+    );
+    assert!(inverted.contains(&some("h", "g")), "{inverted:?}");
+    assert!(inverted.contains(&some("s", "s")), "{inverted:?}");
+    let featured = pairs(ElementKind::TypeFeaturing, "featureOfType", "featuringType");
+    assert!(featured.contains(&some("f", "A")), "{featured:?}");
+}
+
+/// A package imports what a public import of the package it imports
+/// re-exports -- what a name written there resolves to, and what the
+/// model then says it imported.
+#[test]
+fn what_is_imported_includes_what_is_re_exported() {
+    let mut ws = ws(&[(
+        "m.sysml",
+        "package Lib { part def Engine; } package Q { public import Lib::*; part def Wheel; } \
+         package R { import Q::*; part e : Engine; } \
+         package S { private import Lib::*; } package T { import S::*; }",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let named = |ws: &mut Workspace, package: &str| -> Vec<String> {
+        let id = ws.named_globally(package).expect("declared");
+        let members = ws.imported_members(id);
+        members
+            .iter()
+            .filter_map(|&it| ws.model().name(it).map(str::to_string))
+            .collect()
+    };
+    assert_eq!(named(&mut ws, "R"), ["Wheel", "Engine"]);
+    // a private import re-exports nothing
+    assert_eq!(named(&mut ws, "T"), Vec::<String>::new());
+}
+
+/// Only a parameter stands for the one it shares a name with: the
+/// standard implies that redefinition for what a behaviour is handed. A
+/// `part m;` that happens to share an inherited name is a feature of its
+/// own, and reading it as the one it shadows walked a specialization the
+/// model does not have.
+#[test]
+fn sharing_a_name_redefines_only_a_parameter() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P { item def Fuel { attribute grade; } \
+         part def A { item m : Fuel; } part def B :> A { part m; } \
+         part b : B; attribute g = b.m.grade; \
+         action def X { in p : Fuel; } action def Y :> X { in p; } \
+         action y : Y { attribute h = p.grade; } }",
+    )]);
+    let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
+    assert_eq!(missing, ["b::m::grade"]);
+}
