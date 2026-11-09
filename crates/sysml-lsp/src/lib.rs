@@ -1012,6 +1012,17 @@ struct DiagramResult {
 }
 
 /// Apply one LSP content change (ranged or whole-document) to `text`.
+/// A name as a symbol list shows it: as it is, but `part def '';` as the
+/// `''` it was written as -- a client refuses a symbol named nothing, and
+/// VS Code drops the whole answer over one.
+pub(crate) fn shown_name(name: &str) -> String {
+    if name.is_empty() {
+        sysml_syntax::quote(name)
+    } else {
+        name.to_string()
+    }
+}
+
 fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentChangeEvent) {
     let Some(range) = change.range else {
         *text = change.text;
@@ -1072,7 +1083,7 @@ fn symbol_for(
     index: &LineIndex,
 ) -> Option<DocumentSymbol> {
     let model = ws.model();
-    let name = model.name(elem)?.to_string();
+    let name = shown_name(model.name(elem)?);
     let (full, name_range) = ws.element_ranges(elem)?;
     let children: Vec<DocumentSymbol> = model
         .owned(elem)
@@ -1116,6 +1127,12 @@ fn error_response(id: RequestId, err: impl std::fmt::Display) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_symbol_is_never_named_nothing() {
+        assert_eq!(shown_name(""), "''");
+        assert_eq!(shown_name("Wheel Unit"), "Wheel Unit");
+    }
 
     #[test]
     fn an_edit_past_the_end_lands_at_the_end_rather_than_replacing_everything() {

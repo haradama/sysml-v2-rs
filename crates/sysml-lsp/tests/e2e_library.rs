@@ -207,7 +207,9 @@ fn library_navigation_and_error_paths() {
     );
     assert_eq!(edits.as_array().unwrap().len(), 1);
 
-    // an out-of-bounds ranged change falls back to full replacement
+    // an out-of-bounds ranged change lands at the end of the document, as
+    // the reference `TextDocument` reads one: replacing the whole buffer
+    // with it threw away everything the editor still shows
     client.notify(
         lsp_types::notification::DidChangeTextDocument::METHOD,
         json!({
@@ -226,7 +228,14 @@ fn library_navigation_and_error_paths() {
         lsp_types::request::DocumentSymbolRequest::METHOD,
         json!({ "textDocument": { "uri": uri } }),
     );
-    assert_eq!(symbols[0]["name"], "Clean");
+    let names: Vec<&str> = symbols
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.first(), Some(&"App"), "{names:?}");
+    assert_eq!(names.last(), Some(&"Clean"), "{names:?}");
 
     // closing the document stops diagnostics for it
     client.notify(
@@ -251,15 +260,16 @@ fn library_navigation_and_error_paths() {
     assert_eq!(diags["uri"], bad_uri);
     assert!(!diags["diagnostics"].as_array().unwrap().is_empty());
 
-    // an inverted range falls back to replacing the whole document
+    // a range written back to front is the same range forwards, as the
+    // reference `TextDocument` reads it: here, the whole broken line
     client.notify(
         lsp_types::notification::DidChangeTextDocument::METHOD,
         json!({
             "textDocument": { "uri": bad_uri, "version": 2 },
             "contentChanges": [{
                 "range": {
-                    "start": { "line": 0, "character": 5 },
-                    "end": { "line": 0, "character": 1 }
+                    "start": { "line": 0, "character": 12 },
+                    "end": { "line": 0, "character": 0 }
                 },
                 "text": "package Fixed { }"
             }]

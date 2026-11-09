@@ -813,7 +813,7 @@ fn primitive_of(ws: &mut Workspace, ty: ElementId) -> Option<&'static str> {
         if !seen.insert(next) {
             continue;
         }
-        if let Some(found) = ws.model().name(next).and_then(sysml_model::primitive) {
+        if let Some(found) = sysml_model::library_primitive(ws.model(), next) {
             return Some(found);
         }
         queue.extend(ws.supertypes(next));

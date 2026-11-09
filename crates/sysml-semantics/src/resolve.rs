@@ -233,9 +233,12 @@ impl Workspace {
                 }) {
                     self.resolve_asked(id, &until, &mut stats);
                 }
+                // `bind a = b;` writes its second end the way a value is
+                // written, and the ends were read above
                 let inside = self.inside(id);
                 for clause in node
                     .children()
+                    .filter(|_| !binds_an_end(&node))
                     .filter(|child| child.kind() == SyntaxKind::VALUE)
                 {
                     for written in clause.children() {

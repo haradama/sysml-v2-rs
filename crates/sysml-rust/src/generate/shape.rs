@@ -55,7 +55,8 @@ impl<'a> Generator<'a> {
                 if let Some(counted) = crate::quantity::counted(self.model, def) {
                     writeln!(out, "/// {counted}").unwrap();
                 }
-                writeln!(out, "pub type {} = f64;", type_ident(spelled)).unwrap();
+                let scalar = scalar_type(self.model, def).unwrap_or("f64");
+                writeln!(out, "pub type {} = {scalar};", type_ident(spelled)).unwrap();
                 Ok(())
             }
             Shape::Flattened => {
@@ -84,20 +85,54 @@ impl<'a> Generator<'a> {
     ///
     /// `None` marks a specialization cycle, which cannot flatten.
     pub(crate) fn walk_fields(&self, def: ElementId) -> Option<Vec<Field>> {
+        self.walk_fields_and_clashes(def).map(|(fields, _)| fields)
+    }
+    /// The names two generals of `def` both hand down, neither of them
+    /// redefining the other's: only one of them can be the field, and
+    /// the first written is. The model is not well formed -- the names
+    /// of a namespace's members are to be distinguishable -- and a struct
+    /// that quietly lost one says nothing of it.
+    pub(crate) fn clashing_fields(&self, def: ElementId) -> Vec<String> {
+        self.walk_fields_and_clashes(def)
+            .map(|(_, clashes)| clashes)
+            .unwrap_or_default()
+    }
+    fn walk_fields_and_clashes(&self, def: ElementId) -> Option<(Vec<Field>, Vec<String>)> {
         if self.specializes_itself(def, &mut Vec::new(), &mut HashSet::new()) {
             return None;
         }
+        let mut clashes = Vec::new();
+        // which level each name was taken at
+        let mut taken_at: std::collections::HashMap<String, ElementId> = Default::default();
         let mut fields = Vec::new();
         let mut taken: HashSet<String> = HashSet::new();
-        let mut chain = vec![def];
+        // what a redefinition below has replaced, under whatever name: `y
+        // :>> x` stands in the place of `x`, which is no field beside it
+        let mut replaced: HashSet<ElementId> = HashSet::new();
+        // breadth first and in the order the generals are written, so the
+        // nearer and the first-written answer for a name: read as a stack,
+        // the last general written won a name two of them declare
+        let mut chain = std::collections::VecDeque::from([def]);
         let mut visited = HashSet::new();
-        while let Some(level) = chain.pop() {
+        while let Some(level) = chain.pop_front() {
             // diamond inheritance reaches one general along two paths;
             // it hands its fields down once, not twice
             if !visited.insert(level) {
                 continue;
             }
             for &child in self.model.owned(level) {
+                for &relationship in self.model.owned(child) {
+                    if self.model.kind(relationship) == ElementKind::Redefinition {
+                        replaced.extend(
+                            self.model
+                                .maybe(relationship, "redefinedFeature")
+                                .and_then(Value::as_id),
+                        );
+                    }
+                }
+                if replaced.contains(&child) {
+                    continue;
+                }
                 if !matches!(
                     self.model.kind(child),
                     ElementKind::AttributeUsage
@@ -114,12 +149,34 @@ impl<'a> Generator<'a> {
                     continue;
                 };
                 if taken.insert(field.name.clone()) {
+                    taken_at.insert(field.name.clone(), level);
                     fields.push(field);
+                } else if taken_at
+                    .get(&field.name)
+                    .is_some_and(|&nearer| !self.is_below(nearer, level))
+                    && !clashes.contains(&field.name)
+                {
+                    // shadowed by a level that does not specialize this one
+                    clashes.push(field.name.clone());
                 }
             }
             chain.extend(self.generals(level));
         }
-        Some(fields)
+        Some((fields, clashes))
+    }
+    /// Whether `low` specializes `high`, directly or not.
+    fn is_below(&self, low: ElementId, high: ElementId) -> bool {
+        let mut seen = HashSet::new();
+        let mut queue = vec![low];
+        while let Some(at) = queue.pop() {
+            if at == high {
+                return true;
+            }
+            if seen.insert(at) {
+                queue.extend(self.generals(at));
+            }
+        }
+        false
     }
     /// What `def` names as its immediate generals, off the reified
     /// subclassifications.
@@ -225,6 +282,12 @@ impl<'a> Generator<'a> {
         let mut notes: Vec<String> = Vec::new();
 
         let mut fields = self.fields(def).expect("settled as buildable");
+        for name in self.clashing_fields(def) {
+            notes.push(format!(
+                "`{name}` is handed down by two generals that do not redefine one \
+                 another; only the first written is a field"
+            ));
+        }
         for &child in model.owned(def) {
             if model.kind(child).is_a(ElementKind::Relationship)
                 || model.kind(child) == ElementKind::MetadataUsage
@@ -315,7 +378,15 @@ impl<'a> Generator<'a> {
         if let Some(doc) = documentation(model, def) {
             doc_comment(&doc, "", out);
         }
-        writeln!(out, "/// SysML: `part def {def_name}`").unwrap();
+        // what the model wrote, keyword and name, rather than `part def`
+        // and the Rust name for every definition that becomes a struct
+        writeln!(
+            out,
+            "/// SysML: `{} {}`",
+            declared_as(model.kind(def)),
+            sysml_syntax::quote(model.name(def).expect("collected named"))
+        )
+        .unwrap();
         for note in &notes {
             self.open(OpenKind::Skipped, def_name.clone(), None, note);
             writeln!(out, "// not generated: {note}").unwrap();
@@ -628,5 +699,26 @@ impl<'a> Generator<'a> {
             }
         }
         writeln!(out, "}}").unwrap();
+    }
+}
+
+/// The keywords a definition of `kind` is declared with: `PartDefinition`
+/// is `part def`, `UseCaseDefinition` `use case def`, and a KerML
+/// classifier its metaclass in lower case.
+fn declared_as(kind: ElementKind) -> String {
+    let name = kind.name();
+    let Some(defined) = name.strip_suffix("Definition") else {
+        return name.to_lowercase();
+    };
+    let mut words = String::new();
+    for ch in defined.chars() {
+        if ch.is_uppercase() && !words.is_empty() {
+            words.push(' ');
+        }
+        words.extend(ch.to_lowercase());
+    }
+    match words.as_str() {
+        "enumeration" => "enum def".to_string(),
+        _ => format!("{words} def"),
     }
 }

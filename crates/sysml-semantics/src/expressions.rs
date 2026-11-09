@@ -83,7 +83,21 @@ impl Workspace {
                 // `new Nope()` was a model that resolved
                 (None, None) => {
                     let (segments, range, counted) = match invoked_through_arrow(&node) {
-                        Some(named) => (vec![named], node.text_range(), false),
+                        // what `xs->f()` invokes is the name after the arrow
+                        Some(named) => {
+                            let written = node
+                                .children_with_tokens()
+                                .filter_map(|it| it.into_token())
+                                .skip_while(|it| it.kind() != SyntaxKind::ARROW)
+                                .find(|it| {
+                                    matches!(
+                                        it.kind(),
+                                        SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME
+                                    )
+                                })
+                                .map_or(node.text_range(), |it| it.text_range());
+                            (vec![named], written, false)
+                        }
                         None => match invoked_by_name(&node) {
                             Some(callee) => {
                                 // `F(x)` writes `F` where the names of the
@@ -98,12 +112,24 @@ impl Workspace {
                     };
                     let found = self.resolve_operand(elem, &segments);
                     if !segments.is_empty() && !counted {
+                        let file = self.file_of(elem);
                         match found {
-                            Some(_) => stats.resolved += 1,
-                            None => {
-                                let file = self.file_of(elem);
-                                self.record_miss(file, range, &segments, stats);
+                            // recorded as well as counted: a rename that
+                            // does not know `new A()` names `A` leaves it
+                            // naming nothing
+                            Some(target) => {
+                                stats.resolved += 1;
+                                let callee = invoked_by_name(&node)
+                                    .filter(|_| invoked_through_arrow(&node).is_none());
+                                let (name_range, at) = match &callee {
+                                    Some(callee) => {
+                                        (last_name_range(callee), operand_ranges(callee))
+                                    }
+                                    None => (range, vec![range]),
+                                };
+                                self.record(elem, file, range, name_range, &at, target);
                             }
+                            None => self.record_miss(file, range, &segments, stats),
                         }
                     }
                     found
@@ -219,7 +245,19 @@ impl Workspace {
         let found = self.resolve_operand(membership, &segments);
         if !counted {
             match found {
-                Some(_) => stats.resolved += 1,
+                Some(target) => {
+                    stats.resolved += 1;
+                    let file = self.file_of(membership);
+                    let at = operand_ranges(node);
+                    self.record(
+                        membership,
+                        file,
+                        node.text_range(),
+                        last_name_range(node),
+                        &at,
+                        target,
+                    );
+                }
                 // `xs istype Nope` asks about nothing
                 None => {
                     let file = self.file_of(membership);

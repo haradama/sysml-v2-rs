@@ -1768,7 +1768,7 @@ fn a_cycle_through_an_inherited_field_or_a_variant_payload_is_boxed() {
          \tpart def A :> Base;\n\
          \tpart def B { part a : A; }\n\
          \tpart def Tree { part root : Node; }\n\
-         \tvariation part def Node { variant leaf; variant branch : Tree; }\n\
+         \tvariation part def Node { variant part leaf; variant part branch : Tree; }\n\
          }\n",
     )
     .unwrap();
@@ -1785,9 +1785,9 @@ fn a_variation_starts_at_its_first_payload_less_variant() {
     let rust = generate(
         "package S {\n\
          \tprivate import ScalarValues::*;\n\
-         \tvariation part def Mode { variant off; variant on; }\n\
+         \tvariation part def Mode { variant part off; variant part on; }\n\
          \tpart def Payload { attribute p : Real; }\n\
-         \tvariation part def Loaded { variant full : Payload; }\n\
+         \tvariation part def Loaded { variant part full : Payload; }\n\
          \tpart def Holder { part m : Mode; }\n\
          \tpart def Carrier { part l : Loaded; }\n\
          }\n",
@@ -1904,7 +1904,7 @@ fn a_state_machine_spells_its_states_and_reserves_the_names_it_derives() {
          \tstate def 'Traffic Light' {\n\
          \t\tstate 'red light';\n\
          \t\tstate green;\n\
-         \t\tstate waiting { accept go then green; }\n\
+         \t\tstate waiting { accept go : ScalarValues::Boolean then green; }\n\
          \t\ttransition 'go-green' first 'red light' then green;\n\
          \t}\n\
          \tpart def Junction { state s : 'Traffic Light'; }\n\

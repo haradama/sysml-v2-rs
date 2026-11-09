@@ -231,7 +231,7 @@ fn identities(model: &Model) -> Identities {
 /// nothing, once an element on the way has no name to write.
 fn qualified_under(prefix: Option<&str>, model: &Model, id: ElementId) -> Option<String> {
     let prefix = prefix?;
-    let name = quoted(model.effective_name(id)?);
+    let name = sysml_syntax::quote(model.effective_name(id)?);
     Some(if prefix.is_empty() {
         name
     } else {
@@ -498,39 +498,6 @@ fn all_features(kind: ElementKind) -> Vec<&'static sysml_model::FeatureMeta> {
         .collect()
 }
 
-/// A name the way `qualifiedName` writes it: as it is when it is a basic
-/// name, quoted when it is not -- a keyword included, since `part`
-/// written plainly reads back as the keyword rather than as a name.
-/// Inside the quotes a backslash and a quote are escaped again, undoing
-/// what [`sysml_syntax::unquote`] did when the name was read.
-fn quoted(name: &str) -> String {
-    let basic = !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && !name.starts_with(|c: char| c.is_ascii_digit())
-        && sysml_syntax::SyntaxKind::from_keyword(name).is_none();
-    if basic {
-        return name.to_string();
-    }
-    let mut out = String::with_capacity(name.len() + 2);
-    out.push('\'');
-    for ch in name.chars() {
-        match ch {
-            '\\' | '\'' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('\'');
-    out
-}
-
 /// What an annotating element's `about` named: the target of each
 /// `Annotation` it owns, in the order they were written. A comment that
 /// named nothing owns none and is about the element it sits on.
@@ -627,6 +594,39 @@ impl Writing<'_> {
 
     /// A membership reference for one element a namespace reaches: its
     /// bridge where ownership is bridged, nothing where it is not.
+    /// The element a membership written as `uuid` holds: the one it
+    /// bridges to, or what an alias stands for, or -- where `uuid` is an
+    /// element rather than a membership -- that element.
+    fn member_of(&self, uuid: &str) -> Option<Json> {
+        if let Some((&held, _)) = self
+            .bridge_uuids
+            .iter()
+            .find(|(_, it)| it.to_string() == uuid)
+        {
+            return Some(self.reference(&held));
+        }
+        let (&named, _) = self.uuids.iter().find(|(_, it)| it.to_string() == uuid)?;
+        let held = match self.model.kind(named) == ElementKind::Membership {
+            true => self
+                .model
+                .get(named, "memberElement")
+                .and_then(Value::as_id)?,
+            false => named,
+        };
+        Some(self.reference(&held))
+    }
+
+    /// What an import imports: what the resolver said, or -- for a model
+    /// read from a document rather than resolved from text -- what the
+    /// document said, which the model keeps.
+    fn import_target(&self, id: ElementId) -> Option<ElementId> {
+        self.extras.import_targets.get(&id).copied().or_else(|| {
+            ["importedMembership", "importedNamespace"]
+                .iter()
+                .find_map(|prop| self.model.get(id, prop).and_then(Value::as_id))
+        })
+    }
+
     fn membership_of(&self, id: ElementId) -> Option<Json> {
         bridged(self.model, id).then(|| self.membership(id))
     }
@@ -668,6 +668,23 @@ impl Writing<'_> {
                 object.insert("@type".into(), self.model.kind(id).name().into());
                 object.insert("@id".into(), self.uuids[&id].to_string().into());
                 for meta in &self.features[&self.model.kind(id)] {
+                    // What an import imports is a membership, which a model
+                    // read from a document keeps as the element it holds:
+                    // written as it is stored, `importedMembership` named
+                    // the element where the document had named its
+                    // membership. The writer knows the way back.
+                    let imports = self.model.kind(id).is_a(ElementKind::Import)
+                        && matches!(
+                            meta.name,
+                            "importedMembership" | "importedNamespace" | "importedElement"
+                        );
+                    if imports {
+                        let value = self
+                            .derived(id, meta.name)
+                            .unwrap_or_else(|| default_for(meta));
+                        object.insert(meta.name.into(), value);
+                        continue;
+                    }
                     let value = match stored.get(meta.name) {
                         Some(value) => match value {
                             Value::Bool(b) => Json::from(*b),
@@ -699,6 +716,23 @@ impl Writing<'_> {
                         .map(|it| self.reference(it))
                         .collect();
                     fill_ends(&mut object, self.model.kind(id), owner, related);
+                    // What an import imports is read off the end it was
+                    // written with, once the ends are settled: "for a
+                    // MembershipImport, the memberElement of the
+                    // importedMembership; for a NamespaceImport, the
+                    // importedNamespace". Worked out apart from the ends,
+                    // the two could disagree, and a document read back
+                    // came out different from the one written.
+                    if self.model.kind(id).is_a(ElementKind::Import) {
+                        let element = match self.model.kind(id).is_a(ElementKind::NamespaceImport) {
+                            true => object.get("importedNamespace").cloned(),
+                            false => object
+                                .get("importedMembership")
+                                .and_then(|it| it["@id"].as_str())
+                                .and_then(|uuid| self.member_of(uuid)),
+                        };
+                        object.insert("importedElement".into(), element.unwrap_or(Json::Null));
+                    }
                 }
                 Json::Object(object)
             })
@@ -953,21 +987,23 @@ impl Writing<'_> {
                 }
                 Some(self.references(&members))
             }
+            // an alias is a membership of its own, and is what is imported
             "importedMembership" if kind == ElementKind::MembershipImport => Some(
-                self.extras
-                    .import_targets
-                    .get(&id)
-                    .and_then(|&target| self.membership_of(target))
+                self.import_target(id)
+                    .and_then(
+                        |target| match self.model.kind(target) == ElementKind::Membership {
+                            true => Some(self.reference(&target)),
+                            false => self.membership_of(target),
+                        },
+                    )
                     .unwrap_or(Json::Null),
             ),
             "importedMembership" => {
                 Some(self.memberships(self.extras.imported.get(&id).map_or(&[][..], Vec::as_slice)))
             }
             "importedNamespace" if kind == ElementKind::NamespaceImport => Some(
-                self.extras
-                    .import_targets
-                    .get(&id)
-                    .map_or(Json::Null, |it| self.reference(it)),
+                self.import_target(id)
+                    .map_or(Json::Null, |it| self.reference(&it)),
             ),
             "isLibraryElement" => Some(self.extras.library.contains(&id).into()),
             // an import says how far what it brings in travels; written
@@ -1300,7 +1336,10 @@ fn default_for(meta: &sysml_model::FeatureMeta) -> Json {
         return Json::Array(Vec::new());
     }
     match meta.ty {
-        FeatureType::Data(PrimitiveType::Boolean) => Json::from(false),
+        // what the specification says the flag is where a model says
+        // nothing: `isUnique` is true unless `nonunique` was written, and
+        // writing `false` for every flag said every feature was nonunique
+        FeatureType::Data(PrimitiveType::Boolean) => Json::from(meta.default.unwrap_or(false)),
         _ => Json::Null,
     }
 }
@@ -1330,12 +1369,10 @@ const ENDS: [(ElementKind, &[&str], &[&str]); 15] = [
     (
         ElementKind::Import,
         &["importOwningNamespace", "source"],
-        &[
-            "importedMembership",
-            "importedNamespace",
-            "importedElement",
-            "target",
-        ],
+        // `importedElement` is not on the chain: it is derived as the
+        // `memberElement` of what is imported, and copied from the end
+        // it held the membership rather than the element
+        &["importedMembership", "importedNamespace", "target"],
     ),
     (
         ElementKind::Specialization,
@@ -1615,6 +1652,19 @@ fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), Impor
             .copied()
             .ok_or_else(|| ImportError::UnknownReference(uuid.to_string()))
     };
+    // the element a membership that folded into an edge holds
+    let member_of_bridge = |value: &Json| -> Result<Option<ElementId>, ImportError> {
+        let uuid = value["@id"].as_str().unwrap_or_default();
+        let Some(source) = bridges.get(uuid) else {
+            return Ok(None);
+        };
+        let bridge = source.read(0)?;
+        let held = bridge["memberElement"]
+            .as_object()
+            .map(|_| &bridge["memberElement"])
+            .or_else(|| bridge["ownedRelatedElement"].as_array()?.first());
+        Ok(held.and_then(|it| resolve(it).ok()))
+    };
     // what a membership reference brings in: the elements on its far
     // side, each keeping what the membership said about it
     let through = |model: &mut Model, value: &Json| -> Result<Vec<ElementId>, ImportError> {
@@ -1705,14 +1755,18 @@ fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), Impor
                     }
                     let converted = match convert_value(meta.ty, value, &resolve) {
                         // an import may name the membership an element was
-                        // reached through, which folded into an edge here
+                        // reached through, which folded into an edge here:
+                        // what it imports is the element on the far side,
+                        // kept so that writing the model out again names
+                        // the same membership -- dropped, every import of
+                        // a member came back importing nothing
                         Err(ImportError::UnknownReference(_))
                             if matches!(
                                 key.as_str(),
                                 "importedMembership" | "importedNamespace"
                             ) =>
                         {
-                            None
+                            member_of_bridge(value)?.map(Value::Ref)
                         }
                         other => other?,
                     };
@@ -2760,19 +2814,23 @@ mod tests {
 
     #[test]
     fn a_name_that_is_not_basic_is_quoted() {
-        assert_eq!(quoted("mass"), "mass");
-        assert_eq!(quoted("wheel 1"), "'wheel 1'");
-        assert_eq!(quoted("1st"), "'1st'");
-        assert_eq!(quoted(""), "''");
+        assert_eq!(sysml_syntax::quote("mass"), "mass");
+        assert_eq!(sysml_syntax::quote("wheel 1"), "'wheel 1'");
+        assert_eq!(sysml_syntax::quote("1st"), "'1st'");
+        assert_eq!(sysml_syntax::quote(""), "''");
         // a keyword written plainly would read back as the keyword
-        assert_eq!(quoted("part"), "'part'");
-        assert_eq!(quoted("it's"), "'it\\'s'");
+        assert_eq!(sysml_syntax::quote("part"), "'part'");
+        assert_eq!(sysml_syntax::quote("it's"), "'it\\'s'");
         // whatever the quotes must not end early is escaped again, so
         // that unquoting the result gives the name back
         for name in [
             "it's", "a\\b", "a\nb", "a\rb", "a\tb", "a\u{8}b", "a\u{c}b", "wheel 1",
         ] {
-            assert_eq!(sysml_syntax::unquote(&quoted(name)), name, "{name:?}");
+            assert_eq!(
+                sysml_syntax::unquote(&sysml_syntax::quote(name)),
+                name,
+                "{name:?}"
+            );
         }
     }
 

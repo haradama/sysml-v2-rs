@@ -116,7 +116,7 @@ impl BlinkingState {
 }
 
 /// A half-period has passed; how long it took is the payload.
-/// SysML: `part def Tick`
+/// SysML: `item def Tick`
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Tick {
     pub elapsed: u16,

@@ -1057,12 +1057,14 @@ impl Workspace {
                     elsewhere: elsewhere[at]
                         .iter()
                         .take(MOST)
-                        .map(|&id| self.qualified_name_of(id))
+                        .map(|&id| self.qualified_name_written(id))
                         .collect(),
+                    // what an editor puts in place of the misspelt name,
+                    // so spelled the way it has to be written
                     near: ranked
                         .iter()
                         .take(MOST)
-                        .map(|&(_, _, _, id)| self.qualified_name_of(id))
+                        .map(|&(_, _, _, id)| self.qualified_name_written(id))
                         .collect(),
                 }
             })
@@ -1304,6 +1306,26 @@ impl Workspace {
         }
         segments.reverse();
         segments.join("::")
+    }
+
+    /// The qualified name of `elem` as it would have to be written: each
+    /// segment quoted where it is not a basic name, so `'My Pkg'::'Wheel
+    /// Unit'` rather than [`qualified_name_of`](Self::qualified_name_of)'s
+    /// `My Pkg::Wheel Unit`. What is put back into a file, or handed to a
+    /// program that will hand it back, is this: the plain one does not
+    /// parse, and two different names can read the same in it.
+    pub fn qualified_name_written(&self, elem: ElementId) -> String {
+        let mut segments = Vec::new();
+        let mut current = Some(elem);
+        while let Some(e) = current {
+            if e == self.root {
+                break;
+            }
+            segments.push(self.model.name(e).unwrap_or("?"));
+            current = self.model.owner(e);
+        }
+        segments.reverse();
+        sysml_syntax::quote_qualified(segments)
     }
 
     /// A qualified name as it was written, for a message: the root is

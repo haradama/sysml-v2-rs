@@ -804,14 +804,11 @@ fn literal(text: &str) -> String {
     format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// A name from the code as a SysML name: as it is, quoted when it is one
-/// of the reserved words.
+/// A name from the code as a SysML name: as it is where it is a basic
+/// name, quoted where it is not. Quoting only the reserved words wrote
+/// `it's`, `2nd` and `größe` bare, and a package that does not parse.
 fn quoted(name: &str) -> String {
-    if sysml_syntax::SyntaxKind::from_keyword(name).is_some() {
-        format!("'{name}'")
-    } else {
-        name.to_string()
-    }
+    sysml_syntax::quote(name)
 }
 
 /// `get_stock` -> `GetStock`, for the actions a callable becomes.

@@ -192,13 +192,16 @@ impl Server {
 
         // a name already visible where the declaration stands would
         // capture, or be captured by, the renamed one
+        // compared as the name it denotes: `'Other'` is `Other`, and
+        // compared as written it slipped past and declared a second one
+        let denoted = sysml_syntax::unquote(new_name);
         let start = decl_range.start();
         let taken = self
             .analysis()
             .ws
             .visible_names(decl_file, start)
             .into_iter()
-            .any(|(name, _)| name == new_name);
+            .any(|(name, _)| name == denoted);
         if taken {
             return Err(format!("`{new_name}` is already visible there"));
         }
@@ -207,7 +210,7 @@ impl Server {
         // its own, and one that already reaches something under the new
         // name binds to that instead the moment it is rewritten --
         // quietly, because the file still parses and still resolves.
-        let wanted = [new_name.to_string()];
+        let wanted = [denoted.clone()];
         for (file, range) in &edits {
             let (file, at) = (*file, range.start());
             if !looked_up_in_place(&self.analysis().ws, file, at) {
@@ -305,6 +308,10 @@ impl Server {
             .visible_names(file, offset)
             .into_iter()
             .map(|(name, kind)| CompletionItem {
+                // `Wheel Unit` is offered by its name and inserted the way
+                // it has to be written: the bare label wrote `part z :
+                // Wheel Unit`, which does not parse
+                insert_text: Some(sysml_syntax::quote(&name)).filter(|it| *it != name),
                 label: name,
                 kind: Some(pictured(kind).0),
                 detail: Some(kind.name().to_string()),
@@ -389,7 +396,7 @@ impl Server {
                 .search_names(query, 128)
                 .into_iter()
                 .map(|id| {
-                    let name = analysis.ws.model().name(id).unwrap_or_default().to_string();
+                    let name = crate::shown_name(analysis.ws.model().name(id).unwrap_or_default());
                     (id, name, analysis.ws.model().kind(id))
                 })
                 .collect()

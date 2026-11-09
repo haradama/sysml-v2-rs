@@ -54,11 +54,15 @@ impl Translated {
 pub(crate) enum Numbers {
     /// As the model wrote it, so that a model mixing `2` into `Integer`
     /// arithmetic keeps the spelling it chose.
-    AsWritten,
+    Written,
     /// With a point on it. SysML has one numeric tower and Rust has
     /// several: `x * 2` against a `Real` means 2.0, and Rust will not
     /// multiply an `f64` by an integer to find that out.
-    AsReals,
+    Reals,
+    /// Whole, and within an `i64`: what an `Integer` holds. `1.5` and
+    /// `99999999999999999999` are no such number, and written as they
+    /// were they did not compile against the field.
+    Integers,
 }
 
 /// `text` as a Rust expression, or `None` where any part of it falls
@@ -71,7 +75,7 @@ pub(crate) fn translate(
 ) -> Option<Translated> {
     translate_as(
         text,
-        Numbers::AsWritten,
+        Numbers::Written,
         &HashMap::new(),
         resolve,
         resolve_call,
@@ -281,6 +285,9 @@ struct Node {
     rust: String,
     atomic: bool,
     boolean: bool,
+    /// A `String`: `"x".to_string() + "y".to_string()` does not compile,
+    /// since Rust adds a `&str` to a `String` and not another `String`.
+    text: bool,
 }
 
 /// Embedded as an operand: composites keep their own parentheses.
@@ -369,6 +376,7 @@ impl Parser<'_> {
             rust: format!("!{} || {}", wrap(&lhs), wrap(&rhs)),
             atomic: false,
             boolean: true,
+            text: false,
         })
     }
 
@@ -440,6 +448,11 @@ impl Parser<'_> {
         }
         // right-associative, as exponentiation is
         let rhs = self.power()?;
+        // a power held by an integer is no `f64`, and `i64::pow` takes a
+        // `u32` exponent the model does not promise
+        if self.numbers == Numbers::Integers {
+            return None;
+        }
         let exponent = match rhs.rust.parse::<i64>() {
             Ok(whole) => format!("{whole}.0"),
             Err(_) => rhs.rust,
@@ -448,6 +461,7 @@ impl Parser<'_> {
             rust: format!("f64::powf({}, {exponent})", lhs.rust),
             atomic: true,
             boolean: false,
+            text: false,
         })
     }
 
@@ -462,10 +476,17 @@ impl Parser<'_> {
             for (token, spelled) in operators {
                 if self.eat(token) {
                     let rhs = next(self)?;
+                    // `String + &str` is how Rust joins text
+                    let borrowed = if lhs.text && rhs.text && spelled.trim() == "+" {
+                        "&"
+                    } else {
+                        ""
+                    };
                     lhs = Node {
-                        rust: format!("{}{spelled}{}", wrap(&lhs), wrap(&rhs)),
+                        rust: format!("{}{spelled}{borrowed}{}", wrap(&lhs), wrap(&rhs)),
                         atomic: false,
                         boolean,
+                        text: lhs.text && rhs.text,
                     };
                     continue 'joining;
                 }
@@ -481,6 +502,7 @@ impl Parser<'_> {
                 rust: format!("-{}", wrap(&operand)),
                 atomic: false,
                 boolean: false,
+                text: false,
             });
         }
         if self.eat(&Token::Not) {
@@ -489,6 +511,7 @@ impl Parser<'_> {
                 rust: format!("!{}", wrap(&operand)),
                 atomic: false,
                 boolean: true,
+                text: false,
             });
         }
         let operand = self.primary()?;
@@ -524,6 +547,7 @@ impl Parser<'_> {
                 rust: crate::generate::real_literal(product),
                 atomic: true,
                 boolean: false,
+                text: false,
             });
         }
         if factor == 1.0 {
@@ -537,6 +561,7 @@ impl Parser<'_> {
             ),
             atomic: false,
             boolean: false,
+            text: false,
         })
     }
 
@@ -544,28 +569,38 @@ impl Parser<'_> {
         let token = self.tokens.get(self.at)?.clone();
         self.at += 1;
         match token {
+            Token::Num(text) if self.numbers == Numbers::Integers => Some(Node {
+                rust: text.parse::<i64>().ok()?.to_string(),
+                atomic: true,
+                boolean: false,
+                text: false,
+            }),
             Token::Num(text) => Some(Node {
-                rust: match self.numbers == Numbers::AsReals && !text.contains(['.', 'e', 'E']) {
+                rust: match self.numbers == Numbers::Reals && !text.contains(['.', 'e', 'E']) {
                     true => format!("{text}.0"),
                     false => text,
                 },
                 atomic: true,
                 boolean: false,
+                text: false,
             }),
             Token::Str(text) => Some(Node {
                 rust: format!("{text}.to_string()"),
                 atomic: true,
                 boolean: false,
+                text: true,
             }),
             Token::True => Some(Node {
                 rust: "true".to_string(),
                 atomic: true,
                 boolean: true,
+                text: false,
             }),
             Token::False => Some(Node {
                 rust: "false".to_string(),
                 atomic: true,
                 boolean: true,
+                text: false,
             }),
             // a call, where the name is one the caller can spell as a
             // function -- an abstract definition became a trait, and a
@@ -578,6 +613,7 @@ impl Parser<'_> {
                     rust: format!("{}({})", callee.function, arguments.join(", ")),
                     atomic: true,
                     boolean: false,
+                    text: false,
                 })
             }
             Token::Name(leading) => {
@@ -596,6 +632,7 @@ impl Parser<'_> {
                     rust,
                     atomic: true,
                     boolean: false,
+                    text: false,
                 })
             }
             Token::LParen => {
@@ -604,6 +641,7 @@ impl Parser<'_> {
                     rust: format!("({})", inner.rust),
                     atomic: true,
                     boolean: inner.boolean,
+                    text: false,
                 })
             }
             // `if c ? a else b` -- braces keep it one Rust expression
@@ -624,6 +662,7 @@ impl Parser<'_> {
                     ),
                     atomic: false,
                     boolean: then.boolean,
+                    text: false,
                 })
             }
             _ => None,
@@ -782,7 +821,7 @@ mod tests {
         let measured = |text: &str| {
             translate_as(
                 text,
-                Numbers::AsWritten,
+                Numbers::Written,
                 &units,
                 &|name| Some(name.to_string()),
                 &|_| None,

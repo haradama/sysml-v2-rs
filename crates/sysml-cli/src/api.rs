@@ -172,7 +172,11 @@ impl Client {
     fn get_all<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, Error> {
         let mut url = format!("{}{path}", self.base);
         let mut all = Vec::new();
+        // every page read, not only the last: two pages that point at
+        // each other were read in turn for ever
+        let mut read = std::collections::HashSet::new();
         loop {
+            read.insert(url.clone());
             let response = self
                 .agent
                 .get(&url)
@@ -180,15 +184,18 @@ impl Client {
                 .call()?;
             let next = response.all("Link").into_iter().find_map(next_page);
             all.extend(response.into_json::<Vec<T>>()?);
+            // A link is read against the page it came with, as RFC 3986
+            // reads any reference: `</api/projects?page=2>` from a server
+            // mounted at `http://host/api` is `http://host/api/projects`,
+            // where prefixing the base made it `/api/api/projects`.
+            let next = next.and_then(|next| {
+                url::Url::parse(&url)
+                    .and_then(|here| here.join(&next))
+                    .map(String::from)
+                    .ok()
+            });
             match next {
-                // a page that points at itself would be read for ever
-                Some(next) if next != url => {
-                    url = if next.starts_with('/') {
-                        format!("{}{next}", self.base)
-                    } else {
-                        next
-                    };
-                }
+                Some(next) if !read.contains(&next) => url = next,
                 _ => return Ok(all),
             }
         }
@@ -524,6 +531,48 @@ mod tests {
 
         // a link header with no url before the parameters says nothing
         assert_eq!(next_page("rel=\"next\""), None);
+    }
+
+    #[test]
+    fn a_link_is_read_against_the_page_it_came_with() {
+        // a server mounted under a path writes its links from the root
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&asked);
+        let base = serve(2, move |_, target| {
+            let mut seen = seen.lock().unwrap();
+            seen.push(target.to_string());
+            match seen.len() {
+                1 => response(
+                    "200 OK",
+                    &["Link: </api/projects?page=2>; rel=\"next\"".to_string()],
+                    r#"[{"@id":"p1"}]"#,
+                ),
+                _ => response("200 OK", &[], r#"[{"@id":"p2"}]"#),
+            }
+        });
+        let found = Client::new(format!("{base}/api"), QUICK)
+            .projects()
+            .unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(
+            *asked.lock().unwrap(),
+            ["/api/projects", "/api/projects?page=2"]
+        );
+
+        // and two pages that point at each other are each read once
+        let base = serve(2, |base, target| {
+            let next = if target.contains("page=2") {
+                "/projects"
+            } else {
+                "/projects?page=2"
+            };
+            response(
+                "200 OK",
+                &[format!("Link: <{base}{next}>; rel=\"next\"")],
+                r#"[{"@id":"p"}]"#,
+            )
+        });
+        assert_eq!(Client::new(base, QUICK).projects().unwrap().len(), 2);
     }
 
     #[test]

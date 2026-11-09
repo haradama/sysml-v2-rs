@@ -431,7 +431,7 @@ impl Server {
                 json!({
                     "rule": violation.rule,
                     "says": violation.says,
-                    "element": ws.qualified_name_of(violation.element),
+                    "element": ws.qualified_name_written(violation.element),
                 })
             })
             .collect();
@@ -1056,7 +1056,8 @@ fn element_named(ws: &mut Workspace, open: &[usize], name: &str) -> Result<Eleme
             ws.model().effective_short_name(elem) == Some(short)
                 // a redefinition answers to the name it borrows, which
                 // `named_globally` does not know
-                || qualified(ws, elem) == name
+                || sysml_syntax::split_qualified(&qualified(ws, elem))
+                    == sysml_syntax::split_qualified(name)
         })
         .collect();
     match found[..] {
@@ -1103,7 +1104,9 @@ fn qualified(ws: &Workspace, elem: ElementId) -> String {
         at = model.owner(e);
     }
     segments.reverse();
-    segments.join("::")
+    // written the way it would have to be, so that what a call hands
+    // back can be handed back in: `P q::x` is no name at all
+    sysml_syntax::quote_qualified(segments)
 }
 
 /// The text of each file a call places something in, read once per call.
@@ -1220,11 +1223,11 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
             // wants was the thing labelled uselessly. What it names is what it is.
             let names = ws.alias_target(elem).unwrap_or(elem);
             let mut entry = json!({
-                "name": ws.qualified_name_of(elem),
+                "name": ws.qualified_name_written(elem),
                 "kind": ws.model().kind(names).name(),
             });
             if names != elem {
-                entry["alias_for"] = json!(ws.qualified_name_of(names));
+                entry["alias_for"] = json!(ws.qualified_name_written(names));
             }
             if let Some(doc) = ws.documentation_of(names) {
                 entry["documentation"] = json!(doc);
@@ -1239,11 +1242,11 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
 fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) -> Value {
     let model = ws.model();
     let mut entry = json!({
-        "name": ws.qualified_name_of(elem),
+        "name": ws.qualified_name_written(elem),
         "kind": model.kind(elem).name(),
     });
     if let Some(ty) = model.type_of(elem) {
-        entry["type"] = json!(ws.qualified_name_of(ty));
+        entry["type"] = json!(ws.qualified_name_written(ty));
     }
     if let Some(direction) = ws.model().direction(elem) {
         entry["direction"] = json!(direction);
@@ -1265,7 +1268,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
     if !supertypes.is_empty() {
         entry["specializes"] = json!(supertypes
             .iter()
-            .map(|&up| ws.qualified_name_of(up))
+            .map(|&up| ws.qualified_name_written(up))
             .collect::<Vec<_>>());
     }
     // A definition's own members are what the text says; the inherited
@@ -1286,7 +1289,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
             describe(ws, child, depth - 1, false)
         } else {
             json!({
-                "name": ws.qualified_name_of(child),
+                "name": ws.qualified_name_written(child),
                 "kind": ws.model().kind(child).name(),
             })
         });

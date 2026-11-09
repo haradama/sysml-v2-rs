@@ -94,15 +94,25 @@ impl Workspace {
         if let Some(&found) = self.globals.get(qualified) {
             return found;
         }
-        let declared = qualified.rsplit("::").next().unwrap_or(qualified);
+        // compared name by name, so that `'My Pkg'::x` is asked for the
+        // way it is written and `A::'B::C'` is not `A::B::C`
+        let wanted = sysml_syntax::split_qualified(qualified);
+        let declared = wanted.last().cloned().unwrap_or_default();
         let candidates: Vec<ElementId> = self
             .named_elements()
             .filter(|&(_, name)| name == declared)
             .map(|(id, _)| id)
             .collect();
-        let found = candidates
-            .into_iter()
-            .find(|&it| self.qualified_name_of(it) == qualified);
+        let found = candidates.into_iter().find(|&it| {
+            let mut segments = Vec::new();
+            let mut current = Some(it);
+            while let Some(e) = current.filter(|&e| e != self.root) {
+                segments.push(self.model.name(e).unwrap_or("?"));
+                current = self.model.owner(e);
+            }
+            segments.reverse();
+            segments == wanted
+        });
         self.globals.insert(qualified.to_string(), found);
         found
     }

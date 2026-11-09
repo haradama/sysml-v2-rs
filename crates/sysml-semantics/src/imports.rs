@@ -44,6 +44,29 @@ impl Workspace {
     pub fn import_of(&mut self, import: ElementId) -> Option<ElementId> {
         self.import_target(import).map(|target| target.target)
     }
+    /// The membership a member import names, where that is an alias: `import
+    /// D::Car;` with `alias Car for Vehicle;` in `D` imports the alias, and
+    /// reaches `Vehicle` only through it. [`import_of`](Self::import_of)
+    /// answers with `Vehicle`, which is what a name imported this way
+    /// resolves to, and which would say the import named `Vehicle`.
+    pub fn imported_alias(&mut self, import: ElementId) -> Option<ElementId> {
+        let imp = self.import_target(import)?;
+        let leaf = imp.leaf?;
+        let node = self.source.get(&import)?.clone();
+        let qname = node
+            .children()
+            .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
+        let segments = name_segments(&qname);
+        let (_, path) = segments.split_last()?;
+        let ns = match path {
+            [] => self.model.owner(import)?,
+            _ => self.resolve_from(import, path)?,
+        };
+        self.model.owned(ns).iter().copied().find(|&member| {
+            self.model.kind(member) == ElementKind::Membership
+                && self.model.name(member) == Some(leaf.as_str())
+        })
+    }
     /// The members the imports of `ns` bring into it, resolved and
     /// visibility-filtered, in import order: what the standard's derived
     /// `importedMembership` reaches beyond the owned members.

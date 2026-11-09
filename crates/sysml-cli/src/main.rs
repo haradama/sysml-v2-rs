@@ -706,7 +706,8 @@ fn resolved(
         if !imported.is_empty() {
             extras.imported.insert(id, imported);
         }
-        if let Some(target) = ws.import_of(id) {
+        // an import of an alias imports the alias, not what it stands for
+        if let Some(target) = ws.imported_alias(id).or_else(|| ws.import_of(id)) {
             extras.import_targets.insert(id, target);
         }
     }

@@ -32,8 +32,13 @@ impl<'a> Generator<'a> {
                     ElementKind::CalculationDefinition => Shape::Calculation,
                     ElementKind::ConstraintDefinition => Shape::Calculation,
                     ElementKind::ActionDefinition => Shape::Action,
+                    // and so is one that specializes a primitive: `attribute
+                    // def Kg :> Real;` is a number, and as a struct with no
+                    // fields it was a `Kg {}` that `= 1.0` did not compile
+                    // against
                     ElementKind::AttributeDefinition
-                        if crate::quantity::is_scalar_quantity(model, id) =>
+                        if crate::quantity::is_scalar_quantity(model, id)
+                            || sysml_model::library_primitive(model, id).is_some() =>
                     {
                         Shape::Quantity
                     }

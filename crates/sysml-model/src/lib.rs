@@ -430,6 +430,44 @@ pub fn primitive(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The standard library primitive `ty` is, or specializes: the one of
+/// [`primitive`]'s names that `ScalarValues` declares.
+///
+/// By name alone, a model's own `Q::Real` with a real and an imaginary
+/// part was a `f64`, and a `part def String` the primitive string --
+/// what decides it is which package declares it. And `attribute def Kg
+/// :> Real;` is a `Real` as much as `Real` is, which reading the type's
+/// own name missed.
+pub fn library_primitive(model: &Model, ty: ElementId) -> Option<&'static str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::from([ty]);
+    while let Some(next) = queue.pop_front() {
+        if !seen.insert(next) {
+            continue;
+        }
+        let declared_by_the_library = model.owner(next).is_some_and(|package| {
+            model.name(package) == Some("ScalarValues")
+                && model
+                    .owner(package)
+                    .is_none_or(|root| model.owner(root).is_none())
+        });
+        if let Some(found) = model.name(next).and_then(primitive) {
+            if declared_by_the_library {
+                return Some(found);
+            }
+        }
+        for &owned in model.owned(next) {
+            let general = match model.kind(owned) {
+                ElementKind::Subclassification => "superclassifier",
+                ElementKind::Specialization => "general",
+                _ => continue,
+            };
+            queue.extend(model.maybe(owned, general).and_then(Value::as_id));
+        }
+    }
+    None
+}
+
 /// What a connector end reaches, in the order it reaches it.
 ///
 /// An end written as a chain -- `connect w.hub to a.mount` -- holds the

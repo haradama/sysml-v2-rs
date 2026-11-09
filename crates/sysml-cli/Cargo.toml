@@ -44,6 +44,8 @@ sysmlv2-diagram.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
+# a `Link` header is a URI reference, resolved against the page it came with
+url = "2"
 # `--via "python3 my tool.py"`: a command is split the way a shell splits
 # one, so a path with a space in it can be quoted
 shlex = "1"

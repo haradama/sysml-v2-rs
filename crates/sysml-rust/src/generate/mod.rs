@@ -192,7 +192,8 @@ enum Shape {
     Flattened,
     /// A model's own scalar quantity -- `attribute def Payload :>
     /// MassValue;` -- which is the `f64` any quantity is, under its own
-    /// name. Written as a struct, it was the library's machinery for a
+    /// name; or its own specialization of a primitive, which is that
+    /// primitive under its own name. Written as a struct, it was the library's machinery for a
     /// quantity value flattened into fields, beside a default that was
     /// the number.
     Quantity,
@@ -479,16 +480,25 @@ fn multiplicity(model: &Model, usage: ElementId) -> Container {
     let Some(declared) = sysml_model::declared_multiplicity(model, usage) else {
         return Container::One;
     };
-    match (declared.bound, declared.lower, declared.upper) {
-        (Some(Bound::Many), _, _) => Container::Many,
+    // Read as the two numbers the plan reads, so that what is written
+    // two ways is one container: `[1]` and `[1..1]` are both one of the
+    // thing, `[3]` and `[3..3]` both three. Matched on how the bound was
+    // spelled, `[1]` became `[T; 1]` and `[3..3]` a `Vec`.
+    let number = |end: Option<Bound>| match end {
+        Some(Bound::Exactly(n)) if n >= 0 => Some(n),
+        _ => None,
+    };
+    let (lower, upper) = match declared.bound {
+        Some(bound) => (number(Some(bound)), number(Some(bound))),
+        None => (number(declared.lower), number(declared.upper)),
+    };
+    match (lower, upper) {
+        // the multiplicity everything has by default, said out loud
+        (Some(1), Some(1)) => Container::One,
+        (Some(0), Some(1)) => Container::Optional,
         // `[0]` is a multiplicity of nothing, which Rust spells as an
         // array of nothing; a `Vec` would claim it can hold more
-        (Some(Bound::Exactly(n)), _, _) if n >= 0 => Container::Array(n),
-        (None, Some(Bound::Exactly(0)), Some(Bound::Exactly(1))) => Container::Optional,
-        // `[1..1]` is the multiplicity everything has by default, said
-        // out loud -- one of the thing, not a collection of them
-        (None, Some(Bound::Exactly(1)), Some(Bound::Exactly(1))) => Container::One,
-        (None, Some(_), Some(_)) => Container::Many,
+        (Some(lower), Some(upper)) if lower == upper => Container::Array(lower),
         _ => Container::Many,
     }
 }
@@ -503,10 +513,7 @@ fn default_of(model: &Model, usage: ElementId) -> Option<String> {
         ValueClause::Literal(rust) => Some(rust),
         ValueClause::Text(text) => match translate_as(
             &text,
-            match wants_float(model, usage) {
-                true => Numbers::AsReals,
-                false => Numbers::AsWritten,
-            },
+            numbers_for(model, usage),
             &crate::quantity::units_under(model, usage),
             &|_| None,
             &|_| None,
@@ -562,8 +569,8 @@ fn result_clause(model: &Model, element: ElementId) -> Option<ValueClause> {
 /// The Rust scalar a SysML type stands for, where it stands for one.
 /// Fields and parameters both ask this, so that one model type cannot
 /// be a `f64` in a struct and something else in a signature.
-fn scalar_of(name: &str) -> Option<&'static str> {
-    Some(match sysml_model::primitive(name)? {
+fn scalar_of(primitive: &'static str) -> Option<&'static str> {
+    Some(match primitive {
         "Real" => "f64",
         "Integer" => "i64",
         // `Positive` is a `Natural` the model has ruled zero out of;
@@ -606,8 +613,7 @@ pub(crate) fn held_type(model: &Model, feature: ElementId) -> Option<ElementId> 
 /// scalar quantity -- `ISQ::MassValue`, or a model's own specialization
 /// of one -- as the `f64` of SI coherent units it holds.
 fn scalar_type(model: &Model, ty: ElementId) -> Option<&'static str> {
-    model
-        .name(ty)
+    sysml_model::library_primitive(model, ty)
         .and_then(scalar_of)
         .or_else(|| crate::quantity::is_scalar_quantity(model, ty).then_some("f64"))
 }
@@ -641,9 +647,18 @@ pub(crate) fn real_literal(real: f64) -> String {
 /// How a Rust type of `spelled` wants its whole numbers written.
 fn numbers_of(spelled: Option<&str>) -> Numbers {
     match spelled {
-        Some("f32" | "f64") => Numbers::AsReals,
-        _ => Numbers::AsWritten,
+        Some("f32" | "f64") => Numbers::Reals,
+        Some("i64" | "u64" | "i32" | "u32") => Numbers::Integers,
+        _ => Numbers::Written,
     }
+}
+
+/// How the value of `usage` wants its numbers written, by what it holds.
+fn numbers_for(model: &Model, usage: ElementId) -> Numbers {
+    if wants_float(model, usage) {
+        return Numbers::Reals;
+    }
+    numbers_of(held_type(model, usage).and_then(|ty| scalar_type(model, ty)))
 }
 
 /// The `= value` clause of a usage, ready for translation.
@@ -651,6 +666,14 @@ fn value_clause(model: &Model, usage: ElementId) -> Option<ValueClause> {
     use sysml_model::{Declared, Literal};
     let rust = match sysml_model::declared_value(model, usage)? {
         Declared::Text(text) => return Some(ValueClause::Text(text)),
+        // an `Integer` holds no `1.5`, and written as it is the field
+        // does not compile; what is left over goes where a value Rust
+        // cannot start from goes
+        Declared::Literal(Literal::Real(real))
+            if numbers_for(model, usage) == Numbers::Integers =>
+        {
+            return Some(ValueClause::Text(real_literal(real)))
+        }
         Declared::Literal(Literal::Real(real)) => real_literal(real),
         Declared::Literal(Literal::Int(int)) if wants_float(model, usage) => format!("{int}.0"),
         Declared::Literal(Literal::Int(int)) => format!("{int}"),
@@ -826,8 +849,19 @@ fn qualified_of(model: &Model, def: ElementId) -> String {
 /// it says yes to `²` and to the Arabic-Indic digits, and `x²` is not a
 /// name Rust can spell. Letters and ASCII digits are the part of XID
 /// this generator needs, and anything else is dropped.
+///
+/// "Letters" is not `is_alphabetic` alone, which also says yes to `🄰`
+/// and a combining mark, neither of which Rust accepts in a name; a letter
+/// here is one XID admits, and only one XID admits at the start is put
+/// at the start (see [`starts_a_name`]).
 fn spellable(ch: char) -> bool {
-    ch.is_alphabetic() || ch.is_ascii_digit()
+    (ch.is_alphabetic() && unicode_ident::is_xid_continue(ch)) || ch.is_ascii_digit()
+}
+
+/// Whether Rust lets a name begin with `ch`: an ASCII digit or a mark that
+/// may only continue a name is put after a `_`.
+fn starts_a_name(ch: char) -> bool {
+    unicode_ident::is_xid_start(ch) || ch == '_'
 }
 
 /// A SysML name as the name of a Rust *type*. An escaped name holds
@@ -855,7 +889,7 @@ fn type_ident(name: &str) -> String {
         // a name Rust cannot spell one character of -- `'+'`, `''` --
         // still has to be called something, and `_` is not a name
         out.push_str("Unnamed");
-    } else if out.starts_with(|ch: char| ch.is_ascii_digit()) {
+    } else if !out.starts_with(starts_a_name) {
         out.insert(0, '_');
     }
     if TAKEN_TYPES.contains(&out.as_str()) {
@@ -905,7 +939,7 @@ pub(crate) fn ident(name: &str) -> String {
         .chars()
         .map(|ch| if spellable(ch) || ch == '_' { ch } else { '_' })
         .collect();
-    let name = if name.starts_with(|ch: char| ch.is_ascii_digit()) {
+    let name = if !name.is_empty() && !name.starts_with(starts_a_name) {
         format!("_{name}")
     } else if name.is_empty() || name == "_" {
         // `_` is a pattern, not a name, and a name Rust can spell no

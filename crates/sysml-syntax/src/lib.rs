@@ -182,6 +182,78 @@ pub(crate) fn shared_indent(lines: &[&str]) -> String {
     shared.to_string()
 }
 
+/// A name the way the notation has to write it: as it is when it is a
+/// basic name, quoted when it is not -- a keyword included, since `part`
+/// written plainly reads back as the keyword rather than as a name.
+/// Inside the quotes a backslash and a quote are escaped again, undoing
+/// what [`unquote`] did when the name was read.
+pub fn quote(name: &str) -> String {
+    let basic = !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && SyntaxKind::from_keyword(name).is_none();
+    if basic {
+        return name.to_string();
+    }
+    let mut out = String::with_capacity(name.len() + 2);
+    out.push('\'');
+    for ch in name.chars() {
+        match ch {
+            '\\' | '\'' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// A qualified name the way the notation has to write it, each segment
+/// quoted where it needs to be: `'My Pkg'::'Wheel Unit'`. Joined plainly,
+/// `My Pkg::Wheel Unit` does not parse, and `A::'B::C'` reads as the same
+/// three segments as `A::B::C`.
+pub fn quote_qualified<'a>(segments: impl IntoIterator<Item = &'a str>) -> String {
+    segments
+        .into_iter()
+        .map(quote)
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// The names a qualified name is made of, as they are and not as they
+/// were written: `'My Pkg'::'B::C'` is `My Pkg` and `B::C`. A `::` inside
+/// quotes is part of the name, and splitting the text at every one read
+/// `A::'B::C'` as three names.
+pub fn split_qualified(text: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    let mut chars = text.char_indices().peekable();
+    while let Some((at, ch)) = chars.next() {
+        match ch {
+            '\\' if quoted => {
+                chars.next();
+            }
+            '\'' => quoted = !quoted,
+            ':' if !quoted && chars.peek().is_some_and(|&(_, next)| next == ':') => {
+                segments.push(unquote(&text[start..at]));
+                chars.next();
+                start = at + 2;
+            }
+            _ => {}
+        }
+    }
+    segments.push(unquote(&text[start..]));
+    segments
+}
+
 /// The text a string literal denotes.
 ///
 /// The same rule as [`unquote`], with double quotes: `"say \"hi\""` is
@@ -376,5 +448,27 @@ mod name_tests {
             Dialect::from_path(std::path::Path::new("/tmp/x.kerml")),
             Dialect::KerML
         );
+    }
+}
+
+#[cfg(test)]
+mod quoting_tests {
+    use super::*;
+
+    #[test]
+    fn a_qualified_name_is_written_so_it_reads_back_as_the_same_names() {
+        for segments in [
+            vec!["A", "B", "C"],
+            vec!["A", "B::C"],
+            vec!["My Pkg", "Wheel Unit"],
+            vec!["it's", "part", "2nd"],
+            vec!["a\\b"],
+        ] {
+            let written = quote_qualified(segments.iter().copied());
+            assert_eq!(split_qualified(&written), segments, "{written}");
+        }
+        assert_eq!(quote_qualified(["My Pkg", "x"]), "'My Pkg'::x");
+        // a name that needs no quotes is asked for as it is either way
+        assert_eq!(split_qualified("A::'B'::C"), ["A", "B", "C"]);
     }
 }
