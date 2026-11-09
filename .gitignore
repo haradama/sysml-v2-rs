@@ -83,6 +83,9 @@ Cargo.lock
 /examples/arduino-uno/target/
 /examples/arduino-uno/Cargo.lock
 
+# what Python leaves behind running the example importer and generator
+__pycache__/
+
 # Claude Code's own configuration and the notes written for it are local
 # to whoever is working here, not part of the repository. CI runs the
 # gates itself -- `.github/workflows/ci.yml` names every command -- so

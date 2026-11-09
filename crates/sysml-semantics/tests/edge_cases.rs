@@ -3613,3 +3613,42 @@ fn both_ends_of_a_disjointness_are_looked_at() {
         .collect();
     assert_eq!(steps, [2, 2], "both ends are chains of two");
 }
+
+/// A filter that names what only it could bring in.
+///
+/// `@Safety` is resolved where the import is written, and the only
+/// `Safety` there is would come in through `vehicle::**` -- through the
+/// import the condition filters. Answering whether it admits `Safety`
+/// meant resolving `Safety`, which meant asking the same filter again,
+/// each round with a fresh cycle guard: the search branched at every
+/// level down to the depth limit and did not come back. A model an
+/// editor holds halfway through moving a definition is this model, and
+/// the language server stopped answering.
+///
+/// Run on a thread of its own, so that the regression is a failure
+/// rather than a test that never ends.
+#[test]
+fn a_filter_that_names_what_only_it_brings_in_still_finishes() {
+    const MODEL: &str = "package P {\n\
+        \tprivate import Tree::*;\n\
+        \tpackage Tree {\n\
+        \t\tpart vehicle {\n\
+        \t\t\tmetadata def Safety;\n\
+        \t\t\tpart bumper { @Safety; }\n\
+        \t\t}\n\
+        \t}\n\
+        \tpackage Features {\n\
+        \t\tpublic import vehicle::**[@Safety];\n\
+        \t}\n\
+        }\n";
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let ws = ws(&[("p.sysml", MODEL)]);
+        sent.send(ws.unresolved().len()).unwrap();
+    });
+    let unresolved = received
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("resolving a self-referring filter finishes");
+    // and the names the model does bring into scope still resolve
+    assert_eq!(unresolved, 0);
+}

@@ -32,7 +32,7 @@ EXT_ID = $(shell node -p "const m = require('./$(EXT_DIR)/package.json'); m.publ
 EXT_ON_SERVER = $(shell node -p "!!require('./$(EXT_DIR)/package.json').main")
 
 .PHONY: help lsp wasm vscode vscode-package vscode-by-hand vscode-clean web \
-	web-serve web-clean
+	web-serve web-clean gates fmt-check clippy msrv
 
 help:
 	@echo "make vscode          build, package and install the VSCode extension"
@@ -43,6 +43,7 @@ help:
 	@echo "make lsp             build the language server as a program"
 	@echo "make vscode-clean    remove the extension's build artifacts"
 	@echo "make web-clean       remove the playground's build artifacts"
+	@echo "make gates           fmt, clippy and the MSRV check, run as CI runs them"
 
 lsp:
 	$(CARGO) build --release -p sysmlv2-lsp
@@ -119,3 +120,33 @@ web-serve: wasm $(WEB_DIR)/node_modules
 
 web-clean:
 	rm -rf $(WEB_DIR)/node_modules $(WEB_DIR)/dist $(WEB_DIR)/package-lock.json
+
+# The gates CI runs that pass here and fail there unless they are run
+# exactly as CI runs them. Clippy without `-D warnings` replays nothing
+# for a crate that is already fresh, so a lint CI stops on is silent
+# here. And no lockfile is checked in: the MSRV job resolves afresh,
+# while a local `cargo check` reuses whatever this checkout's
+# `Cargo.lock` resolved weeks ago -- which is how a dependency that
+# raised its own minimum got past a check that had "passed". So `msrv`
+# resolves afresh too, and puts this checkout's lockfile back after.
+# The tests are not here: the workspace suite is the half hour CI
+# spends, and which part of it a change wants is a choice.
+MSRV = $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+
+gates: fmt-check clippy msrv
+
+fmt-check:
+	$(CARGO) fmt --all --check
+
+clippy:
+	$(CARGO) clippy --all-targets --all-features -- -D warnings
+
+msrv:
+	@rustup toolchain list | grep -q '^$(MSRV)-' || { \
+		echo "error: toolchain $(MSRV) is not installed -- rustup toolchain install $(MSRV)"; \
+		exit 1; \
+	}
+	@mkdir -p target
+	@if [ -f Cargo.lock ]; then mv Cargo.lock target/Cargo.lock.local; fi; \
+	trap 'rm -f Cargo.lock; if [ -f target/Cargo.lock.local ]; then mv target/Cargo.lock.local Cargo.lock; fi' EXIT INT TERM; \
+	$(CARGO) +$(MSRV) check --workspace --all-features --all-targets

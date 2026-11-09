@@ -1,10 +1,10 @@
 //! What a definition says about the code it stands for.
 //!
-//! [`crate::import`] writes this metadata and [`crate::generate`] reads
-//! it. Spelling the names here rather than on each side is the point of
-//! keeping the two together: a property one writes and the other reads
-//! under another name is a seam that cannot drift if there is only one
-//! list of them.
+//! [`crate::surface::to_sysml`] writes this metadata and a generator --
+//! [`crate::generate`], and whichever others come -- reads it. Spelling
+//! the names here rather than on each side is the point of keeping the
+//! two together: a property one writes and the other reads under another
+//! name is a seam that cannot drift if there is only one list of them.
 //!
 //! The notation says which language it is talking about rather than being
 //! one language's own. It was `@rust { path = "..."; }`, which made every

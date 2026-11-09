@@ -138,8 +138,12 @@ enum Command {
     /// and what they bottom out in, and what happens in it
     Plan {
         /// Files or directories to plan
-        #[arg(required = true)]
+        #[arg(required_unless_present = "schema")]
         paths: Vec<PathBuf>,
+        /// Print the JSON schema of a plan -- what a generator reads --
+        /// and stop
+        #[arg(long)]
+        schema: bool,
     },
     /// Load files (or directories), resolve names and render the definitions
     /// and their specializations as an SVG diagram
@@ -195,6 +199,67 @@ enum Command {
         /// Name of the generated package (default: derived from the crate)
         #[arg(long)]
         package: Option<String>,
+        /// Write the surface the crate is read as -- the JSON
+        /// `import-code` reads, which is what an importer for any other
+        /// language writes -- instead of the SysML
+        #[arg(long)]
+        surface: bool,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Import code in any language as a SysML package with `@code`
+    /// binding metadata. Reads a surface -- what `import-rust --surface`
+    /// writes for a crate, as JSON, and what an importer for any other
+    /// language writes the same way -- or runs that importer on source
+    /// files: `sysml-import-<LANG>` from PATH, which may write the JSON
+    /// or the SysML itself. Either way the package is checked before it
+    /// is written
+    ImportCode {
+        /// A surface JSON file, or the source files an importer reads
+        #[arg(required_unless_present = "schema")]
+        inputs: Vec<PathBuf>,
+        /// Which importer reads the inputs: `sysml-import-<LANG>` from
+        /// PATH (default: named after the inputs' extension)
+        #[arg(long, value_name = "LANG")]
+        lang: Option<String>,
+        /// Run this command on the inputs instead, split as a shell
+        /// would split it
+        #[arg(long, value_name = "COMMAND", conflicts_with = "lang")]
+        via: Option<String>,
+        /// Name of the package written (default: what the surface says,
+        /// or derived from its module)
+        #[arg(long)]
+        package: Option<String>,
+        /// Write to this file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Print the JSON schema of a surface and stop
+        #[arg(long)]
+        schema: bool,
+    },
+    /// Generate code in any language from a resolved model, through the
+    /// generator for that language: `sysml-gen-<LANG>` from PATH, handed
+    /// the plan -- what the model implies for code, in no language in
+    /// particular, as `plan` prints it -- on standard input and writing
+    /// the code on standard output. `--lang rust` is the generator built
+    /// in, which is what `rustgen` runs
+    Codegen {
+        /// Files or directories holding the model to generate for
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Also load these files or directories so names resolve, without
+        /// generating for them (imported API packages, libraries)
+        #[arg(long)]
+        library: Vec<PathBuf>,
+        /// Which generator writes the code: `sysml-gen-<LANG>` from PATH,
+        /// or `rust` for the one built in
+        #[arg(long, value_name = "LANG", required_unless_present = "via")]
+        lang: Option<String>,
+        /// Run this command as the generator instead, split as a shell
+        /// would split it
+        #[arg(long, value_name = "COMMAND", conflicts_with = "lang")]
+        via: Option<String>,
         /// Write to this file instead of stdout
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -384,7 +449,7 @@ fn main() -> ExitCode {
             };
             import(&json, diagram.as_deref(), painted, format)
         }
-        Command::Plan { paths } => plan(&paths, format, bare),
+        Command::Plan { paths, schema } => plan(&paths, format, bare, schema),
         Command::Diagram {
             paths,
             library,
@@ -416,8 +481,39 @@ fn main() -> ExitCode {
         Command::ImportRust {
             json,
             package,
+            surface,
             output,
-        } => import_rust(&json, package.as_deref(), output.as_deref()),
+        } => import_rust(&json, package.as_deref(), surface, output.as_deref()),
+        Command::ImportCode {
+            inputs,
+            lang,
+            via,
+            package,
+            output,
+            schema,
+        } => import_code(
+            &inputs,
+            lang.as_deref(),
+            via.as_deref(),
+            package.as_deref(),
+            output.as_deref(),
+            schema,
+            bare,
+        ),
+        Command::Codegen {
+            paths,
+            library,
+            lang,
+            via,
+            output,
+        } => codegen(
+            &paths,
+            &library,
+            lang.as_deref(),
+            via.as_deref(),
+            output.as_deref(),
+            bare,
+        ),
         Command::Rustgen {
             paths,
             library,
@@ -856,7 +952,13 @@ impl Answered {
 /// The library is loaded and resolved behind the model -- what a feature
 /// bottoms out in is a question about it -- but only the model's own
 /// definitions are planned.
-fn plan(paths: &[PathBuf], format: Format, bare: bool) -> ExitCode {
+fn plan(paths: &[PathBuf], format: Format, bare: bool, schema: bool) -> ExitCode {
+    if schema {
+        let schema =
+            serde_json::to_string_pretty(&sysml_rust::plan::schema()).expect("a schema is JSON");
+        println!("{schema}");
+        return ExitCode::SUCCESS;
+    }
     let mut ws = sysml_semantics::Workspace::new();
     if let Err(unreadable) = load_paths(&mut ws, paths) {
         unreadable.say();
@@ -872,7 +974,7 @@ fn plan(paths: &[PathBuf], format: Format, bare: bool) -> ExitCode {
         .iter()
         .flat_map(|&file| ws.file_roots(file).to_vec())
         .collect();
-    let planned = sysml_cli::plan::of(&mut ws, &roots);
+    let planned = sysml_rust::plan::of(&mut ws, &roots);
     match format {
         Format::Json => report(serde_json::to_value(&planned).expect("a built plan serializes")),
         Format::Text => {
@@ -1331,7 +1433,12 @@ fn refuse_import(path: &Path, why: &str, format: Format) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> ExitCode {
+fn import_rust(
+    json: &Path,
+    package: Option<&str>,
+    surface: bool,
+    output: Option<&Path>,
+) -> ExitCode {
     let text = match std::fs::read_to_string(json) {
         Ok(text) => text,
         Err(err) => {
@@ -1339,31 +1446,312 @@ fn import_rust(json: &Path, package: Option<&str>, output: Option<&Path>) -> Exi
             return ExitCode::FAILURE;
         }
     };
-    match sysml_rust::rustdoc_to_sysml(&text, package) {
-        Ok(imported) => {
-            let sysml = imported.sysml;
-            // counted off the tree, not the text: a `doc` that happens to
-            // say "def" between two spaces is not a definition, and this
-            // number is what a person checks the import by
-            let written = sysml_syntax::parse(&sysml);
-            let definitions = written
-                .syntax()
-                .descendants()
-                .filter(|node| node.kind() == sysml_syntax::SyntaxKind::DEFINITION)
-                .count();
-            // and what had no shape is what is left to model by hand
-            let skipped = imported.skipped.len();
-            emit(
-                &sysml,
-                output,
-                &format!("{definitions} definition(s), {skipped} item(s) not imported"),
-            )
-        }
+    let read = match sysml_rust::rustdoc_to_surface(&text) {
+        Ok(read) => read,
         Err(err) => {
             eprintln!("error: {err}");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
+        }
+    };
+    if surface {
+        // the JSON `import-code` reads: what an importer for another
+        // language writes, shown for a real crate
+        let json = serde_json::to_string_pretty(&read).expect("a surface is JSON");
+        let skipped = read.skipped.len();
+        return emit(
+            &format!("{json}\n"),
+            output,
+            &format!(
+                "{} item(s), {skipped} not imported",
+                read.items.len() + read.scalars.len()
+            ),
+        );
+    }
+    let imported = sysml_rust::surface::to_sysml(&read, package);
+    emit(&imported.sysml, output, &imported_summary(&imported))
+}
+
+/// What a person checks an import by: how many definitions it wrote,
+/// and how many items it could not.
+fn imported_summary(imported: &sysml_rust::surface::Imported) -> String {
+    // counted off the tree, not the text: a `doc` that happens to say
+    // "def" between two spaces is not a definition
+    let written = sysml_syntax::parse(&imported.sysml);
+    let definitions = written
+        .syntax()
+        .descendants()
+        .filter(|node| node.kind() == sysml_syntax::SyntaxKind::DEFINITION)
+        .count();
+    // and what had no shape is what is left to model by hand
+    let skipped = imported.skipped.len();
+    format!("{definitions} definition(s), {skipped} item(s) not imported")
+}
+
+/// Code in any language, as a package: from a surface, or from the
+/// importer that writes one.
+///
+/// Doxygen reads a language it has never heard of through a filter --
+/// a program that writes what Doxygen already reads -- and this is the
+/// same arrangement. The importer is found the way `cargo` and `git`
+/// find theirs, by name on `PATH`, and it may write the surface JSON or
+/// SysML itself. What comes back is checked before it is written out,
+/// whichever it wrote: a name that resolves to nothing in a package
+/// somebody else's tool wrote is exactly what this toolchain is for
+/// catching, and an importer that gets it wrong is told so here rather
+/// than by the first model that imports the package.
+fn import_code(
+    inputs: &[PathBuf],
+    lang: Option<&str>,
+    via: Option<&str>,
+    package: Option<&str>,
+    output: Option<&Path>,
+    schema: bool,
+    bare: bool,
+) -> ExitCode {
+    if schema {
+        let schema =
+            serde_json::to_string_pretty(&sysml_rust::surface::schema()).expect("a schema is JSON");
+        return emit(&format!("{schema}\n"), output, "the schema of a surface");
+    }
+    let text = match surface_text(inputs, lang, via) {
+        Ok(text) => text,
+        Err(why) => {
+            eprintln!("error: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // JSON is a surface; anything else is taken for the SysML an
+    // importer chose to write itself, and checked the same way
+    let imported = if text.trim_start().starts_with('{') {
+        match sysml_rust::surface::read(&text) {
+            Ok(surface) => sysml_rust::surface::to_sysml(&surface, package),
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        if package.is_some() {
+            eprintln!(
+                "error: --package names the package a surface is written as, and this \
+                 importer wrote SysML itself; the name is in what it wrote"
+            );
+            return ExitCode::FAILURE;
+        }
+        sysml_rust::surface::Imported {
+            sysml: text,
+            skipped: Vec::new(),
+        }
+    };
+
+    let mut ws = sysml_semantics::Workspace::new();
+    let file = ws.add_file("imported.sysml", &imported.sysml);
+    if let Err(unreadable) = ensure_library(&mut ws, bare) {
+        unreadable.say();
+        return ExitCode::FAILURE;
+    }
+    let mut wrong = 0;
+    let syntax = ws.findings(&[file]).syntax;
+    for finding in &syntax {
+        let (line, column) = sysml_syntax::line_col(&imported.sysml, finding.range.start().into());
+        eprintln!(
+            "error: {} at {line}:{column} of what was written",
+            finding.what
+        );
+        wrong += 1;
+    }
+    // nothing to resolve in a text that did not parse
+    if syntax.is_empty() {
+        ws.resolve_files(&[file]);
+        for finding in &ws.findings(&[file]).names {
+            let (line, column) =
+                sysml_syntax::line_col(&imported.sysml, finding.range.start().into());
+            eprintln!(
+                "error: `{}` resolves to nothing at {line}:{column} of what was written",
+                finding.what
+            );
+            wrong += 1;
         }
     }
+    // written out regardless, so that what is wrong can be looked at;
+    // the exit code says it is wrong
+    let wrote = emit(&imported.sysml, output, &imported_summary(&imported));
+    if wrong > 0 {
+        eprintln!("error: {wrong} finding(s) in what the importer wrote");
+        return ExitCode::FAILURE;
+    }
+    wrote
+}
+
+/// The text `import-code` reads: a surface file, or what the importer
+/// for the inputs' language writes when run on them.
+fn surface_text(
+    inputs: &[PathBuf],
+    lang: Option<&str>,
+    via: Option<&str>,
+) -> Result<String, String> {
+    let command: Vec<String> = match (via, lang) {
+        (Some(via), _) => shell_words(via)?,
+        (None, Some(lang)) => vec![format!("sysml-import-{lang}")],
+        (None, None) => {
+            // named after the extension, the way Doxygen maps a filter
+            // to one: `sysml-import-py` reads `.py`
+            let extension = |path: &PathBuf| {
+                path.extension()
+                    .and_then(|it| it.to_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let first = inputs.first().map(extension).unwrap_or_default();
+            if inputs.iter().any(|path| extension(path) != first) {
+                return Err(
+                    "the inputs have different extensions; say which importer reads \
+                            them with --lang or --via"
+                        .to_string(),
+                );
+            }
+            if first == "json" {
+                let [path] = inputs else {
+                    return Err(
+                        "a package is written from one surface; give one JSON file, \
+                                or the source files an importer reads"
+                            .to_string(),
+                    );
+                };
+                return std::fs::read_to_string(path)
+                    .map_err(|err| format!("cannot read {}: {err}", path.display()));
+            }
+            if first.is_empty() {
+                return Err(
+                    "the inputs have no extension to name an importer by; say which \
+                            reads them with --lang or --via"
+                        .to_string(),
+                );
+            }
+            vec![format!("sysml-import-{first}")]
+        }
+    };
+    run_tool(&command, inputs, None)
+}
+
+/// A `--via` command, split the way a shell would split it, so that a
+/// path with a space in it can be quoted.
+fn shell_words(via: &str) -> Result<Vec<String>, String> {
+    shlex::split(via).ok_or_else(|| {
+        format!("--via cannot be read as a command: `{via}` has a quote that never closes")
+    })
+}
+
+/// Run an importer or a generator: the command, then the inputs as its
+/// arguments, with `fed` on its standard input where there is something
+/// to feed it. What it writes is the answer; what it says on standard
+/// error is said here too.
+fn run_tool(command: &[String], inputs: &[PathBuf], fed: Option<String>) -> Result<String, String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let Some((program, arguments)) = command.split_first() else {
+        return Err("--via names no command".to_string());
+    };
+    let cannot_run = |err: std::io::Error| format!("cannot run `{program}`: {err}");
+    let mut child = std::process::Command::new(program)
+        .args(arguments)
+        .args(inputs)
+        .stdin(if fed.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(cannot_run)?;
+    // Fed from a thread of its own. A generator that starts answering
+    // before it has read the whole plan fills its end of the pipe while
+    // this end is still writing, and the two wait on each other.
+    let feeding = fed.map(|text| {
+        let mut pipe = child.stdin.take().expect("asked for a pipe");
+        std::thread::spawn(move || pipe.write_all(text.as_bytes()))
+    });
+    let ran = child.wait_with_output().map_err(cannot_run)?;
+    // what closed the pipe early was the tool, and its exit says so
+    let _ = feeding.map(|thread| thread.join());
+    eprint!("{}", String::from_utf8_lossy(&ran.stderr));
+    if !ran.status.success() {
+        return Err(format!("`{program}` failed ({})", ran.status));
+    }
+    String::from_utf8(ran.stdout)
+        .map_err(|_| format!("`{program}` wrote something that is not text"))
+}
+
+/// Code in any language, from the generator for it.
+///
+/// What does not resolve is refused before any generator runs, since
+/// code generated from it would quietly leave out whatever the model
+/// misspelt -- the same refusal `rustgen` makes. What the model left
+/// open is the generator's to say, in whatever way its language has.
+fn codegen(
+    paths: &[PathBuf],
+    library: &[PathBuf],
+    lang: Option<&str>,
+    via: Option<&str>,
+    output: Option<&Path>,
+    bare: bool,
+) -> ExitCode {
+    if lang == Some("rust") {
+        return rustgen(paths, library, output, bare);
+    }
+    let mut ws = sysml_semantics::Workspace::new();
+    if let Err(unreadable) = load_paths(&mut ws, paths) {
+        unreadable.say();
+        return ExitCode::FAILURE;
+    }
+    // generation covers what was named; the library only resolves
+    let own = ws.file_count();
+    if let Err(unreadable) =
+        load_paths(&mut ws, library).and_then(|()| ensure_library(&mut ws, bare))
+    {
+        unreadable.say();
+        return ExitCode::FAILURE;
+    }
+    ws.resolve_all();
+    let roots: Vec<sysml_model::ElementId> = (0..own)
+        .flat_map(|file| ws.file_roots(file).to_vec())
+        .collect();
+    let planned = sysml_rust::plan::of(&mut ws, &roots);
+    if !planned.checked.ok {
+        for broken in &planned.checked.syntax {
+            eprintln!("error: does not parse: {broken}");
+        }
+        for name in &planned.checked.unresolved {
+            eprintln!("error: unresolved `{name}`");
+        }
+        eprintln!(
+            "error: the model does not resolve, so code generated from it would quietly leave \
+             things out; `sysml check` says where"
+        );
+        return ExitCode::FAILURE;
+    }
+    let plan = serde_json::to_string(&planned).expect("a built plan serializes");
+    let command = match via {
+        Some(via) => shell_words(via),
+        None => Ok(vec![format!("sysml-gen-{}", lang.unwrap_or_default())]),
+    };
+    let code = match command.and_then(|command| run_tool(&command, &[], Some(plan))) {
+        Ok(code) => code,
+        Err(why) => {
+            eprintln!("error: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    emit(
+        &code,
+        output,
+        &format!(
+            "{} line(s) from {} definition(s)",
+            code.lines().count(),
+            planned.definitions.len()
+        ),
+    )
 }
 
 fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {

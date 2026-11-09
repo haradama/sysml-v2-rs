@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""A Python module's API as a surface, for `sysml import-code`.
+
+An importer for a language this toolchain has never heard of is a program
+that writes what `sysml import-code` already reads -- Doxygen's filter
+arrangement -- and this is one, for Python. It reads the files it is
+given with `ast` and never imports them, so it runs on code whose
+dependencies are not here. README.md beside it says what it maps.
+
+    sysml import-code --via "python3 sysml-import-python" inventory.py
+
+or, with this file on PATH, `sysml import-code inventory.py`: the tool
+finds `sysml-import-py` by the extension, or `sysml-import-python` when
+told `--lang python`.
+
+Everything SysML decides -- which names to quote, how to tell two apart,
+what to refuse for naming a type nothing declares -- is decided by the
+tool reading this, not here. What has no shape is listed as skipped and
+never guessed at. Print the JSON and stop.
+"""
+
+import ast
+import json
+import sys
+from pathlib import Path
+
+PRIMITIVES = {"int": "Integer", "float": "Real", "bool": "Boolean", "str": "String"}
+SCALARS = {"bytes": ("PyBytes", "String")}
+
+
+class Reader:
+    def __init__(self, module):
+        self.module = module
+        self.declared = set()
+        self.scalars_used = set()
+        self.skipped = []
+
+    def typed(self, annotation, where):
+        """A `(type, multiplicity)` for an annotation, or None, listed."""
+        result = self.mapped(annotation)
+        if result is None:
+            self.skipped.append(f"{where} -- no SysML shape for `{ast.unparse(annotation)}`")
+        return result
+
+    def mapped(self, annotation):
+        if isinstance(annotation, ast.Name):
+            name = annotation.id
+            if name in PRIMITIVES:
+                return PRIMITIVES[name], "one"
+            if name in SCALARS:
+                self.scalars_used.add(name)
+                return SCALARS[name][0], "one"
+            if name in self.declared:
+                return name, "one"
+            return None
+        if isinstance(annotation, ast.Constant) and annotation.value is None:
+            return None
+        # list[T], Optional[T]
+        if isinstance(annotation, ast.Subscript) and isinstance(annotation.value, ast.Name):
+            container = annotation.value.id
+            multiplicity = {"list": "many", "Optional": "optional"}.get(container)
+            if multiplicity is None:
+                return None
+            return self.element(annotation.slice, multiplicity)
+        # T | None
+        if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+            sides = [annotation.left, annotation.right]
+            nones = [s for s in sides if isinstance(s, ast.Constant) and s.value is None]
+            if len(nones) == 1:
+                other = sides[0] if sides[1] is nones[0] else sides[1]
+                return self.element(other, "optional")
+            return None
+        return None
+
+    def element(self, inner, multiplicity):
+        """What a container holds, so long as it wants no multiplicity of its own."""
+        held = self.mapped(inner)
+        if held is None or held[1] != "one":
+            return None
+        return held[0], multiplicity
+
+    def field(self, name, annotation, where, doc=None):
+        typed = self.typed(annotation, where)
+        if typed is None:
+            return None
+        field = {"name": name, "type": typed[0]}
+        if typed[1] != "one":
+            field["multiplicity"] = typed[1]
+        if doc:
+            field["doc"] = doc
+        return field
+
+    def record(self, node):
+        item = {"kind": "record", "name": node.name, "path": f"{self.module}.{node.name}", "fields": []}
+        doc = ast.get_docstring(node)
+        if doc:
+            item["doc"] = doc
+        for statement in node.body:
+            if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+                field = self.field(statement.target.id, statement.annotation,
+                                   f"{node.name}.{statement.target.id}")
+                if field:
+                    item["fields"].append(field)
+        return item
+
+    def enumeration(self, node):
+        values = [t.id for s in node.body if isinstance(s, ast.Assign)
+                  for t in s.targets if isinstance(t, ast.Name)]
+        item = {"kind": "enumeration", "name": node.name, "path": f"{self.module}.{node.name}",
+                "values": values}
+        doc = ast.get_docstring(node)
+        if doc:
+            item["doc"] = doc
+        return item
+
+    def callable(self, node, owner=None):
+        path = f"{self.module}.{owner}.{node.name}" if owner else f"{self.module}.{node.name}"
+        item = {"name": node.name, "path": path, "parameters": []}
+        doc = ast.get_docstring(node)
+        if doc:
+            item["doc"] = doc
+        arguments = node.args.args
+        if arguments and arguments[0].arg in ("self", "cls"):
+            item["receiver"] = arguments[0].arg
+            arguments = arguments[1:]
+        for argument in arguments:
+            if argument.annotation is None:
+                self.skipped.append(f"{path} -- `{argument.arg}` has no annotation")
+                return None
+            field = self.field(argument.arg, argument.annotation, path)
+            if field is None:
+                return None
+            item["parameters"].append(field)
+        if node.returns is not None and not (
+            isinstance(node.returns, ast.Constant) and node.returns.value is None
+        ):
+            typed = self.typed(node.returns, path)
+            if typed is None:
+                return None
+            item["result"] = {"type": typed[0]}
+            if typed[1] != "one":
+                item["result"]["multiplicity"] = typed[1]
+        if isinstance(node, ast.AsyncFunctionDef):
+            item["async"] = True
+        if any(isinstance(inner, ast.Raise) for inner in ast.walk(node)):
+            item["fallible"] = True
+        return item
+
+    def interface(self, node):
+        item = {"kind": "interface", "name": node.name, "path": f"{self.module}.{node.name}",
+                "methods": []}
+        doc = ast.get_docstring(node)
+        if doc:
+            item["doc"] = doc
+        for statement in node.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                method = self.callable(statement, owner=node.name)
+                if method:
+                    item["methods"].append(method)
+        return item
+
+
+def bases(node):
+    return [b.id for b in node.bases if isinstance(b, ast.Name)]
+
+
+def kind_of(node):
+    """What a class is, by what it derives from."""
+    if not isinstance(node, ast.ClassDef):
+        return None
+    named = bases(node)
+    if "Enum" in named or "IntEnum" in named or "StrEnum" in named:
+        return "enumeration"
+    if "Protocol" in named or "ABC" in named:
+        return "interface"
+    if any(isinstance(s, ast.AnnAssign) for s in node.body):
+        return "record"
+    return None
+
+
+def main(paths):
+    if not paths:
+        print("usage: sysml-import-python FILE.py...", file=sys.stderr)
+        return 2
+    files = [Path(p) for p in paths]
+    module = files[0].stem if len(files) == 1 else files[0].resolve().parent.name
+    reader = Reader(module)
+    trees = [(f, ast.parse(f.read_text(), filename=str(f))) for f in files]
+    # every class first, so that a signature written above a class can
+    # name it -- and so that what is refused is never named
+    for _, tree in trees:
+        for node in tree.body:
+            if kind_of(node) in ("record", "enumeration", "interface"):
+                reader.declared.add(node.name)
+    items = []
+    for _, tree in trees:
+        for node in tree.body:
+            kind = kind_of(node)
+            if kind == "record":
+                items.append(reader.record(node))
+            elif kind == "enumeration":
+                items.append(reader.enumeration(node))
+            elif kind == "interface":
+                items.append(reader.interface(node))
+            elif isinstance(node, ast.ClassDef):
+                reader.skipped.append(f"{node.name} -- a class with no annotated attributes")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function = reader.callable(node)
+                if function:
+                    function["kind"] = "function"
+                    items.append(function)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        reader.skipped.append(f"{target.id} -- an assignment, not a declaration")
+    surface = {
+        "language": "python",
+        "module": module,
+        "unit": "module",
+        "tool": "sysml-import-python",
+        "scalars": [
+            {"name": SCALARS[p][0], "of": SCALARS[p][1], "path": p, "capabilities": ["Hashable"]}
+            for p in sorted(reader.scalars_used)
+        ],
+        "items": items,
+        "skipped": reader.skipped,
+    }
+    json.dump(surface, sys.stdout, indent=2)
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

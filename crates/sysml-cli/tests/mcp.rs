@@ -130,6 +130,7 @@ fn a_client_handshakes_lists_and_calls() {
             "outline",
             "generate_rust",
             "import_rust",
+            "import_code",
             "notation",
             "generation_plan",
             "library_search",
@@ -949,6 +950,127 @@ fn import_rust_states_a_crate_and_says_what_it_could_not() {
     ] {
         let refused = session(&[call("import_rust", bad)]);
         assert_eq!(refused[0]["result"]["isError"], true, "{refused:?}");
+    }
+}
+
+/// What `import_rust` reads off rustdoc, any reader of any language may
+/// say as JSON -- the caller included, for a language no tool reads yet
+/// -- and the answer is checked the same way.
+#[test]
+fn import_code_states_any_language_from_a_surface() {
+    let surface = json!({
+        "language": "python",
+        "module": "inventory",
+        "items": [
+            { "kind": "record", "name": "StockQuery", "path": "inventory.StockQuery",
+              "fields": [ { "name": "sku", "type": "String" },
+                          { "name": "warehouses", "type": "Integer", "multiplicity": "many" } ] },
+            { "kind": "interface", "name": "InventoryStore", "path": "inventory.InventoryStore",
+              "methods": [ { "name": "get_stock", "path": "inventory.InventoryStore.get_stock",
+                             "receiver": "self", "fallible": true,
+                             "parameters": [ { "name": "query", "type": "StockQuery" } ],
+                             "result": { "type": "StockQuery" } } ] },
+            { "kind": "function", "name": "count", "path": "inventory.count",
+              "parameters": [ { "name": "of", "type": "Basket" } ] }
+        ]
+    });
+
+    // the JSON itself, as an object, against the library
+    let library = library();
+    let mut server = sysml_cli::mcp::Server::new(Some(&library));
+    let imported = answered(
+        &server
+            .handle(&call(
+                "import_code",
+                json!({ "surface": surface, "package": "Warehouse" }),
+            ))
+            .expect("a request is answered"),
+    );
+    let written = imported["sysml"].as_str().unwrap();
+    assert!(written.contains("package Warehouse {"), "{written}");
+    assert!(written.contains(":>> writtenIn = \"python\";"), "{written}");
+    assert!(written.contains("action def GetStock {"), "{written}");
+    assert!(
+        written.contains("attribute warehouses : Integer[*];"),
+        "{written}"
+    );
+    assert_eq!(imported["checked"]["ok"], true, "{}", imported["checked"]);
+    // a signature naming what the surface never declared is refused
+    // and named, so the package resolves rather than dangling
+    assert_eq!(
+        imported["skipped"],
+        json!(["inventory.count -- names `Basket`, which the surface does not declare"])
+    );
+
+    // the same JSON as text, and from a file
+    let as_text = answered(
+        &session(&[call(
+            "import_code",
+            json!({ "surface": surface.to_string() }),
+        )])[0],
+    );
+    assert!(as_text["sysml"]
+        .as_str()
+        .unwrap()
+        .contains("package InventoryApi {"));
+    let dir = std::env::temp_dir().join("sysml-mcp-import-code");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("inventory.surface.json");
+    std::fs::write(&path, surface.to_string()).unwrap();
+    let from_file = answered(
+        &session(&[call(
+            "import_code",
+            json!({ "path": path.to_str().unwrap() }),
+        )])[0],
+    );
+    assert_eq!(from_file["sysml"], as_text["sysml"]);
+
+    // the tool's own schema is the surface's, so a client builds the call
+    // from what a front end's author reads; its definitions sit where a
+    // `$ref` in it points
+    let listed = session(&[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})]);
+    let tool = listed[0]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "import_code")
+        .expect("the tool is listed");
+    let schema = &tool["inputSchema"];
+    assert!(
+        schema["properties"]["surface"]["properties"]["items"].is_object(),
+        "{schema}"
+    );
+    assert!(schema["$defs"].is_object(), "{schema}");
+    assert!(
+        schema["properties"]["surface"].get("$defs").is_none(),
+        "{schema}"
+    );
+    assert!(
+        schema["properties"]["surface"].get("$schema").is_none(),
+        "{schema}"
+    );
+
+    // with neither, the refusal says what to give
+    let refused = session(&[call("import_code", json!({}))]);
+    assert_eq!(refused[0]["result"]["isError"], true, "{refused:?}");
+    assert!(
+        answered(&refused[0])["error"]
+            .as_str()
+            .unwrap()
+            .contains("--schema"),
+        "{refused:?}"
+    );
+    // and what is not a surface is refused by name, however it came
+    for bad in [
+        json!({ "surface": "not json" }),
+        json!({ "surface": { "language": "python" } }),
+        json!({ "surface": { "language": "python", "module": "m", "colour": "blue" } }),
+        json!({ "path": "/nowhere.surface.json" }),
+        json!({ "path": path.with_file_name("bad.json").to_str().unwrap() }),
+    ] {
+        std::fs::write(path.with_file_name("bad.json"), "{ \"module\": 1 }").unwrap();
+        let refused = session(&[call("import_code", bad.clone())]);
+        assert_eq!(refused[0]["result"]["isError"], true, "{bad}: {refused:?}");
     }
 }
 

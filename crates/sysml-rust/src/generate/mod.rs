@@ -190,6 +190,12 @@ enum Shape {
     Action,
     /// Abstract: features flatten into subtypes, no item of its own.
     Flattened,
+    /// A model's own scalar quantity -- `attribute def Payload :>
+    /// MassValue;` -- which is the `f64` any quantity is, under its own
+    /// name. Written as a struct, it was the library's machinery for a
+    /// quantity value flattened into fields, beside a default that was
+    /// the number.
+    Quantity,
 }
 
 struct Generator<'a> {
@@ -501,6 +507,7 @@ fn default_of(model: &Model, usage: ElementId) -> Option<String> {
                 true => Numbers::AsReals,
                 false => Numbers::AsWritten,
             },
+            &crate::quantity::units_under(model, usage),
             &|_| None,
             &|_| None,
         ) {
@@ -567,27 +574,62 @@ fn scalar_of(name: &str) -> Option<&'static str> {
     })
 }
 
+/// The type a feature holds values of: its own typing, or -- where it
+/// writes none -- that of what it redefines or subsets, as far up as it
+/// takes. `attribute mass :> ISQ::mass;` declares no type and is a
+/// `MassValue` all the same, since a subset of the masses is masses.
+///
+/// Asked by every reader of what a field or a parameter holds, so that
+/// one feature cannot be a `MassValue` to the struct and nothing to the
+/// plan.
+pub(crate) fn held_type(model: &Model, feature: ElementId) -> Option<ElementId> {
+    let mut seen = HashSet::new();
+    let mut next = Some(feature);
+    // a feature that subsets itself, however far round, holds nothing
+    // anyone wrote down
+    while let Some(at) = next.filter(|&at| seen.insert(at)) {
+        if let Some(ty) = model.type_of(at) {
+            return Some(ty);
+        }
+        next = redefined(model, at).or_else(|| {
+            model.owned(at).iter().find_map(|&child| {
+                (model.kind(child) == ElementKind::Subsetting)
+                    .then(|| model.subsetted_feature(child))
+                    .flatten()
+            })
+        });
+    }
+    None
+}
+
+/// The Rust scalar a type stands for: a primitive by its name, and a
+/// scalar quantity -- `ISQ::MassValue`, or a model's own specialization
+/// of one -- as the `f64` of SI coherent units it holds.
+fn scalar_type(model: &Model, ty: ElementId) -> Option<&'static str> {
+    model
+        .name(ty)
+        .and_then(scalar_of)
+        .or_else(|| crate::quantity::is_scalar_quantity(model, ty).then_some("f64"))
+}
+
 /// Whether a usage is typed by something Rust spells as a float. SysML
 /// writes `attribute shift : Real = 1670;` and means 1670.0; Rust reads
 /// that literal as an integer and refuses it, so the point has to be
 /// put back.
 fn wants_float(model: &Model, usage: ElementId) -> bool {
-    let Some(target) = model
-        .type_of(usage)
-        .or_else(|| redefined(model, usage).and_then(|it| model.type_of(it)))
-    else {
+    let Some(target) = held_type(model, usage) else {
         return false;
     };
     match binding(model, target).and_then(|bound| bound.get(binding::ITEM).cloned()) {
         Some(path) => path == "f32" || path == "f64",
-        None => model.name(target).and_then(scalar_of) == Some("f64"),
+        None => scalar_type(model, target) == Some("f64"),
     }
 }
 
 /// A real as Rust spells it. `{:?}` writes `inf` and `NaN`, which are
 /// what a model overflowing a `f64` -- `1e999` -- arrives as and which
 /// Rust does not read back as anything.
-fn real_literal(real: f64) -> String {
+pub(crate) fn real_literal(real: f64) -> String {
     match real {
         _ if real.is_nan() => "f64::NAN".to_string(),
         f64::INFINITY => "f64::INFINITY".to_string(),
