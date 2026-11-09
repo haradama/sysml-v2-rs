@@ -73,19 +73,13 @@ pub(crate) fn si_unit(model: &Model, quantity: ElementId) -> Option<String> {
             model.type_of(child).and_then(|ty| model.name(ty)) == Some("QuantityPowerFactor")
         })
     {
-        let written = sysml_model::expression_text(
-            model,
-            value_of(model, member(model, factor, "quantity")?)?,
-        )?;
+        let dimension = value_of(model, member(model, factor, "quantity")?)?;
+        let written = sysml_model::expression_text(model, dimension)?;
         let symbol = written.rsplit('.').next()?.trim_matches('\'');
-        let base = BASE.iter().position(|(quantity, _)| *quantity == symbol)?;
+        let base = BASE.iter().position(|(declared, _)| *declared == symbol)?;
         // a root of a unit has no spelling among powers of whole units
-        let exponent = Some(number(
-            model,
-            value_of(model, member(model, factor, "exponent")?)?,
-            &mut Vec::new(),
-        )?)
-        .filter(|it| it.fract() == 0.0)?;
+        let exponent = value_of(model, member(model, factor, "exponent")?)?;
+        let exponent = number(model, exponent, &mut Vec::new()).filter(|it| it.fract() == 0.0)?;
         *powers.entry(base).or_default() += exponent as i64;
     }
     let spell = |sign: i64| -> Vec<String> {
@@ -249,18 +243,13 @@ fn conversion_factor(
     conversion: ElementId,
     seen: &mut Vec<ElementId>,
 ) -> Option<f64> {
-    let reference = number(
-        model,
-        value_of(model, member(model, conversion, "referenceUnit")?)?,
-        seen,
-    )?;
+    let reference = value_of(model, member(model, conversion, "referenceUnit")?)?;
+    let reference = number(model, reference, seen)?;
     let stated = match member(model, conversion, "conversionFactor") {
         Some(factor) => value_of(model, factor)?,
         None => {
-            let prefix = referent(
-                model,
-                value_of(model, member(model, conversion, "prefix")?)?,
-            )?;
+            let named = value_of(model, member(model, conversion, "prefix")?)?;
+            let prefix = referent(model, named)?;
             value_of(model, member(model, prefix, "conversionFactor")?)?
         }
     };

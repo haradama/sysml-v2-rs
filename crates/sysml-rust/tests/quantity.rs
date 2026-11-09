@@ -29,6 +29,7 @@ const MODEL: &str = "package Q {\n\
     \t\tattribute power : PowerValue = 3 [kW];\n\
     \t\tattribute stride : LengthValue = 3 [ft];\n\
     \t\tattribute hum : FrequencyValue = 50 [Hz];\n\
+    \t\tattribute rate : FrequencyValue = 30 [min^-(1)];\n\
     \t\tattribute field : MagneticFluxDensityValue = 2 [T];\n\
     \t\tattribute drag : ReynoldsNumberValue;\n\
     \t\tattribute hot : ThermodynamicTemperatureValue = 300 [K];\n\
@@ -102,6 +103,8 @@ fn a_quantity_is_the_number_of_si_units_it_holds() {
         ("power", "3000.0"),
         ("stride", "0.9144"),
         ("hum", "50.0"),
+        // `-1` is folded into a literal, `-(1)` is a minus applied to one
+        ("rate", "0.5"),
         ("field", "2.0"),
         ("hot", "300.0"),
     ] {
