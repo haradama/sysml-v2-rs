@@ -1594,7 +1594,6 @@ impl Parser<'_> {
                             }
                             self.finish_node();
                         }
-                        STRING => self.bump(),
                         _ => {}
                     }
                     self.finish_node();

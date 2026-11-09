@@ -457,12 +457,14 @@ pub fn library_primitive(model: &Model, ty: ElementId) -> Option<&'static str> {
             }
         }
         for &owned in model.owned(next) {
-            let general = match model.kind(owned) {
-                ElementKind::Subclassification => "superclassifier",
-                ElementKind::Specialization => "general",
-                _ => continue,
-            };
-            queue.extend(model.maybe(owned, general).and_then(Value::as_id));
+            if model.kind(owned).is_a(ElementKind::Specialization) {
+                queue.extend(
+                    model
+                        .maybe(owned, "superclassifier")
+                        .or_else(|| model.maybe(owned, "general"))
+                        .and_then(Value::as_id),
+                );
+            }
         }
     }
     None

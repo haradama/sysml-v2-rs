@@ -98,17 +98,18 @@ impl Workspace {
                                 .map_or(node.text_range(), |it| it.text_range());
                             (vec![named], written, false)
                         }
-                        None => match invoked_by_name(&node) {
-                            Some(callee) => {
-                                // `F(x)` writes `F` where the names of the
-                                // expression are looked up already
-                                let mut chains = Vec::new();
-                                name_chains(&node, &mut chains);
-                                let counted = chains.contains(&callee);
-                                (operand_segments(&callee), callee.text_range(), counted)
-                            }
-                            None => (Vec::new(), node.text_range(), true),
-                        },
+                        None => {
+                            // `F(x)` writes `F` where the names of the
+                            // expression are looked up already
+                            let callee = invoked_by_name(&node);
+                            let mut chains = Vec::new();
+                            name_chains(&node, &mut chains);
+                            let counted = callee.as_ref().is_none_or(|it| chains.contains(it));
+                            let segments =
+                                callee.as_ref().map(operand_segments).unwrap_or_default();
+                            let range = callee.map_or(node.text_range(), |it| it.text_range());
+                            (segments, range, counted)
+                        }
                     };
                     let found = self.resolve_operand(elem, &segments);
                     if !segments.is_empty() && !counted {
@@ -552,51 +553,6 @@ impl Workspace {
         }
         Vec::new()
     }
-    /// The names a multiplicity counts with.
-    ///
-    /// `first [nCauses] causes.startShot ... { attribute nCauses =
-    /// size(causes); }` counts with an attribute the succession declares, and
-    /// `validateMultiplicityRangeBoundResultTypes` reads what such a bound
-    /// comes to. The builder keeps a named bound as text; until the name is
-    /// looked up it refers to nothing.
-    pub(crate) fn count_with_what_is_named(&mut self, ids: &[ElementId]) {
-        for &elem in ids {
-            if self.model.kind(elem) != ElementKind::FeatureReferenceExpression
-                || self.model.maybe(elem, "referent").is_some()
-            {
-                continue;
-            }
-            let Some(owner) = self
-                .model
-                .owner(elem)
-                .filter(|&it| self.model.kind(it) == ElementKind::MultiplicityRange)
-                .and_then(|range| self.model.owner(range))
-            else {
-                continue;
-            };
-            let written = self
-                .written_as(elem)
-                .expect("the builder keeps a named bound as the text it was written as");
-            let segments: Vec<String> = written.split("::").map(str::to_string).collect();
-            let found = self
-                .resolve_inside(owner, &segments)
-                .or_else(|| self.resolve_from(owner, &segments));
-            if let Some(target) = found {
-                self.refers_to(elem, target);
-            }
-        }
-    }
-    /// The text an element was written as, where the builder kept it.
-    fn written_as(&self, elem: ElementId) -> Option<String> {
-        self.model
-            .owned(elem)
-            .iter()
-            .copied()
-            .find(|&it| self.model.kind(it) == ElementKind::TextualRepresentation)
-            .and_then(|it| self.model.maybe(it, "body"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    }
     /// Resolve every name written in an expression, from `owner`.
     ///
     /// The model keeps an expression as the text the author wrote, so the
@@ -685,16 +641,10 @@ impl Workspace {
     }
     /// The file an element is written in: its own, or that of the
     /// nearest owner the builder put on the text.
-    pub(crate) fn file_of(&self, mut elem: ElementId) -> usize {
-        loop {
-            if let Some(&file) = self.elem_file.get(&elem) {
-                return file;
-            }
-            match self.model.owner(elem) {
-                Some(owner) => elem = owner,
-                None => return 0,
-            }
-        }
+    pub(crate) fn file_of(&self, elem: ElementId) -> usize {
+        std::iter::successors(Some(elem), |&at| self.model.owner(at))
+            .find_map(|at| self.elem_file.get(&at).copied())
+            .unwrap_or_default()
     }
     /// Look up the names a bracketed import filter is written with: the
     /// metadata each `@` asks about, and any other name in the condition.

@@ -3824,6 +3824,11 @@ fn a_name_resolves_to_nothing_wherever_it_is_written() {
             "part def Ok; attribute v = new NOPE();",
         ),
         (
+            "what a flow's payload references",
+            "part def W { part ok; } part w : W; flow f of p ::> w.ok from w.ok to w.ok;",
+            "part def W { part ok; } part w : W; flow f of p ::> w.NOPE from w.ok to w.ok;",
+        ),
+        (
             "what an arrow invokes and the function it hands over",
             "calc def f { in a; in b; } calc def ok { in a; in b; } attribute xs; attribute v = xs->f ok;",
             "calc def f { in a; in b; } calc def ok { in a; in b; } attribute xs; attribute v = xs->f NOPE;",
@@ -4060,4 +4065,42 @@ fn sharing_a_name_redefines_only_a_parameter() {
     )]);
     let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
     assert_eq!(missing, ["b::m::grade"]);
+}
+
+/// A filter condition written as a literal says outright what passes,
+/// and `and`/`or` are decided by one side where that side settles them.
+#[test]
+fn a_filter_says_what_passes_as_far_as_it_can_be_read() {
+    let unresolved = |filter: &str| -> Vec<String> {
+        let ws = ws(&[(
+            "m.sysml",
+            &format!(
+                "package P {{ metadata def Safety; package Q {{ part x; #Safety part y; }} \
+                 package R {{ private import Q::*[{filter}]; part a :> x; part b :> y; }} }}"
+            ),
+        )]);
+        ws.unresolved().iter().map(|it| it.name.clone()).collect()
+    };
+    let none: Vec<String> = Vec::new();
+    assert_eq!(unresolved("true"), none);
+    assert_eq!(unresolved("false"), ["x", "y"]);
+    // what is no condition at all is not evaluated, and keeps every name
+    assert_eq!(unresolved("1"), none);
+    // `@Safety and ...` holds for no member that is not annotated, whatever
+    // the other side is; `@Safety or ...` for every member that is
+    assert_eq!(unresolved("@Safety and 1 == 1"), ["x"]);
+    assert_eq!(unresolved("@Safety or false"), ["x"]);
+    assert_eq!(unresolved("@Safety xor true"), ["y"]);
+}
+
+/// A recursive import that has nothing by the name asked for hands the
+/// search on to the imports after it.
+#[test]
+fn a_recursive_import_that_has_nothing_passes_the_name_on() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package Q { package Deep { part def Inner; } } package S { part def There; } \
+         package R { private import Q::**; private import S::*; part z : There; part y : Inner; }",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
 }

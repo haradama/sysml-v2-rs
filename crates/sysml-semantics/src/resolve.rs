@@ -126,7 +126,6 @@ impl Workspace {
     pub(crate) fn imply_for(&mut self, ids: &[ElementId]) {
         let ids = self.with_what_they_own(ids);
         self.carry_ends(&ids);
-        self.count_with_what_is_named(&ids);
         self.relate_named_ends(&ids);
         self.imply_end_redefinitions(&ids);
         self.imply_end_participation(&ids);

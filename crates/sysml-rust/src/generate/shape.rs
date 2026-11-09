@@ -703,22 +703,14 @@ impl<'a> Generator<'a> {
 }
 
 /// The keywords a definition of `kind` is declared with: `PartDefinition`
-/// is `part def`, `UseCaseDefinition` `use case def`, and a KerML
-/// classifier its metaclass in lower case.
+/// is `part def`. Only the definitions that become structs ask, and each
+/// of those is one word before `Definition`.
 fn declared_as(kind: ElementKind) -> String {
     let name = kind.name();
-    let Some(defined) = name.strip_suffix("Definition") else {
-        return name.to_lowercase();
-    };
-    let mut words = String::new();
-    for ch in defined.chars() {
-        if ch.is_uppercase() && !words.is_empty() {
-            words.push(' ');
-        }
-        words.extend(ch.to_lowercase());
-    }
-    match words.as_str() {
-        "enumeration" => "enum def".to_string(),
-        _ => format!("{words} def"),
-    }
+    format!(
+        "{} def",
+        name.strip_suffix("Definition")
+            .unwrap_or(name)
+            .to_lowercase()
+    )
 }

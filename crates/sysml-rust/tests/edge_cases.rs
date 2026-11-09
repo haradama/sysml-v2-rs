@@ -2022,3 +2022,60 @@ fn a_multiplicity_becomes_the_container_it_states() {
     assert!(rust.contains("pub three: [Thing; 3],"), "{rust}");
     compiles(&rust);
 }
+
+/// What the generator was handed that it could not write as Rust that
+/// compiles, it now writes otherwise or leaves open and says so: a
+/// number specialized under a name of its own, a redefinition under a
+/// new name, two generals handing down one name, text joined with `+`,
+/// and values an `Integer` cannot hold.
+#[test]
+fn what_the_types_say_is_what_compiles() {
+    let rust = generate(
+        "package P {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Kg :> Real;\n\
+         \tpackage Q { abstract attribute def Real { attribute re : ScalarValues::Real; } }\n\
+         \tpart def X1 { attribute x : Integer; }\n\
+         \tpart def X2 { attribute x : String; }\n\
+         \tpart def R2 :> X1 { attribute y :>> x = 7; }\n\
+         \tpart def Both :> X1, X2;\n\
+         \tpart def A {\n\
+         \t\tattribute k : Kg = 1.0;\n\
+         \t\tattribute q : Q::Real;\n\
+         \t\tattribute st : String = \"x\" + \"y\";\n\
+         \t\tattribute pw : Integer = 2 ** 3;\n\
+         \t\tattribute big : Integer = 99999999999999999999;\n\
+         \t\tattribute i : Integer = 1.5;\n\
+         \t\tattribute one : Integer[1..1];\n\
+         \t\tattribute three : Integer[3];\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("pub type Kg = f64;"), "{rust}");
+    assert!(rust.contains("pub k: f64,"), "{rust}");
+    // a model's own `Real` is not the library's
+    assert!(!rust.contains("pub q: f64"), "{rust}");
+    assert!(
+        rust.contains("pub struct R2 {\n    pub y: i64,\n}"),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("`x` is handed down by two generals that do not redefine one another"),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("st: \"x\".to_string() + &\"y\".to_string(),"),
+        "{rust}"
+    );
+    for open in ["pw", "big", "i"] {
+        assert!(
+            rust.contains(&format!("// left open: `{open}`")),
+            "{open}: {rust}"
+        );
+    }
+    assert!(rust.contains("pub one: i64,"), "{rust}");
+    assert!(rust.contains("pub three: [i64; 3],"), "{rust}");
+    assert!(rust.contains("/// SysML: `attribute def Kg`"), "{rust}");
+    compiles(&rust);
+}

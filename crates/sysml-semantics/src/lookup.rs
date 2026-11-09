@@ -30,12 +30,6 @@ pub(crate) struct Reach {
     access: Access,
     /// Whether what the namespace inherits is searched.
     inherited: bool,
-    /// Whether what it imports is searched. What a supertype imports
-    /// publicly or protectedly is inherited with the rest of what it
-    /// has: `inheritableMemberships` takes the supertype's
-    /// `nonPrivateMemberships`, which are its own and its imported
-    /// memberships of that visibility (`membershipsOfVisibility`).
-    imports: bool,
     /// A member the answer must not be -- the declaration whose own
     /// clause is being resolved, which would otherwise answer itself.
     exclude: Option<ElementId>,
@@ -48,7 +42,6 @@ impl Reach {
         Reach {
             access,
             inherited: true,
-            imports: true,
             exclude: None,
         }
     }
@@ -436,9 +429,9 @@ impl Workspace {
         ns: ElementId,
         name: &str,
         reach: Reach,
-        guard: &mut HashSet<(ElementId, Access, bool, bool)>,
+        guard: &mut HashSet<(ElementId, Access, bool)>,
     ) -> Option<ElementId> {
-        if !guard.insert((ns, reach.access, reach.inherited, reach.imports)) {
+        if !guard.insert((ns, reach.access, reach.inherited)) {
             return None;
         }
         // A namespace inherits from a namespace that inherits from a
@@ -460,7 +453,7 @@ impl Workspace {
         ns: ElementId,
         name: &str,
         reach: Reach,
-        guard: &mut HashSet<(ElementId, Access, bool, bool)>,
+        guard: &mut HashSet<(ElementId, Access, bool)>,
     ) -> Option<ElementId> {
         // Direct members and aliases, in the order they are written.
         let mut candidates = self.members_named(ns, name);
@@ -527,63 +520,64 @@ impl Workspace {
         // imported members: all imports apply inside the namespace itself,
         // only `public import`s re-export, and a subtype inherits what a
         // supertype imports unless it imported it privately
-        if reach.imports {
-            for import in self.imports_of(ns) {
-                let shown = match reach.access {
-                    Access::Internal => true,
-                    Access::Inherited => self.visibility(import) != Vis::Private,
-                    Access::External => self.visibility(import) == Vis::Public,
-                };
-                if !shown {
-                    continue;
+        // -- what a supertype imports publicly or protectedly is inherited
+        // with the rest of what it has: `inheritableMemberships` takes its
+        // `nonPrivateMemberships`, imported ones included
+        for import in self.imports_of(ns) {
+            let shown = match reach.access {
+                Access::Internal => true,
+                Access::Inherited => self.visibility(import) != Vis::Private,
+                Access::External => self.visibility(import) == Vis::Public,
+            };
+            if !shown {
+                continue;
+            }
+            let Some(imp) = self.import_target(import) else {
+                continue;
+            };
+            // `import all` overrides target-side visibility
+            let target_access = if imp.all {
+                Access::Internal
+            } else {
+                Access::External
+            };
+            if imp.scope.brings_the_member() {
+                // `import A::B;` makes the member visible under
+                // the name the import wrote, and where that is
+                // the member's own its short name answers too.
+                // Where it is an alias's -- `import A::Alias;`
+                // -- the member's own name was not imported,
+                // and offering it as well would let a name the
+                // importing file never wrote resolve.
+                let wrote = imp.leaf.as_deref();
+                let by_its_own_name =
+                    wrote.is_some_and(|leaf| self.member_name_matches(imp.target, leaf));
+                if (wrote == Some(name)
+                    || (by_its_own_name && self.member_name_matches(imp.target, name)))
+                    && self.admits(imp.target, &imp.filters)
+                {
+                    return Some(imp.target);
                 }
-                let Some(imp) = self.import_target(import) else {
-                    continue;
-                };
-                // `import all` overrides target-side visibility
-                let target_access = if imp.all {
-                    Access::Internal
-                } else {
-                    Access::External
-                };
-                if imp.scope.brings_the_member() {
-                    // `import A::B;` makes the member visible under
-                    // the name the import wrote, and where that is
-                    // the member's own its short name answers too.
-                    // Where it is an alias's -- `import A::Alias;`
-                    // -- the member's own name was not imported,
-                    // and offering it as well would let a name the
-                    // importing file never wrote resolve.
-                    let wrote = imp.leaf.as_deref();
-                    let by_its_own_name =
-                        wrote.is_some_and(|leaf| self.member_name_matches(imp.target, leaf));
-                    if (wrote == Some(name)
-                        || (by_its_own_name && self.member_name_matches(imp.target, name)))
-                        && self.admits(imp.target, &imp.filters)
-                    {
-                        return Some(imp.target);
+            }
+            if imp.scope.brings_its_members() {
+                let inherited = self.inherits_into_imports(imp.target);
+                if let Some(hit) = self.lookup_guarded(
+                    imp.target,
+                    name,
+                    reach.narrowed_to(target_access).inheriting(inherited),
+                    guard,
+                ) {
+                    if self.admits(hit, &imp.filters) {
+                        return Some(hit);
                     }
                 }
-                if imp.scope.brings_its_members() {
-                    let inherited = self.inherits_into_imports(imp.target);
-                    if let Some(hit) = self.lookup_guarded(
-                        imp.target,
-                        name,
-                        reach.narrowed_to(target_access).inheriting(inherited),
-                        guard,
-                    ) {
-                        if self.admits(hit, &imp.filters) {
-                            return Some(hit);
-                        }
-                    }
-                    if imp.scope.reaches_below() {
-                        for desc in self.nested_visible(imp.target, target_access) {
-                            if Some(desc) != reach.exclude
-                                && self.member_name_matches(desc, name)
-                                && self.admits(desc, &imp.filters)
-                            {
-                                return Some(desc);
-                            }
+                if imp.scope.reaches_below() {
+                    for desc in self.nested_visible(imp.target, target_access) {
+                        if Some(desc) != reach.exclude
+                            && self.member_name_matches(desc, name)
+                            && self.admits(desc, &imp.filters)
+                        {
+                            return Some(desc);
                         }
                     }
                 }

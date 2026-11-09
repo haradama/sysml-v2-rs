@@ -623,7 +623,7 @@ impl Writing<'_> {
         self.extras.import_targets.get(&id).copied().or_else(|| {
             ["importedMembership", "importedNamespace"]
                 .iter()
-                .find_map(|prop| self.model.get(id, prop).and_then(Value::as_id))
+                .find_map(|prop| self.model.maybe(id, prop).and_then(Value::as_id))
         })
     }
 
@@ -2518,6 +2518,35 @@ mod tests {
         // and the whole shape reads back and re-exports identically
         let (rebuilt, _) = from_json(&json).unwrap();
         assert_eq!(to_json_with(&rebuilt, &extras), json);
+
+        // what each imports is the element, not the membership it came by
+        assert_eq!(namespace_import["importedElement"]["@id"], a["@id"]);
+        assert_eq!(membership_import["importedElement"]["@id"], x["@id"]);
+        // and read back with nothing beside the document, the imports
+        // still say what they imported: the membership folded into an
+        // edge on the way in, and was dropped with it
+        let again = to_json(&rebuilt);
+        let reimported = again
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|object| object["@type"] == "MembershipImport")
+            .unwrap();
+        assert_eq!(
+            reimported["importedMembership"],
+            membership_import["importedMembership"]
+        );
+        assert_eq!(reimported["importedElement"]["@id"], x["@id"]);
+
+        // a membership the document does not hold is no reason to refuse it
+        let mut elsewhere = json.clone();
+        for object in elsewhere.as_array_mut().unwrap() {
+            if object["@type"] == "MembershipImport" {
+                object["importedMembership"] =
+                    json!({ "@id": "00000000-0000-0000-0000-000000000000" });
+            }
+        }
+        assert!(from_json(&elsewhere).is_ok());
     }
 
     #[test]
