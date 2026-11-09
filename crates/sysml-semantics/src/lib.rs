@@ -1566,6 +1566,8 @@ pub(crate) fn implicit_supertype(kind: ElementKind) -> &'static [&'static str] {
         // `validateMultiplicityRangeBoundResultTypes` asks of the `*`
         // in `[0..*]`.
         LiteralInfinity => &["Performances::literalIntegerEvaluations"],
+        // `checkNullExpressionSpecialization`
+        NullExpression => &["Performances::nullEvaluations"],
         FeatureReferenceExpression => &["Performances::evaluations"],
         Connector => &["Links::links"],
         BindingConnector => &["Links::selfLinks"],

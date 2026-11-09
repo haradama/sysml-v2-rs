@@ -544,6 +544,26 @@ impl Workspace {
     /// The `FeatureReferenceExpression` an element's value was built
     /// into, where the model made one -- which it does exactly when the
     /// whole value is a name.
+    /// The bounds of an element's multiplicity that were built from an
+    /// expression, each with the text it was built from. A literal bound
+    /// was built from no node of its own and names nothing.
+    pub(crate) fn bounds_written_as_expressions(
+        &self,
+        elem: ElementId,
+    ) -> Vec<(ElementId, SyntaxNode)> {
+        let Some(range) = self
+            .model
+            .maybe(elem, "multiplicity")
+            .and_then(Value::as_id)
+        else {
+            return Vec::new();
+        };
+        self.model
+            .owned(range)
+            .iter()
+            .filter_map(|&bound| Some((bound, self.source.get(&bound)?.clone())))
+            .collect()
+    }
     pub(crate) fn reference_expression(&self, owner: ElementId) -> Option<ElementId> {
         let membership = self
             .model

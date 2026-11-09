@@ -3652,3 +3652,69 @@ fn a_filter_that_names_what_only_it_brings_in_still_finishes() {
     // and the names the model does bring into scope still resolve
     assert_eq!(unresolved, 0);
 }
+
+/// A bound that names something is a reference like any other. Read as
+/// the tokens between the brackets, `[count]` was never looked up, so a
+/// bound that named nothing at all -- a typo, a feature since renamed --
+/// passed `check` as a multiplicity nobody could read.
+#[test]
+fn a_name_written_as_a_bound_is_looked_up() {
+    const MODEL: &str = "package P {\n\
+        \tattribute count = 4;\n\
+        \tpart wheels[count];\n\
+        \tpart spares[1..count + 1];\n\
+        \tpart axles[count * 2];\n\
+        \tpart seats[0..*];\n\
+        \tpart nuts[nope];\n\
+        \tpart bolts[2..nope * 2];\n\
+        }\n";
+    let mut ws = ws(&[("p.sysml", MODEL)]);
+    let count = ws.named_globally("P::count").expect("declared");
+    let named: Vec<&str> = ws
+        .references()
+        .iter()
+        .filter(|it| it.target == count)
+        .map(|it| &MODEL[it.range])
+        .collect();
+    assert_eq!(named, ["count", "count", "count"]);
+    let missing: Vec<(&str, u32)> = ws
+        .unresolved()
+        .iter()
+        .map(|it| (it.name.as_str(), u32::from(it.range.start())))
+        .collect();
+    let at = |line: &str| (MODEL.find(line).unwrap() + line.find("nope").unwrap()) as u32;
+    assert_eq!(
+        missing,
+        [
+            ("nope", at("part nuts[nope]")),
+            ("nope", at("part bolts[2..nope * 2]")),
+        ]
+    );
+}
+
+/// `(@A)` is the condition inside the parentheses, and `(@A, @B)` is a
+/// sequence, which is no condition at all. Read by its first element
+/// alone, the sequence filtered by `@A` and hid `b` behind a filter the
+/// model never wrote; a condition that cannot be evaluated keeps every
+/// name, like any other this cannot answer.
+#[test]
+fn a_sequence_written_as_a_filter_is_not_its_first_element() {
+    const MODEL: &str = "package P {\n\
+        \tprivate import Tree::*;\n\
+        \tpackage Tree {\n\
+        \t\tmetadata def A;\n\
+        \t\tmetadata def B;\n\
+        \t\tpart a { @A; }\n\
+        \t\tpart b { @B; }\n\
+        \t}\n\
+        \tpackage One { public import Tree::*[(@A)]; }\n\
+        \tpackage Both { public import Tree::*[(@A, @B)]; }\n\
+        \tpart oneA :> One::a;\n\
+        \tpart oneB :> One::b;\n\
+        \tpart bothA :> Both::a;\n\
+        \tpart bothB :> Both::b;\n\
+        }\n";
+    let ws = ws(&[("p.sysml", MODEL)]);
+    let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
+    assert_eq!(missing, ["One::b"]);
+}

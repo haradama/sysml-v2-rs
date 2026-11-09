@@ -214,10 +214,13 @@ impl Workspace {
             .children()
             .filter(|child| child.kind() != SyntaxKind::QUALIFIED_NAME);
         match condition.kind() {
-            SyntaxKind::PAREN_EXPR => {
-                let inner = operands.next()?;
-                self.condition_holds(&inner, member, at)
-            }
+            // `(@A)` is the condition inside it; `(@A, @B)` is a
+            // sequence, which is no condition at all, and reading its
+            // first element alone made it filter by `@A`
+            SyntaxKind::PAREN_EXPR => match (operands.next(), operands.next()) {
+                (Some(inner), None) => self.condition_holds(&inner, member, at),
+                _ => None,
+            },
             // `@Safety` asks what the member is annotated with, and it
             // is the whole of what the published models filter by.
             SyntaxKind::UNARY_EXPR if operator == Some(SyntaxKind::AT) => {

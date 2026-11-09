@@ -448,7 +448,7 @@ fn build_node(
         reify_condition(model, node, id);
     }
     if kind.feature("multiplicity").is_some() {
-        reify_multiplicity(model, node, id);
+        reify_multiplicity(model, node, id, built);
     }
     // every feature, not only the usages SysML layers on them: the
     // standard puts a `FeatureValue` on `Feature`, and KerML writes
@@ -575,13 +575,14 @@ fn closes_a_loop(node: &SyntaxNode) -> bool {
 /// A single bound is recorded as the range's `bound`, two as `lowerBound`
 /// and `upperBound` -- the shape the written text has, with the KerML
 /// reading left to the consumer.
-fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
+fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId, built: &mut Built) {
     use SyntaxKind::*;
     // `part x [0..*]` writes the clause as a node of its own. A control
     // statement writes the same thing where an index would go -- `then
-    // timeslice ownership[0..*]` -- and a two-ended range arrives whole
-    // there rather than as bounds either side of a `..`, so it is opened
-    // up to be read the one way.
+    // timeslice ownership[0..*]`. Either way a two-ended range arrives
+    // whole, as one `..` expression rather than as bounds either side of
+    // it, so it is opened up to be read the one way; any other expression
+    // is one bound.
     let written: Vec<sysml_syntax::SyntaxElement> =
         match node.children().find(|child| child.kind() == MULTIPLICITY) {
             Some(clause) => clause.children_with_tokens().collect(),
@@ -592,16 +593,12 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
                 indexed
                     .children_with_tokens()
                     .skip_while(|part| part.kind() != L_BRACKET)
-                    .flat_map(|part| match part.as_node() {
-                        Some(range) if range.kind() == BINARY_EXPR => {
-                            range.children_with_tokens().collect::<Vec<_>>()
-                        }
-                        _ => vec![part],
-                    })
                     .collect()
             }
             None => return,
         };
+    let written: Vec<sysml_syntax::SyntaxElement> =
+        written.into_iter().flat_map(opened_ranges).collect();
     let range = model.create(ElementKind::MultiplicityRange);
     model.add_owned(owner, range);
     model.set(owner, "multiplicity", Value::Ref(range));
@@ -625,7 +622,7 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     } else {
         segments
             .iter()
-            .map(|segment| bound_expression(model, range, segment))
+            .map(|segment| bound_expression(model, range, segment, built))
             .collect()
     };
     match bounds.as_slice() {
@@ -640,22 +637,54 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId) {
     }
 }
 
+/// A part of a multiplicity with every `..` in it laid out flat:
+/// `[1..2..3]` reads as `(1..2)..3`, and is three bounds all the same,
+/// which fit no range.
+fn opened_ranges(part: sysml_syntax::SyntaxElement) -> Vec<sysml_syntax::SyntaxElement> {
+    match part.as_node() {
+        Some(range)
+            if range.kind() == SyntaxKind::BINARY_EXPR && has_token(range, SyntaxKind::DOT_DOT) =>
+        {
+            range
+                .children_with_tokens()
+                .flat_map(opened_ranges)
+                .collect()
+        }
+        _ => vec![part],
+    }
+}
+
 /// One bound of a multiplicity range, as the element it denotes. A
-/// bound of one plain token is the literal it spells; anything else --
-/// `count + 1`, a number too large for the model's integers, a minus
-/// sign where a natural belongs, or nothing at all -- is an expression
-/// kept as the text it was written as.
+/// bound of one plain token is the literal it spells, and one that names
+/// something -- `count`, `count + 1` -- is the expression it is written
+/// as, built like any other value so that its names are looked up.
+/// Anything else -- a number too large for the model's integers, a
+/// minus sign where a natural belongs, or nothing at all -- is an
+/// expression kept as the text it was written as.
 fn bound_expression(
     model: &mut Model,
     range: ElementId,
     segment: &[sysml_syntax::SyntaxElement],
+    built: &mut Built,
 ) -> ElementId {
     use SyntaxKind::*;
     let written: String = segment.iter().map(|part| part.to_string()).collect();
-    let single = match segment {
-        [only] => only.as_token().map(|token| token.kind()),
+    let node = match segment {
+        [only] => only.as_node(),
         _ => None,
     };
+    let single = match (segment, node) {
+        ([only], None) => only.as_token().map(|token| token.kind()),
+        (_, Some(literal)) if literal.kind() == LITERAL => {
+            literal.first_token().map(|token| token.kind())
+        }
+        _ => None,
+    };
+    if let Some(expression) = node.filter(|_| single.is_none()) {
+        if expression.descendants().any(|it| it.kind() == NAME_REF) {
+            return value_expression(model, range, expression, built);
+        }
+    }
     let (kind, value) = match single {
         Some(DECIMAL) => match written.parse() {
             Ok(int) => (ElementKind::LiteralInteger, Value::Int(int)),
@@ -745,16 +774,24 @@ fn value_expression(
         model.set(literal, "value", value);
         return literal;
     }
+    // `NullExpression = 'null' | '(' ')'` and `LiteralInfinity = '*'`
+    // are each the whole of what they mean, and have no value to hold.
+    // Falling through to the text-only expression at the end, they were
+    // an expression of nothing in particular.
+    if let Some(kind) = valueless_literal(written) {
+        let literal = model.create(kind);
+        model.add_owned(membership, literal);
+        return literal;
+    }
     // `( a + b )` is what is inside it and nothing more; `(a, b, c)` is a
     // sequence, and every element of it is kept
     if written.kind() == SyntaxKind::PAREN_EXPR {
         let items: Vec<SyntaxNode> = written.children().collect();
-        if items.len() > 1 {
-            return sequence_expression(model, membership, written, &items, built);
-        }
-        if let Some(inner) = items.into_iter().next() {
-            return value_expression(model, membership, &inner, built);
-        }
+        // the empty `()` was the null literal above
+        return match items.as_slice() {
+            [inner] => value_expression(model, membership, inner, built),
+            _ => sequence_expression(model, membership, written, &items, built),
+        };
     }
     // `= ledPinNumber` refers to a feature rather than computing
     // anything, and the standard has an expression kind for exactly
@@ -812,7 +849,18 @@ fn value_expression(
                 // `x as T` hands over `x` and names `T`; the type is not
                 // an argument, and `BaseFunctions::as` takes one.
                 let handed = hands_over_only(written);
-                for (at, (named, operand)) in operands(written).into_iter().enumerate() {
+                let mut operands = operands(written);
+                // `IndexExpression = PrimaryArgumentMember '#' '('
+                // SequenceExpressionListMember ')'`, and a bracket the
+                // same: what is indexed and one sequence of indices,
+                // however many are written -- not an argument apiece
+                let indices: Vec<SyntaxNode> = match written.kind() {
+                    SyntaxKind::INDEX_EXPR if operands.len() > 2 => {
+                        operands.drain(1..).map(|(_, index)| index).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                for (at, (named, operand)) in operands.into_iter().enumerate() {
                     match at < handed {
                         true => hands_over(model, expression, named, &operand, Some("in"), built),
                         false => {
@@ -822,6 +870,9 @@ fn value_expression(
                             built.expressions.push(reference);
                         }
                     }
+                }
+                if !indices.is_empty() {
+                    hands_over_sequence(model, expression, written, &indices, built);
                 }
                 results_in(model, expression);
                 // `(that as SpatialItem).localClock` chains to a name,
@@ -860,21 +911,34 @@ fn sequence_expression(
     built.expressions.push(expression);
     model.set(expression, "operator", Value::String(",".to_string()));
     hands_over(model, expression, None, &items[0], Some("in"), built);
-    // the rest has no node of its own to hand over, so it is built in place
+    hands_over_sequence(model, expression, written, &items[1..], built);
+    results_in(model, expression);
+    represent_textually(model, expression, written.text().to_string().trim());
+    expression
+}
+
+/// Hand `items` over as one argument: the one item where there is one,
+/// else the sequence of them. A sequence written without parentheses --
+/// the rest of `(a, b, c)`, the indices of `a#(1, 2)` -- has no node of
+/// its own to hand over, so it is built in place.
+fn hands_over_sequence(
+    model: &mut Model,
+    expression: ElementId,
+    written: &SyntaxNode,
+    items: &[SyntaxNode],
+    built: &mut Built,
+) {
     let parameter = model.create(ElementKind::Feature);
     model.add_owned(expression, parameter);
     model.set(parameter, "direction", Value::EnumLit("in"));
     let value = model.create(ElementKind::FeatureValue);
     model.add_owned(parameter, value);
     model.set(value, "featureWithValue", Value::Ref(parameter));
-    let rest = match &items[1..] {
-        [last] => value_expression(model, value, last, built),
+    let handed = match items {
+        [only] => value_expression(model, value, only, built),
         more => sequence_expression(model, value, written, more, built),
     };
-    model.set(value, "value", Value::Ref(rest));
-    results_in(model, expression);
-    represent_textually(model, expression, written.text().to_string().trim());
-    expression
+    model.set(value, "value", Value::Ref(handed));
 }
 
 /// Which kind of invocation an expression is written as, and the
@@ -1063,6 +1127,25 @@ fn results_in(model: &mut Model, expression: ElementId) -> ElementId {
     model.set_member_role(result, Role::Return);
     model.set(result, "direction", Value::EnumLit("out"));
     result
+}
+
+/// The literal a value clause holds when that literal has no value to
+/// hold: `null` and `()`, which are both the empty sequence, and `*`.
+fn valueless_literal(written: &SyntaxNode) -> Option<ElementKind> {
+    use SyntaxKind::*;
+    match written.kind() {
+        PAREN_EXPR => written
+            .children()
+            .next()
+            .is_none()
+            .then_some(ElementKind::NullExpression),
+        LITERAL => match written.first_token()?.kind() {
+            NULL_KW => Some(ElementKind::NullExpression),
+            STAR => Some(ElementKind::LiteralInfinity),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The literal a value clause holds, when it holds one this model reifies.
@@ -2648,6 +2731,92 @@ mod tests {
         );
     }
 
+    /// `[count * 2]` and `[1..count + 1]` are expressions over a name, and
+    /// are built as the invocations they are -- the name inside reified as
+    /// a reference -- rather than kept as text, which name resolution
+    /// could not look into.
+    #[test]
+    fn a_bound_over_a_name_is_built_as_the_expression_it_is() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def V {\n\tattribute count;\n\tpart wheels[count * 2];\n\tpart spares[1..count + 1];\n}\n",
+        ));
+        let operator = |id: ElementId| model.maybe(id, "operator").and_then(Value::as_str);
+        let wheels = model.owned(roots[0])[1];
+        let range = reference(&model, wheels, "multiplicity").unwrap();
+        let bound = reference(&model, range, "bound").unwrap();
+        assert_eq!(model.kind(bound), ElementKind::OperatorExpression);
+        assert_eq!(operator(bound), Some("*"));
+        let spares = model.owned(roots[0])[2];
+        let range = reference(&model, spares, "multiplicity").unwrap();
+        let lower = reference(&model, range, "lowerBound").unwrap();
+        let upper = reference(&model, range, "upperBound").unwrap();
+        assert_eq!(model.maybe(lower, "value"), Some(&Value::Int(1)));
+        assert_eq!(operator(upper), Some("+"));
+        let references = model
+            .descendants(upper)
+            .into_iter()
+            .filter(|&it| model.kind(it) == ElementKind::FeatureReferenceExpression)
+            .count();
+        assert_eq!(references, 1);
+    }
+
+    /// `null` and `()` are the empty sequence and `*` the infinite literal,
+    /// none of them with a value to hold. Left to the text-only expression
+    /// every unread value falls to, each was an expression of nothing in
+    /// particular, and `check` said nothing about it.
+    #[test]
+    fn null_the_empty_sequence_and_infinity_are_the_literals_they_are() {
+        for (written, kind) in [
+            ("null", ElementKind::NullExpression),
+            ("()", ElementKind::NullExpression),
+            ("*", ElementKind::LiteralInfinity),
+        ] {
+            let (model, roots) =
+                build_model(&sysml_syntax::parse(&format!("attribute x = {written};\n")));
+            let membership = model.owned(roots[0])[0];
+            let value = reference(&model, membership, "value").expect(written);
+            assert_eq!(model.kind(value), kind, "{written}");
+            assert!(model.owned(value).is_empty(), "{written}");
+        }
+
+        // a literal no reification exists for -- an integer too large
+        // for the model's -- stays an expression kept as text
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "attribute n = 99999999999999999999;\n",
+        ));
+        let membership = model.owned(roots[0])[0];
+        let kept = reference(&model, membership, "value").unwrap();
+        assert_eq!(model.kind(kept), ElementKind::Expression);
+    }
+
+    /// `a#(1, 2)` and `a[1, 2]` hand over what is indexed and one
+    /// sequence of indices -- two arguments, as the grammar has them --
+    /// rather than an argument apiece; `a#(1)` hands its one index over
+    /// as it is.
+    #[test]
+    fn an_index_of_several_is_one_sequence_of_them() {
+        for (written, arguments, commas) in
+            [("a#(1, 2)", 2, 1), ("a[1, 2, 3]", 2, 2), ("a#(1)", 2, 0)]
+        {
+            let (model, roots) =
+                build_model(&sysml_syntax::parse(&format!("attribute x = {written};\n")));
+            let membership = model.owned(roots[0])[0];
+            let index = reference(&model, membership, "value").expect(written);
+            let handed = model
+                .owned(index)
+                .iter()
+                .filter(|&&it| model.maybe(it, "direction") == Some(&Value::EnumLit("in")))
+                .count();
+            assert_eq!(handed, arguments, "{written}");
+            let sequences = model
+                .descendants(index)
+                .into_iter()
+                .filter(|&it| model.maybe(it, "operator").and_then(Value::as_str) == Some(","))
+                .count();
+            assert_eq!(sequences, commas, "{written}");
+        }
+    }
+
     /// How many bounds a multiplicity has is what the brackets say. A
     /// bound this builder cannot read must still take up its place: drop
     /// it and `[1..18446744073709551615]` arrives as a lone `1`, which
@@ -3473,14 +3642,6 @@ mod tests {
         let literal = reference(&model, model.owned(c)[0], "value").unwrap();
         assert_eq!(model.kind(literal), ElementKind::LiteralBoolean);
         assert_eq!(model.maybe(literal, "value"), Some(&Value::Bool(false)));
-
-        // a literal no reification exists for stays an expression as text
-        let (model, roots) = build_model(&sysml_syntax::parse(
-            "part def W {\n\tattribute n = null;\n}\n",
-        ));
-        let n = model.owned(roots[0])[0];
-        let kept = reference(&model, model.owned(n)[0], "value").unwrap();
-        assert_eq!(model.kind(kept), ElementKind::Expression);
     }
 
     #[test]

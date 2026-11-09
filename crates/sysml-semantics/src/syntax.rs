@@ -187,15 +187,19 @@ pub(crate) fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
 /// the brackets is a bound and not a step of the name. Counted as one,
 /// the `*` of `[0..*]` made the steps say two where the name had one
 /// segment, and reading a prefix of that name went off the end of it.
+/// Only a multiplicity inside the operand is passed over: a name written
+/// as a bound -- the `count` of `[count]` -- is an operand of its own,
+/// and its tokens are the whole of it.
 pub(crate) fn operand_name_tokens(
     operand: &SyntaxNode,
-) -> impl Iterator<Item = sysml_syntax::SyntaxToken> {
+) -> impl Iterator<Item = sysml_syntax::SyntaxToken> + '_ {
     operand
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .filter(|token| {
+        .filter(move |token| {
             !token
                 .parent_ancestors()
+                .take_while(|up| up != operand)
                 .any(|up| up.kind() == SyntaxKind::MULTIPLICITY)
         })
 }

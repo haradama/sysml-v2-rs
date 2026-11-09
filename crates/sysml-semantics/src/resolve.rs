@@ -317,6 +317,13 @@ impl Workspace {
                     self.resolve_expression(id, &written, &mut stats);
                 }
             }
+            // `part wheels : Wheel[count];` -- a bound that names
+            // something was built as the expression it is written as,
+            // and its names are looked up from where it stands, like a
+            // value's
+            for (bound, written) in self.bounds_written_as_expressions(id) {
+                self.resolve_expression(bound, &written, &mut stats);
+            }
             let is_definition = node.kind() == SyntaxKind::DEFINITION;
             for (part_kind, targets) in relationship_parts(&node) {
                 for t in targets {

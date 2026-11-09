@@ -1016,6 +1016,14 @@ impl Parser<'_> {
     fn multiplicity(&mut self) {
         self.start_node(MULTIPLICITY);
         self.bump();
+        // `[n * 2]` and `[1..count]` bound by expressions, whose names
+        // are references like any other: read as tokens, a name in a
+        // bound was never looked up, and one that names nothing passed
+        // as a bound nobody could read. `0..*` is one range expression,
+        // and `*` alone is the literal it is anywhere else.
+        if self.at_expr_start() {
+            self.expr_bp(0);
+        }
         while !matches!(
             self.current(),
             R_BRACKET | SEMICOLON | L_BRACE | R_BRACE | EOF
