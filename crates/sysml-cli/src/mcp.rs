@@ -892,14 +892,12 @@ fn edges(ws: &Workspace, open: &[usize]) -> Vec<Edge> {
     // the relationship elements whose own references are already said by
     // the edge they make
     let mut said: HashSet<ElementId> = HashSet::new();
-    let elements: Vec<ElementId> = open
+    let placed: Vec<_> = open
         .iter()
         .flat_map(|&file| ws.file_elements(file).iter().copied())
+        .filter_map(|elem| Some((elem, ws.element_place(elem)?)))
         .collect();
-    for &elem in &elements {
-        let Some((file, range)) = ws.element_place(elem) else {
-            continue;
-        };
+    for &(elem, (file, range)) in &placed {
         let mut add = |source, relation, target| {
             edges.push(Edge {
                 source,
@@ -927,16 +925,15 @@ fn edges(ws: &Workspace, open: &[usize]) -> Vec<Edge> {
                 add(elem, "verifies", requirement);
             }
         }
-        if let Some(V::RefList(ends)) = model.maybe(elem, "relatedFeature") {
-            if let [from, to] = ends[..] {
-                let relation = match kind {
-                    "AllocationUsage" | "AllocationDefinition" => "allocated_to",
-                    _ if kind.contains("Succession") => "then",
-                    _ => "connected_to",
-                };
-                add(from, relation, to);
-                said.insert(elem);
-            }
+        // a connection of more than two ends is not a link between two
+        if let Some(&[from, to]) = model.maybe(elem, "relatedFeature").and_then(V::as_ids) {
+            let relation = match kind {
+                "AllocationUsage" | "AllocationDefinition" => "allocated_to",
+                _ if kind.contains("Succession") => "then",
+                _ => "connected_to",
+            };
+            add(from, relation, to);
+            said.insert(elem);
         }
     }
     let typed: HashSet<(ElementId, ElementId)> =

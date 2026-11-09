@@ -1791,3 +1791,112 @@ fn find_filters_by_kind_namespace_name_and_a_missing_link() {
     assert_eq!(find(json!({ "within": "User" })), ["User::spare"]);
     assert_eq!(find(json!({ "kind": "PartUsage", "limit": 1 })).len(), 1);
 }
+
+/// The links `LINKED` makes none of: a satisfaction that is negated or
+/// names no feature, a perform, a subsetting, a reference subsetting, a
+/// bare mention, and a KerML conjugation.
+const LINKED_OTHERWISE: &str = "\
+package Other {
+    part def Engine;
+    requirement <'R-1'> fast { doc /* Quick enough. */ }
+    action drive;
+    part car {
+        part engine : Engine;
+        assert not satisfy fast by engine;
+        perform drive;
+    }
+    part bus { satisfy fast; }
+    part spare :> car;
+    ref part link ::> car;
+    attribute top = car;
+    connect (car, spare, link);
+}
+package Twin { requirement <'R-1'> slow; }
+";
+
+#[test]
+fn relations_names_every_other_link_and_find_says_what_is_documented() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut ask = |arguments: Value| {
+        answered(
+            &server
+                .handle(&call("relations", arguments))
+                .expect("a request is answered"),
+        )
+    };
+
+    let fast = links(
+        &ask(json!({ "text": LINKED_OTHERWISE, "element": "Other::fast" })),
+        "incoming",
+    );
+    assert_eq!(
+        fast,
+        [
+            "does_not_satisfy Other::car::engine",
+            // `satisfy` without `by` is said by what it is written in
+            "satisfies Other::bus",
+        ]
+    );
+    let car = ask(json!({ "text": LINKED_OTHERWISE, "element": "Other::car" }));
+    assert!(
+        links(&car, "outgoing").contains(&"performs Other::drive".to_string()),
+        "{car}"
+    );
+    let incoming = links(&car, "incoming");
+    for expected in [
+        "subsets Other::spare",
+        "references Other::link",
+        "mentions Other::top",
+    ] {
+        assert!(
+            incoming.contains(&expected.to_string()),
+            "{expected} missing from {incoming:?}"
+        );
+    }
+    // a connection of three ends is not a link between two of them
+    assert!(
+        !incoming.iter().any(|it| it.starts_with("connected_to")),
+        "{incoming:?}"
+    );
+
+    let conjugated = ask(json!({
+        "text": "package K { type A; type B conjugates A; type C ~ A; type D disjoint from A; }",
+        "name": "k.kerml",
+        "element": "K::A",
+    }));
+    assert_eq!(
+        links(&conjugated, "incoming"),
+        [
+            "conjugates K::B",
+            "conjugates K::C",
+            // a relationship there is no name for here is only a mention
+            "mentions K::D",
+        ]
+    );
+
+    // a short name two requirements share names neither of them
+    let shared = server
+        .handle(&call(
+            "relations",
+            json!({ "text": LINKED_OTHERWISE, "element": "R-1" }),
+        ))
+        .expect("a request is answered");
+    assert_eq!(shared["result"]["isError"], true, "{shared}");
+    let said = shared["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(said.contains("Other::fast, Twin::slow"), "{said}");
+
+    let found = answered(
+        &server
+            .handle(&call(
+                "find",
+                json!({ "text": LINKED_OTHERWISE, "kind": "Requirement" }),
+            ))
+            .expect("answered"),
+    );
+    assert_eq!(found["total"], 2, "{found}");
+    assert_eq!(
+        found["found"][0]["documentation"], "Quick enough.",
+        "{found}"
+    );
+    assert!(found["found"][1].get("documentation").is_none(), "{found}");
+}
