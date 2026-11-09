@@ -37,6 +37,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
@@ -274,8 +275,25 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
             out.push(Response::new_ok(req.id, ()).into());
             (Phase::Closing, Flow::Go)
         }
+        // A panic answering one question is that question's failure, not
+        // the session's: unwound to here, the editor is told this one
+        // went wrong and goes on being served, where a server that died
+        // would take every open document's diagnostics with it -- and a
+        // client stops restarting a server that keeps dying.
         Message::Request(req) => {
-            let response = server.handle_request(&req);
+            let answered = catch_unwind(AssertUnwindSafe(|| server.handle_request(&req)));
+            let response = answered.unwrap_or_else(|payload| {
+                server.forget_what_was_built();
+                Response::new_err(
+                    req.id.clone(),
+                    lsp_server::ErrorCode::InternalError as i32,
+                    format!(
+                        "`{}` failed inside the server: {}",
+                        req.method,
+                        panic_said(&*payload)
+                    ),
+                )
+            });
             out.push(Message::Response(response));
             (Phase::Open(server), Flow::Go)
         }
@@ -283,8 +301,21 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
             Phase::Over,
             Flow::Over(Err("`exit` without a `shutdown` before it".into())),
         ),
+        // A notification has no answer to carry the failure, so it is
+        // logged; whatever it had already published stands.
         Message::Notification(note) => {
-            server.handle_notification(out, note);
+            let method = note.method.clone();
+            let taken = catch_unwind(AssertUnwindSafe(|| server.handle_notification(out, note)));
+            if let Err(payload) = taken {
+                server.forget_what_was_built();
+                log(
+                    out,
+                    &format!(
+                        "`{method}` failed inside the server: {}",
+                        panic_said(&*payload)
+                    ),
+                );
+            }
             (Phase::Open(server), Flow::Go)
         }
         // this server asks the client nothing, so an answer is nothing
@@ -435,6 +466,15 @@ fn handed_files(said: &serde_json::Value) -> Vec<(PathBuf, String)> {
 /// written there goes nowhere, so a library path that would not open was
 /// a setting that went wrong in silence. VSCode shows this in the
 /// channel it showed standard error in.
+/// What a panic said, where it said it in words.
+fn panic_said(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("a panic that said nothing")
+}
+
 fn log(out: &mut Vec<Message>, said: &str) {
     let params = serde_json::json!({
         "type": lsp_types::MessageType::WARNING,
@@ -651,6 +691,8 @@ impl Server {
                     self.publish_diagnostics(out, None);
                 }
             }
+            #[cfg(test)]
+            "test/panic" => panic!("asked to"),
             _ => {}
         }
     }
@@ -759,6 +801,18 @@ impl Server {
         }
     }
 
+    /// Drop the layers built from the documents, so that the next
+    /// question builds them again.
+    ///
+    /// After a panic, what was half-way through being built -- a file
+    /// list scanned for a project not yet resolved -- is not something
+    /// to answer from. The documents themselves are what the client
+    /// sent, and stay.
+    fn forget_what_was_built(&mut self) {
+        self.project = None;
+        self.analysis = None;
+    }
+
     fn handle_request(&mut self, req: &Request) -> Response {
         use lsp_types::request::*;
         let id = req.id.clone();
@@ -858,6 +912,10 @@ impl Server {
                 let params = asked!(DiagramParams);
                 ok_response(id, self.diagram(&params))
             }
+            // what the tests below make fail, since nothing real is
+            // known to
+            #[cfg(test)]
+            "test/panic" => panic!("asked to"),
             _ => Response::new_err(
                 id,
                 lsp_server::ErrorCode::MethodNotFound as i32,
@@ -1306,5 +1364,65 @@ mod tests {
         let flow = session.handle(notification("textDocument/didSave"), &mut out);
         assert!(matches!(flow, Flow::Over(Ok(()))), "{flow:?}");
         assert!(out.is_empty());
+    }
+
+    /// A question the server panics answering is answered with an error,
+    /// and the next one is answered as if nothing had happened.
+    #[test]
+    fn a_panic_answering_a_question_fails_that_question_alone() {
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        let uri = "file:///p/a.sysml";
+        let opened = Message::Notification(Notification {
+            method: "textDocument/didOpen".into(),
+            params: serde_json::json!({ "textDocument": {
+                "uri": uri, "languageId": "sysml", "version": 1,
+                "text": "part def Engine;",
+            }}),
+        });
+        session.handle(opened, &mut out);
+        out.clear();
+
+        let flow = session.handle(request(2, "test/panic", serde_json::Value::Null), &mut out);
+        assert!(matches!(flow, Flow::Go), "{flow:?}");
+        let answer = &said(&out)[0];
+        assert_eq!(answer["id"], 2);
+        assert_eq!(
+            answer["error"]["code"],
+            lsp_server::ErrorCode::InternalError as i32
+        );
+        let message = answer["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("test/panic") && message.contains("asked to"),
+            "{message}"
+        );
+        out.clear();
+
+        let symbols = serde_json::json!({ "textDocument": { "uri": uri } });
+        session.handle(request(3, "textDocument/documentSymbol", symbols), &mut out);
+        let answer = &said(&out)[0];
+        assert_eq!(answer["id"], 3);
+        assert_eq!(answer["result"][0]["name"], "Engine", "{answer}");
+    }
+
+    /// A notification the server panics taking in has no answer to fail,
+    /// so the client is told in the log, and the session goes on.
+    #[test]
+    fn a_panic_taking_a_notification_in_is_logged_and_survived() {
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        let flow = session.handle(notification("test/panic"), &mut out);
+        assert!(matches!(flow, Flow::Go), "{flow:?}");
+        let logged = &said(&out)[0];
+        assert_eq!(logged["method"], "window/logMessage");
+        let message = logged["params"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("test/panic") && message.contains("asked to"),
+            "{message}"
+        );
+        out.clear();
+
+        session.handle(request(2, "shutdown", serde_json::Value::Null), &mut out);
+        assert_eq!(said(&out)[0]["id"], 2);
     }
 }
