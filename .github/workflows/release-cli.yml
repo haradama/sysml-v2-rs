@@ -25,8 +25,31 @@ permissions:
   contents: read
 
 jobs:
+  # No lockfile is checked in (see `audit.yml` for why), so a build
+  # resolves its dependencies on the day it runs. Left to each target,
+  # five builds of one release resolved five times, and could ship five
+  # different sets of dependencies under one version number. They are
+  # resolved once here instead, checked the way the weekly audit checks
+  # a resolve -- a release is the one resolve that certainly reaches
+  # somebody -- and every target builds that, and nothing else.
+  resolve:
+    name: one resolve for every target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo generate-lockfile
+      - run: cargo deny check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Cargo.lock
+          path: Cargo.lock
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.target }}
+    needs: resolve
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -60,6 +83,9 @@ jobs:
             echo "::error::tag says $tag, sysml-cli/Cargo.toml says $manifest" >&2
             exit 1
           }
+      - uses: actions/download-artifact@v4
+        with:
+          name: Cargo.lock
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -69,7 +95,8 @@ jobs:
       - if: matrix.apt != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
       - name: build
-        run: cargo build --release -p sysmlv2-cli --target ${{ matrix.target }}
+        # `--locked`: what was resolved and checked above, or nothing
+        run: cargo build --release --locked -p sysmlv2-cli --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           # a fifth of the binary is symbols nobody downloading it reads;
@@ -122,6 +149,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      # every artifact of the run: the archives, and the lockfile they
+      # were all built from, so that a binary can be rebuilt as released
+      # and checked against advisories published after it
       - uses: actions/download-artifact@v4
         with:
           path: archives
