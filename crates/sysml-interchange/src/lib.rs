@@ -2002,7 +2002,14 @@ mod tests {
 
         // only such a name is spelled differently, so every other element
         // keeps the UUID it always had
-        for kept in ["b", "km/h", "pica (computer) (1/6 in)", "%", ",2/3 v", "a/b/c"] {
+        for kept in [
+            "b",
+            "km/h",
+            "pica (computer) (1/6 in)",
+            "%",
+            ",2/3 v",
+            "a/b/c",
+        ] {
             assert_eq!(unmistakable(kept), kept);
         }
         for (changed, spelled) in [

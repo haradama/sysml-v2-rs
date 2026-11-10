@@ -163,7 +163,9 @@ impl Workspace {
         // (KerML 8.2.3.5.1). `feature aa subsets non;` names nothing
         // when `non` is a classifier, however plainly the name is
         // there: what a feature subsets is a feature.
-        let mismatch = found.zip(expected).filter(|&(hit, kind)| !self.model.kind(hit).is_a(kind));
+        let mismatch = found
+            .zip(expected)
+            .filter(|&(hit, kind)| !self.model.kind(hit).is_a(kind));
         let found =
             found.filter(|&hit| expected.is_none_or(|kind| self.model.kind(hit).is_a(kind)));
         self.depth -= 1;
@@ -263,10 +265,14 @@ impl Workspace {
     ) {
         stats.unresolved += 1;
         let wrong_kind = self.wrong_kind.take();
-        let written = self
-            .files
-            .get(file)
-            .and_then(|it| it.parse.syntax().text().to_string().get(usize::from(range.start())..usize::from(range.end())).map(str::to_string));
+        let written = self.files.get(file).and_then(|it| {
+            it.parse
+                .syntax()
+                .text()
+                .to_string()
+                .get(usize::from(range.start())..usize::from(range.end()))
+                .map(str::to_string)
+        });
         let name = written
             .and_then(|written| spelled_as_written(segments, &written))
             .unwrap_or_else(|| Self::spell(segments));

@@ -304,10 +304,37 @@ const UNCLOSED: [(&str, &str, &str); 5] = [
     ),
 ];
 
+/// Constraints whose OCL reads, and reads one end of a relationship where
+/// the words beside it name the other -- with the end the words name.
+///
+/// "A variation `Definition` may not specialize any other variation
+/// `Definition`", and the OCL asks it of `ownedSpecialization.specific`:
+/// the variation itself, which is a variation, so every variation broke it
+/// and the two were left unrun with the rest of [`MISWRITTEN`]. What a
+/// type specializes is the `general` end, and that is all there is to
+/// mend: `enum def F :> E;`, one enumeration extending another, went
+/// unreported.
+const MISREAD: [(&str, &str, &str); 2] = [
+    (
+        "validateDefinitionVariationSpecialization",
+        "ownedSpecialization.specific",
+        "ownedSpecialization.general",
+    ),
+    (
+        "validateUsageVariationSpecialization",
+        "ownedSpecialization.specific",
+        "ownedSpecialization.general",
+    ),
+];
+
 /// The specification's OCL for one of its rules, with what it leaves
-/// open closed.
+/// open closed and what it misreads read as its words say.
 fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
-    match UNCLOSED.iter().find(|(rule, _, _)| *rule == name) {
+    match UNCLOSED
+        .iter()
+        .chain(MISREAD.iter())
+        .find(|(rule, _, _)| *rule == name)
+    {
         Some((_, written, meant)) => ocl.replace(written, meant).into(),
         None => ocl.into(),
     }
@@ -393,7 +420,7 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// Running any of these would report a violation of a sound model, so what
 /// they are is said instead. The two the OCL subset cannot parse are
 /// pinned in `ocl.rs` alongside.
-const MISWRITTEN: [(&str, &str); 8] = [
+const MISWRITTEN: [(&str, &str); 6] = [
     (
         "validateMultiplicityRangeBoundResultTypes",
         "a bound written as a name comes to whatever that name is typed by, and the notation \
@@ -417,14 +444,6 @@ const MISWRITTEN: [(&str, &str); 8] = [
         "the OCL asks for two sets of featuring types to differ where the constraint asks for \
          one the redefining feature has and the redefined one has not, and neither holds of a \
          redefinition between two features of the same type",
-    ),
-    (
-        "validateDefinitionVariationSpecialization",
-        "the specification's own OCL reads `specific` where the constraint says `general`",
-    ),
-    (
-        "validateUsageVariationSpecialization",
-        "the specification's own OCL reads `specific` where the constraint says `general`",
     ),
     (
         "validateMergeNodeIncomingSuccessions",
@@ -3888,6 +3907,27 @@ mod tests {
         );
     }
 
+    /// What [`MISREAD`] mends is written in the specification exactly
+    /// where it says, once, and the rule reads either way -- otherwise the
+    /// mending is a replacement of nothing, and the rule is the one that
+    /// reported every variation.
+    #[test]
+    fn what_is_misread_is_where_the_specification_writes_it() {
+        for (name, written, meant) in MISREAD {
+            let rule = sysml_model::RULES
+                .iter()
+                .find(|it| it.name == name)
+                .unwrap_or_else(|| panic!("`{name}` is one of the specification's rules"));
+            assert_eq!(rule.ocl.matches(written).count(), 1, "`{name}`");
+            let mended = closed(name, rule.ocl);
+            assert!(
+                mended.contains(meant) && !mended.contains(written),
+                "`{name}`"
+            );
+            assert!(crate::ocl::parse(&mended).is_ok(), "`{name}`");
+        }
+    }
+
     /// Every constraint is asked of every element of its metaclass, and
     /// what cannot be asked is named rather than passed over.
     #[test]
@@ -3902,7 +3942,7 @@ mod tests {
         // carrying what they are rather than a model's answer
         let named: Vec<&str> = checked.unevaluated.iter().map(|(name, _)| *name).collect();
         assert!(
-            named.contains(&"validateUsageVariationSpecialization"),
+            named.contains(&"validateRedefinitionFeaturingTypes"),
             "{named:?}"
         );
         // and every reason says what could not be answered

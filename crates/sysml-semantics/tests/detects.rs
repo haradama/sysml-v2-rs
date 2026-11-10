@@ -37,6 +37,23 @@ use sysml_semantics::Workspace;
 /// The set is exact in both directions: a rule that stops noticing fails
 /// here, and so does one that starts complaining about something else.
 const REJECTED: &[(&str, &str, &[&str])] = &[
+    // a variation specializes no variation: an enumeration is one, so
+    // one enumeration cannot extend another
+    (
+        "an enumeration extending an enumeration",
+        "package P {\n\tenum def E { enum a; }\n\tenum def F :> E { enum b; }\n}\n",
+        &["validateDefinitionVariationSpecialization"],
+    ),
+    (
+        "a variation usage typed by a variation",
+        "package P {\n\tvariation part def V { variant part a; }\n\tvariation part w : V { variant part b; }\n}\n",
+        &["validateUsageVariationSpecialization"],
+    ),
+    (
+        "a variation of something that is not one",
+        "package P {\n\tpart def V;\n\tvariation part def W :> V { variant part b; }\n}\n",
+        &[],
+    ),
     // `validateNamespaceDistinguishibility`: two members of one
     // namespace answer to one name, and nothing can tell which is meant
     (

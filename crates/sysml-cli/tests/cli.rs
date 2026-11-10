@@ -904,7 +904,10 @@ fn diagram_says_when_the_model_it_draws_is_broken() {
     let said = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success(), "{said}");
     assert!(said.contains("does not parse"), "{said}");
-    assert!(said.contains("1 name(s) in this model resolve to nothing"), "{said}");
+    assert!(
+        said.contains("1 name(s) in this model resolve to nothing"),
+        "{said}"
+    );
     // and it is drawn all the same
     assert!(String::from_utf8_lossy(&out.stdout).contains("<svg"));
 
@@ -1628,6 +1631,10 @@ fn output_stops_quietly_when_the_reader_does() {
     child.stdout.take().unwrap().read_exact(&mut first).unwrap();
     // the reader is gone now
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
 }

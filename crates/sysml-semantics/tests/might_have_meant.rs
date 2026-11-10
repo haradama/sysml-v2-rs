@@ -244,7 +244,11 @@ fn another_case_is_a_near_miss_not_the_name() {
         panic!("one name, one answer");
     };
     assert!(about.elsewhere.is_empty(), "{about:?}");
-    assert_eq!(about.near.first().map(String::as_str), Some("b"), "{about:?}");
+    assert_eq!(
+        about.near.first().map(String::as_str),
+        Some("b"),
+        "{about:?}"
+    );
 }
 
 /// What no qualified name can reach is no answer: a member of something
@@ -300,7 +304,10 @@ fn a_name_of_the_wrong_kind_of_thing_says_what_it_names() {
     let said = ws
         .wrong_kind_at(ws.unresolved()[0].file, ws.unresolved()[0].range)
         .unwrap();
-    assert_eq!(said, "it names `P::a`, a `PartUsage`, where only a `Classifier` can stand");
+    assert_eq!(
+        said,
+        "it names `P::a`, a `PartUsage`, where only a `Classifier` can stand"
+    );
     // and a name that is merely missing has nothing of the kind to say
     let ws = resolved("part x : Nope;\n");
     let nope = &ws.unresolved()[0];
@@ -320,7 +327,11 @@ fn a_chain_is_reported_and_mended_as_a_chain() {
     let [about] = &ws.suggestions(&missed)[..] else {
         panic!("one name, one answer");
     };
-    assert_eq!(about.near.first().map(String::as_str), Some("a.c"), "{about:?}");
+    assert_eq!(
+        about.near.first().map(String::as_str),
+        Some("a.c"),
+        "{about:?}"
+    );
     assert!(about.elsewhere.is_empty(), "{about:?}");
     // a qualified name is still one
     let ws = resolved("package P { part def C; }\npart x : P::Cc;\n");

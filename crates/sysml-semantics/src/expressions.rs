@@ -992,17 +992,16 @@ impl Workspace {
         let in_library = scopes
             .iter()
             .any(|&it| self.model.kind(it) == ElementKind::LibraryPackage);
-        let declared = scopes
-            .iter()
-            .copied()
-            .filter(|_| !in_library)
-            .find_map(|scope| {
-                self.model
-                    .owned(scope)
-                    .iter()
-                    .copied()
-                    .find(|&member| member != elem && self.model.name(member) == Some(&segments[0]))
-            });
+        let declared =
+            scopes
+                .iter()
+                .copied()
+                .filter(|_| !in_library)
+                .find_map(|scope| {
+                    self.model.owned(scope).iter().copied().find(|&member| {
+                        member != elem && self.model.name(member) == Some(&segments[0])
+                    })
+                });
         if declared.is_some() {
             return declared;
         }

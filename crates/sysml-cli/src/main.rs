@@ -891,7 +891,10 @@ fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<
         let files = if is_dir {
             let found = sysml_semantics::model_files(path);
             if found.is_empty() {
-                return Err(failed("load", "it holds no .sysml or .kerml file".to_string()));
+                return Err(failed(
+                    "load",
+                    "it holds no .sysml or .kerml file".to_string(),
+                ));
             }
             found
         } else {
@@ -1177,7 +1180,11 @@ fn diagram(
     // person writing the model is entitled to see it so far; what is
     // wrong is said, and the exit code says not to take it as the model.
     let mut broken = false;
-    for file in files.iter().copied().filter(|&file| !ws.file_parse(file).ok()) {
+    for file in files
+        .iter()
+        .copied()
+        .filter(|&file| !ws.file_parse(file).ok())
+    {
         eprintln!(
             "warning: {} does not parse, so what is drawn of it is a guess; `sysml parse` says where",
             ws.file_name(file)
@@ -2295,7 +2302,9 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
 fn written(text: &str) -> bool {
     use std::io::Write as _;
     let mut out = std::io::stdout().lock();
-    out.write_all(text.as_bytes()).and_then(|()| out.flush()).is_ok()
+    out.write_all(text.as_bytes())
+        .and_then(|()| out.flush())
+        .is_ok()
 }
 
 fn report(value: serde_json::Value) {
