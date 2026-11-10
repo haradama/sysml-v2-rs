@@ -461,6 +461,30 @@ impl SyntaxKind {
         )
     }
 
+    /// Whether a node of this kind is an expression.
+    pub fn is_expression(self) -> bool {
+        matches!(
+            self,
+            LITERAL
+                | NAME_REF
+                | PAREN_EXPR
+                | UNARY_EXPR
+                | BINARY_EXPR
+                | COND_EXPR
+                | CALL_EXPR
+                | PATH_EXPR
+                | INDEX_EXPR
+                | METADATA_ACCESS_EXPR
+                | ARROW_EXPR
+        )
+    }
+
+    /// Whether it introduces a control node: `merge`, `decide`, `fork`
+    /// or `join`.
+    pub fn is_control_node_kw(self) -> bool {
+        matches!(self, MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW)
+    }
+
     /// Prefix modifiers that may precede a definition/usage kind.
     pub fn is_modifier_kw(self) -> bool {
         matches!(

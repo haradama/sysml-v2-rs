@@ -150,7 +150,10 @@ impl Workspace {
             // what invokes it to invoking something typed by a
             // behaviour. The notation writes that type nowhere.
             self.materialize_implied_for(target);
-            self.hands_over_what_it_takes(elem, target);
+            self.hands_over_what_it_takes(elem, target, stats);
+            if self.model.kind(elem) == ElementKind::ConstructorExpression {
+                self.sets_what_it_names(elem, target, stats);
+            }
             self.comes_to_what_it_invokes(elem, target);
         }
     }
@@ -407,14 +410,19 @@ impl Workspace {
     /// `validateInvocationExpressionParameterRedefinition` holds every
     /// argument to redefining exactly one. The notation names none of them, so
     /// the order is what says which is which.
-    fn hands_over_what_it_takes(&mut self, invocation: ElementId, function: ElementId) {
+    fn hands_over_what_it_takes(
+        &mut self,
+        invocation: ElementId,
+        function: ElementId,
+        stats: &mut ResolveStats,
+    ) {
         let taken = self.taken_by(function, &mut Vec::new());
         let handed = self.takes(invocation);
         // An argument that names the parameter it is for says which one
         // it redefines; where none of them do, the order says it.
         let named: Vec<Option<ElementId>> = handed
             .iter()
-            .map(|&argument| self.names_a_parameter(argument, function))
+            .map(|&argument| self.names_a_parameter(argument, function, stats))
             .collect();
         let pairs: Vec<(ElementId, ElementId)> = match named.iter().all(Option::is_some) {
             true => handed
@@ -439,6 +447,38 @@ impl Workspace {
             // what it specializes was worked out before this was written
             self.supertypes.remove(&argument);
         }
+    }
+    /// What `new A(y = 1)` gives the `A` it constructs a value for.
+    ///
+    /// A constructor hands its arguments to the result it constructs, and
+    /// an argument that names a feature of the type is a value for that
+    /// one: it redefines it, as a named argument to a function redefines
+    /// the parameter it names.
+    fn sets_what_it_names(
+        &mut self,
+        constructor: ElementId,
+        constructed: ElementId,
+        stats: &mut ResolveStats,
+    ) -> Option<()> {
+        let result = self.hands_back(constructor)?;
+        for argument in self.model.owned(result).to_vec() {
+            let Some(feature) = self.names_a_parameter(argument, constructed, stats) else {
+                continue;
+            };
+            self.reified(
+                argument,
+                ElementKind::Redefinition,
+                &[
+                    ("redefiningFeature", Value::Ref(argument)),
+                    ("redefinedFeature", Value::Ref(feature)),
+                    ("isImplied", Value::Bool(true)),
+                ],
+            );
+            self.model
+                .set(argument, "isImpliedIncluded", Value::Bool(true));
+            self.supertypes.remove(&argument);
+        }
+        Some(())
     }
     /// An invocation comes to what the function it invokes hands back.
     ///
@@ -524,10 +564,29 @@ impl Workspace {
         None
     }
     /// The parameter an argument names itself for, where it names one.
-    fn names_a_parameter(&mut self, argument: ElementId, function: ElementId) -> Option<ElementId> {
+    ///
+    /// The name is a reference like any other: `F(q = 1)` names the `q`
+    /// of `F`, a rename of it has to reach the argument, and `F(nope =
+    /// 1)` names nothing `F` takes.
+    fn names_a_parameter(
+        &mut self,
+        argument: ElementId,
+        function: ElementId,
+        stats: &mut ResolveStats,
+    ) -> Option<ElementId> {
         let node = self.source.get(&argument)?.clone();
         let name = operand_segments(&node).pop()?;
-        self.lookup(function, &name, Reach::all(Access::Internal))
+        let file = self.file_of(argument);
+        let range = node.text_range();
+        let found = self.lookup(function, &name, Reach::all(Access::Internal));
+        match found {
+            Some(parameter) => {
+                stats.resolved += 1;
+                self.record(argument, file, range, range, &[range], parameter);
+            }
+            None => self.record_miss(file, range, &[name], stats),
+        }
+        found
     }
     /// What something is handed, in the order it is handed them.
     fn takes(&self, of: ElementId) -> Vec<ElementId> {
@@ -583,18 +642,18 @@ impl Workspace {
         let mut chains = Vec::new();
         name_chains(expr, &mut chains);
         for chain in chains {
+            // `{in i; private attribute a = v#(i); a > 0}` declares `a` as
+            // an element of its own, whose value is read with it
+            if self.declared_in_a_body(file, &chain, expr) {
+                continue;
+            }
             let segments = operand_segments(&chain);
             // a parameter of a body expression the name is written in:
-            // `{ in x; x > 0 }` names its own `x`, and where the body was
-            // built into no expression there is no `x` to name
-            let local = segments
+            // `{ in x; x > 0 }` names its own `x`
+            let from = segments
                 .first()
-                .and_then(|first| self.body_parameter(file, &chain, expr, first));
-            let from = match local {
-                Some(Some(parameter)) => parameter,
-                Some(None) => continue,
-                None => owner,
-            };
+                .and_then(|first| self.body_parameter(file, &chain, expr, first))
+                .unwrap_or(owner);
             let at = operand_ranges(&chain);
             let name_range = *at.last().expect("a name chain spells a name");
             let range = chain.text_range();
@@ -758,10 +817,12 @@ impl Workspace {
     /// a function returns -- are kept as text.
     fn resolve_arrows(&mut self, owner: ElementId, expr: &SyntaxNode, stats: &mut ResolveStats) {
         let file = self.file_of(owner);
-        for arrow in expr
+        let arrows: Vec<SyntaxNode> = expr
             .descendants()
             .filter(|it| it.kind() == SyntaxKind::ARROW_EXPR)
-        {
+            .filter(|arrow| !self.declared_in_a_body(file, arrow, expr))
+            .collect();
+        for arrow in arrows {
             let Some(name) = arrow
                 .children_with_tokens()
                 .filter_map(|it| it.into_token())
@@ -787,41 +848,54 @@ impl Workspace {
             }
         }
     }
-    /// Whether `first`, the first name of `chain`, is a parameter of a body
-    /// expression around it within `expr`: `None` where it is not, and
-    /// otherwise the parameter -- or nothing, where the body was built
-    /// into no expression and so declares no element to name.
+    /// Whether `chain` is written in a member of a body expression, within
+    /// `expr`, that was built into an element: its names are read with
+    /// that element, and reading them here as well recorded each twice.
+    fn declared_in_a_body(&self, file: usize, chain: &SyntaxNode, expr: &SyntaxNode) -> bool {
+        chain
+            .ancestors()
+            .take_while(|it| it != expr)
+            .filter(|it| {
+                it.parent()
+                    .is_some_and(|parent| parent.kind() == SyntaxKind::BODY_EXPR)
+            })
+            .any(|member| {
+                self.files[file]
+                    .elements
+                    .iter()
+                    .any(|it| self.source.get(it) == Some(&member))
+            })
+    }
+    /// The element a body expression around `chain`, within `expr`,
+    /// declares under `first`, the first name of the chain: a parameter
+    /// `{in x; ...}` or a member `{private attribute a = ...; ...}`.
     fn body_parameter(
         &self,
         file: usize,
         chain: &SyntaxNode,
         expr: &SyntaxNode,
         first: &str,
-    ) -> Option<Option<ElementId>> {
-        let bodies = chain
+    ) -> Option<ElementId> {
+        let declared = chain
             .ancestors()
             .take_while(|it| it != expr)
             .chain(std::iter::once(expr.clone()))
-            .filter(|it| it.kind() == SyntaxKind::BODY_EXPR);
-        for body in bodies {
-            let declared = body.children().find(|it| {
-                it.kind() == SyntaxKind::USAGE
-                    && it
-                        .children()
-                        .find(|part| part.kind() == SyntaxKind::NAME)
-                        .and_then(|part| part.first_token())
-                        .is_some_and(|name| sysml_syntax::unquote(name.text()) == first)
-            });
-            if let Some(declared) = declared {
-                let parameter = self.files[file]
-                    .elements
-                    .iter()
-                    .copied()
-                    .find(|it| self.source.get(it) == Some(&declared));
-                return Some(parameter);
-            }
-        }
-        None
+            .filter(|it| it.kind() == SyntaxKind::BODY_EXPR)
+            .find_map(|body| {
+                body.children().find(|it| {
+                    it.kind() == SyntaxKind::USAGE
+                        && it
+                            .children()
+                            .find(|part| part.kind() == SyntaxKind::NAME)
+                            .and_then(|part| part.first_token())
+                            .is_some_and(|name| sysml_syntax::unquote(name.text()) == first)
+                })
+            })?;
+        self.files[file]
+            .elements
+            .iter()
+            .copied()
+            .find(|it| self.source.get(it) == Some(&declared))
     }
     /// Look up the names in what a control node asks and hands over,
     /// from where the node stands.

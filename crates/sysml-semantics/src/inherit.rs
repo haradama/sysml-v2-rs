@@ -14,6 +14,10 @@ use sysml_model::{ElementId, ElementKind, Role, Value};
 use sysml_syntax::{is_name_chain, SyntaxKind, SyntaxNode};
 
 use crate::lookup::Reach;
+
+/// The relationship clauses a statement writes, as `relationship_parts`
+/// reads them.
+type Parts = Vec<(SyntaxKind, Vec<Target>)>;
 use crate::syntax::*;
 use crate::{push_supertype, reaches, Access, Workspace};
 
@@ -36,6 +40,32 @@ impl Workspace {
             queue.extend(self.supertypes_of(up));
         }
         false
+    }
+    /// What a feature with no syntax of its own is declared with, where
+    /// the statement that implies it writes that: an accept's payload,
+    /// `accept s : Sig`, and a loop's variable, `for n : Integer in xs`.
+    /// With the element whose names it is read among -- the accept node
+    /// or the loop, or the transition whose trigger the accept is.
+    fn typed_where_written(&self, elem: ElementId) -> Option<(ElementId, Parts)> {
+        let owner = self.model.owner(elem)?;
+        let kind = self.model.kind(owner);
+        if kind == ElementKind::ForLoopActionUsage && self.model.owned(owner).first() == Some(&elem)
+        {
+            let node = self.source.get(&owner)?;
+            return Some((owner, relationship_parts(node)));
+        }
+        if !kind.is_a(ElementKind::AcceptActionUsage)
+            || sysml_model::payload_parameter(&self.model, owner) != Some(elem)
+        {
+            return None;
+        }
+        [Some(owner), self.model.owner(owner)]
+            .into_iter()
+            .flatten()
+            .find_map(|written| {
+                let node = self.source.get(&written)?;
+                Some((written, payload_parts(node)))
+            })
     }
     /// What an element specializes, as the resolver worked it out.
     ///
@@ -157,6 +187,26 @@ impl Workspace {
             .collect();
         for target in implied {
             push_supertype(&mut supers, elem, target);
+        }
+        // What an accept waits for is typed where the statement writes
+        // it, `accept s : Sig`, and the payload it types has no syntax of
+        // its own. Read from that statement whenever it is asked for,
+        // `T.s.x` names the `x` of a `Sig` wherever it is written, and not
+        // only below the transition `T` that declares it -- which is where
+        // the typing was attached once `T` had been resolved.
+        if supers.is_empty() {
+            if let Some((context, parts)) = self.typed_where_written(elem) {
+                for (_, targets) in parts
+                    .into_iter()
+                    .filter(|(part, _)| *part == SyntaxKind::TYPING)
+                {
+                    for t in targets {
+                        if let Some(target) = self.resolve_from(context, &t.segments) {
+                            push_supertype(&mut supers, elem, target);
+                        }
+                    }
+                }
+            }
         }
         // An element the builder reified has no syntax of its own. An
         // accept node's payload is one: `accept cl : Cmd` declares it on

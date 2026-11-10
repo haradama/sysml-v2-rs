@@ -3575,12 +3575,16 @@ mod tests {
     /// whose memberElement is a Feature.` Asking it needs the implicit
     /// iterator as well, since the constraint binds no variable to read
     /// the memberships of.
+    ///
+    /// The value is a name rather than a literal: with no library loaded
+    /// here, a literal has no result to inherit, and the value assigned is
+    /// in the model as the second argument.
     #[test]
     fn what_an_assignment_refers_to_is_there_to_be_asked_for() {
         let mut ws = Workspace::new();
         let file = ws.add_file(
             "test.sysml",
-            "action def A {\n\tattribute v;\n\taction x;\n\tassign v := 1;\n}\n",
+            "action def A {\n\tattribute v;\n\tattribute w;\n\taction x;\n\tassign v := w;\n}\n",
         );
         ws.resolve_all();
         let checked = ws.check_rules(&[file]);

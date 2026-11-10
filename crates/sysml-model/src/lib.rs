@@ -242,6 +242,35 @@ pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
     })
 }
 
+/// The stretch of a statement one of the actions it carries is written
+/// in, from the keyword that opens it: `accept` for a transition's
+/// trigger, `do` for its effect.
+///
+/// `transition first a accept s via p do send x via q then b;` writes two
+/// `via`s, and which action each belongs to is where it stands. Read off
+/// the whole statement, a trigger with no `via` of its own took the one
+/// the effect sends through.
+pub fn clause(
+    node: &sysml_syntax::SyntaxNode,
+    opens: sysml_syntax::SyntaxKind,
+) -> Option<sysml_syntax::TextRange> {
+    use sysml_syntax::SyntaxKind::*;
+    let mut parts = node
+        .children_with_tokens()
+        .skip_while(|part| part.kind() != opens);
+    let start = parts.next()?.text_range().start();
+    let end = parts
+        .find(|part| {
+            part.kind() != opens
+                && matches!(
+                    part.kind(),
+                    IF_KW | DO_KW | THEN_KW | ELSE_KW | COND_EXPR | BODY
+                )
+        })
+        .map_or(node.text_range().end(), |part| part.text_range().start());
+    Some(sysml_syntax::TextRange::new(start, end))
+}
+
 /// What an accept node waits for.
 ///
 /// `deriveAcceptActionUsagePayloadParameter` -- "the payloadParameter of

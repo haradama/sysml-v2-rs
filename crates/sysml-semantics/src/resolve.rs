@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 
 use sysml_model::{ElementId, ElementKind, Role, Value};
-use sysml_syntax::SyntaxKind;
+use sysml_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::syntax::*;
 use crate::{Clear, ResolveStats, Workspace};
@@ -196,6 +196,14 @@ impl Workspace {
         let mut stats = ResolveStats::default();
         let began = self.lookups;
         self.claimed.clear();
+        // the statements more than one element was built from
+        let mut written: HashSet<&SyntaxNode> = HashSet::new();
+        let shared: HashSet<SyntaxNode> = ids
+            .iter()
+            .filter_map(|id| self.source.get(id))
+            .filter(|node| node.kind() == SyntaxKind::CONTROL_STMT && !written.insert(node))
+            .cloned()
+            .collect();
         for &id in ids {
             let Some(node) = self.source.get(&id).cloned() else {
                 continue;
@@ -215,6 +223,15 @@ impl Workspace {
                 SyntaxKind::CONNECTOR_STMT | SyntaxKind::CONTROL_STMT
             ) {
                 self.resolve_connector_ends(id, &node, &mut stats);
+                // `then assign i := i + 1;` is the succession and the
+                // assignment it runs into, written as one statement and
+                // built as two elements. What the statement hands over is
+                // the assignment's, and read for the succession too, every
+                // name in it was recorded twice. A succession alone in its
+                // statement -- `if g then b;` -- asks its guard itself.
+                if self.model.kind(id).is_a(ElementKind::Succession) && shared.contains(&node) {
+                    continue;
+                }
                 self.resolve_trigger_type(id, &node, &mut stats);
                 self.resolve_action_arguments(id, &node, &mut stats);
                 // `do senseTemperature { ... }` performs what it names
@@ -233,8 +250,15 @@ impl Workspace {
                     self.resolve_asked(id, &until, &mut stats);
                 }
                 // `bind a = b;` writes its second end the way a value is
-                // written, and the ends were read above
-                let inside = self.inside(id);
+                // written, and the ends were read above. What `assign x :=
+                // y` assigns is its second argument, which holds the value
+                // and whose reference to `y` is what the name resolves.
+                let inside = match self.model.kind(id) {
+                    ElementKind::AssignmentActionUsage => {
+                        self.model.owned(id).get(1).copied().unwrap_or(id)
+                    }
+                    _ => self.inside(id),
+                };
                 for clause in node
                     .children()
                     .filter(|_| !binds_an_end(&node))
@@ -245,6 +269,13 @@ impl Workspace {
                     }
                 }
                 continue;
+            }
+            // `action a accept s : Sig;` types its payload `s` as the
+            // statement form does, and the action itself is no `Sig`
+            if node.kind() == SyntaxKind::USAGE
+                && self.model.kind(id).is_a(ElementKind::AcceptActionUsage)
+            {
+                self.resolve_trigger_type(id, &node, &mut stats);
             }
             // `comment about A, B /* ... */` and `metadata m : M about
             // A` both say what they are about, and the names they say it

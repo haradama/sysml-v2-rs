@@ -6,7 +6,7 @@
 //! reified with resolved targets by `sysml-semantics`; expression trees are
 //! not represented as elements.
 
-use sysml_syntax::{unquote, Parse, SyntaxKind, SyntaxNode};
+use sysml_syntax::{unquote, Parse, SyntaxKind, SyntaxNode, TextRange};
 
 use crate::{ElementId, ElementKind, Model, Role, Value, Vis};
 
@@ -179,7 +179,7 @@ fn build_node(
         }
     }
 
-    if let Some(name) = declared_name(node).or_else(|| statement_declared_name(node)) {
+    if let Some(name) = declared_name(node) {
         model.set(id, "declaredName", Value::String(name));
     }
     if let Some(visibility) = member_visibility(node)
@@ -386,6 +386,11 @@ fn build_node(
         model.set_member_role(id, Role::Result);
         if let Some(written) = node.children().next() {
             represent_textually(model, id, written.text().to_string().trim());
+            // and what it says, built the way a value is: `xs->forAll {in
+            // x : T; x > 0}` hands over a body that declares the `x` it
+            // names. Kept as text alone, the body declared nothing, and
+            // neither `x` nor its `T` was ever looked up.
+            builds_what_it_says(model, id, Some(written), built);
         }
     }
     if kind == ElementKind::TransitionUsage {
@@ -407,9 +412,11 @@ fn build_node(
             let trigger = model.create(ElementKind::AcceptActionUsage);
             model.add_owned(id, trigger);
             let payload = reify_accept_payload(model, node, trigger);
+            let window = crate::clause(node, ACCEPT_KW).unwrap_or_else(|| node.text_range());
             reify_action_arguments(
                 model,
                 node,
+                window,
                 trigger,
                 ElementKind::AcceptActionUsage,
                 payload,
@@ -423,7 +430,7 @@ fn build_node(
                 model.set(subsetting, "subsettedFeature", Value::Ref(payload));
             }
         }
-        reify_guard(model, node, id);
+        reify_guard(model, node, id, built);
         reify_effect(model, node, id, built);
         // A transition is not a connector: what it relates it relates
         // through a `Succession` of its own, which is what
@@ -435,7 +442,7 @@ fn build_node(
     let payload = (kind == ElementKind::AcceptActionUsage)
         .then(|| reify_accept_payload(model, node, id))
         .flatten();
-    reify_action_arguments(model, node, id, kind, payload, built);
+    reify_action_arguments(model, node, node.text_range(), id, kind, payload, built);
     // The condition is what an `if` or a loop node is about, and it was being
     // read and dropped.
     // A `for` loop's variable is written first and is the first feature the
@@ -445,7 +452,7 @@ fn build_node(
         reify_loop_variable(model, node, id);
     }
     if structured_node(kind) {
-        reify_condition(model, node, id);
+        reify_condition(model, node, id, built);
     }
     if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id, built);
@@ -480,7 +487,7 @@ fn build_node(
                     if let Some(repeats) =
                         loop_before(model, under).filter(|_| closes_a_loop(&member))
                     {
-                        reify_condition(model, &member, repeats);
+                        reify_condition(model, &member, repeats, built);
                         continue;
                     }
                     let made = build_node(model, &member, Some(under), built);
@@ -895,16 +902,32 @@ fn value_expression(
     // parameters it is handed, and what it says names them. Kept as text
     // alone, `x` stood for nothing anywhere in the model.
     if written.kind() == SyntaxKind::BODY_EXPR {
-        let declared = written
-            .children()
-            .filter(|it| it.kind() == SyntaxKind::USAGE)
-            .filter_map(|it| Some((declared_name(&it)?, it)));
-        for (name, declared) in declared {
+        for member in written.children() {
+            // `{in x : T; ...}` declares a parameter; what else the body
+            // declares -- `private attribute lbcf = lugBolts#(i).frame;`
+            // -- and the expression it ends with are members like any
+            // other. Taken for parameters, they were handed in rather than
+            // worked out, and what `lbcf` is was nowhere to be found.
+            let direction = [
+                (SyntaxKind::IN_KW, "in"),
+                (SyntaxKind::OUT_KW, "out"),
+                (SyntaxKind::INOUT_KW, "inout"),
+            ]
+            .into_iter()
+            .find(|&(keyword, _)| has_token(&member, keyword))
+            .map(|(_, direction)| direction);
+            let declared = Some(member.clone())
+                .filter(|it| it.kind() == SyntaxKind::USAGE)
+                .and_then(|it| Some((declared_name(&it)?, direction?)));
+            let Some((name, direction)) = declared else {
+                build_node(model, &member, Some(expression), built);
+                continue;
+            };
             let parameter = model.create(ElementKind::Feature);
             model.add_owned(expression, parameter);
             model.set(parameter, "declaredName", Value::String(name));
-            model.set(parameter, "direction", Value::EnumLit("in"));
-            built.source.push((parameter, declared));
+            model.set(parameter, "direction", Value::EnumLit(direction));
+            built.source.push((parameter, member));
         }
     }
     represent_textually(model, expression, written.text().to_string().trim());
@@ -1272,7 +1295,7 @@ fn reify_accept_payload(
                     continue;
                 }
                 match child.kind() {
-                    SyntaxKind::NAME_REF => {
+                    SyntaxKind::NAME => {
                         name = Some(child.first_token().map(|t| unquote(t.text())));
                         break;
                     }
@@ -1308,6 +1331,7 @@ fn reify_accept_payload(
 fn reify_action_arguments(
     model: &mut Model,
     node: &SyntaxNode,
+    window: TextRange,
     action: ElementId,
     kind: ElementKind,
     payload: Option<ElementId>,
@@ -1320,6 +1344,16 @@ fn reify_action_arguments(
     let slots: &[Option<SyntaxKind>] = match kind {
         ElementKind::SendActionUsage => &[None, Some(SyntaxKind::VIA_KW), Some(SyntaxKind::TO_KW)],
         ElementKind::AcceptActionUsage => &[None, Some(SyntaxKind::VIA_KW)],
+        // `terminate c1;` ends the occurrence it names, which the standard
+        // hands the node as its one parameter: `TerminateNode = ...
+        // 'terminate' ( ActionBodyParameterMember )?`. Without it what was
+        // terminated was nowhere in the model, and `terminate nope;` passed
+        ElementKind::TerminateActionUsage => &[Some(SyntaxKind::TERMINATE_KW)],
+        // `assign x := new T();` -- "the `targetArgument` ... is its first
+        // argument" and "the `valueExpression` ... is its second", the
+        // value written after `:=`. Without them what was assigned was
+        // nowhere in the model, and `new Nope()` passed.
+        ElementKind::AssignmentActionUsage => &[None, Some(SyntaxKind::COLON_EQ)],
         _ => return,
     };
     let mut waits_through = None;
@@ -1335,10 +1369,26 @@ fn reify_action_arguments(
             }
         };
         model.set(parameter, "direction", Value::EnumLit("in"));
-        if at == 0 {
+        if at == 0 && kind == ElementKind::AcceptActionUsage {
             waits_through = Some(parameter);
         }
-        let Some(written) = slot.and_then(|keyword| operand_after(node, keyword)) else {
+        // `send new Sig(1) to p` writes what it sends straight after the
+        // keyword, as any expression at all: `SendNode = ... 'send' (
+        // NodeParameterMember ...`. Left out, the payload parameter had no
+        // value and what was sent was in the model nowhere.
+        let written = match slot {
+            Some(SyntaxKind::COLON_EQ) => node
+                .children()
+                .find(|it| it.kind() == SyntaxKind::VALUE)
+                .and_then(|value| value.children().find(|it| it.kind().is_expression())),
+            Some(keyword) => operand_after_in(node, *keyword, window),
+            None if kind == ElementKind::SendActionUsage => {
+                node_after_in(node, SyntaxKind::SEND_KW, window)
+                    .filter(|it| it.kind().is_expression())
+            }
+            None => None,
+        };
+        let Some(written) = written else {
             continue;
         };
         let membership = model.create(ElementKind::FeatureValue);
@@ -1360,19 +1410,20 @@ fn reify_action_arguments(
 /// which is what `deriveAcceptActionUsagePayloadArgument` reads back.
 /// Which of the three functions in the library's `Triggers` package it
 /// invokes is what the `kind` says, so the keyword is the whole of it.
-fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built: &mut Built) {
-    let Some((keyword, kind)) = [
+fn reify_trigger(
+    model: &mut Model,
+    node: &SyntaxNode,
+    payload: ElementId,
+    built: &mut Built,
+) -> Option<()> {
+    let (keyword, kind) = [
         (SyntaxKind::AFTER_KW, "after"),
         (SyntaxKind::AT_KW, "at"),
         (SyntaxKind::WHEN_KW, "when"),
     ]
     .into_iter()
-    .find(|&(keyword, _)| has_token(node, keyword)) else {
-        return;
-    };
-    let Some(written) = node_after(node, keyword) else {
-        return;
-    };
+    .find(|&(keyword, _)| has_token(node, keyword))?;
+    let written = node_after(node, keyword)?;
     let membership = model.create(ElementKind::FeatureValue);
     model.add_owned(payload, membership);
     model.set(membership, "featureWithValue", Value::Ref(payload));
@@ -1411,17 +1462,26 @@ fn reify_trigger(model: &mut Model, node: &SyntaxNode, payload: ElementId, built
     model.set(value, "value", Value::Ref(held));
     results_in(model, trigger);
     model.set(membership, "value", Value::Ref(trigger));
+    Some(())
 }
 
 /// The first node written after `keyword`, whatever kind it is.
 ///
-/// `operand_after` takes only a name, since `via p` names a port and an
+/// `operand_after_in` takes only a name, since `via p` names a port and an
 /// expression there would be something else; what a trigger waits for is
 /// an expression of any shape -- `after 10[SI::s]`, `at new
 /// Time::Iso8601DateTime(...)`, `when senseTemperature.temp > Tmax`.
 fn node_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
+    node_after_in(node, keyword, node.text_range())
+}
+
+/// [`node_after`], among what is written within `window`.
+fn node_after_in(node: &SyntaxNode, keyword: SyntaxKind, window: TextRange) -> Option<SyntaxNode> {
     let mut after = false;
-    for element in node.children_with_tokens() {
+    for element in node
+        .children_with_tokens()
+        .filter(|part| window.contains_range(part.text_range()))
+    {
         match element.as_token() {
             Some(token) if token.kind().is_trivia() => {}
             Some(token) => after = token.kind() == keyword,
@@ -1442,8 +1502,14 @@ fn node_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 /// The node has to be the one right after the keyword: any other keyword
 /// closes the slot the reference sits in, so a node that is not a name
 /// is an answer of `None` rather than a reason to keep looking.
-fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
-    node_after(node, keyword)
+///
+/// Only among what is written within `window`.
+fn operand_after_in(
+    node: &SyntaxNode,
+    keyword: SyntaxKind,
+    window: TextRange,
+) -> Option<SyntaxNode> {
+    node_after_in(node, keyword, window)
         .filter(|child| matches!(child.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
 }
 
@@ -1453,23 +1519,25 @@ fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
 /// represent as elements, so what is kept is its source text -- recorded the
 /// way SysML records any element in a concrete syntax, as a textual
 /// representation of the guard.
-fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
+fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId, built: &mut Built) {
     // `transition first a if g then b;` writes the guard as one node, and
     // `if g then b;` in an action body as the statement's own `if`:
     // `GuardedTargetSuccession = 'if' GuardExpressionMember 'then' ...`.
     // Looking only for the first, the guard of the second was dropped and
     // the branch read as taken whatever held.
-    let text = match node
+    let (text, asked) = match node
         .children()
         .find(|child| child.kind() == SyntaxKind::COND_EXPR)
     {
-        Some(condition) => condition.text().to_string(),
-        None if tokens(node).next() == Some(SyntaxKind::IF_KW) => node
-            .children_with_tokens()
-            .skip(1)
-            .take_while(|part| part.kind() != SyntaxKind::THEN_KW)
-            .map(|part| part.to_string())
-            .collect(),
+        Some(condition) => (condition.text().to_string(), first_expression(&condition)),
+        None if tokens(node).next() == Some(SyntaxKind::IF_KW) => (
+            node.children_with_tokens()
+                .skip(1)
+                .take_while(|part| part.kind() != SyntaxKind::THEN_KW)
+                .map(|part| part.to_string())
+                .collect(),
+            first_expression(node),
+        ),
         None => return,
     };
     let guard = model.create(ElementKind::Expression);
@@ -1485,6 +1553,7 @@ fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
         Value::String(text.strip_prefix("if").unwrap_or(&text).trim().to_string()),
     );
     model.set(written, "representedElement", Value::Ref(guard));
+    builds_what_it_says(model, guard, asked, built);
 }
 
 /// Keep what an `if` or a loop asks, as the text the author wrote it as.
@@ -1492,7 +1561,7 @@ fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId) {
 /// `if hot > 100 then cool;` and `while hot > 0 { ... }` are about their
 /// condition; a node holding only the body says a flow branches or
 /// repeats without saying on what.
-fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
+fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId, built: &mut Built) {
     use SyntaxKind::*;
     // `for i in xs` asks for `xs`: what comes before `in` is the variable
     // it binds, which `reify_loop_variable` declares. Kept whole, the
@@ -1506,9 +1575,11 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
     // expression a guard is written as, all of it in one node.
     if let Some(written) = node.children().find(|it| it.kind() == COND_EXPR) {
         let text = written.text().to_string();
-        return keep_condition(model, id, text.strip_prefix("if").unwrap_or(&text).trim());
+        let asked = text.strip_prefix("if").unwrap_or(&text).trim();
+        return keep_condition(model, id, asked, first_expression(&written), built);
     }
     let mut started = false;
+    let mut first = None;
     for part in node.children_with_tokens() {
         if !started {
             started = matches!(part.kind(), IN_KW | WHILE_KW | UNTIL_KW | LOOP_KW | IF_KW);
@@ -1523,7 +1594,10 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
             _ => {}
         }
         let written = match part {
-            sysml_syntax::SyntaxElement::Node(node) => node.text().to_string(),
+            sysml_syntax::SyntaxElement::Node(node) => {
+                first = first.or_else(|| Some(node.clone()).filter(|it| it.kind().is_expression()));
+                node.text().to_string()
+            }
             sysml_syntax::SyntaxElement::Token(token) => token.text().to_string(),
         };
         if !asked.is_empty() {
@@ -1545,7 +1619,12 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
         }
         return;
     }
-    keep_condition(model, id, asked);
+    keep_condition(model, id, asked, first, built);
+}
+
+/// The expression a condition is written as, inside the node that holds it.
+fn first_expression(node: &SyntaxNode) -> Option<SyntaxNode> {
+    node.children().find(|it| it.kind().is_expression())
 }
 
 /// Keep what a structured control node asks, as the text it was written
@@ -1554,7 +1633,17 @@ fn reify_condition(model: &mut Model, node: &SyntaxNode, id: ElementId) {
 /// `IfNode = 'if' ExpressionParameterMember ...` and its loop kin: what
 /// the node asks is handed to it, and `inputParameters()` is what the
 /// constraints about a structured control node count.
-fn keep_condition(model: &mut Model, id: ElementId, asked: &str) {
+///
+/// And what it asks, built the way a value is, under that text: `if
+/// xs->exists {in x; x > 0}` hands over a body that declares the `x` it
+/// names, and kept as text alone neither was in the model to be named.
+fn keep_condition(
+    model: &mut Model,
+    id: ElementId,
+    asked: &str,
+    written: Option<SyntaxNode>,
+    built: &mut Built,
+) {
     let condition = model.create(ElementKind::Expression);
     model.add_owned(id, condition);
     // `ExpressionParameterMember : ParameterMembership` -- what the
@@ -1564,6 +1653,21 @@ fn keep_condition(model: &mut Model, id: ElementId, asked: &str) {
     // `validateResultExpressionMembershipOwningType` says so.
     model.set(condition, "direction", Value::EnumLit("in"));
     represent_textually(model, condition, asked);
+    builds_what_it_says(model, condition, written, built);
+}
+
+/// Build what an expression kept as text says as the expression it results
+/// in, where it is written as one.
+fn builds_what_it_says(
+    model: &mut Model,
+    expression: ElementId,
+    written: Option<SyntaxNode>,
+    built: &mut Built,
+) {
+    if let Some(written) = written {
+        let result = value_expression(model, expression, &written, built);
+        model.set_member_role(result, Role::Result);
+    }
 }
 
 /// Declare the variable a `for` loop iterates with.
@@ -1629,7 +1733,8 @@ fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId, bui
     // `do send 1 to p` is a send action like any other, and
     // `validateSendActionParameters` counts the three parameters it is
     // handed whether the statement wrote a clause for each or not.
-    reify_action_arguments(model, node, effect, kind, None, built);
+    let window = crate::clause(node, SyntaxKind::DO_KW).unwrap_or_else(|| node.text_range());
+    reify_action_arguments(model, node, window, effect, kind, None, built);
 }
 
 /// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
@@ -1711,14 +1816,6 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
                 Some(ElementKind::WhileLoopActionUsage)
             }
             SyntaxKind::FOR_KW => Some(ElementKind::ForLoopActionUsage),
-            // `then event server.publish_request[1];` declares the
-            // occurrence the flow runs into, and `then perform a;` and
-            // `then include u;` the same. Read as the succession alone,
-            // the step the source wrote is in the model nowhere and the
-            // succession runs into nothing.
-            SyntaxKind::EVENT_KW => Some(ElementKind::EventOccurrenceUsage),
-            SyntaxKind::PERFORM_KW => Some(ElementKind::PerformActionUsage),
-            SyntaxKind::INCLUDE_KW => Some(ElementKind::IncludeUseCaseUsage),
             _ => None,
         }) {
             return Some(declared);
@@ -1931,139 +2028,6 @@ fn control_node_kind(token: SyntaxKind) -> Option<ElementKind> {
         SyntaxKind::SNAPSHOT_KW | SyntaxKind::TIMESLICE_KW => Some(ElementKind::OccurrenceUsage),
         _ => None,
     }
-}
-
-/// Some statements write their own name as a plain reference rather than
-/// the `NAME` node a declaration carries: `merge continue;`, `transition
-/// off_to_on first off then on`, `action engineStarted accept engineStart`,
-/// `action stop terminate;`.
-///
-/// The name is the reference before the keyword that introduces the
-/// statement's operands, so a bare `first x then y` stays unnamed. A usage
-/// only takes a name this way when such a keyword is present, leaving
-/// `perform pp.gt;` to the effective name resolution gives it.
-fn statement_declared_name(node: &SyntaxNode) -> Option<String> {
-    // the keywords a relationship statement writes between its name and
-    // the two things it relates
-    let relates = |kind| {
-        matches!(
-            kind,
-            SyntaxKind::SUBTYPE_KW
-                | SyntaxKind::SUBCLASSIFIER_KW
-                | SyntaxKind::SUBSET_KW
-                | SyntaxKind::REDEFINITION_KW
-                | SyntaxKind::TYPING_KW
-                | SyntaxKind::CONJUGATE_KW
-                | SyntaxKind::DISJOINT_KW
-                | SyntaxKind::INVERSE_KW
-                | SyntaxKind::OF_KW
-                | SyntaxKind::FROM_KW
-        )
-    };
-    let introduces_operands = |kind| {
-        matches!(
-            kind,
-            SyntaxKind::FIRST_KW
-                | SyntaxKind::THEN_KW
-                // `else a2;` names where the flow goes when no guard
-                // held, as `then a2;` does; read as a name, it declared
-                // a second `a2` beside the action it was meant to reach
-                | SyntaxKind::ELSE_KW
-                | SyntaxKind::ACCEPT_KW
-                | SyntaxKind::SEND_KW
-                | SyntaxKind::TERMINATE_KW
-                | SyntaxKind::ASSIGN_KW
-                // `do providePower;` performs the action it names; the
-                // name is what it is about, not what it is called
-                | SyntaxKind::ENTRY_KW
-                | SyntaxKind::DO_KW
-                | SyntaxKind::EXIT_KW
-        )
-    };
-    // `specialization s subtype A :> B;` and `featuring feat of f by A;`
-    // name themselves before the clause that says what they relate;
-    // `disjoint A from B;` leaves the place empty and stays unnamed.
-    if node.kind() == SyntaxKind::RELATION_STMT {
-        return node
-            .children_with_tokens()
-            .take_while(|part| !relates(part.kind()) && part.kind() != SyntaxKind::RELATION)
-            .filter_map(|part| part.into_node())
-            .find(|child| child.kind() == SyntaxKind::NAME_REF)
-            .and_then(|name| Some(unquote(name.first_token()?.text())));
-    }
-    // `dependency Use from A to B;` names itself before `from`, and
-    // `Dependency = 'dependency' ( Identification? 'from' )? ...` says a
-    // name is only there when `from` is: `dependency Z to A;` starts
-    // with a client.
-    if node.kind() == SyntaxKind::DEPENDENCY {
-        if !has_token(node, SyntaxKind::FROM_KW) {
-            return None;
-        }
-        return node
-            .children_with_tokens()
-            .take_while(|part| part.kind() != SyntaxKind::FROM_KW)
-            .filter_map(|part| part.into_node())
-            .find(|child| child.kind() == SyntaxKind::NAME_REF)
-            .and_then(|name| Some(unquote(name.first_token()?.text())));
-    }
-    // `for t in 1..3` and `if hot > 100 then cool` lead with the loop
-    // variable and the condition; taking either for a name would leave
-    // the statement saying nothing about what it asks
-    if tokens(node).any(|token| {
-        matches!(
-            token,
-            SyntaxKind::FOR_KW | SyntaxKind::IF_KW | SyntaxKind::WHILE_KW | SyntaxKind::UNTIL_KW
-        )
-    }) {
-        return None;
-    }
-    match node.kind() {
-        SyntaxKind::CONTROL_STMT => {}
-        SyntaxKind::USAGE if tokens(node).any(introduces_operands) => {}
-        _ => return None,
-    }
-    // `then merge continue;` names the node it declares, so the leading
-    // `then` does not end the search -- the declaration keyword restarts it
-    let declares = tokens(node).any(|t| control_node_kind(t).is_some());
-    // `a then b` takes an operand on each side of the keyword, unlike
-    // `first`, `accept` and the rest, which take only what follows. So
-    // the reference at the front of a bare `then` is where the flow
-    // comes from, and reading it as a name leaves the statement saying
-    // nothing about what it joins. A `first` puts the source after
-    // itself and leaves the front for a name again.
-    let bare_then =
-        !declares && has_token(node, SyntaxKind::THEN_KW) && !has_token(node, SyntaxKind::FIRST_KW);
-    let mut reached_declaration = !declares;
-    for element in node.children_with_tokens() {
-        if let Some(token) = element.as_token() {
-            if control_node_kind(token.kind()).is_some() {
-                reached_declaration = true;
-                continue;
-            }
-            // past that keyword every reference is an operand, not a name
-            if reached_declaration && introduces_operands(token.kind()) {
-                return None;
-            }
-            continue;
-        }
-        let child = element.into_node().expect("checked for a token above");
-        // `timeslice ownership[0..*]` writes the multiplicity where an
-        // index would go, so the name it declares is inside that
-        let named = match child.kind() {
-            SyntaxKind::NAME_REF => Some(child),
-            SyntaxKind::INDEX_EXPR => child
-                .children()
-                .find(|part| part.kind() == SyntaxKind::NAME_REF),
-            _ => None,
-        };
-        if let Some(named) = named.filter(|_| reached_declaration) {
-            if bare_then {
-                return None;
-            }
-            return Some(unquote(named.first_token()?.text()));
-        }
-    }
-    None
 }
 
 fn package_kind(node: &SyntaxNode) -> ElementKind {
@@ -2609,15 +2573,29 @@ fn leading_keywords(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
 /// wrapper names nothing; what it says describes the declaration it wraps.
 /// A connector end really does own what it nests, so `end` is never a
 /// wrapper.
+///
+/// Nor is a declaration that says anything of its own besides:
+/// `connection : C connect x references t.a to y references w.b;` is
+/// nameless and nests its two ends, and taken for a wrapper the connection
+/// was built as nothing -- its ends became members of what owned it, and
+/// its type was never looked up.
 fn is_prefix_wrapper(node: &SyntaxNode) -> bool {
     use SyntaxKind::*;
     matches!(node.kind(), DEFINITION | USAGE)
         && !has_token(node, END_KW)
         && declared_name(node).is_none()
-        && statement_declared_name(node).is_none()
         && node
             .children()
             .any(|child| matches!(child.kind(), DEFINITION | USAGE))
+        && node
+            .children()
+            .all(|child| matches!(child.kind(), DEFINITION | USAGE | BODY | PREFIX_METADATA))
+        && !tokens(node).any(|token| {
+            matches!(
+                token,
+                CONNECT_KW | ALLOCATE_KW | BIND_KW | FROM_KW | TO_KW | FIRST_KW | THEN_KW
+            )
+        })
 }
 
 /// The node and, when the node was hoisted out of an anonymous wrapper
@@ -2660,8 +2638,13 @@ fn declared_name(node: &SyntaxNode) -> Option<String> {
     if names_an_end(node) {
         return None;
     }
+    // `accept s : Sig;` and `for i in xs { ... }` declare a name, and it
+    // is the payload's and the loop variable's rather than the action's:
+    // past the keyword that opens either, a name is not the statement's
     let name = node
-        .children()
+        .children_with_tokens()
+        .take_while(|part| !matches!(part.kind(), SyntaxKind::ACCEPT_KW | SyntaxKind::FOR_KW))
+        .filter_map(|part| part.into_node())
         .find(|c| c.kind() == SyntaxKind::NAME)?
         .first_token()?;
     Some(unquote(name.text()))
@@ -3078,11 +3061,12 @@ mod tests {
                 .collect()
         };
         let members = model.owned(roots[0]);
-        // the two branches are one parameter each, whatever they hold
+        // the two branches are one parameter each, whatever they hold; the
+        // condition holds its text and the expression it is built into
         let branch = ElementKind::ActionUsage;
         assert_eq!(
             shape(members[1]),
-            [(ElementKind::Expression, 1), (branch, 2), (branch, 1),]
+            [(ElementKind::Expression, 2), (branch, 2), (branch, 1),]
         );
         // and a bare loop is handed an empty parameter beside its body
         assert_eq!(

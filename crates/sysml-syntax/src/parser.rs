@@ -74,6 +74,8 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         carries_payload: false,
         in_metadata_body: false,
         opens_metadata_body: false,
+        declaring_effect: false,
+        stops_at_then: false,
         connector_ends: false,
     };
     parser.source_file();
@@ -125,6 +127,12 @@ struct Parser<'t> {
     /// The body the element being read opens, if it opens one, is such
     /// a body.
     opens_metadata_body: bool,
+    /// The declaration about to be read is the action a transition's `do`
+    /// writes, which a `then` may follow straight after its name.
+    declaring_effect: bool,
+    /// The declaration being read is such an effect, which ends where the
+    /// transition's `then` begins.
+    stops_at_then: bool,
     /// While reading the ends an n-ary connector lists.
     connector_ends: bool,
 }
@@ -322,6 +330,12 @@ impl Parser<'_> {
             self.start_node(TYPING);
             self.type_ref();
             self.finish_node();
+        } else if self.nth(1) != DOT {
+            // `accept s : Sig` declares the payload `s`: `PayloadFeature =
+            // Identification PayloadFeatureSpecializationPart ...`. Read as
+            // a reference, it was a name that resolved to nothing standing
+            // where the payload's name belongs.
+            self.opt_name();
         }
     }
 
@@ -638,10 +652,28 @@ impl Parser<'_> {
             DEPENDENCY_KW => kind == FROM_KW,
             _ => false,
         };
+        if led == FOR_KW {
+            // `for i in xs` and `for n : T in xs` declare the loop
+            // variable: `ForVariableDeclarationMember = UsageDeclaration`
+            if self.at_name() && matches!(self.nth(1), IN_KW | COLON | TYPED_KW) {
+                self.opt_name();
+            }
+            return;
+        }
         self.opt_short_name();
-        if self.at_name() && relates(self.nth(1)) {
+        if self.at_name() && (relates(self.nth(1)) || led.is_control_node_kw()) {
             self.opt_name();
         }
+    }
+
+    /// `merge m;`, `then fork F { ... }`: the name after a control node's
+    /// keyword is the one it declares -- `MergeNode = ControlNodePrefix
+    /// 'merge' UsageDeclaration ActionBody` -- however the statement goes
+    /// on.
+    fn control_node(&mut self) {
+        self.bump();
+        self.opt_short_name();
+        self.opt_name();
     }
 
     /// `transition <shortName>? Name? first a then b;`
@@ -756,8 +788,11 @@ impl Parser<'_> {
     }
 
     fn definition_or_usage_inner(&mut self, cp: Checkpoint) {
+        let effect = std::mem::take(&mut self.declaring_effect);
+        let mut ended = false;
         loop {
             if self.current().is_modifier_kw() {
+                ended |= self.at(END_KW);
                 self.bump();
             } else if self.at(HASH) && self.nth_is_name(1) {
                 self.opt_prefix_metadata();
@@ -790,6 +825,7 @@ impl Parser<'_> {
         // `@Classified { ... }` says.
         let is_metadata = self.at(METADATA_KW);
         let is_connector = self.at(CONNECTOR_KW);
+        let kinded = self.current().is_def_kind_kw();
         self.def_kind_keywords();
         let node = if self.at(DEF_KW) || is_classifier {
             DEFINITION
@@ -801,6 +837,7 @@ impl Parser<'_> {
         self.eat(ALL_KW); // `struct all Curve` — sufficiency marker
         self.opt_prefix_metadata();
         self.opt_short_name();
+        let before = self.pos;
         if node == DEFINITION {
             // `def` has been read, and a definition's name is the only
             // thing that belongs after it
@@ -814,6 +851,32 @@ impl Parser<'_> {
         } else {
             // usages: only take a name the next token confirms, so that
             // `flow p1.torque to p2.torque;` keeps `p1.torque` an expression
+            self.declaring_effect = effect;
+            self.opt_decl_name();
+            self.declaring_effect = false;
+        }
+        let unnamed = self.pos == before && self.at(L_BRACKET);
+        // `end [*] ref cause : Situation;` writes a cross multiplicity
+        // between the `end` and the declaration of the end, as `end [1]
+        // part x : T;` does: `EndUsagePrefix = 'end'
+        // OwnedCrossMultiplicityMember? ...`. With no kind keyword after
+        // it the declaration went on as the end's own, and its name was
+        // read as a reference to nothing.
+        if ended && !kinded && node == USAGE && unnamed {
+            self.multiplicity();
+            // only the run of prefixes straight up to the name: `end [1] in
+            // ordered part bead` names its end after a kind keyword, which
+            // reads the way it always has
+            let mut ahead = 0;
+            while self.nth(ahead).is_modifier_kw() {
+                ahead += 1;
+            }
+            if ahead > 0 && self.nth_is_name(ahead) {
+                let nested = self.checkpoint();
+                self.definition_or_usage(nested);
+                self.finish_node();
+                return;
+            }
             self.opt_decl_name();
         }
         if self.at(L_PAREN) && is_connector {
@@ -822,11 +885,13 @@ impl Parser<'_> {
         } else if self.at(L_PAREN) {
             self.param_list();
         }
+        let stops = std::mem::replace(&mut self.stops_at_then, effect);
         if is_metadata && node == USAGE {
             self.metadata_tail();
         } else {
             self.element_tail();
         }
+        self.stops_at_then = stops;
         self.carries_payload = false;
         self.finish_node();
     }
@@ -855,8 +920,11 @@ impl Parser<'_> {
             let here = self.current();
             let after_flow = matches!(previous, THEN_KW | ELSE_KW | FIRST_KW);
             let after_connect = matches!(previous, CONNECT_KW | ALLOCATE_KW);
+            let after_do = previous == DO_KW;
             previous = here;
             match here {
+                // `do action D then S2;` -- the `then` is the transition's
+                THEN_KW if self.stops_at_then => return,
                 SEMICOLON => {
                     self.start_node(BODY);
                     self.bump();
@@ -921,15 +989,45 @@ impl Parser<'_> {
                 }
                 OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | AT_KW
                 | AFTER_KW | WHEN_KW | UNTIL_KW | WHILE_KW | DO_KW | BY_KW | ALL_KW
-                | PARALLEL_KW | ASSIGN_KW | SEND_KW | MERGE_KW | DECIDE_KW | FORK_KW | JOIN_KW
-                | TERMINATE_KW | LOOP_KW | FOR_KW | NEW_KW | ORDERED_KW | NONUNIQUE_KW
-                | CONNECT_KW | BIND_KW | MESSAGE_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW
+                | PARALLEL_KW | ASSIGN_KW | SEND_KW | TERMINATE_KW | LOOP_KW | ORDERED_KW
+                | NONUNIQUE_KW | CONNECT_KW | BIND_KW | ALLOCATE_KW | SUBTYPE_KW | SUBSET_KW
                 | REDEFINITION_KW | TYPING_KW | SPECIALIZATION_KW | SUBCLASSIFIER_KW | COMMA
                 | QUESTION | QUESTION_QUESTION | FAT_ARROW | LANGUAGE_KW => self.bump(),
-                // nested declarations inside statements: `then perform body;`,
-                // `then private action whileLoop { ... }`
+                k if k.is_control_node_kw() => self.control_node(),
+                // `action f for i in xs { ... }` declares its loop variable
+                // as the statement form does
+                FOR_KW => {
+                    self.bump();
+                    self.opt_statement_name(FOR_KW);
+                }
+                // `then timeslice bob { ... }` declares the portion the
+                // flow runs into, and the name after the portion kind is
+                // its own, as it is when no `then` leads
+                TIMESLICE_KW | SNAPSHOT_KW if after_flow => {
+                    self.bump();
+                    self.opt_decl_name();
+                }
+                // `then message m of T` declares the message the flow
+                // runs into, before what it carries
+                MESSAGE_KW => {
+                    self.bump();
+                    self.opt_decl_name();
+                }
+                // `then event o.e[1];`, `then perform body;`, `then include
+                // u { ... }`: the step the flow runs into, declared the way
+                // the same words declare it as a member -- `then action a`
+                // already is. Read as loose words of the statement, what
+                // the step adapts was never looked up, and `then perform
+                // nope;` passed.
                 PERFORM_KW | EXHIBIT_KW | EVENT_KW | INCLUDE_KW | SATISFY_KW | ASSERT_KW
-                | ASSUME_KW | REQUIRE_KW | VERIFY_KW | FRAME_KW => self.bump(),
+                | ASSUME_KW | REQUIRE_KW | VERIFY_KW | FRAME_KW => {
+                    if after_flow {
+                        let nested = self.checkpoint();
+                        self.adapter_usage(nested);
+                        return;
+                    }
+                    self.bump();
+                }
                 k if k.is_visibility_kw() => self.bump(),
                 // `connect [1] lugNutPort ::> wheel.lugNutPort to ...` — a
                 // named connector end; parse just the name and its
@@ -960,7 +1058,11 @@ impl Parser<'_> {
                     && (self.nth_is_name(1) || (after_flow && self.nth(1) == L_BRACE)) =>
                 {
                     let nested = self.checkpoint();
+                    self.declaring_effect = after_do;
                     self.definition_or_usage(nested);
+                    if after_do && self.at(THEN_KW) {
+                        continue;
+                    }
                     return;
                 }
                 k if k.is_def_kind_kw() || k.is_modifier_kw() => self.bump(),
@@ -1007,9 +1109,11 @@ impl Parser<'_> {
         self.bump();
         let outer = self.in_metadata_body;
         self.in_metadata_body = std::mem::take(&mut self.opens_metadata_body);
+        let stops = std::mem::take(&mut self.stops_at_then);
         while !matches!(self.current(), R_BRACE | EOF) {
             self.member();
         }
+        self.stops_at_then = stops;
         self.in_metadata_body = outer;
         self.expect(R_BRACE);
         self.finish_node();
@@ -1382,7 +1486,27 @@ impl Parser<'_> {
                     // `succession s first a then b;` and `transition t
                     // first a then b;` declare themselves before `first`
                     | FIRST_KW
+                    // `action aa accept S;`, `state s parallel { ... }`,
+                    // `action stop terminate;`, `action a assign x := 1;`:
+                    // an action node or a state written with its own name
+                    // in front of what it does. Read as a reference, the
+                    // action had no name at all.
+                    | ACCEPT_KW
+                    | SEND_KW
+                    | TERMINATE_KW
+                    | ASSIGN_KW
+                    | PARALLEL_KW
+                    // `then action aLoop while i > 0 { ... }`: a loop
+                    // node, and an `if`, named before what it asks
+                    | WHILE_KW
+                    | LOOP_KW
+                    | FOR_KW
+                    | IF_KW
             )
+            // `accept s do action D then S2;` declares the effect `D` of
+            // the transition, which goes on to its target; anywhere
+            // else `succession a then b` makes `a` where the flow starts
+            || self.at_name() && self.declaring_effect && self.nth(1) == THEN_KW
         {
             self.opt_name();
         }
@@ -1748,6 +1872,72 @@ mod tests {
         assert_eq!(parse.errors(), &[], "unexpected errors for:\n{text}");
         assert_eq!(parse.syntax().text().to_string(), text, "lossless violated");
         parse
+    }
+
+    /// Every name written where the grammar declares one comes out as a
+    /// `NAME`, and every name it refers to as a reference, wherever the
+    /// statement goes on to.
+    #[test]
+    fn a_name_is_declared_where_the_grammar_declares_one() {
+        let declared = |text: &str| -> Vec<String> {
+            let parse = check_ok(text);
+            parse
+                .syntax()
+                .descendants()
+                .filter(|it| it.kind() == NAME)
+                .map(|it| it.text().to_string())
+                .collect()
+        };
+        for (text, names) in [
+            ("accept s : S;", &["s"][..]),
+            ("accept sig after 10;", &["sig"]),
+            ("accept S;", &[]),
+            ("merge m;", &["m"]),
+            ("then fork <f> F { }", &["F"]),
+            ("for i in xs { }", &["i"]),
+            ("for n : T in xs { }", &["n"]),
+            ("then timeslice bob { }", &["bob"]),
+            ("then snapshot s[1];", &["s"]),
+            ("then message m of T;", &["m"]),
+            ("action aa accept S;", &["aa"]),
+            ("action s2 send x via p;", &["s2"]),
+            ("action stop terminate;", &["stop"]),
+            ("action a1 assign x := 1;", &["a1"]),
+            ("state s parallel { }", &["s"]),
+            ("then action aLoop while c { }", &["aLoop"]),
+            ("action l loop { }", &["l"]),
+            ("action f for i in xs { }", &["f", "i"]),
+            ("action i if c { }", &["i"]),
+            ("end [*] ref cause : T;", &["cause"]),
+            ("end [1] in ordered part bead : T;", &["bead"]),
+            ("end [1] x : T;", &["x"]),
+            ("accept s : S do action D then S2;", &["s", "D"]),
+            ("succession a then b;", &[]),
+            ("then event o.e[1];", &[]),
+            ("then perform p;", &[]),
+            ("accept S do perform p then s2;", &[]),
+        ] {
+            assert_eq!(declared(text), names, "{text}");
+        }
+        // `do action D then S2;` -- the transition goes on to `S2`, which
+        // the action it declares on the way does not take for its own
+        let parse = check_ok("accept s : S do action D then S2;");
+        let statement = parse.syntax().first_child().expect("one statement");
+        let target = statement
+            .children()
+            .filter(|it| it.kind() == NAME_REF)
+            .map(|it| it.text().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(target, ["S2"]);
+        // `then event o.e[1];` is the event the flow runs into, which
+        // adapts `o.e` once
+        let parse = check_ok("then event o.e[1];");
+        let event = parse
+            .syntax()
+            .descendants()
+            .find(|it| it.kind() == USAGE)
+            .expect("the event is declared");
+        assert!(event.children().any(|it| it.kind() == MULTIPLICITY));
     }
 
     #[test]

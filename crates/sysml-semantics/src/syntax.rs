@@ -324,22 +324,6 @@ pub(crate) fn invoked_through_arrow(node: &SyntaxNode) -> Option<String> {
 /// `if nope { ... }` passed as a model with every name resolved.
 pub(crate) fn asked_expressions(node: &SyntaxNode) -> Vec<SyntaxNode> {
     use SyntaxKind::*;
-    let is_expression = |kind| {
-        matches!(
-            kind,
-            LITERAL
-                | NAME_REF
-                | PAREN_EXPR
-                | UNARY_EXPR
-                | BINARY_EXPR
-                | COND_EXPR
-                | CALL_EXPR
-                | PATH_EXPR
-                | INDEX_EXPR
-                | METADATA_ACCESS_EXPR
-                | ARROW_EXPR
-        )
-    };
     let mut asking = false;
     // `in` asks only in a `for`: elsewhere it is a direction
     let mut looping = false;
@@ -359,7 +343,7 @@ pub(crate) fn asked_expressions(node: &SyntaxNode) -> Vec<SyntaxNode> {
         }
         let child = part.into_node().expect("checked for a token above");
         // a transition's `if g` is one node, guard and keyword both
-        if (asking || child.kind() == COND_EXPR) && is_expression(child.kind()) {
+        if (asking || child.kind() == COND_EXPR) && child.kind().is_expression() {
             asked.push(child);
         } else {
             asking = false;
@@ -419,6 +403,23 @@ pub(crate) fn metadata_target(node: &SyntaxNode) -> Option<Target> {
 }
 
 pub(crate) fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
+    parts_written(node, false)
+}
+
+/// What the payload of an accept is written with: `accept s : Sig` types
+/// the payload `s`, and the action that waits for it is no `Sig`. Read
+/// with the action's own, `action a accept s : Sig;` made `a` one and
+/// left `s` typed by nothing, so `a.s.x` named nothing.
+pub(crate) fn payload_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Target>)> {
+    parts_written(node, true)
+}
+
+fn parts_written(node: &SyntaxNode, of_payload: bool) -> Vec<(SyntaxKind, Vec<Target>)> {
+    let accepts = node
+        .children_with_tokens()
+        .find(|it| it.kind() == SyntaxKind::ACCEPT_KW)
+        .map(|it| it.text_range().end());
+    let payload = |part: &SyntaxNode| accepts.is_some_and(|at| part.text_range().start() >= at);
     // `connector a ::> a.x to b;` writes no `from`, so `a ::> a.x` is
     // the end it runs from -- `ConnectorEnd : Feature = ...
     // ( declaredName = NAME REFERENCES )? OwnedReferenceSubsetting` --
@@ -426,6 +427,7 @@ pub(crate) fn relationship_parts(node: &SyntaxNode) -> Vec<(SyntaxKind, Vec<Targ
     // refers to.
     let end_refers = names_an_end(node);
     node.children()
+        .filter(|part| payload(part) == of_payload)
         .filter_map(|part| match part.kind() {
             SyntaxKind::REFERENCES if end_refers => None,
             SyntaxKind::TYPING
@@ -742,8 +744,20 @@ pub(crate) fn relation_ends(kind: ElementKind) -> Option<(SyntaxKind, &'static s
 
 /// The reference written directly after `keyword`, if the next thing is one.
 pub(crate) fn operand_after(node: &SyntaxNode, keyword: SyntaxKind) -> Option<SyntaxNode> {
+    operand_after_in(node, keyword, node.text_range())
+}
+
+/// [`operand_after`], among what is written within `window`.
+pub(crate) fn operand_after_in(
+    node: &SyntaxNode,
+    keyword: SyntaxKind,
+    window: TextRange,
+) -> Option<SyntaxNode> {
     let mut seen = false;
-    for element in node.children_with_tokens() {
+    for element in node
+        .children_with_tokens()
+        .filter(|part| window.contains_range(part.text_range()))
+    {
         match element.as_token() {
             Some(token) if token.kind().is_trivia() => {}
             Some(token) => {

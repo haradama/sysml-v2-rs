@@ -3843,6 +3843,76 @@ fn a_name_resolves_to_nothing_wherever_it_is_written() {
             "part def W { part ok; } part w : W; connection c connect ([1] w.ok, [1] w.ok, [2] w.ok);",
             "part def W { part ok; } part w : W; connection c connect ([1] w.ok, [1] w.ok, [2] w.NOPE);",
         ),
+        (
+            "what is sent, constructed where it is sent",
+            "item def Ok; action a { send new Ok(); }",
+            "item def Ok; action a { send new NOPE(); }",
+        ),
+        (
+            "what is terminated",
+            "action a { action ok; terminate ok; }",
+            "action a { action ok; terminate NOPE; }",
+        ),
+        (
+            "the event a flow runs into",
+            "occurrence def O { event occurrence ok; } occurrence o : O; occurrence u { event occurrence e; then event o.ok[1]; }",
+            "occurrence def O { event occurrence ok; } occurrence o : O; occurrence u { event occurrence e; then event o.NOPE[1]; }",
+        ),
+        (
+            "the action a flow runs into and performs",
+            "action ok; action a { action b; first b; then perform ok; }",
+            "action ok; action a { action b; first b; then perform NOPE; }",
+        ),
+        (
+            "the port a transition's trigger waits through",
+            "port def P; item def S; port ok : P; state def M { state s1; state s2; transition first s1 accept S via ok then s2; }",
+            "port def P; item def S; port ok : P; state def M { state s1; state s2; transition first s1 accept S via NOPE then s2; }",
+        ),
+        (
+            "where a transition's effect sends",
+            "port def P; item def S; port ok : P; state def M { state s1; state s2; transition first s1 accept S do send new S() to ok then s2; }",
+            "port def P; item def S; port ok : P; state def M { state s1; state s2; transition first s1 accept S do send new S() to NOPE then s2; }",
+        ),
+        (
+            "what is assigned, constructed where it is assigned",
+            "part def Ok; action a { attribute v; assign v := new Ok(); }",
+            "part def Ok; action a { attribute v; assign v := new NOPE(); }",
+        ),
+        (
+            "the parameter an argument names",
+            "calc def F { in ok; } attribute v = F(ok = 1);",
+            "calc def F { in ok; } attribute v = F(NOPE = 1);",
+        ),
+        (
+            "the feature a constructor's argument names",
+            "attribute def A { attribute ok; } attribute v = new A(ok = 1);",
+            "attribute def A { attribute ok; } attribute v = new A(NOPE = 1);",
+        ),
+        (
+            "the type of a loop variable",
+            "attribute def Ok; action a { for n : Ok in 1 { } }",
+            "attribute def Ok; action a { for n : NOPE in 1 { } }",
+        ),
+        (
+            "the type of a body's parameter and the value of its member",
+            "attribute def Ok; calc def f { in xs; in b; } attribute xs; constraint c { xs->f {in n : Ok; private attribute m = n; m} }",
+            "attribute def Ok; calc def f { in xs; in b; } attribute xs; constraint c { xs->f {in n : NOPE; private attribute m = n; m} }",
+        ),
+        (
+            "the type of a nameless connection whose ends are named",
+            "part def W { part a; } part w : W; connection def Ok { end x; end y; } part q { connection : Ok connect x references w.a to y references w.a; }",
+            "part def W { part a; } part w : W; connection def Ok { end x; end y; } part q { connection : NOPE connect x references w.a to y references w.a; }",
+        ),
+        (
+            "what a body asks of its parameter, in what an if, a while and a guard ask",
+            "attribute def Ok { attribute ok; } calc def f { in xs; in b; } attribute xs; action a { if xs->f {in x : Ok; x.ok} { } while xs->f {in y : Ok; y.ok} { } } transition t first a if xs->f {in z : Ok; z.ok} then a;",
+            "attribute def Ok { attribute ok; } calc def f { in xs; in b; } attribute xs; action a { if xs->f {in x : Ok; x.ok} { } while xs->f {in y : Ok; y.NOPE} { } } transition t first a if xs->f {in z : Ok; z.ok} then a;",
+        ),
+        (
+            "the type of the payload an accept action declares",
+            "item def Ok; action a { action t accept s : Ok; }",
+            "item def Ok; action a { action t accept s : NOPE; }",
+        ),
     ];
     for (what, right, wrong) in CASES {
         let unresolved = |body: &str| -> Vec<String> {
@@ -4164,4 +4234,115 @@ fn every_name_a_kerml_model_writes_is_looked_up() {
         missing(&model("nope")),
         ["nope1", "nope2", "nope3", "nope4", "nope5", "nope6", "nope7"]
     );
+}
+
+/// A name written where the grammar declares one is the name of what it
+/// declares, however the statement goes on: each of these came out with
+/// no name at all, or as a reference to nothing.
+#[test]
+fn a_statement_names_what_it_declares() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+            item def Sig { attribute x; }
+            part def T;
+            connection def C { end [*] ref cause : T; end [1] in ordered part effect : T; }
+            state ps parallel { }
+            action def A {
+                action aa accept s : Sig;
+                action stop terminate;
+                action s2 send new Sig() via p;
+                port p;
+                then merge m;
+                then action aLoop while true { }
+            }
+            state def S {
+                state S1; state S2;
+                accept s : Sig do action D then S2;
+            }
+            action def B :> A {
+                ref r1 = aa; ref r2 = stop; ref r3 = s2; ref r4 = m; ref r5 = aLoop;
+                ref r6 = aa.s.x;
+            }
+            part q { ref r7 = ps; ref r8 = C::cause; ref r9 = C::effect; }
+        }",
+    )]);
+    assert_eq!(
+        ws.unresolved()
+            .iter()
+            .map(|it| it.name.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+    // `accept s : Sig do action D then S2` goes on to `S2`: the effect
+    // declares `D` and stops where the transition's `then` begins
+    let s2 = ws
+        .named_elements()
+        .find(|(_, name)| *name == "S2")
+        .map(|(id, _)| id)
+        .expect("the state is declared");
+    assert!(ws.references().iter().any(|it| it.target == s2));
+}
+
+/// What an accept waits for is typed where the statement writes it, and
+/// a name reaching through it resolves wherever it is written -- not only
+/// below the transition that declares it.
+#[test]
+fn a_payload_is_typed_wherever_it_is_reached() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+            attribute def Sig { attribute x; }
+            port def Q;
+            state def S {
+                state S1 { attribute early = T.s.x; }
+                state S2;
+                transition T first S1 accept s : Sig via p then S2;
+                port p : Q;
+                attribute late = T.s.x;
+            }
+            action def A {
+                attribute early = a.s.x;
+                action a accept s : Sig;
+                for n : Sig in 1 { attribute y = n.x; }
+            }
+        }",
+    )]);
+    assert_eq!(
+        ws.unresolved()
+            .iter()
+            .map(|it| it.name.clone())
+            .collect::<Vec<_>>(),
+        Vec::<String>::new()
+    );
+}
+
+/// Each name is recorded once, however many elements a statement or an
+/// expression is built into: `then assign i := i + 1` is a succession and
+/// an assignment, and `{in n; private attribute m = n; m}` a body whose
+/// member reads its own value. A name recorded twice is a rename that
+/// edits it twice.
+#[test]
+fn a_name_is_recorded_once() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+            calc def f { in xs; in b; }
+            attribute xs;
+            action a {
+                attribute i;
+                assign i := 1;
+                then assign i := i + 1;
+            }
+            constraint c { xs->f {in n; private attribute m = n; m->f {in k; k + n} } }
+        }",
+    )]);
+    let mut seen = std::collections::HashSet::new();
+    for reference in ws.references() {
+        assert!(
+            seen.insert((reference.file, reference.range)),
+            "recorded twice: {:?}",
+            reference.range
+        );
+    }
 }

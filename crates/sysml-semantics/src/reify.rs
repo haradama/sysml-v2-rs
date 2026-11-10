@@ -11,7 +11,7 @@
 //! what an end reached through a chain participates in.
 
 use sysml_model::{ElementId, ElementKind, Value};
-use sysml_syntax::{SyntaxKind, SyntaxNode};
+use sysml_syntax::{SyntaxKind, SyntaxNode, TextRange};
 
 use crate::syntax::*;
 use crate::{Reached, Reference, ResolveStats, Workspace};
@@ -665,10 +665,42 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
+        // A transition carries its trigger and its effect as actions of
+        // their own, each written in a clause of the statement: `accept s
+        // via p` waits through `p`, and `do send x to q` sends to `q`.
+        // Read as the transition's, neither was looked up at all.
+        if self.model.kind(id) == ElementKind::TransitionUsage {
+            for (role, opens) in [
+                ("triggerAction", SyntaxKind::ACCEPT_KW),
+                ("effectAction", SyntaxKind::DO_KW),
+            ] {
+                let carried: Vec<ElementId> = match self.model.maybe(id, role) {
+                    Some(Value::RefList(actions)) => actions.clone(),
+                    _ => Vec::new(),
+                };
+                if let Some(window) = sysml_model::clause(node, opens) {
+                    for action in carried {
+                        self.resolve_arguments_in(action, node, window, stats);
+                    }
+                }
+            }
+            return;
+        }
+        self.resolve_arguments_in(id, node, node.text_range(), stats);
+    }
+    /// What an action is handed by the clauses written within `window`.
+    fn resolve_arguments_in(
+        &mut self,
+        id: ElementId,
+        node: &SyntaxNode,
+        window: TextRange,
+        stats: &mut ResolveStats,
+    ) {
         let kind = self.model.kind(id);
         let arguments: &[(usize, SyntaxKind)] = match kind {
             ElementKind::SendActionUsage => &[(1, SyntaxKind::VIA_KW), (2, SyntaxKind::TO_KW)],
             ElementKind::AcceptActionUsage => &[(1, SyntaxKind::VIA_KW)],
+            ElementKind::TerminateActionUsage => &[(0, SyntaxKind::TERMINATE_KW)],
             ElementKind::AssignmentActionUsage => &[],
             _ => return,
         };
@@ -711,7 +743,7 @@ impl Workspace {
             .filter(|&child| self.model.kind(child) == ElementKind::ReferenceUsage)
             .collect();
         for &(slot, keyword) in arguments {
-            let Some(operand) = operand_after(node, keyword) else {
+            let Some(operand) = operand_after_in(node, keyword, window) else {
                 continue;
             };
             let Some(target) = resolve(self, operand) else {
@@ -932,6 +964,14 @@ impl Workspace {
         node: &SyntaxNode,
         stats: &mut ResolveStats,
     ) {
+        // `for n : Integer in xs` types the loop variable, which is the
+        // first feature the loop owns and has no syntax of its own
+        if self.model.kind(transition) == ElementKind::ForLoopActionUsage {
+            if let Some(variable) = self.model.owned(transition).first().copied() {
+                self.type_where_written(transition, variable, relationship_parts(node), stats);
+            }
+            return;
+        }
         let declared = match self.model.maybe(transition, "triggerAction") {
             Some(Value::RefList(triggers)) => triggers.first().copied(),
             // `accept cl : CallGiveItems do action { ... }` is an accept
@@ -956,21 +996,32 @@ impl Workspace {
         else {
             return;
         };
-        let file = self.file_of(transition);
-        let typings = relationship_parts(node)
+        self.type_where_written(transition, trigger, payload_parts(node), stats);
+    }
+    /// Type `typed` by what the typings among `parts` name, looked up from
+    /// `written`, the element whose statement writes them.
+    fn type_where_written(
+        &mut self,
+        written: ElementId,
+        typed: ElementId,
+        parts: Vec<(SyntaxKind, Vec<Target>)>,
+        stats: &mut ResolveStats,
+    ) {
+        let file = self.file_of(written);
+        let typings = parts
             .into_iter()
             .filter(|(part, _)| *part == SyntaxKind::TYPING);
         for (_, targets) in typings {
             for t in targets {
-                match self.resolve_written(transition, &t.segments, false, None) {
+                match self.resolve_written(written, &t.segments, false, None) {
                     Some(target) => {
                         stats.resolved += 1;
-                        self.record(transition, file, t.range, t.name_range, &t.at, target);
+                        self.record(written, file, t.range, t.name_range, &t.at, target);
                         self.reified(
-                            trigger,
+                            typed,
                             ElementKind::FeatureTyping,
                             &[
-                                ("typedFeature", Value::Ref(trigger)),
+                                ("typedFeature", Value::Ref(typed)),
                                 ("type", Value::Ref(target)),
                             ],
                         );
