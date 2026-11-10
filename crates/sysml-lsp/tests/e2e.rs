@@ -689,3 +689,37 @@ fn the_client_says_how_the_preview_is_painted() {
     // and told something that is not a skin, it draws what it drew
     assert_eq!(drawn(json!({ "light": { "paper": "#fff" } })), plain);
 }
+
+/// After `P::` the completion is what `P` holds, and no keyword: one was
+/// never what could be written there, and the names around the cursor
+/// were offered in place of `P`'s.
+#[test]
+fn completion_after_a_qualifier_offers_what_the_qualifier_holds() {
+    let (mut client, handle) = serving();
+    client.initialize();
+    let uri = "file:///qualified.sysml";
+    let text = "package P {\n    part def Wheel;\n}\npackage Q {\n    import P::\n}\n";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1, "text": text } }),
+    );
+    client.wait_diagnostics();
+    let completions = client.request(
+        lsp_types::request::Completion::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 4, "character": 14 }
+        }),
+    );
+    let labels: Vec<&str> = completions
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["Wheel"]);
+
+    client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
+    client.notify(lsp_types::notification::Exit::METHOD, Value::Null);
+    handle.join().unwrap();
+}

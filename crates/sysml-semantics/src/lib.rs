@@ -164,6 +164,50 @@ pub struct Finding {
     pub what: String,
 }
 
+/// The qualifier written straight before `offset` and whatever part of a
+/// name is being typed after it: `P::Inner::` and `P::Inner::De` both
+/// give `[P, Inner]`, and `a.b.` gives `[a, b]` read through a feature.
+/// `None` where the cursor follows no `::` or `.`.
+fn qualifier_before(text: &str, offset: usize) -> Option<(Vec<String>, bool)> {
+    let text = text.get(..offset)?;
+    let named = |c: char| c.is_alphanumeric() || c == '_';
+    // the part of a name already typed
+    let mut end = text.trim_end_matches(named).len();
+    let mut segments = Vec::new();
+    let mut through_a_feature = false;
+    loop {
+        let before = &text[..end];
+        let separator = if before.ends_with("::") {
+            2
+        } else if before.ends_with('.') && !before.ends_with("..") {
+            if segments.is_empty() {
+                through_a_feature = true;
+            }
+            1
+        } else {
+            break;
+        };
+        let before = &before[..before.len() - separator];
+        // `'Wheel Unit'::` names its segment in quotes
+        let (segment, start) = match before.strip_suffix('\'') {
+            Some(inside) => {
+                let opened = inside.rfind('\'')?;
+                (inside[opened + 1..].to_string(), opened)
+            }
+            None => {
+                let start = before.trim_end_matches(named).len();
+                (before[start..].to_string(), start)
+            }
+        };
+        if segment.is_empty() {
+            return None;
+        }
+        segments.insert(0, segment);
+        end = start;
+    }
+    (!segments.is_empty()).then_some((segments, through_a_feature))
+}
+
 /// What a name that resolved to nothing might have meant.
 ///
 /// See [`Workspace::suggestions`], which is where the two halves are
@@ -1142,6 +1186,28 @@ impl Workspace {
 
         let mut out = Vec::new();
         let mut seen = HashSet::new();
+        // `P::|` asks for what `P` holds and `x.|` for the features of
+        // `x`, not for the names around the cursor: offered those, an
+        // editor completing `import P::` listed `P` and `Q` and none of
+        // what was in `P`. What the qualifier names is looked up the way a
+        // name written there would be, and only what is reachable through
+        // it is offered -- nothing at all where it names nothing.
+        let text = self.files[file].parse.syntax().text().to_string();
+        if let Some((segments, through_a_feature)) = qualifier_before(&text, offset.into()) {
+            let Some(named) = self.resolve_from(scope, &segments) else {
+                return out;
+            };
+            let mut holders = vec![named];
+            if through_a_feature {
+                holders.extend(self.model.types_of(named).collect::<Vec<_>>());
+            }
+            for holder in holders {
+                self.collect_visible(holder, Access::External, &mut out, &mut seen, &[]);
+            }
+            let mut names = HashSet::new();
+            out.retain(|(name, _)| names.insert(name.clone()));
+            return out;
+        }
         loop {
             self.collect_visible(scope, Access::Internal, &mut out, &mut seen, &[]);
             match self.model.owner(scope) {
@@ -1153,6 +1219,13 @@ impl Workspace {
         let mut names = HashSet::new();
         out.retain(|(name, _)| names.insert(name.clone()));
         out
+    }
+
+    /// Whether the cursor is in a name written after `P::` or `x.`, where
+    /// only what the qualifier holds can be written and no keyword can.
+    pub fn follows_qualifier(&self, file: usize, offset: sysml_syntax::TextSize) -> bool {
+        let text = self.files[file].parse.syntax().text().to_string();
+        qualifier_before(&text, offset.into()).is_some()
     }
 
     fn collect_visible(

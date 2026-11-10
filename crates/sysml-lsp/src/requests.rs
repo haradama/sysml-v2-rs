@@ -318,7 +318,13 @@ impl Server {
                 ..Default::default()
             })
             .collect();
-        for (keyword, _, _) in sysml_syntax::KEYWORDS {
+        // after `P::` or `x.` only a name can follow
+        let keywords = if analysis.ws.follows_qualifier(file, offset) {
+            &[][..]
+        } else {
+            sysml_syntax::KEYWORDS
+        };
+        for (keyword, _, _) in keywords {
             items.push(CompletionItem {
                 label: (*keyword).to_string(),
                 kind: Some(CompletionItemKind::KEYWORD),

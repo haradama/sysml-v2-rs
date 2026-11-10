@@ -4483,3 +4483,41 @@ fn a_name_is_recorded_once() {
         );
     }
 }
+
+/// After `P::` what is offered is what `P` holds -- its public members --
+/// and after `x.` the features of `x`, not the names around the cursor.
+/// `import P::|` used to be offered `P` and `Q` and nothing in `P`.
+#[test]
+fn what_is_offered_after_a_qualifier_is_what_the_qualifier_holds() {
+    let text = "package P {\n\
+                \tpart def Wheel;\n\
+                \tprivate part def Hidden;\n\
+                \tpackage Inner { part def Deep; }\n\
+                }\n\
+                package Q {\n\
+                \tpart def Car { part w : P::Wheel { attribute rim; } }\n\
+                \tpart c : Car;\n\
+                \tpart z :> c.w;\n\
+                \timport P::Inner::De;\n\
+                \timport 'P'::;\n\
+                \timport Nope::;\n\
+                }\n";
+    let mut ws = ws(&[("m.sysml", text)]);
+    let at = |needle: &str| TextSize::from((text.find(needle).unwrap() + needle.len()) as u32);
+    let mut offered = |needle: &str| {
+        let mut names: Vec<String> = ws
+            .visible_names(0, at(needle))
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(offered("import P::Inner::"), ["Deep"]);
+    assert_eq!(offered("import 'P'::"), ["Inner", "Wheel"]);
+    assert_eq!(offered("import Nope::"), Vec::<String>::new());
+    // through a feature, its own features and those of its type
+    assert!(offered("part z :> c.").contains(&"w".to_string()));
+    // and with no qualifier, the names around the cursor as before
+    assert!(offered("part c : ").contains(&"Car".to_string()));
+}
