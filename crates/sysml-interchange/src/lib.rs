@@ -149,8 +149,41 @@ fn roots(model: &Model) -> Vec<ElementId> {
 /// among its owner's children, and the name it was declared with.
 fn path_segment(model: &Model, id: ElementId, index: usize) -> String {
     match model.name(id) {
-        Some(name) => format!("{index}:{name}"),
+        Some(name) => format!("{index}:{}", unmistakable(name)),
         None => format!("{index}"),
+    }
+}
+
+/// A name as a path segment spells it, so that no name can be mistaken
+/// for the segments around it.
+///
+/// Segments are joined with `/` and each starts with its index, so a name
+/// holding what reads as the start of another -- a `/` and digits, then a
+/// `:`, a `/` or the end -- read as more than one segment: the package
+/// `'a/0:b'` and the `b` inside a package `a` came out the same path, the
+/// same UUID, and a document `import` refused as naming one element
+/// twice. Only such a name is changed, and one already holding what the
+/// change is spelled with, so every other element keeps the UUID it always
+/// had -- the library's `'pica (computer) (1/6 in)'` and `'km/h'` among
+/// them -- and documents written before still name it.
+fn unmistakable(name: &str) -> std::borrow::Cow<'_, str> {
+    let bytes = name.as_bytes();
+    let reads_as_a_segment = (0..bytes.len()).any(|at| {
+        if bytes[at] != b'/' {
+            return false;
+        }
+        let digits = bytes[at + 1..]
+            .iter()
+            .take_while(|it| it.is_ascii_digit())
+            .count();
+        // a bare `/` at the end would be read as one before an empty name
+        matches!(bytes.get(at + 1 + digits), None | Some(b':' | b'/'))
+    });
+    let spelled_like_the_change = name.contains("%2F") || name.contains("%25");
+    if reads_as_a_segment || spelled_like_the_change {
+        name.replace('%', "%25").replace('/', "%2F").into()
+    } else {
+        name.into()
     }
 }
 
@@ -1948,6 +1981,42 @@ mod tests {
         let one_way = exported(a, b);
         assert!(one_way.contains_key("A::X"));
         assert_eq!(one_way, exported(b, a), "the load order moved the UUIDs");
+    }
+
+    /// A name holding what reads as another segment of the path its UUID
+    /// is made from -- `'a/0:b'` -- used to share a UUID with the element
+    /// that path really leads to, and the document did not read back.
+    #[test]
+    fn a_name_that_reads_as_a_path_is_not_another_element() {
+        let parse = sysml_syntax::parse("package a { part def b; }\npackage 'a/0:b';\n");
+        let model = build_model(&parse).0;
+        let json = to_json(&model);
+        let ids: Vec<&str> = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|it| it["@id"].as_str().unwrap())
+            .collect();
+        let distinct: std::collections::HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(distinct.len(), ids.len(), "{json}");
+
+        // only such a name is spelled differently, so every other element
+        // keeps the UUID it always had
+        for kept in ["b", "km/h", "pica (computer) (1/6 in)", "%", ",2/3 v", "a/b/c"] {
+            assert_eq!(unmistakable(kept), kept);
+        }
+        for (changed, spelled) in [
+            ("a/0:b", "a%2F0:b"),
+            ("x/12", "x%2F12"),
+            // the second segment of `1` with an unnamed element at 2
+            ("1/2", "1%2F2"),
+            ("x/", "x%2F"),
+            ("y/3/z", "y%2F3%2Fz"),
+            ("a%2Fb", "a%252Fb"),
+            ("100%25", "100%2525"),
+        ] {
+            assert_eq!(unmistakable(changed), spelled);
+        }
     }
 
     #[test]
