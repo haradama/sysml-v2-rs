@@ -263,10 +263,17 @@ impl Workspace {
     ) {
         stats.unresolved += 1;
         let wrong_kind = self.wrong_kind.take();
+        let written = self
+            .files
+            .get(file)
+            .and_then(|it| it.parse.syntax().text().to_string().get(usize::from(range.start())..usize::from(range.end())).map(str::to_string));
+        let name = written
+            .and_then(|written| spelled_as_written(segments, &written))
+            .unwrap_or_else(|| Self::spell(segments));
         self.unresolved.push(Unresolved {
             file,
             range,
-            name: Self::spell(segments),
+            name,
             wrong_kind,
         });
     }
@@ -779,4 +786,28 @@ impl Workspace {
         }
         None
     }
+}
+
+/// `segments` joined the way the source joined them: `a.cc` is a feature
+/// chain, and reported as `a::cc` it named a path nobody wrote, which an
+/// editor's quick fix then replaced with one that meant something else.
+/// `None` where what is written is not plainly the segments and their
+/// separators -- quoted names, a multiplicity in front -- and the plain
+/// spelling stands.
+fn spelled_as_written(segments: &[String], written: &str) -> Option<String> {
+    let compact: String = written.chars().filter(|it| !it.is_whitespace()).collect();
+    let (first, rest) = segments.split_first()?;
+    let mut rest_of = compact.strip_prefix(first.as_str())?;
+    let mut out = first.clone();
+    for segment in rest {
+        let (separator, after) = if let Some(after) = rest_of.strip_prefix("::") {
+            ("::", after)
+        } else {
+            (".", rest_of.strip_prefix('.')?)
+        };
+        rest_of = after.strip_prefix(segment.as_str())?;
+        out.push_str(separator);
+        out.push_str(segment);
+    }
+    rest_of.is_empty().then_some(out)
 }

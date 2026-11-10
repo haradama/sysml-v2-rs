@@ -1046,9 +1046,19 @@ impl Workspace {
     pub fn suggestions(&self, wanted: &[String]) -> Vec<Suggestion> {
         // the last segment is what a name answers to; `ISQ::Volume`
         // missed because of `Volume`, not because of `ISQ`
+        //
+        // `a.cc` is a feature chain, and what it missed is `cc` among the
+        // features reached through `a`: what is offered for it is written
+        // the same way, `a.c`, since a name spelled from the root put in
+        // its place means another feature altogether. And no import brings
+        // a feature of `a` into scope, so nothing is "declared as" for it.
+        let chained: Vec<Option<&str>> = wanted
+            .iter()
+            .map(|it| it.rfind('.').map(|at| &it[..at]))
+            .collect();
         let asked: Vec<&str> = wanted
             .iter()
-            .map(|it| it.rsplit("::").next().unwrap_or(it))
+            .map(|it| it.rsplit(['.', ':']).next().unwrap_or(it))
             .collect();
         let lowered: Vec<String> = asked.iter().map(|it| it.to_lowercase()).collect();
 
@@ -1119,20 +1129,34 @@ impl Workspace {
                 let mut ranked = std::mem::take(&mut near[at]);
                 ranked.retain(|&(_, _, _, id)| self.can_be_named_from_outside(id));
                 ranked.sort_by_key(|&(kind, off, len, id)| (kind, off, len, id));
+                let written = |id: ElementId| match chained[at] {
+                    Some(through) => {
+                        let name = self.model.name(id).unwrap_or_default();
+                        format!("{through}.{}", sysml_syntax::quote(name))
+                    }
+                    None => self.qualified_name_written(id),
+                };
+                let mut near: Vec<String> = Vec::new();
+                for &(_, _, _, id) in &ranked {
+                    let spelled = written(id);
+                    if !near.contains(&spelled) {
+                        near.push(spelled);
+                    }
+                    if near.len() == MOST {
+                        break;
+                    }
+                }
                 Suggestion {
                     elsewhere: elsewhere[at]
                         .iter()
+                        .filter(|_| chained[at].is_none())
                         .filter(|&&id| self.can_be_named_from_outside(id))
                         .take(MOST)
                         .map(|&id| self.qualified_name_written(id))
                         .collect(),
                     // what an editor puts in place of the misspelt name,
                     // so spelled the way it has to be written
-                    near: ranked
-                        .iter()
-                        .take(MOST)
-                        .map(|&(_, _, _, id)| self.qualified_name_written(id))
-                        .collect(),
+                    near,
                 }
             })
             .collect()

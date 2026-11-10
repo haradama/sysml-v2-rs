@@ -1112,7 +1112,7 @@ fn an_unresolvable_satisfaction_is_reported() {
          satisfy p by that;\n",
     )]);
     let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
-    assert_eq!(names, ["nowhere::deep", "that"]);
+    assert_eq!(names, ["nowhere.deep", "that"]);
 }
 
 #[test]
@@ -4271,7 +4271,7 @@ fn sharing_a_name_redefines_only_a_parameter() {
          action y : Y { attribute h = p.grade; } }",
     )]);
     let missing: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
-    assert_eq!(missing, ["b::m::grade"]);
+    assert_eq!(missing, ["b.m.grade"]);
 }
 
 /// A filter condition written as a literal says outright what passes,

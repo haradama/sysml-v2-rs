@@ -36,7 +36,7 @@ fn a_name_in_a_value_a_body_or_a_constraint_is_a_reference() {
     );
     assert_eq!(
         unresolved,
-        ["notDeclared", "t::notAMember", "s::absent", "missingHere",]
+        ["notDeclared", "t.notAMember", "s.absent", "missingHere",]
     );
 }
 

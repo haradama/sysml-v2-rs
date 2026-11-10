@@ -307,3 +307,22 @@ fn a_name_of_the_wrong_kind_of_thing_says_what_it_names() {
     assert!(nope.wrong_kind.is_none());
     assert_eq!(ws.wrong_kind_at(nope.file, nope.range), None);
 }
+
+/// A feature chain is reported as written, `a.cc` and not `a::cc`, and
+/// what is offered for it is written the same way: `a.c`. Spelled from
+/// the root, `A::c` put in its place subsets the definition's feature
+/// rather than `a`'s.
+#[test]
+fn a_chain_is_reported_and_mended_as_a_chain() {
+    let ws = resolved("part def A { part c; }\npart a : A;\npart z :> a.cc;\n");
+    let missed: Vec<String> = ws.unresolved().iter().map(|u| u.name.clone()).collect();
+    assert_eq!(missed, ["a.cc"]);
+    let [about] = &ws.suggestions(&missed)[..] else {
+        panic!("one name, one answer");
+    };
+    assert_eq!(about.near.first().map(String::as_str), Some("a.c"), "{about:?}");
+    assert!(about.elsewhere.is_empty(), "{about:?}");
+    // a qualified name is still one
+    let ws = resolved("package P { part def C; }\npart x : P::Cc;\n");
+    assert_eq!(ws.unresolved()[0].name, "P::Cc");
+}

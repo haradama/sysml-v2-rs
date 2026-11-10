@@ -369,7 +369,7 @@ package Collections {
     }
 }
 ",
-        &["c::nothing", "one::dimensions"],
+        &["c.nothing", "one.dimensions"],
     ),
 ];
 
