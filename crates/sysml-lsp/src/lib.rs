@@ -172,7 +172,7 @@ impl Session {
         // `Over`, which is where a failure leaves it anyway.
         let (phase, flow) = match std::mem::replace(&mut self.phase, Phase::Over) {
             Phase::Starting(files) => starting(files, message, out),
-            Phase::Greeting(server) => greeting(server, message),
+            Phase::Greeting(server) => greeting(server, message, out),
             Phase::Open(server) => open(server, message, out),
             Phase::Closing => (Phase::Over, closing(message)),
             Phase::Over => (Phase::Over, Flow::Over(Ok(()))),
@@ -246,11 +246,35 @@ fn starting(files: Files, message: Message, out: &mut Vec<Message>) -> (Phase, F
 
 /// Between `initialize` and `initialized`, where the specification lets
 /// nothing else through.
-fn greeting(server: Box<Server>, message: Message) -> (Phase, Flow) {
+fn greeting(server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (Phase, Flow) {
     match message {
         Message::Notification(note)
             if note.method == lsp_types::notification::Initialized::METHOD =>
         {
+            // The project's files that no editor holds open are read from
+            // disk, and only a client watching them can say they changed:
+            // without that, a `git checkout` left this server answering
+            // about the files as they were, and a rename wrote its edits at
+            // the old offsets into the new text. A client that can be asked
+            // to watch is asked, once it may be spoken to.
+            if server.watch_files {
+                out.push(Message::Request(lsp_server::Request {
+                    id: lsp_server::RequestId::from(WATCH_REGISTRATION.to_string()),
+                    method: lsp_types::request::RegisterCapability::METHOD.into(),
+                    params: serde_json::json!({
+                        "registrations": [{
+                            "id": WATCH_REGISTRATION,
+                            "method": lsp_types::notification::DidChangeWatchedFiles::METHOD,
+                            "registerOptions": {
+                                "watchers": [
+                                    { "globPattern": "**/*.sysml" },
+                                    { "globPattern": "**/*.kerml" },
+                                ],
+                            },
+                        }],
+                    }),
+                }));
+            }
             (Phase::Open(server), Flow::Go)
         }
         // `$/...` is the protocol's own traffic, which the
@@ -318,8 +342,9 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
             }
             (Phase::Open(server), Flow::Go)
         }
-        // this server asks the client nothing, so an answer is nothing
-        // it is waiting for
+        // the one thing this server asks the client is to watch the
+        // project's files, and nothing waits on the answer: a client that
+        // will not is one whose files are read as they were
         Message::Response(_) => (Phase::Open(server), Flow::Go),
     }
 }
@@ -417,6 +442,16 @@ fn begin(mut files: Files, params: serde_json::Value) -> Result<Box<Server>, Str
         .collect();
 
     let mut server = Box::new(Server::new(files, library, &roots, &excluded));
+    // asked for after the handshake, where there are project files on disk
+    // to watch and the client says it can be asked to
+    server.watch_files = !roots.is_empty()
+        && init
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|it| it.did_change_watched_files)
+            .and_then(|it| it.dynamic_registration)
+            .unwrap_or(false);
     // How wide a line may be before formatting breaks it. Read once, as
     // the library path is: a client that changes it restarts the server,
     // which is what changing any of these takes.
@@ -534,7 +569,12 @@ pub struct Server {
     layout: sysml_syntax::fmt::Layout,
     /// and what the preview is painted in
     skin: sysml_diagram::Skin,
+    /// whether to ask the client to watch the project's files
+    watch_files: bool,
 }
+
+/// The id the request to watch the project's files is registered under.
+const WATCH_REGISTRATION: &str = "sysml-watched-files";
 
 /// One analysis pass over the library + the project + all open documents.
 struct Analysis {
@@ -1200,6 +1240,57 @@ mod tests {
         session.handle(request(1, "initialize", params), out);
         session.handle(notification("initialized"), out);
         out.clear();
+    }
+
+    /// A client that can be asked to watch the project's files is asked,
+    /// once the handshake lets the server speak; one that cannot, or that
+    /// has no folder open, is not. Unwatched, a file changed on disk was
+    /// answered about as it had been, and a rename wrote its edits at the
+    /// old offsets.
+    #[test]
+    fn a_client_that_can_watch_files_is_asked_to() {
+        let ask = |capabilities: serde_json::Value, root: Option<&str>| {
+            let (mut session, mut out) = waiting();
+            let mut params = serde_json::json!({
+                "capabilities": capabilities,
+                "initializationOptions": { "noLibrary": true },
+            });
+            if let Some(root) = root {
+                params["rootUri"] = root.into();
+            }
+            session.handle(request(1, "initialize", params), &mut out);
+            out.clear();
+            session.handle(notification("initialized"), &mut out);
+            let asked = said(&out)
+                .into_iter()
+                .filter(|it| it["method"] == "client/registerCapability")
+                .collect::<Vec<_>>();
+            // the client's answer is nothing the session waits on
+            let flow = session.handle(
+                Message::Response(Response::new_ok(
+                    RequestId::from(WATCH_REGISTRATION.to_string()),
+                    serde_json::Value::Null,
+                )),
+                &mut out,
+            );
+            assert!(matches!(flow, Flow::Go), "{flow:?}");
+            asked
+        };
+        let can = serde_json::json!({
+            "workspace": { "didChangeWatchedFiles": { "dynamicRegistration": true } },
+        });
+        let asked = ask(can.clone(), Some("file:///project"));
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let registration = &asked[0]["params"]["registrations"][0];
+        assert_eq!(registration["method"], "workspace/didChangeWatchedFiles");
+        assert_eq!(
+            registration["registerOptions"]["watchers"][0]["globPattern"],
+            "**/*.sysml"
+        );
+        // no folder, nothing on disk to watch
+        assert!(ask(can, None).is_empty());
+        // a client that cannot be asked is not
+        assert!(ask(serde_json::json!({}), Some("file:///project")).is_empty());
     }
 
     #[test]

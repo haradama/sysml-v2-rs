@@ -145,6 +145,7 @@ impl Server {
             published: HashMap::new(),
             layout: sysml_syntax::fmt::Layout::default(),
             skin: sysml_diagram::Skin::default(),
+            watch_files: false,
         }
     }
     /// Every model file under the workspace folders.
