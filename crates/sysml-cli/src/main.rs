@@ -1142,7 +1142,30 @@ fn diagram(
     // only what is drawn, and what it reaches: a library is loaded so
     // that names resolve, not so that all of it is worked through
     let files: Vec<usize> = (0..drawn).collect();
-    ws.resolve_reached(&files);
+    let stats = ws.resolve_reached(&files);
+    // A drawing of a model that does not parse, or whose names resolve
+    // to nothing, leaves out what the parser guessed past and draws a
+    // feature with no type as one that has none -- and nothing on the
+    // page says so. It is still drawn, as `plan` still plans, since the
+    // person writing the model is entitled to see it so far; what is
+    // wrong is said, and the exit code says not to take it as the model.
+    let mut broken = false;
+    for file in files.iter().copied().filter(|&file| !ws.file_parse(file).ok()) {
+        eprintln!(
+            "warning: {} does not parse, so what is drawn of it is a guess; `sysml parse` says where",
+            ws.file_name(file)
+        );
+        broken = true;
+    }
+    if stats.unresolved > 0 {
+        eprintln!(
+            "warning: {} name(s) in this model resolve to nothing, so what they type or \
+             relate is missing from the drawing; `sysml check` says where they are",
+            stats.unresolved
+        );
+        broken = true;
+    }
+    let done = |drawn: ExitCode| if broken { ExitCode::FAILURE } else { drawn };
     let roots: Vec<_> = (0..drawn)
         .flat_map(|file| ws.file_roots(file).to_vec())
         .collect();
@@ -1164,7 +1187,7 @@ fn diagram(
                 ..Default::default()
             },
         );
-        return emit(&svg, output, &format!("{} row(s)", view.rows.len()));
+        return done(emit(&svg, output, &format!("{} row(s)", view.rows.len())));
     }
     if let View::Sequence(name) = view {
         let Some(target) = named(&ws, &own, name) else {
@@ -1182,7 +1205,7 @@ fn diagram(
                 ..Default::default()
             },
         );
-        return emit(
+        return done(emit(
             &svg,
             output,
             &format!(
@@ -1190,7 +1213,7 @@ fn diagram(
                 view.lifelines.len(),
                 view.moments.len()
             ),
-        );
+        ));
     }
     let diagram = match view {
         View::Internal(name) => {
@@ -1248,7 +1271,7 @@ fn diagram(
             + count(Relation::Annotation),
         count(Relation::Satisfy),
     );
-    emit(&svg, output, &summary)
+    done(emit(&svg, output, &summary))
 }
 
 /// Write a rendered view to `output`, or to stdout when there is none.

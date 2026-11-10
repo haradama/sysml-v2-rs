@@ -888,6 +888,34 @@ fn diagram_reports_empty_models_and_write_failures() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
 }
 
+/// A model that does not parse, or names what is not there, is still
+/// drawn -- but the drawing leaves those parts out, so it is said, and
+/// the exit code says not to take the drawing as the model. It used to
+/// be drawn in silence with a zero exit.
+#[test]
+fn diagram_says_when_the_model_it_draws_is_broken() {
+    let dir = temp_dir("diagram-broken");
+    let broken = write(
+        &dir,
+        "broken.sysml",
+        "package P {\n    part def A;\n    part def B :> A {\n        part x : Nope;\n        part y : A\n        part z : A;\n    }\n}\n",
+    );
+    let out = sysml(&["diagram", broken.to_str().unwrap()]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("does not parse"), "{said}");
+    assert!(said.contains("1 name(s) in this model resolve to nothing"), "{said}");
+    // and it is drawn all the same
+    assert!(String::from_utf8_lossy(&out.stdout).contains("<svg"));
+
+    // the same in every view
+    for view in [&["--browser"][..], &["--internal", "B"]] {
+        let mut args = vec!["diagram", broken.to_str().unwrap()];
+        args.extend_from_slice(view);
+        assert!(!sysml(&args).status.success(), "{view:?}");
+    }
+}
+
 #[test]
 fn corpus_measures_parse_rates() {
     let dir = temp_dir("corpus");
