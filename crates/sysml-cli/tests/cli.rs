@@ -1610,3 +1610,24 @@ fn check_reads_what_it_is_given_once_and_refuses_nothing_to_read() {
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(!said.contains("(100.0%)"), "{said}");
 }
+
+/// `sysml parse --tree big.sysml | head` closes the pipe after a screenful,
+/// and the command panicked on what was left. A reader that stops reading
+/// is not an error.
+#[test]
+fn output_stops_quietly_when_the_reader_does() {
+    use std::io::Read as _;
+    let big = library().join("Domain Libraries/Quantities and Units/ISQAtomicNuclear.sysml");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(["parse", "--tree", big.to_str().unwrap()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first = [0u8; 16];
+    child.stdout.take().unwrap().read_exact(&mut first).unwrap();
+    // the reader is gone now
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
+}

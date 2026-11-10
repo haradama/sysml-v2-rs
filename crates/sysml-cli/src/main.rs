@@ -1824,7 +1824,7 @@ fn codegen(
 
 fn emit(svg: &str, output: Option<&Path>, summary: &str) -> ExitCode {
     let Some(path) = output else {
-        print!("{svg}");
+        written(svg);
         return ExitCode::SUCCESS;
     };
     if let Err(err) = std::fs::write(path, svg) {
@@ -2232,7 +2232,15 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
             // a tree in front of it would spoil that; a person reading
             // the tree can have it either way round
             match format {
-                Format::Text => println!("{:#?}", parse.syntax()),
+                // `sysml parse --tree big.sysml | head` closes the pipe
+                // after a screenful, and `println!` panicked on the rest:
+                // a reader that has stopped reading is not an error, so
+                // the output stops with it
+                Format::Text => {
+                    if !written(&format!("{:#?}\n", parse.syntax())) {
+                        return ExitCode::SUCCESS;
+                    }
+                }
                 Format::Json => eprintln!("{:#?}", parse.syntax()),
             }
         }
@@ -2279,6 +2287,17 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
 }
 
 /// One JSON document per run, on stdout.
+/// Write `text` to stdout, saying whether the reader is still there.
+///
+/// A reader that stops early -- `| head` -- closes the pipe, and what
+/// `print!` does then is panic. Stopping is what the reader asked for,
+/// and is no error of this command's.
+fn written(text: &str) -> bool {
+    use std::io::Write as _;
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes()).and_then(|()| out.flush()).is_ok()
+}
+
 fn report(value: serde_json::Value) {
     println!(
         "{}",
