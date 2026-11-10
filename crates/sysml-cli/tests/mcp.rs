@@ -744,6 +744,30 @@ fn a_file_the_call_brings_stands_in_however_it_is_spelled() {
     assert_eq!(answer["resolved"], 3, "{answer}");
 }
 
+/// A name that reaches the wrong kind of thing is said to, and is not
+/// offered an import or another spelling: neither would mend it.
+#[test]
+fn a_name_of_the_wrong_kind_of_thing_says_so() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let answer = answered(
+        &server
+            .handle(&call(
+                "check",
+                json!({ "text": "package P {\n\tpart def A;\n\tpart b :> A;\n}\n" }),
+            ))
+            .unwrap(),
+    );
+    let unresolved = answer["unresolved"].as_array().unwrap();
+    assert_eq!(unresolved.len(), 1, "{answer}");
+    assert!(
+        unresolved[0]["wrong_kind"]
+            .as_str()
+            .is_some_and(|it| it.contains("`PartDefinition`")),
+        "{answer}"
+    );
+    assert!(unresolved[0].get("declared_as").is_none(), "{answer}");
+}
+
 /// The agent asking these questions is the one writing the files.
 #[test]
 fn the_project_is_read_again_after_it_changes() {

@@ -1638,3 +1638,24 @@ fn output_stops_quietly_when_the_reader_does() {
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("panicked"));
 }
+
+/// A name that reaches the wrong kind of thing is said to, in place of
+/// "an import would" -- which was the advice for `part b :> A;` naming a
+/// definition, already in scope.
+#[test]
+fn check_says_when_a_name_names_the_wrong_kind_of_thing() {
+    let dir = temp_dir("check-wrong-kind");
+    let model = write(
+        &dir,
+        "k.sysml",
+        "package P {\n    part def A;\n    part b :> A;\n}\n",
+    );
+    let out = sysml(&["check", "--no-library", model.to_str().unwrap()]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        said.contains("it names `P::A`, a `PartDefinition`, where only a `Feature` can stand"),
+        "{said}"
+    );
+    assert!(!said.contains("an import would"), "{said}");
+}

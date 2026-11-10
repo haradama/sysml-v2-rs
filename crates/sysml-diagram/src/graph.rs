@@ -5614,6 +5614,12 @@ mod behaviour_tests {
             "Sys",
         );
         assert_eq!(edges(&wired), [pair("p : P", "a : A")]);
+        // a feature of the model's own called `done` is no end of the flow
+        let own = internal(
+            "action def W {\n\tattribute done;\n\taction a;\n\tthen done;\n}\n",
+            "W",
+        );
+        assert!(own.nodes.iter().all(|n| n.shape != Shape::Final));
         // and a port nothing inside connects to is not drawn
         let alone = internal("port def P;\npart def S { port p : P; part a; }\n", "S");
         assert!(alone.nodes.iter().all(|n| n.name != "p : P"));
