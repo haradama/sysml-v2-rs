@@ -232,3 +232,38 @@ fn a_short_name_is_not_near_every_other_short_name() {
     };
     assert!(about.near.is_empty(), "{:?}", about.near);
 }
+
+/// Names are case-sensitive, so "declared as" -- the very name, wanting
+/// only an import -- is the exact spelling alone. `B` used to be "declared
+/// as" the `b` being declared on the same line, and the quick fix wrote
+/// `part b : b;`. Another case is a near miss, and the nearest.
+#[test]
+fn another_case_is_a_near_miss_not_the_name() {
+    let ws = resolved("part def A;\npart a : A;\npart b : B;\n");
+    let [about] = &ws.suggestions(&["B".to_string()])[..] else {
+        panic!("one name, one answer");
+    };
+    assert!(about.elsewhere.is_empty(), "{about:?}");
+    assert_eq!(about.near.first().map(String::as_str), Some("b"), "{about:?}");
+}
+
+/// What no qualified name can reach is no answer: a member of something
+/// that has no name, or a private one, which no import brings in.
+#[test]
+fn what_cannot_be_named_from_outside_is_not_offered() {
+    let ws = resolved(
+        "package P {\n\
+         \tprivate part def Hidden;\n\
+         \tpart { part def Inside; }\n\
+         }\n\
+         part h : Hidden;\n\
+         part i : Inside;\n",
+    );
+    for (name, about) in ["Hidden", "Inside"]
+        .iter()
+        .zip(ws.suggestions(&["Hidden".to_string(), "Inside".to_string()]))
+    {
+        assert!(about.elsewhere.is_empty(), "{name}: {about:?}");
+        assert!(about.near.is_empty(), "{name}: {about:?}");
+    }
+}

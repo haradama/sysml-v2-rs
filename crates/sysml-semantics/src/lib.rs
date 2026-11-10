@@ -1011,8 +1011,19 @@ impl Workspace {
         for (id, name) in self.named_elements() {
             let spelled = name.to_lowercase();
             for (at, needle) in lowered.iter().enumerate() {
+                // Names are case-sensitive, so "declared as" -- a claim
+                // that this is the very name, wanting only an import --
+                // holds of the exact spelling alone. `B` used to be
+                // "declared as" the `b` being declared on the same line,
+                // and an editor's quick fix wrote `part b : b;`. The same
+                // letters in another case are a near miss, and the
+                // nearest there is.
                 if &spelled == needle {
-                    elsewhere[at].push(id);
+                    if name == asked[at] {
+                        elsewhere[at].push(id);
+                    } else {
+                        near[at].push((0, 0, name.len(), id));
+                    }
                     continue;
                 }
                 // A declared name that holds what was asked for -- `TemperatureValue` for
@@ -1052,10 +1063,12 @@ impl Workspace {
         (0..wanted.len())
             .map(|at| {
                 let mut ranked = std::mem::take(&mut near[at]);
+                ranked.retain(|&(_, _, _, id)| self.can_be_named_from_outside(id));
                 ranked.sort_by_key(|&(kind, off, len, id)| (kind, off, len, id));
                 Suggestion {
                     elsewhere: elsewhere[at]
                         .iter()
+                        .filter(|&&id| self.can_be_named_from_outside(id))
                         .take(MOST)
                         .map(|&id| self.qualified_name_written(id))
                         .collect(),
@@ -1069,6 +1082,20 @@ impl Workspace {
                 }
             })
             .collect()
+    }
+
+    /// Whether a qualified name can reach `id` from outside the namespaces
+    /// it is in: every namespace on the way has a name, and nothing on
+    /// the way is private. What fails this is no answer to "what did you
+    /// mean": `Trade::'?'::'?'::a` cannot be written, and a private
+    /// member is not what an import would bring in.
+    fn can_be_named_from_outside(&self, id: ElementId) -> bool {
+        std::iter::successors(Some(id), |&it| self.model.owner(it))
+            .take_while(|&it| it != self.root)
+            .all(|it| {
+                self.model.name(it).is_some()
+                    && self.model.member_visibility(it) != Some(sysml_model::Vis::Private)
+            })
     }
 
     /// The names that may legally be written at a point in a file: the
