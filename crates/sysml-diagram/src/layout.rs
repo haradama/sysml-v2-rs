@@ -209,7 +209,7 @@ fn swimlanes(diagram: &Diagram, sizes: &[(f64, f64)], style: &Style) -> Layout {
 pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
     match node.shape {
         // a filled circle, sized to read at the same weight as a box border
-        Shape::Initial | Shape::ConnectionDot => {
+        Shape::Initial | Shape::Final | Shape::ConnectionDot => {
             let diameter = style.line_height;
             return (diameter, diameter);
         }

@@ -78,6 +78,9 @@ pub enum Shape {
     /// The filled circle a state machine or action flow starts from,
     /// carrying no label of its own.
     Initial,
+    /// The ringed circle a flow ends at: `done`, which every action and
+    /// state inherits, drawn the way the notation draws a final node.
+    Final,
     /// The filled circle three or more connection ends meet at
     /// (`n-ary-connection-dot`), named beside it by the connection.
     ConnectionDot,
@@ -134,6 +137,102 @@ pub struct Node {
     /// A view holding the parts but not what wires them together is
     /// half of `interconnection-view`, and the half that says less.
     pub links: Vec<Edge>,
+}
+
+/// The `start` and `done` every action and state inherits, drawn as the
+/// dot a flow starts from and the ringed dot it ends at -- once each,
+/// however many successions run from or to them. They are the library's
+/// features rather than the definition's, so nothing else puts them on
+/// the canvas, and `first start; then a; ... then done;` was drawn as
+/// a flow with neither a beginning nor an end.
+///
+/// And the definition's own ports, which a connection inside it runs to
+/// when it delegates through one: `connect p to a.q;` in `part def Sys {
+/// port p; part a; }`. A port is no box, so the port on the boundary was
+/// on the canvas nowhere, and every such connection was dropped in silence.
+#[derive(Default)]
+struct EndsOfFlow {
+    start: Option<usize>,
+    done: Option<usize>,
+    ports: HashMap<ElementId, usize>,
+}
+
+impl EndsOfFlow {
+    /// The node `target` is drawn as, where it is `start`, `done` or one of
+    /// the definition's own ports.
+    fn at(
+        &mut self,
+        model: &Model,
+        members: &[ElementId],
+        target: ElementId,
+        nodes: &mut Vec<Node>,
+    ) -> Option<usize> {
+        if model.kind(target).is_a(ElementKind::PortUsage) && members.contains(&target) {
+            return Some(*self.ports.entry(target).or_insert_with(|| {
+                let name = model.effective_name(target).unwrap_or_default();
+                nodes.push(Node {
+                    id: target,
+                    keyword: box_keyword(model, target),
+                    name: box_label(model, target, name),
+                    compartments: Vec::new(),
+                    is_abstract: is_abstract(model, target),
+                    rounded: true,
+                    shape: Shape::Box,
+                    children: Vec::new(),
+                    links: Vec::new(),
+                });
+                nodes.len() - 1
+            }));
+        }
+        let (slot, shape) = match model.name(target)? {
+            "start" => (&mut self.start, Shape::Initial),
+            "done" => (&mut self.done, Shape::Final),
+            _ => return None,
+        };
+        // only the library's own: a step the model itself calls `done`
+        // is a box like any other
+        if !library_feature(model, target) {
+            return None;
+        }
+        Some(*slot.get_or_insert_with(|| {
+            let mut node = initial_node(target);
+            node.shape = shape;
+            nodes.push(node);
+            nodes.len() - 1
+        }))
+    }
+}
+
+/// Whether `feature` is declared by the standard library rather than by
+/// the model: its outermost owner is one of the library's packages.
+fn library_feature(model: &Model, feature: ElementId) -> bool {
+    std::iter::successors(Some(feature), |&it| model.owner(it))
+        .any(|it| model.kind(it) == ElementKind::LibraryPackage)
+}
+
+/// A step of a flow that is a node of it whether or not it is named:
+/// `decide;`, `fork;`, `then assign x := 1;`, `then send s to p;`,
+/// `accept s : S;`, `then action { ... }`. Each is written without a name
+/// as often as with one, and skipped for having none, every succession
+/// into or out of it went with it.
+///
+/// Only the definition's own: what it inherits nameless is the library's
+/// machinery, not a step anybody wrote. And not what an `entry`, `do` or
+/// `exit` declares, which the machine is drawn starting from or doing.
+fn unnamed_step_of_the_flow(model: &Model, definition: ElementId, step: ElementId) -> bool {
+    let kind = model.kind(step);
+    let of_the_flow = kind.is_a(ElementKind::ControlNode)
+        || kind.is_a(ElementKind::AssignmentActionUsage)
+        || kind.is_a(ElementKind::SendActionUsage)
+        || kind.is_a(ElementKind::AcceptActionUsage)
+        || kind.is_a(ElementKind::TerminateActionUsage)
+        || kind == ElementKind::ActionUsage;
+    of_the_flow
+        && model.owner(step) == Some(definition)
+        && !matches!(
+            model.member_role(step),
+            Some(Role::Entry | Role::Do | Role::Exit)
+        )
 }
 
 /// The filled circle a flow starts from, standing for `element`.
@@ -749,7 +848,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             ElementKind::IfActionUsage
                 | ElementKind::WhileLoopActionUsage
                 | ElementKind::ForLoopActionUsage
-        );
+        ) || unnamed_step_of_the_flow(model, definition, child);
         let Some(name) = model.effective_name(child).or(anonymous.then_some("")) else {
             continue;
         };
@@ -795,6 +894,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     // `action A1; then J;` continues from whatever came before it, so a
     // succession that names only where it goes needs its source remembered
     let mut previous: Option<usize> = None;
+    let mut ends_of_flow = EndsOfFlow::default();
     for &child in &members {
         if let Some(&at) = index.get(&child) {
             previous = Some(at);
@@ -810,7 +910,11 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         // it is the filled circle a machine starts at.
         if let [only] = &ends[..] {
             if model.kind(child) == ElementKind::SuccessionAsUsage {
-                if let Some(&to) = index.get(&only.target) {
+                let to = index
+                    .get(&only.target)
+                    .copied()
+                    .or_else(|| ends_of_flow.at(model, &members, only.target, &mut nodes));
+                if let Some(to) = to {
                     let from = previous.unwrap_or(nodes.len());
                     if previous.is_none() {
                         nodes.push(initial_node(child));
@@ -847,8 +951,12 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         let Some((first, rest)) = ends.split_first() else {
             continue;
         };
-        let from = match index.get(&first.target) {
-            Some(&at) => at,
+        let from = match index
+            .get(&first.target)
+            .copied()
+            .or_else(|| ends_of_flow.at(model, &members, first.target, &mut nodes))
+        {
+            Some(at) => at,
             // `entry; then off;` runs from the empty action an `entry`
             // on its own declares. That action is the filled circle a
             // machine starts at rather than a box of its own.
@@ -859,10 +967,19 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
             None => continue,
         };
         for second in rest {
-            let Some(&to) = index.get(&second.target) else {
+            let Some(to) = index
+                .get(&second.target)
+                .copied()
+                .or_else(|| ends_of_flow.at(model, &members, second.target, &mut nodes))
+            else {
                 continue;
             };
-            if from == to {
+            // A state that handles an event and stays where it is is the
+            // commonest transition there is, and dropping it said the event
+            // was never handled. Anything else joining a box to itself is
+            // a box standing for two declarations that redefine one
+            // another, which is no line to draw.
+            if from == to && relation != Relation::Transition {
                 continue;
             }
             edges.push(Edge {
@@ -5398,6 +5515,108 @@ mod behaviour_tests {
         );
         assert_eq!(diagram.edges.len(), 1);
         assert_eq!(diagram.edges[0].label, None);
+    }
+
+    /// What used to drop out of an internal view without a word: a step
+    /// written without a name, with every succession through it; the
+    /// `start` and `done` a flow begins and ends at; a state that handles
+    /// an event and stays; and a connection to the definition's own port.
+    #[test]
+    fn nothing_a_flow_or_a_wiring_runs_through_is_left_out() {
+        let edges = |diagram: &Diagram| {
+            let mut found: Vec<(String, String)> = diagram
+                .edges
+                .iter()
+                .map(|e| {
+                    let at = |n: usize| {
+                        let node = &diagram.nodes[n];
+                        match node.shape {
+                            Shape::Initial => "(start)".to_string(),
+                            Shape::Final => "(done)".to_string(),
+                            Shape::Diamond => "<>".to_string(),
+                            _ if node.name.is_empty() => format!("({})", node.keyword),
+                            _ => node.name.clone(),
+                        }
+                    };
+                    (at(e.from), at(e.to))
+                })
+                .collect();
+            found.sort();
+            found
+        };
+        let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+        // `start` and `done` are the library's, so this one is read with it
+        let flow = {
+            let mut ws = sysml_semantics::Workspace::new();
+            ws.load_dir(&sysml_corpus::library()).unwrap();
+            ws.add_file(
+                "test.sysml",
+                "action def W {\n\
+             \tin x : ScalarValues::Integer;\n\
+             \tfirst start;\n\
+             \tthen action a;\n\
+             \tthen assign x := 1;\n\
+             \tthen decide;\n\
+             \t\tif x > 1 then b;\n\
+             \t\telse c;\n\
+             \taction b;\n\
+             \tthen done;\n\
+             \taction c;\n\
+             }\n",
+            );
+            ws.resolve_all();
+            let owner = ws
+                .named_elements()
+                .find(|(_, declared)| *declared == "W")
+                .map(|(id, _)| id)
+                .unwrap();
+            interconnection_diagram(ws.model(), owner)
+        };
+        assert_eq!(
+            edges(&flow),
+            [
+                pair("(assign)", "<>"),
+                pair("(start)", "a"),
+                pair("<>", "b"),
+                pair("<>", "c"),
+                pair("a", "(assign)"),
+                pair("b", "(done)"),
+            ]
+        );
+
+        let machine = internal(
+            "attribute def Sig;\n\
+             state def M {\n\
+             \tentry; then off;\n\
+             \tstate off;\n\
+             \ttransition stay first off accept Sig then off;\n\
+             }\n",
+            "M",
+        );
+        assert!(
+            machine
+                .edges
+                .iter()
+                .any(|e| e.from == e.to && e.relation == Relation::Transition),
+            "{:?}",
+            machine.edges
+        );
+
+        let wired = internal(
+            "port def P;\n\
+             part def A { port q : P; }\n\
+             part def Sys {\n\
+             \tport p : P;\n\
+             \tpart a : A;\n\
+             \tconnect p to a.q;\n\
+             }\n",
+            "Sys",
+        );
+        assert_eq!(edges(&wired), [pair("p : P", "a : A")]);
+        // and a port nothing inside connects to is not drawn
+        let alone = internal("port def P;\npart def S { port p : P; part a; }\n", "S");
+        assert!(alone.nodes.iter().all(|n| n.name != "p : P"));
     }
 
     #[test]

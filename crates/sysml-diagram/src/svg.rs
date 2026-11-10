@@ -949,6 +949,13 @@ fn glyph_of(shape: Shape, placed: &Placed) -> Option<String> {
             "<circle class=\"initial\" cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"{:.1}\"/>\n",
             w / 2.0
         ),
+        // the same dot inside a ring
+        Shape::Final => format!(
+            "<circle class=\"box\" cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"{:.1}\"/>\n\
+             <circle class=\"initial\" cx=\"{cx:.1}\" cy=\"{cy:.1}\" r=\"{:.1}\"/>\n",
+            w / 2.0,
+            w / 3.5
+        ),
         Shape::Bar => format!(
             "<rect class=\"initial\" x=\"{:.1}\" y=\"{:.1}\" width=\"{w:.1}\" \
              height=\"{h:.1}\"/>\n",
