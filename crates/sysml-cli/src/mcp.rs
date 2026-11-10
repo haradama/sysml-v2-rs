@@ -294,14 +294,24 @@ impl Server {
     /// A file the call names replaces the project's copy rather than joining
     /// it -- added, everything in it would be declared twice -- so an edit can
     /// be asked about before it is written.
+    ///
+    /// Which file a name is, is asked of the file system, so `lib.sysml`,
+    /// `./lib.sysml` and the absolute path are one file -- and a relative
+    /// name is read from the project's root before the server's own
+    /// directory, since that is where the project's files are named from.
+    /// Compared as written, `name: "lib.sysml"` replaced nothing, the
+    /// project's copy on disk was loaded beside the edit, and an edit that
+    /// deleted a definition another file uses was answered `ok`.
     fn opened(&self, arguments: &Value) -> Result<Opened, String> {
         let named = source(arguments)?;
-        let alongside = alongside(arguments);
-        let replaced: HashSet<String> = named
-            .iter()
-            .map(|(name, _)| canonical(name))
-            .chain(alongside.iter().map(|path| canonical(path)))
+        let named_as = named.as_ref().map(|(name, _)| self.canonical(name));
+        // each once, and none that is the file the call's text replaces
+        let mut seen: HashSet<String> = named_as.iter().cloned().collect();
+        let alongside: Vec<String> = alongside(arguments)
+            .into_iter()
+            .filter(|path| seen.insert(self.canonical(path)))
             .collect();
+        let replaced = seen;
         let mut ws = self.base.clone();
         let mut open = Vec::new();
         for (path, text) in self.project.iter().flat_map(|project| &project.files) {
@@ -320,6 +330,19 @@ impl Server {
             file
         });
         Ok(Opened { ws, open, focus })
+    }
+
+    /// The file a name a call gives stands for, spelled as the project's
+    /// files are: from the project's root where it names a file there,
+    /// otherwise from the server's directory.
+    fn canonical(&self, path: &str) -> String {
+        if let Some(project) = &self.project {
+            let under = Path::new(&project.root).join(path);
+            if Path::new(path).is_relative() && under.exists() {
+                return canonical(&under.to_string_lossy());
+            }
+        }
+        canonical(path)
     }
 
     /// Does it parse, and does every name in it resolve? The findings
@@ -453,6 +476,9 @@ impl Server {
                 "asked": diagnosed.asked,
                 "violations": violations,
                 "held": checked.held.len(),
+                // held of the elements that could answer, and not asked
+                // of the rest: a violation among those is not reported
+                "partly": checked.partly.len(),
                 "unevaluated": checked.unevaluated.len(),
             },
         }))
@@ -1402,7 +1428,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "check",
-            "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path, each with what it might have meant: `declared_as` names the elements that answer to it somewhere, so the name is right and wants an import, while `did_you_mean` names what is near it, so the name itself is wrong -- which root packages of your own take a name the standard library has already taken (`collisions`: both sides still resolve, but the name means one thing in your model and another in the library), and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. The constraints are put only to a model that parses, resolves and has the library to be asked against -- one asked with a name still dangling answers about the hole and not about the model -- so read `rules.asked` before reading an empty `rules.violations` as a clean bill. `rules.unevaluated` counts the constraints that could not be asked at all, which says what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
+            "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path, each with what it might have meant: `declared_as` names the elements that answer to it somewhere, so the name is right and wants an import, while `did_you_mean` names what is near it, so the name itself is wrong -- which root packages of your own take a name the standard library has already taken (`collisions`: both sides still resolve, but the name means one thing in your model and another in the library), and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. The constraints are put only to a model that parses, resolves and has the library to be asked against -- one asked with a name still dangling answers about the hole and not about the model -- so read `rules.asked` before reading an empty `rules.violations` as a clean bill. `rules.unevaluated` counts the constraints that could not be asked at all, and `rules.partly` those some elements could not answer -- a violation among those is not reported -- both of which say what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
             "inputSchema": {
                 "type": "object",
                 "properties": source_properties,

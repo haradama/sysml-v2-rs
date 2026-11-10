@@ -456,14 +456,23 @@ impl Workspace {
     /// nearest member of the same body before it that a succession can join.
     ///
     /// A step or an occurrence, since a sequence model writes `event
-    /// occurrence e; then f;`. Where the nearest one is another succession the
-    /// answer is the end of it facing this one: `then a; then b;` runs a to b.
+    /// occurrence e; then f;`. Another succession, or a conditional one, is
+    /// passed over rather than followed: "the source of a succession
+    /// represented using the then shorthand is ... the nearest occurrence
+    /// lexically previous to the then, skipping over any intervening
+    /// non-occurrence usages (and conditional successions)" (SysML 7.17.4),
+    /// so `fork f; then a; then b;` runs f to a and f to b, and the branches
+    /// written under a `decide` all leave the decision.
     fn step_before(&self, succession: ElementId) -> Option<ElementId> {
         let owner = self.model.owner(succession)?;
         let members = self.model.owned(owner);
         let at = members.iter().position(|&it| it == succession)?;
         for &member in members[..at].iter().rev() {
             let kind = self.model.kind(member);
+            if kind.is_a(ElementKind::SuccessionAsUsage) || kind.is_a(ElementKind::TransitionUsage)
+            {
+                continue;
+            }
             if kind.is_a(ElementKind::ConnectorAsUsage) {
                 // the one before this went somewhere, and that is where
                 // this one starts

@@ -528,12 +528,24 @@ fn build_node(
                 // structured node is handed belongs to it however it
                 // was written; a step of the flow does not.
                 let handed = handed_body(model.kind(id), &child);
-                let parent = if handed || node.kind() != CONTROL_STMT {
+                // `transition t first a do action beep : Beep then b;`
+                // declares what the transition does on the way across,
+                // and the transition owns it: `EffectBehaviorMember :
+                // TransitionFeatureMembership = kind = 'effect'
+                // ownedRelatedElement += EffectBehaviorUsage`. Hoisted
+                // with a step of the flow, it read as a `do` of the
+                // state around it, and two transitions doing `action D`
+                // declared two members of one name there.
+                let effect = kind == ElementKind::TransitionUsage && declares_effect(&child);
+                let parent = if handed || effect || node.kind() != CONTROL_STMT {
                     Some(id)
                 } else {
                     owner
                 };
                 let made = build_node(model, &child, parent, built);
+                if let Some(action) = made.filter(|_| effect) {
+                    model.set(id, "effectAction", Value::RefList(vec![action]));
+                }
                 // `connect [1] lugNutPort ::> wheel.lugNutPort to ...`
                 // writes the end itself: `ConnectorEnd : Feature = (
                 // OwnedCrossMultiplicityMember )? ( declaredName = NAME
@@ -1278,36 +1290,31 @@ fn reify_accept_payload(
     node: &SyntaxNode,
     owner: ElementId,
 ) -> Option<ElementId> {
-    let mut after_accept = false;
     // `accept cmd : Cmd` names the payload; `accept Cmd` only types it,
-    // and the payload is there all the same, with no name
-    let mut name = None;
-    for element in node.children_with_tokens() {
-        match element.as_token() {
-            Some(token) if token.kind().is_trivia() => {}
-            Some(token) if token.kind() == SyntaxKind::ACCEPT_KW => after_accept = true,
-            // any other keyword closes the slot the payload name sits in
-            Some(_) if after_accept => break,
-            Some(_) => {}
-            None => {
-                let child = element.into_node().expect("checked for a token above");
-                if !after_accept {
-                    continue;
-                }
-                match child.kind() {
-                    SyntaxKind::NAME => {
-                        name = Some(child.first_token().map(|t| unquote(t.text())));
-                        break;
-                    }
-                    SyntaxKind::TYPING => {
-                        name = Some(None);
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    // and the payload is there all the same, with no name. What stands
+    // after the `accept` up to the next keyword is where either is
+    // written; anything else the parser hands over there is not the
+    // payload and says nothing about it.
+    let written = node
+        .children_with_tokens()
+        .filter(|element| {
+            element
+                .as_token()
+                .is_none_or(|token| !token.kind().is_trivia())
+        })
+        .skip_while(|element| {
+            element
+                .as_token()
+                .is_none_or(|token| token.kind() != SyntaxKind::ACCEPT_KW)
+        })
+        .skip(1)
+        // any other keyword closes the slot the payload name sits in
+        .map_while(|element| element.into_node())
+        .find(|child| matches!(child.kind(), SyntaxKind::NAME | SyntaxKind::TYPING));
+    let name = written.map(|child| match child.kind() {
+        SyntaxKind::NAME => child.first_token().map(|t| unquote(t.text())),
+        _ => None,
+    });
     // no `accept` clause, nothing to stand for
     let name = name?;
     let payload = model.create(ElementKind::ReferenceUsage);
@@ -1718,7 +1725,9 @@ fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId, bui
             _ => {}
         }
     }
-    if !after_do {
+    // `do action beep : Beep` declares the effect itself, and the
+    // transition takes that declaration as it is built
+    if !after_do || node.children().any(|child| declares_effect(&child)) {
         return;
     }
     let kind = if sends {
@@ -1735,6 +1744,17 @@ fn reify_effect(model: &mut Model, node: &SyntaxNode, transition: ElementId, bui
     // handed whether the statement wrote a clause for each or not.
     let window = crate::clause(node, SyntaxKind::DO_KW).unwrap_or_else(|| node.text_range());
     reify_action_arguments(model, node, window, effect, kind, None, built);
+}
+
+/// Whether a declaration written in a transition statement is the effect
+/// it carries across: the one written straight after its `do`.
+fn declares_effect(child: &SyntaxNode) -> bool {
+    matches!(child.kind(), SyntaxKind::DEFINITION | SyntaxKind::USAGE)
+        && std::iter::successors(child.prev_sibling_or_token(), |it| {
+            it.prev_sibling_or_token()
+        })
+        .find_map(|it| it.into_token().filter(|token| !token.kind().is_trivia()))
+        .is_some_and(|token| token.kind() == SyntaxKind::DO_KW)
 }
 
 /// The connector a `CONNECTOR_STMT` reifies, keyed on its leading keyword.
@@ -2309,9 +2329,16 @@ fn member_role(node: &SyntaxNode) -> Option<Role> {
                 before = part.prev_sibling_or_token();
             }
             sysml_syntax::SyntaxElement::Token(token) => {
+                // ... unless the keyword sits in the middle of a
+                // statement: the `do` of `accept s do action D then S2`
+                // says what a transition does, not what the state does
+                let leads = node.parent().is_none_or(|parent| {
+                    parent.kind() != CONTROL_STMT
+                        || matches!(tokens(&parent).next(), Some(ENTRY_KW | DO_KW | EXIT_KW))
+                });
                 let role = match token.kind() {
                     ENTRY_KW => Some(Role::Entry),
-                    DO_KW => Some(Role::Do),
+                    DO_KW if leads => Some(Role::Do),
                     EXIT_KW => Some(Role::Exit),
                     _ => None,
                 };

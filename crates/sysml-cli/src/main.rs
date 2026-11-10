@@ -2017,6 +2017,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
             "violations": violations,
             "rules": {
                 "held": checked.held.len(),
+                "partly": checked.partly.len(),
                 "unevaluated": checked.unevaluated.len(),
             },
         }));
@@ -2034,9 +2035,16 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
         ws.model().len(),
         stats.resolved
     );
+    // A constraint some elements could not answer was not checked of
+    // them, and saying "checked" of it would claim a check that was not
+    // made: it is counted apart.
+    let partly = match checked.partly.len() {
+        0 => String::new(),
+        n => format!(" ({n} more only in part)"),
+    };
     match askable {
         true => println!(
-            "{resolution}, {} constraint(s) checked, {} violation(s)",
+            "{resolution}, {} constraint(s) checked{partly}, {} violation(s)",
             checked.held.len(),
             checked.violations.len()
         ),

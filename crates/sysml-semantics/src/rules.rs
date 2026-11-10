@@ -523,6 +523,12 @@ pub struct Checked {
     /// why -- the property the abstract syntax has and this model does
     /// not, or the defect in the specification's own text.
     pub unevaluated: Vec<(&'static str, String)>,
+    /// Constraints some elements answered and others could not: by name,
+    /// how many could not, and why the first of them could not. Such a
+    /// constraint is in neither `held` nor `unevaluated` -- what it says
+    /// of the ones that answered is in `violations`, and nothing is known
+    /// of the rest.
+    pub partly: Vec<(&'static str, usize, String)>,
 }
 
 impl Workspace {
@@ -638,8 +644,13 @@ impl Workspace {
             let about = about.into_iter().map(|(_, elem, it)| (elem, it));
             let mut asked = false;
             let mut unknown = None;
+            let mut unknowns = 0;
             for (elem, it) in about {
-                match self.holds(expr, &it, &present) {
+                let answer = match rule.name {
+                    "validateNamespaceDistinguishibility" => Ok(self.distinguishable(elem)),
+                    _ => self.holds(expr, &it, &present),
+                };
+                match answer {
                     Ok(true) => asked = true,
                     Ok(false) => {
                         asked = true;
@@ -651,11 +662,18 @@ impl Workspace {
                     }
                     // an element that cannot answer says nothing about
                     // whether another one can
-                    Err(why) => unknown = unknown.or(Some(why)),
+                    Err(why) => {
+                        unknowns += 1;
+                        unknown = unknown.or(Some(why));
+                    }
                 }
             }
             match (asked, unknown) {
-                (true, _) => checked.held.push(rule.name),
+                // held of every element it was asked of
+                (true, None) => checked.held.push(rule.name),
+                // held, or not, of some: counting it as held would say
+                // the model was checked where it was not
+                (true, Some(why)) => checked.partly.push((rule.name, unknowns, why)),
                 (false, Some(why)) => checked.unevaluated.push((rule.name, why)),
                 // no element of that metaclass is in the model at all,
                 // which is not a rule failing to be evaluated
@@ -663,6 +681,73 @@ impl Workspace {
             }
         }
         checked
+    }
+
+    /// `validateNamespaceDistinguishibility` of one namespace: "All
+    /// `memberships` of a `Namespace` must be distinguishable from each
+    /// other", `membership->forAll(m1 | membership->forAll(m2 | m1 <> m2
+    /// implies m1.isDistinguishableFrom(m2)))`.
+    ///
+    /// Answered here rather than from the OCL, which cannot be: the body
+    /// of `Membership::isDistinguishableFrom` closes one bracket more than
+    /// it opens, calls `oclKindOf` and reads `shortMemberName`, none of
+    /// which exists. What it means is plain from the prose beside it --
+    /// two memberships are told apart unless one's name or short name is
+    /// the other's name or short name and the metaclass of either member
+    /// conforms to the other's -- and read as written it would compare
+    /// every membership with every other, which over a namespace that
+    /// imports a quantities library is millions of evaluations.
+    ///
+    /// Only the namespace's own memberships, aliases among them, are
+    /// compared. An imported membership whose name clashes with an owned
+    /// member or with another import "is hidden and is not included in
+    /// the set of imported memberships" (KerML 7.2.5.4), so it can never
+    /// be what breaks this. And only declared names: a feature that names
+    /// nothing answers to the name of what it redefines, and two of those
+    /// redefining different things are a model the resolver reads without
+    /// complaint.
+    fn distinguishable(&self, namespace: ElementId) -> bool {
+        let model = self.model();
+        let mut by_name: HashMap<&str, Vec<(ElementId, ElementKind)>> = HashMap::new();
+        for &owned in model.owned(namespace) {
+            let kind = model.kind(owned);
+            // `alias X for A;` is a membership of its own, with a name of
+            // its own, whose member is what it stands for
+            let member = if kind == ElementKind::Membership {
+                match model.maybe(owned, "memberElement") {
+                    Some(sysml_model::Value::Ref(target)) => *target,
+                    _ => continue,
+                }
+            } else if is_bare_relationship(kind) {
+                continue;
+            } else {
+                owned
+            };
+            let names = [
+                model.name(owned),
+                model
+                    .get(owned, "declaredShortName")
+                    .and_then(sysml_model::Value::as_str),
+            ];
+            let mut seen_here: Vec<&str> = Vec::new();
+            for name in names.into_iter().flatten() {
+                // `part def <A> A;` is one membership answering to one
+                // name twice, which is not two memberships
+                if seen_here.contains(&name) {
+                    continue;
+                }
+                seen_here.push(name);
+                let alike = by_name.entry(name).or_default();
+                let member_kind = model.kind(member);
+                if alike.iter().any(|&(other, other_kind)| {
+                    other != owned && (member_kind.is_a(other_kind) || other_kind.is_a(member_kind))
+                }) {
+                    return false;
+                }
+                alike.push((owned, member_kind));
+            }
+        }
+        true
     }
 
     /// Evaluate one constraint of one element: whether it holds, or why

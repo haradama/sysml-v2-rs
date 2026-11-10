@@ -824,8 +824,9 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
                             label: None,
                         });
                     }
-                    // the flow now stands where it just arrived
-                    previous = Some(to);
+                    // `previous` stays where it was: a succession is no
+                    // occurrence, so the next `then` leaves the same
+                    // place this one did (SysML 7.17.4)
                 }
             }
             continue;
@@ -5469,6 +5470,41 @@ mod behaviour_tests {
                 .collect::<Vec<_>>(),
             [(0, 1), (1, 2)]
         );
+
+        // the `then`s under a fork all leave the fork, and every branch
+        // under a decide leaves the decision (SysML 7.17.4/7.17.5): a
+        // succession is no occurrence, so the next one does not start
+        // where it arrived
+        let fanned = internal(
+            "action def Flow {\n\
+             \tin x : ScalarValues::Integer;\n\
+             \taction s;\n\
+             \tthen fork f;\n\
+             \t\tthen a;\n\
+             \t\tthen b;\n\
+             \taction a;\n\
+             \taction b;\n\
+             \tdecide d;\n\
+             \t\tif x > 1 then a;\n\
+             \t\tif x < 0 then c;\n\
+             \t\telse b;\n\
+             \taction c;\n\
+             }\n",
+            "Flow",
+        );
+        let at = |name: &str| fanned.nodes.iter().position(|n| n.name == name).unwrap();
+        let mut edges: Vec<(usize, usize)> = fanned.edges.iter().map(|e| (e.from, e.to)).collect();
+        edges.sort();
+        let mut expected = vec![
+            (at("s"), at("f")),
+            (at("f"), at("a")),
+            (at("f"), at("b")),
+            (at("d"), at("a")),
+            (at("d"), at("c")),
+            (at("d"), at("b")),
+        ];
+        expected.sort();
+        assert_eq!(edges, expected);
 
         // a succession into something that is not drawn has nowhere to go
         let nowhere = internal(

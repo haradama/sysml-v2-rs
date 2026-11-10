@@ -55,10 +55,25 @@ fn no_constraint_fires_on_the_models_the_specification_publishes() {
     // about a metadata access, which the corpus never writes. This is a
     // floor and not a count -- answering more of them is the point, and
     // only losing ground is the regression worth failing on.
+    //
+    // Answered counts a constraint some elements could not answer as
+    // well as the ones every element did: `held` alone is the second,
+    // and `partly` the first, kept apart so that a report does not call
+    // a constraint checked of elements it was never asked of.
+    let answered = checked.held.len() + checked.partly.len();
     assert!(
-        checked.held.len() >= 170,
-        "{} of the specification's constraints are answered, down from 170",
-        checked.held.len()
+        answered >= 170,
+        "{answered} of the specification's constraints are answered, down from 170"
+    );
+    // and none is both
+    assert!(
+        checked
+            .partly
+            .iter()
+            .all(|(rule, unknown, why)| !checked.held.contains(rule)
+                && *unknown > 0
+                && !why.is_empty()),
+        "{checked:?}"
     );
     // What could not be answered is named, with the property of the
     // abstract syntax this model does not build. That list is the work

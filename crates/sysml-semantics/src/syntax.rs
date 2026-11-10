@@ -690,7 +690,15 @@ pub(crate) fn may_name_itself(part: SyntaxKind, is_definition: bool) -> bool {
         // association, this one included, so the path may start with
         // the very name being declared
         SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW => !is_definition,
-        SyntaxKind::REDEFINITION | SyntaxKind::REFERENCES => true,
+        SyntaxKind::REFERENCES => true,
+        // A redefined feature is looked up in the supertypes of the
+        // owning type, not in the owning type itself: "the local
+        // namespace of the owning type of the redefining feature is not
+        // included in the name resolution of the redefined features"
+        // (KerML 7.3.4.5, 8.2.3.5.1). So `part engine :>> engine;` where
+        // no supertype has an `engine` redefines nothing; answering with
+        // itself would report a model naming nothing as sound.
+        SyntaxKind::REDEFINITION => false,
         // `feature outsideOfOccurrences ... inverse of outsideOfOccurrences`:
         // a symmetric relation is its own inverse
         SyntaxKind::INVERSE_KW => true,
@@ -921,9 +929,14 @@ pub(crate) fn end_operands(node: &SyntaxNode, of: ElementKind) -> Vec<SyntaxNode
                         || token.kind().is_modifier_kw()
                         || token.kind().is_visibility_kw()
                         || token.kind().is_def_kind_kw()
+                        // `succession all [*] guard then ...`:
+                        // `isSufficient ?= 'all' 'first'?` stands in
+                        // front of the end the succession runs from
                         || matches!(
                             token.kind(),
-                            SyntaxKind::SUCCESSION_KW | SyntaxKind::TRANSITION_KW
+                            SyntaxKind::SUCCESSION_KW
+                                | SyntaxKind::TRANSITION_KW
+                                | SyntaxKind::ALL_KW
                         )
                 })
             })

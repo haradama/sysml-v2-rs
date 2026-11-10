@@ -490,6 +490,88 @@ fn broken_aliases_and_redefinitions_do_not_block_lookup() {
     assert!(!names.contains(&"good"), "{names:?}");
 }
 
+/// A redefined feature is looked up in the supertypes of the owning
+/// type, not in the owning type (KerML 7.3.4.5, 8.2.3.5.1), so a named
+/// redefinition whose name no supertype has redefines nothing. It used
+/// to answer with itself, and the model was reported sound.
+#[test]
+fn a_named_redefinition_of_nothing_is_not_its_own_answer() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+    part def V;
+    part def C :> V { part engine :>> engine; attribute m :>> m = 1; }
+    part c : V { part e :>> e; }
+    part def W { part x; }
+    part def D :> W { part x :>> x; part x2 :>> x; }
+}
+",
+    )]);
+    let mut names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    names.sort();
+    // the ones that redefine something a supertype has still resolve
+    assert_eq!(names, ["e", "engine", "m"]);
+}
+
+/// `do action D` in a transition declares what the transition does on
+/// the way across, and the transition owns it as its effect
+/// (`EffectBehaviorMember : TransitionFeatureMembership`). It used to be
+/// hoisted into the state around it and read as that state's own `do`,
+/// so two transitions each doing `action D` gave the state two members
+/// called `D`.
+#[test]
+fn a_transition_owns_the_effect_it_declares() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+    attribute def Sig;
+    state def S {
+        entry; then S1;
+        state S1;
+        state S2;
+        transition first S1 accept Sig do action D then S2;
+        transition first S2 accept Sig do action D then S1;
+        action beep;
+        transition first S2 accept Sig do beep then S1;
+    }
+}
+",
+    )]);
+    let model = ws.model();
+    // `do beep` declares nothing: what the transition does is an action
+    // of its own, which the library calls `effect`
+    let made: Vec<_> = model
+        .ids()
+        .filter(|&id| model.name(id) == Some("effect"))
+        .collect();
+    assert_eq!(made.len(), 1);
+    assert_eq!(
+        model.kind(model.owner(made[0]).unwrap()),
+        ElementKind::TransitionUsage
+    );
+    let effects: Vec<_> = model
+        .ids()
+        .filter(|&id| model.name(id) == Some("D"))
+        .collect();
+    assert_eq!(effects.len(), 2);
+    for effect in effects {
+        let transition = model.owner(effect).expect("it is owned");
+        assert_eq!(model.kind(transition), ElementKind::TransitionUsage);
+        assert_eq!(
+            model.maybe(transition, "effectAction"),
+            Some(&sysml_model::Value::RefList(vec![effect]))
+        );
+        assert_eq!(sysml_model::transition_role(model, effect), Some("effect"));
+        // and the transition carries no second one beside it
+        let names: Vec<_> = model
+            .owned(transition)
+            .iter()
+            .map(|&it| model.name(it))
+            .collect();
+        assert!(!names.contains(&Some("effect")), "{names:?}");
+    }
+}
+
 #[test]
 fn self_annotating_metadata_terminates() {
     let mut ws = ws(&[(
@@ -2171,8 +2253,10 @@ fn a_succession_records_what_it_follows() {
         ),
         ["e", "f"]
     );
-    // where the one before it is another succession, the answer is
-    // where that one went: `then b; then c;` runs b to c
+    // where the one before it is another succession, that one is passed
+    // over: a succession is no occurrence, so `then b; then c;` both
+    // leave what stands before them (SysML 7.17.4, "The two successions
+    // following fork1 both have fork1 as their source")
     let all = |source: &str| {
         let mut ws = sysml_semantics::Workspace::new();
         ws.add_file("test.sysml", source);
@@ -2193,7 +2277,24 @@ fn a_succession_records_what_it_follows() {
     };
     assert_eq!(
         all("action def A {\n\taction a;\n\tthen b;\n\tthen c;\n\taction b;\n\taction c;\n}\n"),
-        ["a-b", "b-c"]
+        ["a-b", "a-c"]
+    );
+    // which is what a fork is written for
+    assert_eq!(
+        all(
+            "action def A {\n\taction s;\n\tthen fork f;\n\t\tthen a;\n\t\tthen b;\n\
+             \taction a;\n\taction b;\n}\n"
+        ),
+        ["s-f", "f-a", "f-b"]
+    );
+    // and a conditional succession is passed over too: every branch
+    // written under a `decide` leaves the decision
+    assert_eq!(
+        all(
+            "action def A {\n\tattribute x = 1;\n\taction a;\n\taction b;\n\taction c;\n\
+             \tdecide d;\n\t\tif x > 1 then a;\n\t\tif x < 0 then c;\n\t\telse b;\n}\n"
+        ),
+        ["d-a", "d-c", "d-b"]
     );
 
     // a connector before it that relates nothing is stepped over: it is

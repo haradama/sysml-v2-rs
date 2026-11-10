@@ -96,6 +96,20 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
 /// nobody wrote by hand.
 const MAX_DEPTH: usize = 512;
 
+/// Whether what leads a statement lets a kind keyword follow in its tail:
+/// `then action b`, `return part x`, `end x [1] feature y`. Anywhere else
+/// a kind keyword starts the next declaration.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Licence {
+    /// Only after one of the words that declares part-way through.
+    No,
+    /// Straight away, and on through the words that may stand before the
+    /// kind keyword.
+    Next,
+    /// Anywhere in the tail.
+    Throughout,
+}
+
 struct Parser<'t> {
     text: &'t str,
     tokens: Vec<Token>,
@@ -745,7 +759,9 @@ impl Parser<'_> {
         self.opt_prefix_metadata();
         self.opt_short_name();
         self.opt_decl_name();
-        self.element_tail();
+        // `return part x;`, `variant part v;`: the keyword leads a
+        // declaration its kind keyword comes after
+        self.element_tail_licensed(led, Licence::Next);
         self.finish_node();
     }
 
@@ -790,9 +806,11 @@ impl Parser<'_> {
     fn definition_or_usage_inner(&mut self, cp: Checkpoint) {
         let effect = std::mem::take(&mut self.declaring_effect);
         let mut ended = false;
+        let mut prefixed = false;
         loop {
             if self.current().is_modifier_kw() {
                 ended |= self.at(END_KW);
+                prefixed = true;
                 self.bump();
             } else if self.at(HASH) && self.nth_is_name(1) {
                 self.opt_prefix_metadata();
@@ -888,6 +906,15 @@ impl Parser<'_> {
         let stops = std::mem::replace(&mut self.stops_at_then, effect);
         if is_metadata && node == USAGE {
             self.metadata_tail();
+        } else if ended {
+            // `end x [1..*] feature y : T;` goes on to declare the end's
+            // feature, which is what lets a kind keyword follow
+            self.element_tail_licensed(EOF, Licence::Throughout);
+        } else if prefixed && !kinded {
+            // `in event occurrence e;`, `variation perform action a;`:
+            // the modifiers lead a declaration their kind keyword comes
+            // after, by way of the word that adapts it
+            self.element_tail_licensed(EOF, Licence::Next);
         } else {
             self.element_tail();
         }
@@ -909,6 +936,17 @@ impl Parser<'_> {
     /// written after `then` is the action the succession runs into,
     /// where the same shape after `do` is the statement's own body.
     fn element_tail_from(&mut self, led: SyntaxKind) {
+        let licence = match led {
+            // `for i in xs { ... }`: the `in` is the statement's own
+            FOR_KW => Licence::Throughout,
+            _ => Licence::No,
+        };
+        self.element_tail_licensed(led, licence);
+    }
+
+    /// [`element_tail_from`], told whether what leads the statement lets
+    /// a kind keyword follow.
+    fn element_tail_licensed(&mut self, led: SyntaxKind, licence: Licence) {
         // What the last turn of the loop dispatched on, starting from
         // the lead-in, so `then action { ... }` reads alike whether the
         // `then` opened the statement or came part-way through it.
@@ -916,12 +954,49 @@ impl Parser<'_> {
         if led == ACCEPT_KW {
             self.opt_accepted_type();
         }
+        // Whether a kind keyword may come next. Only a few words declare
+        // something part-way through a statement -- `then action b`, `do
+        // action D`, `end x [1] feature y` -- with any modifiers between
+        // (`then event occurrence e`). Anywhere else a kind keyword is the
+        // next declaration, and this one was left without its `;`: `part
+        // def A` then `part a : A;` on the next line read as one
+        // declaration owning the other, with no error, and the formatter
+        // then joined the two lines into one.
+        let opens = |kind: SyntaxKind| {
+            matches!(
+                kind,
+                THEN_KW | ELSE_KW | FIRST_KW | DO_KW | ENTRY_KW | EXIT_KW | LOOP_KW
+            )
+        };
+        // and what may stand between that word and the kind keyword
+        let keeps = |kind: SyntaxKind| {
+            kind.is_def_kind_kw()
+                || kind.is_modifier_kw()
+                || kind.is_visibility_kw()
+                || matches!(
+                    kind,
+                    PERFORM_KW
+                        | EXHIBIT_KW
+                        | EVENT_KW
+                        | INCLUDE_KW
+                        | SATISFY_KW
+                        | ASSERT_KW
+                        | ASSUME_KW
+                        | REQUIRE_KW
+                        | VERIFY_KW
+                        | FRAME_KW
+                )
+        };
+        let mut throughout = licence == Licence::Throughout;
+        let mut licensed = licence != Licence::No || opens(led);
         loop {
             let here = self.current();
             let after_flow = matches!(previous, THEN_KW | ELSE_KW | FIRST_KW);
             let after_connect = matches!(previous, CONNECT_KW | ALLOCATE_KW);
             let after_do = previous == DO_KW;
             previous = here;
+            let may_declare = throughout || licensed;
+            licensed = opens(here) || (licensed && keeps(here));
             match here {
                 // `do action D then S2;` -- the `then` is the transition's
                 THEN_KW if self.stops_at_then => return,
@@ -999,6 +1074,8 @@ impl Parser<'_> {
                 FOR_KW => {
                     self.bump();
                     self.opt_statement_name(FOR_KW);
+                    // `for i : T in xs`: the `in` is the loop's own
+                    throughout = true;
                 }
                 // `then timeslice bob { ... }` declares the portion the
                 // flow runs into, and the name after the portion kind is
@@ -1054,7 +1131,8 @@ impl Parser<'_> {
                 // feature declaration ends the enclosing element, and so
                 // does the nameless `then action { ... }`, which declares
                 // the action the succession runs into
-                k if k.is_def_kind_kw()
+                k if may_declare
+                    && k.is_def_kind_kw()
                     && (self.nth_is_name(1) || (after_flow && self.nth(1) == L_BRACE)) =>
                 {
                     let nested = self.checkpoint();
@@ -1065,7 +1143,19 @@ impl Parser<'_> {
                     }
                     return;
                 }
-                k if k.is_def_kind_kw() || k.is_modifier_kw() => self.bump(),
+                k if may_declare && (k.is_def_kind_kw() || k.is_modifier_kw()) => self.bump(),
+                // the next declaration, where this one should have ended:
+                // said here, and left for the body to read as its own
+                k if k.is_def_kind_kw() || k.is_modifier_kw() => {
+                    let word = self.tokens[self.pos..]
+                        .iter()
+                        .find(|t| !t.kind.is_trivia())
+                        .map_or("", |t| &self.text[t.range.clone()]);
+                    self.error(format!(
+                        "expected `;` or `{{` before `{word}`: the declaration before it is not ended"
+                    ));
+                    return;
+                }
                 _ if self.at_expr_start() => self.expression(),
                 _ => self.error_and_bump(format!(
                     "unexpected token {:?} in declaration",
@@ -1874,6 +1964,70 @@ mod tests {
         parse
     }
 
+    /// A declaration left without its `;` is an error where the next one
+    /// begins, and the next one is a declaration of its own. It used to
+    /// be read as owned by the one before it, with no error at all, and
+    /// `fmt --write` then joined the two lines into one.
+    #[test]
+    fn a_declaration_without_its_semicolon_is_an_error() {
+        for text in [
+            "part def A\npart a : A;\n",
+            "package P\npart x;\n",
+            "part x\npart y;\n",
+            "attribute a = 1\nattribute b = 2;\n",
+            "part def A :> B\npart c;\n",
+            "part def A\nabstract part c;\n",
+            "part def A\nprivate part c;\n",
+            "part def A\nref part c;\n",
+            "port def A\nport p;\n",
+            "enum def E\nenum a;\n",
+            "part def A part;\n",
+            "part part part;\n",
+            "part def A abstract ref in out;\n",
+        ] {
+            let parse = parse(text);
+            let said: Vec<&str> = parse
+                .errors()
+                .iter()
+                .map(|it| it.message.as_str())
+                .collect();
+            let unended = said
+                .iter()
+                .any(|it| it.contains("the declaration before it is not ended"));
+            assert!(unended, "{text:?}: {said:?}");
+            assert_eq!(parse.syntax().text().to_string(), text, "lossless violated");
+        }
+        // the next declaration is a sibling, not a member
+        let parse = parse("part def A\npart a : A;\n");
+        let top: Vec<SyntaxKind> = parse.syntax().children().map(|it| it.kind()).collect();
+        assert_eq!(top, [DEFINITION, USAGE]);
+        let parse = parse_dialect("classifier A\nfeature a : A;\n", crate::Dialect::KerML);
+        assert!(!parse.errors().is_empty());
+
+        // and every place the language does declare part-way through a
+        // statement still does
+        for text in [
+            "action a { then action b; }",
+            "action a { first start; then action b; then done; }",
+            "action a { then event occurrence e; }",
+            "action a { then private action w { } }",
+            "state def S { entry action e; do action d; exit action x; }",
+            "state def S { state s1; accept T do action D then s1; }",
+            "connection def C { end x [1] feature y : T; end [0..1] item z : T; }",
+            "action a { in event occurrence e; }",
+            "action a { variation perform action p { variant action q; } }",
+            "calc def C { return part :>> r : T; return attribute v : T; }",
+            "part def V { variation part p : T { variant part a; } }",
+            "action a { loop action b { } until c; }",
+            "action a { for i in xs { } }",
+            "action a { for n : T in (1, 2) { } }",
+            "action a { then for t in 1..3 { action f; } }",
+            "action a { action aFor for u : T in 1..3 { action g; } }",
+        ] {
+            check_ok(text);
+        }
+    }
+
     /// Every name written where the grammar declares one comes out as a
     /// `NAME`, and every name it refers to as a reference, wherever the
     /// statement goes on to.
@@ -2074,7 +2228,6 @@ mod tests {
             format!("attribute x = {};", "(".repeat(50_000)),
             format!("attribute x = a{};", ".a".repeat(20_000)),
             format!("attribute x = 1{};", " + 1".repeat(20_000)),
-            (0..20_000).fold(String::new(), |text, n| text + &format!("part a{n} ")) + ";",
             format!("attribute x = f{};", "(1)".repeat(20_000)),
         ] {
             let parse = parse(&text);
@@ -2096,6 +2249,29 @@ mod tests {
                 .unwrap();
             assert!(deepest <= MAX_DEPTH + 8, "{deepest} levels");
         }
+    }
+
+    /// `part a0 part a1 part a2 ... ;` used to nest each declaration in
+    /// the one before it until the depth limit gave up. Each is a
+    /// declaration of its own that is missing its `;`, so nothing nests.
+    #[test]
+    fn declarations_run_together_are_siblings_not_a_nest() {
+        let text = (0..20_000).fold(String::new(), |text, n| text + &format!("part a{n} ")) + ";";
+        let parse = parse(&text);
+        assert_eq!(parse.syntax().text().to_string(), text, "lossless");
+        assert!(parse
+            .errors()
+            .iter()
+            .all(|e| !e.message.contains("nested more than")));
+        assert_eq!(
+            parse
+                .errors()
+                .iter()
+                .filter(|e| e.message.contains("not ended"))
+                .count(),
+            19_999
+        );
+        assert_eq!(parse.syntax().children().count(), 20_000);
     }
 
     /// A definition named after a reserved word used to lose its name:

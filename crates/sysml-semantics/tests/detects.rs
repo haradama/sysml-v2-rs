@@ -37,6 +37,40 @@ use sysml_semantics::Workspace;
 /// The set is exact in both directions: a rule that stops noticing fails
 /// here, and so does one that starts complaining about something else.
 const REJECTED: &[(&str, &str, &[&str])] = &[
+    // `validateNamespaceDistinguishibility`: two members of one
+    // namespace answer to one name, and nothing can tell which is meant
+    (
+        "two definitions of one name",
+        "package P {\n\tpart def A;\n\tpart def A;\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    (
+        "two features of one name",
+        "package P {\n\tpart def A {\n\t\tpart x;\n\t\tpart x;\n\t}\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    (
+        "an alias that takes a name already taken",
+        "package P {\n\tpart def A;\n\tpart def B;\n\talias A for B;\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    (
+        "a short name that is another member's",
+        "package P {\n\tpart def <s> A;\n\tpart def <s> B;\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    // ... and where the metaclasses do not conform, the name is shared
+    // and both are told apart: `isDistinguishableFrom`
+    (
+        "a definition and a usage may share a name",
+        "package P {\n\tpart def A;\n\tpart A : A;\n}\n",
+        &[],
+    ),
+    (
+        "a member whose short name is its own name is one member",
+        "package P {\n\tpart def <A> A;\n}\n",
+        &[],
+    ),
     (
         "an objective belongs to a case",
         "package P {\n\tpart def E {\n\t\tobjective o;\n\t}\n}\n",
@@ -482,8 +516,9 @@ const MUTATED: &[(&str, Break, &[&str])] = &[
         &["validateFlowPayloadFeature"],
     ),
     (
+        // `then done;` twice: the join has two successions out of it
         "Fork Join Example.sysml",
-        Repeat(22),
+        Repeat(39),
         &["validateJoinNodeOutgoingSuccessions"],
     ),
     (

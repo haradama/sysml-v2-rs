@@ -686,6 +686,64 @@ fn a_file_the_call_brings_stands_in_for_the_one_on_disk() {
     assert_eq!(answer["resolved"], 2, "{answer}");
 }
 
+/// ... however the call spells the file. A name relative to the project's
+/// root is the project's file, though the server runs somewhere else: it
+/// used to be compared against the project's files as written, matched
+/// none of them, and the copy on disk was loaded beside the edit -- so an
+/// edit deleting a definition another file uses was answered `ok`.
+#[test]
+fn a_file_the_call_brings_stands_in_however_it_is_spelled() {
+    let dir = scratch("sysml-mcp-overlay-spelled");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(
+        dir.join("lib.sysml"),
+        "package Lib {\n\tpart def Wheel;\n\tpart def Axle;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("sub/car.sysml"),
+        "package Car {\n\tprivate import Lib::*;\n\tpart w : Wheel;\n\tpart x : Axle;\n}\n",
+    )
+    .unwrap();
+    let without_axle = "package Lib {\n\tpart def Wheel;\n}\n";
+    for name in ["lib.sysml", "./lib.sysml"] {
+        let answer = answered(
+            &in_project(
+                &dir,
+                &[call("check", json!({ "text": without_axle, "name": name }))],
+            )[0],
+        );
+        assert_eq!(answer["ok"], false, "{name}: {answer}");
+        let unresolved: Vec<&str> = answer["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|it| it["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(unresolved, ["Axle"], "{name}: {answer}");
+    }
+
+    // and a file named twice among the others is loaded once, as is one
+    // that is also the call's own: loaded twice, every definition in it
+    // was declared twice and every count doubled
+    let lib = dir.join("lib.sysml");
+    let car = dir.join("sub/car.sysml");
+    let answer = answered(
+        &in_project(
+            &dir,
+            &[call(
+                "check",
+                json!({
+                    "path": lib.to_str().unwrap(),
+                    "alongside": [lib.to_str().unwrap(), car.to_str().unwrap(), car.to_str().unwrap()],
+                }),
+            )],
+        )[0],
+    );
+    assert_eq!(answer["references"], 3, "{answer}");
+    assert_eq!(answer["resolved"], 3, "{answer}");
+}
+
 /// The agent asking these questions is the one writing the files.
 #[test]
 fn the_project_is_read_again_after_it_changes() {
