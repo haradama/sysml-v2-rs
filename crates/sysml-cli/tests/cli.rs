@@ -1575,3 +1575,38 @@ fn diagram_is_painted_in_the_skin_it_is_given() {
     assert!(!ok);
     assert!(err.contains("no `paper`"), "{err}");
 }
+
+/// A directory with no model in it is refused, as `corpus` refuses it: read
+/// as an empty model it passed `check` with the library alone, and a
+/// mistyped path in a CI step could not fail. One file named twice is read
+/// once, or everything in it is declared twice. And a model with a name
+/// missing never reads as 100.0% resolved.
+#[test]
+fn check_reads_what_it_is_given_once_and_refuses_nothing_to_read() {
+    let dir = temp_dir("check-paths");
+    let empty = dir.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = sysml(&["check", empty.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("holds no .sysml or .kerml file"));
+
+    let model = write(&dir, "ok.sysml", OK_MODEL);
+    let twice = dir.join(".").join("ok.sysml");
+    let once = sysml(&["check", "--no-library", model.to_str().unwrap()]);
+    let again = sysml(&[
+        "check",
+        "--no-library",
+        model.to_str().unwrap(),
+        twice.to_str().unwrap(),
+        dir.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        String::from_utf8_lossy(&once.stdout),
+        String::from_utf8_lossy(&again.stdout)
+    );
+
+    let missing = write(&dir, "missing.sysml", "part x : Nope;\n");
+    let out = sysml(&["check", missing.to_str().unwrap()]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!said.contains("(100.0%)"), "{said}");
+}

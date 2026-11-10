@@ -871,18 +871,45 @@ impl Unreadable {
 
 /// Load every path -- file or directory -- into `ws`, stopping at the
 /// first one that cannot be read.
+///
+/// A directory with no model in it is refused rather than read as an empty
+/// model: `sysml check modle/` passed -- the library alone, resolved, and
+/// "0 violation(s)" -- where `sysml corpus` of the same path failed, and a
+/// mistyped path in a CI step was a step that could not fail. And one file
+/// named twice, `a.sysml ./a.sysml` or a directory and a file in it, is
+/// read once: read twice, everything in it was declared twice and every
+/// count doubled, with nothing to say so.
 fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<(), Unreadable> {
+    let mut loaded: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for path in paths {
-        let failed = |verb, error: std::io::Error| Unreadable {
+        let failed = |verb, error: String| Unreadable {
             path: path.display().to_string(),
             verb,
-            error: error.to_string(),
+            error,
         };
-        if path.is_dir() {
-            ws.load_dir(path).map_err(|err| failed("load", err))?;
+        let is_dir = path.is_dir();
+        let files = if is_dir {
+            let found = sysml_semantics::model_files(path);
+            if found.is_empty() {
+                return Err(failed("load", "it holds no .sysml or .kerml file".to_string()));
+            }
+            found
         } else {
-            let text = std::fs::read_to_string(path).map_err(|err| failed("read", err))?;
-            ws.add_file(path.to_string_lossy(), &text);
+            vec![path.clone()]
+        };
+        for file in files {
+            let same = std::fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
+            if !loaded.insert(same) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).map_err(|err| match is_dir {
+                // the error names the file, not just the directory asked
+                // about: one unreadable file among hundreds is otherwise a
+                // refusal with nothing to act on
+                true => failed("load", format!("{}: {err}", file.display())),
+                false => failed("read", err.to_string()),
+            })?;
+            ws.add_file(file.to_string_lossy(), &text);
         }
     }
     Ok(())
@@ -1878,10 +1905,12 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
 
     let stats = ws.resolve_all();
     let total = stats.resolved + stats.unresolved;
+    // rounded down, so that a model with a name missing never reads as
+    // 100.0% -- one in seventeen thousand came out as exactly that
     let rate = if total == 0 {
         100.0
     } else {
-        100.0 * stats.resolved as f64 / total as f64
+        (1000.0 * stats.resolved as f64 / total as f64).floor() / 10.0
     };
     // `--show` trims a list a person reads; a program is given all of
     // them, since it is the list it works from
