@@ -572,6 +572,42 @@ fn a_transition_owns_the_effect_it_declares() {
     }
 }
 
+/// `self` and `that` stand for the type an expression is written in --
+/// unless the model declares a feature of that name where it is written,
+/// which is then what the name means. It used to be passed over: inside
+/// a definition the name was read as the definition, and at a package's
+/// top level it resolved to nothing.
+#[test]
+fn a_feature_the_model_calls_self_or_that_is_what_the_name_means() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {
+    part def A { attribute that = 1; attribute b = that; attribute x = self; }
+    attribute self = 2;
+    attribute c = self;
+}
+",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let named: Vec<(String, String)> = ws
+        .references()
+        .iter()
+        .map(|r| (ws.qualified_name_of(r.from), ws.qualified_name_of(r.target)))
+        .filter(|(_, to)| to.ends_with("that") || to.ends_with("self") || to == "P::A")
+        .collect();
+    let to = |from: &str| {
+        named
+            .iter()
+            .filter(|(at, _)| at.starts_with(from))
+            .map(|(_, to)| to.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(to("P::A::b"), ["P::A::that"], "{named:?}");
+    assert_eq!(to("P::c"), ["P::self"], "{named:?}");
+    // with none declared, `self` is still the type it is written in
+    assert_eq!(to("P::A::x"), ["P::A"], "{named:?}");
+}
+
 #[test]
 fn self_annotating_metadata_terminates() {
     let mut ws = ws(&[(

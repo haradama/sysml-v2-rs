@@ -971,6 +971,41 @@ impl Workspace {
         // `self` and `that` are not looked up, so no qualified name was
         // walked to reach what they name.
         self.chain.clear();
+        // ... unless the model declares one of its own where it is
+        // written: `part def A { attribute that = 1; attribute b = that; }`
+        // means the attribute, and was read as `A`, while at a package's
+        // top level the same name resolved to nothing at all. The
+        // library's own -- `Occurrence` redeclares `self` -- are what
+        // `self` and `that` stand for already, and stay read that way.
+        // Only as far out as the type the expression is in: that type
+        // has a `self` of its own, inherited, which a declaration further
+        // out does not shadow.
+        let mut scopes: Vec<ElementId> = Vec::new();
+        for scope in std::iter::successors(self.model.owner(elem), |&it| self.model.owner(it))
+            .take_while(|&it| it != self.root)
+        {
+            scopes.push(scope);
+            if self.model.kind(scope).is_a(ElementKind::Type) {
+                break;
+            }
+        }
+        let in_library = scopes
+            .iter()
+            .any(|&it| self.model.kind(it) == ElementKind::LibraryPackage);
+        let declared = scopes
+            .iter()
+            .copied()
+            .filter(|_| !in_library)
+            .find_map(|scope| {
+                self.model
+                    .owned(scope)
+                    .iter()
+                    .copied()
+                    .find(|&member| member != elem && self.model.name(member) == Some(&segments[0]))
+            });
+        if declared.is_some() {
+            return declared;
+        }
         let mut scope = self.model.owner(elem);
         while let Some(current) = scope {
             if self.model.kind(current).is_a(ElementKind::Type) {
