@@ -1916,7 +1916,12 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
                 text,
                 span: span(u.range),
                 label: None,
-                helps: helps(meant),
+                // a name that reaches the wrong kind of thing is no
+                // missing import and no misspelling
+                helps: match ws.wrong_kind_at(u.file, u.range) {
+                    Some(why) => vec![why],
+                    None => helps(meant),
+                },
             }),
             Format::Json => {
                 let mut entry = sysml_cli::at(

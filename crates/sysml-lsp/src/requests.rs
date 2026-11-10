@@ -500,6 +500,12 @@ impl Server {
 
         let mut actions = Vec::new();
         for (missing, may) in wanted.iter().zip(suggested) {
+            // a name that reaches the wrong kind of thing is spelt right
+            // and in scope: putting another spelling in its place only
+            // names the same thing again
+            if missing.wrong_kind.is_some() {
+                continue;
+            }
             // Both lists are spelled from the root, so either replaces
             // the whole of what was written -- `Parts::Wheeel` becomes
             // `Parts::Wheel` without the qualifier being put back by

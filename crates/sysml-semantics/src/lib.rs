@@ -94,6 +94,10 @@ pub struct Unresolved {
     pub range: TextRange,
     /// The name, as it was written.
     pub name: String,
+    /// What the name does reach, and what it had to be: `part def B :>
+    /// a;` reaches the part `a` where a classifier is wanted. Such a name
+    /// is no missing import and no misspelling, and is not said to be.
+    pub wrong_kind: Option<(ElementId, ElementKind)>,
 }
 
 /// A successfully resolved reference (for go-to-definition etc.).
@@ -368,6 +372,10 @@ pub struct Workspace {
     /// drawn while this moved rests on a name that was not there, and
     /// a file added afterwards may be the file that name lives in.
     misses: u64,
+    /// What the last outermost lookup found and threw away for being the
+    /// wrong kind of thing, with the kind it had to be: handed to the
+    /// miss recorded next, which is that lookup's.
+    wrong_kind: Option<(ElementId, ElementKind)>,
     /// The elements whose cached supertypes or semantic bases were
     /// worked out while a name was missing, and so are only as
     /// complete as the workspace was at the time.
@@ -431,6 +439,7 @@ impl Clone for Workspace {
             chain: Vec::new(),
             depth: 0,
             misses: self.misses,
+            wrong_kind: None,
             incomplete: self.incomplete.clone(),
             origin: self.root,
             imports: self.imports.clone(),
@@ -478,6 +487,7 @@ impl Workspace {
             chain: Vec::new(),
             depth: 0,
             misses: 0,
+            wrong_kind: None,
             incomplete: HashSet::new(),
             origin: root,
             imports: HashMap::new(),
@@ -1082,6 +1092,25 @@ impl Workspace {
                 }
             })
             .collect()
+    }
+
+    /// Where the name written at `range` in `file` resolved to nothing
+    /// because what it reaches is the wrong kind of thing: a sentence
+    /// saying so. Such a name is not out of scope -- saying "an import
+    /// would" bring it in is wrong -- and not misspelt; it names something
+    /// that cannot stand there.
+    pub fn wrong_kind_at(&self, file: usize, range: TextRange) -> Option<String> {
+        let (found, wanted) = self
+            .unresolved
+            .iter()
+            .find(|it| it.file == file && it.range == range)?
+            .wrong_kind?;
+        Some(format!(
+            "it names `{}`, a `{}`, where only a `{}` can stand",
+            self.qualified_name_written(found),
+            self.model.kind(found).name(),
+            wanted.name()
+        ))
     }
 
     /// Whether a qualified name can reach `id` from outside the namespaces

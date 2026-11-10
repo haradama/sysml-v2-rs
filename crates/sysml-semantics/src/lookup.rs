@@ -163,9 +163,15 @@ impl Workspace {
         // (KerML 8.2.3.5.1). `feature aa subsets non;` names nothing
         // when `non` is a classifier, however plainly the name is
         // there: what a feature subsets is a feature.
+        let mismatch = found.zip(expected).filter(|&(hit, kind)| !self.model.kind(hit).is_a(kind));
         let found =
             found.filter(|&hit| expected.is_none_or(|kind| self.model.kind(hit).is_a(kind)));
         self.depth -= 1;
+        // an outermost lookup's, for the miss recorded after it: the
+        // lookups made on the way, for imports and the like, are not
+        if self.depth == 0 {
+            self.wrong_kind = mismatch;
+        }
         self.origin = outer;
         if found.is_none() {
             self.misses += 1;
@@ -256,10 +262,12 @@ impl Workspace {
         stats: &mut ResolveStats,
     ) {
         stats.unresolved += 1;
+        let wrong_kind = self.wrong_kind.take();
         self.unresolved.push(Unresolved {
             file,
             range,
             name: Self::spell(segments),
+            wrong_kind,
         });
     }
     /// Record a resolved reference, and with it every earlier segment of

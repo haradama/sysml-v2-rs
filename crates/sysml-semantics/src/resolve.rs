@@ -421,7 +421,7 @@ impl Workspace {
                             id,
                             &t.segments,
                             may_name_itself(part_kind, is_definition),
-                            expected_kind(part_kind, is_definition),
+                            expected_kind(part_kind, is_definition, self.model.kind(id)),
                         )
                     });
                     self.redefining = redefining;

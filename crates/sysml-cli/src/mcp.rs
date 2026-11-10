@@ -423,6 +423,12 @@ impl Server {
             .zip(&might)
             .map(|(f, might)| {
                 let mut said = json!({ "name": f.what });
+                // a name that reaches the wrong kind of thing wants
+                // neither an import nor another spelling
+                if let Some(why) = ws.wrong_kind_at(f.file, f.range) {
+                    said["wrong_kind"] = json!(why);
+                    return place(f, said);
+                }
                 if !might.elsewhere.is_empty() {
                     said["declared_as"] = json!(might.elsewhere);
                 }

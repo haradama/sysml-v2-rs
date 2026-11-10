@@ -267,3 +267,43 @@ fn what_cannot_be_named_from_outside_is_not_offered() {
         assert!(about.near.is_empty(), "{name}: {about:?}");
     }
 }
+
+/// A name that reaches the wrong kind of thing is spelt right and in
+/// scope, so neither "declared as ... an import would" nor "did you mean"
+/// is the answer; what it names is. A definition specializes a classifier
+/// (`Subclassification::superclassifier : Classifier`), so `part def B :>
+/// a;` naming a part usage names nothing -- it used to resolve -- and a
+/// usage subsets a feature.
+#[test]
+fn a_name_of_the_wrong_kind_of_thing_says_what_it_names() {
+    let ws = resolved(
+        "package P {\n\
+         \tpart a;\n\
+         \tpart def A;\n\
+         \tpart def B :> a;\n\
+         \tpart b :> A;\n\
+         \tpart def C :> A;\n\
+         }\n",
+    );
+    let missed: Vec<(&str, Option<sysml_model::ElementKind>)> = ws
+        .unresolved()
+        .iter()
+        .map(|it| (it.name.as_str(), it.wrong_kind.map(|(_, kind)| kind)))
+        .collect();
+    assert_eq!(
+        missed,
+        [
+            ("a", Some(sysml_model::ElementKind::Classifier)),
+            ("A", Some(sysml_model::ElementKind::Feature)),
+        ]
+    );
+    let said = ws
+        .wrong_kind_at(ws.unresolved()[0].file, ws.unresolved()[0].range)
+        .unwrap();
+    assert_eq!(said, "it names `P::a`, a `PartUsage`, where only a `Classifier` can stand");
+    // and a name that is merely missing has nothing of the kind to say
+    let ws = resolved("part x : Nope;\n");
+    let nope = &ws.unresolved()[0];
+    assert!(nope.wrong_kind.is_none());
+    assert_eq!(ws.wrong_kind_at(nope.file, nope.range), None);
+}

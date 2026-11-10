@@ -660,12 +660,23 @@ pub(crate) fn operand_segments(operand: &SyntaxNode) -> Vec<String> {
 /// `feature aa subsets non;` apart from a model that means it, when `non`
 /// is a classifier declared next door.
 ///
-/// Only what a feature relates is narrowed. What a definition specializes
-/// is a `Classifier` for a `Subclassification` and a `Type` for a plain
-/// `Specialization`, and this parser hands both the same node.
-pub(crate) fn expected_kind(part: SyntaxKind, is_definition: bool) -> Option<ElementKind> {
+/// What a definition specializes is a `Classifier` for a
+/// `Subclassification` -- `Subclassification::superclassifier :
+/// Classifier` -- and a `Type` for a plain `Specialization`, and this
+/// parser hands both the same node. Which it is follows from what is
+/// declaring it: a classifier's is a subclassification, so `part def B
+/// :> a;` naming a part usage names nothing, as `part b :> A;` naming a
+/// definition already did. KerML's `type T specializes f;` relates two
+/// types, and a feature is one.
+pub(crate) fn expected_kind(
+    part: SyntaxKind,
+    is_definition: bool,
+    declaring: ElementKind,
+) -> Option<ElementKind> {
     match part {
-        SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW if is_definition => None,
+        SyntaxKind::SUBSETTING | SyntaxKind::CROSSES_KW if is_definition => declaring
+            .is_a(ElementKind::Classifier)
+            .then_some(ElementKind::Classifier),
         SyntaxKind::SUBSETTING
         | SyntaxKind::CROSSES_KW
         | SyntaxKind::REDEFINITION
