@@ -204,13 +204,30 @@ impl Server {
         project.files = files;
     }
 
-    /// One request in, one response out -- or nothing, for a
+    /// One message in, one response out -- or nothing, for a
     /// notification, which by JSON-RPC has no reply.
+    ///
+    /// A message may be a batch: revision 2025-03-26, which this server
+    /// says it speaks, has a server accept an array of requests and answer
+    /// with an array of what they draw. It used to be refused whole. The
+    /// array holds the answers to the requests that draw one, and a batch
+    /// of notifications draws nothing at all.
     pub fn handle(&mut self, request: &Value) -> Option<Value> {
+        match request.as_array() {
+            Some(batch) if !batch.is_empty() => {
+                let answers: Vec<Value> = batch.iter().filter_map(|one| self.one(one)).collect();
+                (!answers.is_empty()).then_some(Value::Array(answers))
+            }
+            _ => self.one(request),
+        }
+    }
+
+    /// One request, out of a batch or not.
+    fn one(&mut self, request: &Value) -> Option<Value> {
         // Anything that is not a request object cannot be acted on, and JSON-RPC
         // has the server say so rather than fall silent: a client that sent an id
-        // would wait for ever. MCP carries no batches, so an array is refused the
-        // same way, under the null id the spec gives an unidentifiable request.
+        // would wait for ever. An empty batch, or a batch inside one, is refused
+        // the same way, under the null id the spec gives an unidentifiable request.
         let Some(fields) = request.as_object() else {
             return Some(invalid("a request is a JSON object", Value::Null));
         };
@@ -307,7 +324,7 @@ impl Server {
         let named_as = named.as_ref().map(|(name, _)| self.canonical(name));
         // each once, and none that is the file the call's text replaces
         let mut seen: HashSet<String> = named_as.iter().cloned().collect();
-        let alongside: Vec<String> = alongside(arguments)
+        let alongside: Vec<String> = alongside(arguments)?
             .into_iter()
             .filter(|path| seen.insert(self.canonical(path)))
             .collect();
@@ -345,9 +362,15 @@ impl Server {
         canonical(path)
     }
 
-    /// Does it parse, and does every name in it resolve? The findings
-    /// carry the shape `sysml check --format json` reports, so a client
-    /// that knows one knows the other.
+    /// Does it parse, and does every name in it resolve?
+    ///
+    /// Each finding is placed the way `sysml check --format json` places
+    /// one -- `path`, then offsets, lines and columns from [`crate::at`]
+    /// -- but the answer around them is this server's own: the hints are
+    /// `declared_as` and `did_you_mean` where the command line says
+    /// `declaredAs` and `didYouMean`, and the violations are under
+    /// `rules`. Agents already read these names, so they stay; what used
+    /// to be said here -- that the two shapes were one -- was not so.
     fn check(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
         let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
@@ -368,14 +391,17 @@ impl Server {
                 )
             })
             .collect();
-        let place = |finding: &sysml_semantics::Finding, mut extra: Value| {
+        let place_in = |file: usize, range: sysml_syntax::TextRange, mut extra: Value| {
             let which = open
                 .iter()
-                .position(|&f| f == finding.file)
+                .position(|&f| f == file)
                 .expect("a finding in a file that was opened");
             let (name, text) = &texts[which];
             extra["path"] = json!(name);
-            crate::at(text, finding.range, extra)
+            crate::at(text, range, extra)
+        };
+        let place = |finding: &sysml_semantics::Finding, extra: Value| {
+            place_in(finding.file, finding.range, extra)
         };
 
         // syntax first: a file that does not parse has no names worth
@@ -457,11 +483,16 @@ impl Server {
             .violations
             .iter()
             .map(|violation| {
-                json!({
+                let said = json!({
                     "rule": violation.rule,
                     "says": violation.says,
                     "element": ws.qualified_name_written(violation.element),
-                })
+                });
+                // placed where the element is declared, as the command
+                // line places it, wherever that is one of the files opened
+                ws.element_place(violation.element)
+                    .filter(|(file, _)| open.contains(file))
+                    .map_or(said.clone(), |(file, range)| place_in(file, range, said))
             })
             .collect();
         Ok(json!({
@@ -509,6 +540,23 @@ impl Server {
         let text = ws.file_parse(file).syntax().text().to_string();
         let offset = offset_of(&text, line, column)
             .ok_or_else(|| format!("line {line}, column {column} is past the end of the text"))?;
+        // Inside a comment or a string no name is written, so none may
+        // be: the names in scope around a block comment were offered for
+        // a point in its prose.
+        use sysml_syntax::SyntaxKind::{BLOCK_NOTE, COMMENT_BODY, LINE_NOTE, STRING};
+        let at = sysml_syntax::TextSize::from(offset as u32);
+        let in_prose = ws
+            .file_parse(file)
+            .syntax()
+            .token_at_offset(at)
+            .any(|token| {
+                matches!(token.kind(), BLOCK_NOTE | COMMENT_BODY | LINE_NOTE | STRING)
+                    && token.text_range().start() < at
+                    && at < token.text_range().end()
+            });
+        if in_prose {
+            return Ok(json!({ "visible": [] }));
+        }
         ws.resolve_files(&open);
         let names: Vec<Value> = ws
             .visible_names(file, (offset as u32).into())
@@ -525,11 +573,15 @@ impl Server {
     /// name in the standard library turns out to be.
     fn outline(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
-        let depth = arguments
-            .get("depth")
-            .and_then(Value::as_u64)
-            .unwrap_or(2)
-            .min(16) as usize;
+        // 0 is the element alone; anything but a count is refused rather
+        // than read as the default, which a negative one used to be
+        let depth = match arguments.get("depth") {
+            None | Some(Value::Null) => 2,
+            Some(given) => given
+                .as_u64()
+                .ok_or_else(|| "`depth` must be a whole number, 0 or more".to_string())?
+                .min(16) as usize,
+        };
         let inherited = arguments
             .get("inherited")
             .and_then(Value::as_bool)
@@ -1209,18 +1261,31 @@ fn notation(arguments: &Value) -> Result<Value, String> {
 /// and checking one file of it alone reports every reference into the
 /// rest as unresolved -- a false alarm on every line that reaches for
 /// something the project declares elsewhere.
-fn alongside(arguments: &Value) -> Vec<String> {
-    arguments
-        .get("alongside")
-        .and_then(Value::as_array)
-        .map(|paths| {
-            paths
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+///
+/// Given as anything but a list of paths it is refused: a single path
+/// written as a string used to be dropped without a word, and the model
+/// checked without the files it was meant to be checked with.
+fn alongside(arguments: &Value) -> Result<Vec<String>, String> {
+    let refused = || "`alongside` must be an array of paths".to_string();
+    match arguments.get("alongside") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(paths)) => paths
+            .iter()
+            .map(|path| path.as_str().map(str::to_string).ok_or_else(refused))
+            .collect(),
+        Some(_) => Err(refused()),
+    }
+}
+
+/// An argument that is a string where it is given at all. One of another
+/// type is refused rather than read as absent: `text: 42` answered about
+/// the project instead, as if no text had been sent.
+fn optional_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(it)) => Ok(Some(it)),
+        Some(_) => Err(format!("`{key}` must be a string")),
+    }
 }
 
 /// The text a tool works on: written out in the call, or read from a
@@ -1228,14 +1293,12 @@ fn alongside(arguments: &Value) -> Vec<String> {
 /// the server was started with. The name decides the dialect, so a
 /// `.kerml` file is read as KerML whichever way it arrives.
 fn source(arguments: &Value) -> Result<Option<(String, String)>, String> {
-    if let Some(text) = arguments.get("text").and_then(Value::as_str) {
-        let name = arguments
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or("model.sysml");
+    let name = optional_str(arguments, "name")?;
+    if let Some(text) = optional_str(arguments, "text")? {
+        let name = name.unwrap_or("model.sysml");
         return Ok(Some((name.to_string(), text.to_string())));
     }
-    let Some(path) = arguments.get("path").and_then(Value::as_str) else {
+    let Some(path) = optional_str(arguments, "path")? else {
         return Ok(None);
     };
     let text =
@@ -1302,6 +1365,11 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
             .iter()
             .map(|&up| ws.qualified_name_written(up))
             .collect::<Vec<_>>());
+    }
+    // depth 0 asked for the element and nothing inside it, and used to
+    // be answered as 1
+    if depth == 0 {
+        return entry;
     }
     // A definition's own members are what the text says; the inherited
     // ones are the reason to ask a resolved model rather than read it.
@@ -1385,6 +1453,9 @@ fn invalid(why: &str, id: Value) -> Value {
 
 /// A one-based line and column as a byte offset, or nothing where the
 /// text does not reach that far.
+///
+/// The column is in characters, as the columns of a finding are, so a
+/// place `check` reports can be handed straight back.
 fn offset_of(text: &str, line: usize, column: usize) -> Option<usize> {
     let (line, column) = (line.checked_sub(1)?, column.checked_sub(1)?);
     let mut lines = text.split_inclusive('\n');
@@ -1395,7 +1466,12 @@ fn offset_of(text: &str, line: usize, column: usize) -> Option<usize> {
     }
     // and a column has to stay on the line it names
     let rest = lines.next().unwrap_or("");
-    (column <= rest.len()).then_some(start + column)
+    let at = rest
+        .char_indices()
+        .map(|(at, _)| at)
+        .chain([rest.len()])
+        .nth(column)?;
+    Some(start + at)
 }
 
 /// A JSON answer as the text content a tool result carries.
@@ -1451,7 +1527,7 @@ fn tools() -> Value {
                     "name": source_properties["name"],
                     "alongside": source_properties["alongside"],
                     "line": { "type": "integer", "description": "Line, counting from one" },
-                    "column": { "type": "integer", "description": "Column in bytes, counting from one" },
+                    "column": { "type": "integer", "description": "Column in characters, counting from one" },
                 },
                 "required": ["line", "column"],
             },
@@ -1467,7 +1543,7 @@ fn tools() -> Value {
                     "name": source_properties["name"],
                     "alongside": source_properties["alongside"],
                     "within": { "type": "string", "description": "A qualified name to describe instead of the whole model" },
-                    "depth": { "type": "integer", "description": "How many levels of nesting to descend (default 2, at most 16)" },
+                    "depth": { "type": "integer", "description": "How many levels of nesting to descend: 0 is the element alone, 1 names what is directly inside it (default 2, at most 16)" },
                     "inherited": { "type": "boolean", "description": "Also list the features that come from supertypes (default false)" },
                 },
             },

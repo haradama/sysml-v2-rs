@@ -77,6 +77,7 @@ pub fn parse_dialect(text: &str, dialect: crate::Dialect) -> Parse {
         declaring_effect: false,
         stops_at_then: false,
         connector_ends: false,
+        named: false,
     };
     parser.source_file();
     Parse {
@@ -149,6 +150,9 @@ struct Parser<'t> {
     stops_at_then: bool,
     /// While reading the ends an n-ary connector lists.
     connector_ends: bool,
+    /// The declaration whose tail is about to be read has a name, which
+    /// a reference or a value may not follow without a word between.
+    named: bool,
 }
 
 impl Parser<'_> {
@@ -401,11 +405,17 @@ impl Parser<'_> {
 
     fn member_inner(&mut self) {
         let cp = self.checkpoint();
+        let mut seen_visibility = false;
         // visibility and `#name` user-defined-keyword prefixes, in any order
         loop {
             if self.at(HASH) && self.nth_is_name(1) {
                 self.opt_prefix_metadata();
             } else if self.current().is_visibility_kw() {
+                if seen_visibility {
+                    self.error_and_bump("a member has one visibility, and it is already given");
+                    continue;
+                }
+                seen_visibility = true;
                 self.bump();
             } else {
                 break;
@@ -775,6 +785,9 @@ impl Parser<'_> {
             if k == USE_KW {
                 self.eat(CASE_KW);
             }
+            if self.at(k) {
+                self.error_and_bump("this is already said of the declaration");
+            }
             if !matches!(k, ASSOC_KW | SUCCESSION_KW) {
                 break;
             }
@@ -807,10 +820,22 @@ impl Parser<'_> {
         let effect = std::mem::take(&mut self.declaring_effect);
         let mut ended = false;
         let mut prefixed = false;
+        let mut written: Vec<SyntaxKind> = Vec::new();
         loop {
             if self.current().is_modifier_kw() {
-                ended |= self.at(END_KW);
+                let here = self.current();
+                ended |= here == END_KW;
                 prefixed = true;
+                let direction = |k: SyntaxKind| matches!(k, IN_KW | OUT_KW | INOUT_KW);
+                if written.contains(&here) {
+                    self.error_and_bump("this is already said of the declaration");
+                    continue;
+                }
+                if direction(here) && written.iter().any(|&k| direction(k)) {
+                    self.error_and_bump("a feature has one direction, and it is already given");
+                    continue;
+                }
+                written.push(here);
                 self.bump();
             } else if self.at(HASH) && self.nth_is_name(1) {
                 self.opt_prefix_metadata();
@@ -904,6 +929,7 @@ impl Parser<'_> {
             self.param_list();
         }
         let stops = std::mem::replace(&mut self.stops_at_then, effect);
+        self.named = self.pos != before && !is_metadata;
         if is_metadata && node == USAGE {
             self.metadata_tail();
         } else if ended {
@@ -989,8 +1015,94 @@ impl Parser<'_> {
         };
         let mut throughout = licence == Licence::Throughout;
         let mut licensed = licence != Licence::No || opens(led);
+        // Whether what was read last ends an operand -- a name, a type, a
+        // value, a multiplicity -- that another may not follow until some
+        // word joins them: `part x y;`, `part x : A B;`, `part x = 1 2;`
+        // and `part x [1] [2];` say nothing a model can mean.
+        let mut operand = std::mem::take(&mut self.named);
+        let mut counted = false;
+        // What a declaration says once: its typing, its value and each
+        // of `ordered` and `nonunique`. A word that joins a second
+        // operand -- `connect a to b`, `first a then b` -- starts afresh.
+        let mut given: Vec<SyntaxKind> = Vec::new();
         loop {
             let here = self.current();
+            // no keyword of a statement is written twice in a row, and
+            // no comma: `send send x`, `via via p`, `a, , b`
+            // -- save the words that each lead an operand of their own:
+            // `redefines a redefines b`, `unions A unions B`
+            let leads_operand = matches!(
+                here,
+                TYPED_KW
+                    | DEFINED_KW
+                    | SPECIALIZES_KW
+                    | SUBSETS_KW
+                    | CROSSES_KW
+                    | REDEFINES_KW
+                    | REFERENCES_KW
+                    | CHAINS_KW
+                    | UNIONS_KW
+                    | INTERSECTS_KW
+                    | DIFFERENCES_KW
+                    | DISJOINT_KW
+                    | INVERSE_KW
+                    | FEATURED_KW
+                    | CONJUGATES_KW
+                    | ABOUT_KW
+            );
+            if here == previous && !leads_operand && (here.is_keyword() || here == COMMA) {
+                self.error_and_bump("this is written twice");
+                continue;
+            }
+            let once = match here {
+                COLON | TYPED_KW | DEFINED_KW => Some(COLON),
+                EQ | COLON_EQ | DEFAULT_KW => Some(EQ),
+                ORDERED_KW | NONUNIQUE_KW => Some(here),
+                _ => None,
+            };
+            if let Some(once) = once {
+                if given.contains(&once) {
+                    self.error(match once {
+                        COLON => "the declaration is already typed: more types are listed with `,`",
+                        EQ => "the declaration is already given a value",
+                        _ => "this is already said of the declaration",
+                    });
+                }
+                given.push(once);
+            } else if matches!(
+                here,
+                OF_KW | FROM_KW | TO_KW | VIA_KW | THEN_KW | ELSE_KW | FIRST_KW | DO_KW | BY_KW
+                    | ACCEPT_KW | SEND_KW | ASSIGN_KW | CONNECT_KW | BIND_KW | ALLOCATE_KW
+                    | FOR_KW | AT_KW | AFTER_KW | WHEN_KW | IF_KW | COMMA | L_PAREN
+                    // KerML may type a feature again after another of
+                    // its relationships: `feature x1 subsets g typed by
+                    // A subsets f typed by B`
+                    | COLON_GT | SPECIALIZES_KW | SUBSETS_KW | CROSSES_KW | COLON_GT_GT
+                    | REDEFINES_KW | COLON_COLON_GT | REFERENCES_KW
+            ) {
+                given.clear();
+            }
+            let was_operand = std::mem::replace(
+                &mut operand,
+                matches!(
+                    here,
+                    COLON
+                        | TYPED_KW
+                        | DEFINED_KW
+                        | COLON_GT
+                        | SPECIALIZES_KW
+                        | SUBSETS_KW
+                        | CROSSES_KW
+                        | COLON_GT_GT
+                        | REDEFINES_KW
+                        | COLON_COLON_GT
+                        | REFERENCES_KW
+                        | EQ
+                        | COLON_EQ
+                        | DEFAULT_KW
+                ),
+            );
+            let was_counted = std::mem::replace(&mut counted, here == L_BRACKET);
             let after_flow = matches!(previous, THEN_KW | ELSE_KW | FIRST_KW);
             let after_connect = matches!(previous, CONNECT_KW | ALLOCATE_KW);
             let after_do = previous == DO_KW;
@@ -1028,6 +1140,10 @@ impl Parser<'_> {
                 CHAINS_KW | UNIONS_KW | INTERSECTS_KW | DIFFERENCES_KW | DISJOINT_KW
                 | INVERSE_KW | FEATURED_KW | CONJUGATES_KW | CONJUGATE_KW | TILDE => {
                     self.kerml_relation_part()
+                }
+                L_BRACKET if was_counted => {
+                    self.error("a multiplicity is already given");
+                    self.multiplicity();
                 }
                 L_BRACKET => self.multiplicity(),
                 EQ | COLON_EQ | DEFAULT_KW => self.value_part(),
@@ -1105,6 +1221,9 @@ impl Parser<'_> {
                     }
                     self.bump();
                 }
+                k if k.is_visibility_kw() && !may_declare => {
+                    self.error_and_bump("a visibility stands before the member it is of")
+                }
                 k if k.is_visibility_kw() => self.bump(),
                 // `connect [1] lugNutPort ::> wheel.lugNutPort to ...` — a
                 // named connector end; parse just the name and its
@@ -1156,7 +1275,22 @@ impl Parser<'_> {
                     ));
                     return;
                 }
-                _ if self.at_expr_start() => self.expression(),
+                // `if` guards a transition: `accept S if ready then on`
+                _ if self.at_expr_start() && was_operand && !matches!(here, L_PAREN | IF_KW) => {
+                    let word = self.tokens[self.pos..]
+                        .iter()
+                        .find(|t| !t.kind.is_trivia())
+                        .map_or("", |t| &self.text[t.range.clone()]);
+                    self.error(format!(
+                        "unexpected `{word}`: nothing joins it to what comes before"
+                    ));
+                    self.expression();
+                    operand = true;
+                }
+                _ if self.at_expr_start() => {
+                    self.expression();
+                    operand = true;
+                }
                 _ => self.error_and_bump(format!(
                     "unexpected token {:?} in declaration",
                     self.current()
@@ -1180,6 +1314,8 @@ impl Parser<'_> {
             self.expression();
             if self.eat(ELSE_KW) {
                 self.expression();
+            } else {
+                self.error("expected `else`: a conditional expression gives both values");
             }
             self.start_node_at(cp, COND_EXPR);
             self.finish_node();
@@ -1391,6 +1527,10 @@ impl Parser<'_> {
         }
         if self.at_expr_start() || self.at(L_BRACE) {
             self.expression();
+        } else if !self.at(L_BRACKET) {
+            // KerML's `binding [1] a = [1] b` gives the other end its
+            // multiplicity first
+            self.error("expected the value it is given");
         }
         self.finish_node();
     }
@@ -1733,6 +1873,8 @@ impl Parser<'_> {
                     self.expr_bp(0);
                     if self.eat(ELSE_KW) {
                         self.expr_bp(0);
+                    } else {
+                        self.error("expected `else`: a conditional expression gives both values");
                     }
                 }
                 self.finish_node();
@@ -2013,7 +2155,9 @@ mod tests {
             "action a { then private action w { } }",
             "state def S { entry action e; do action d; exit action x; }",
             "state def S { state s1; accept T do action D then s1; }",
-            "connection def C { end x [1] feature y : T; end [0..1] item z : T; }",
+            // `feature` is a kind keyword of KerML alone: SysML names
+            // the kind of an owned cross feature's end with its own
+            "connection def C { end x [1] part y : T; end [0..1] item z : T; }",
             "action a { in event occurrence e; }",
             "action a { variation perform action p { variant action q; } }",
             "calc def C { return part :>> r : T; return attribute v : T; }",
@@ -2025,6 +2169,68 @@ mod tests {
             "action a { action aFor for u : T in 1..3 { action g; } }",
         ] {
             check_ok(text);
+        }
+    }
+
+    /// What a declaration says once is an error said twice, and two
+    /// operands with nothing between them say nothing a model can mean.
+    #[test]
+    fn a_declaration_says_each_thing_once_and_joins_what_it_lists() {
+        for (text, wanted) in [
+            ("private private part x;", "one visibility"),
+            ("abstract abstract part def A;", "already said"),
+            ("in out part x;", "one direction"),
+            ("part x ordered ordered;", "written twice"),
+            ("part x ordered [1] ordered;", "already said"),
+            ("part x : A : B;", "already typed"),
+            ("part x = 1 = 2;", "already given a value"),
+            ("part x = ;", "expected the value"),
+            ("part x [1] [2];", "a multiplicity is already given"),
+            ("part x y z;", "unexpected `y`"),
+            ("part def A B;", "unexpected `B`"),
+            ("part x : A B;", "unexpected `B`"),
+            ("part x = 1 2;", "unexpected `2`"),
+            ("part x \"s\";", "unexpected `\"s\"`"),
+            ("part def A private;", "stands before the member"),
+            ("attribute x = if c ? 1;", "expected `else`"),
+            ("if c ? 1;", "expected `else`"),
+            ("action a { accept S via via p; }", "written twice"),
+            ("part def A :> B, , C;", "written twice"),
+            ("attribute attribute x;", "already said"),
+        ] {
+            let parse = parse(text);
+            let said: Vec<&str> = parse
+                .errors()
+                .iter()
+                .map(|it| it.message.as_str())
+                .collect();
+            assert!(
+                said.iter().any(|it| it.contains(wanted)),
+                "{text:?}: {said:?}"
+            );
+            assert_eq!(parse.syntax().text().to_string(), text, "lossless violated");
+        }
+        // and what the language does write twice, or back to back, still reads
+        for text in [
+            "part x : A, B :> c, d ordered nonunique [1] = 1;",
+            "action a { accept S if ready then b; }",
+            "action a { first x if g then b; }",
+            "connection c connect [1] a to [1] b;",
+            "attribute x = if c ? 1 else 2;",
+            "action a { action b : B (x, y); }",
+            "action a { then private action w { } }",
+        ] {
+            check_ok(text);
+        }
+        for text in [
+            "feature x1 subsets g typed by A subsets f typed by B;",
+            "binding [1] a.b = [1] c;",
+            "assoc A { end x [1] feature y : T; }",
+            "classifier F unions A unions B;",
+            "feature f redefines a redefines b;",
+        ] {
+            let parse = parse_dialect(text, crate::Dialect::KerML);
+            assert!(parse.ok(), "{text:?}: {:?}", parse.errors());
         }
     }
 

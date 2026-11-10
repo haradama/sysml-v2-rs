@@ -272,6 +272,22 @@ fn a_document_from_an_excluded_directory_is_read_with_the_files_beside_it() {
     assert!(svg.contains("<rect class=\"box\""), "{svg}");
     assert!(svg.contains(">Wheel<"), "{svg}");
 
+    // What the document brought in, it takes away when it closes: the
+    // files beside it were answered for until the server restarted.
+    let wheels = |client: &mut Client| {
+        let found = client.request(
+            lsp_types::request::WorkspaceSymbolRequest::METHOD,
+            json!({ "query": "Wheel" }),
+        );
+        found.as_array().unwrap().len()
+    };
+    assert_eq!(wheels(&mut client), 1);
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": usages } }),
+    );
+    assert_eq!(wheels(&mut client), 0);
+
     client.request(lsp_types::request::Shutdown::METHOD, Value::Null);
     client.notify(lsp_types::notification::Exit::METHOD, json!({}));
     handle.join().unwrap();

@@ -1936,6 +1936,30 @@ fn is_target_transition(node: &SyntaxNode) -> bool {
         .take_while(|token| *token != SyntaxKind::THEN_KW)
         .any(|token| matches!(token, SyntaxKind::ACCEPT_KW | SyntaxKind::IF_KW))
         && has_token(node, SyntaxKind::THEN_KW)
+        || is_guarded_succession(node)
+}
+
+/// Whether a `first a if g then b` -- with or without `succession S` in
+/// front -- guards the succession it writes, which makes it a transition:
+/// `GuardedSuccession : TransitionUsage = ( 'succession' UsageDeclaration
+/// )? 'first' FeatureChainMember GuardExpressionMember 'then'
+/// TransitionSuccessionMember UsageBody`. Read as a plain succession, the
+/// guard was in the model nowhere and the step ran unconditionally.
+fn is_guarded_succession(node: &SyntaxNode) -> bool {
+    let mut seen_first = false;
+    for it in node.children_with_tokens() {
+        match it.kind() {
+            SyntaxKind::FIRST_KW => seen_first = true,
+            SyntaxKind::THEN_KW => return false,
+            SyntaxKind::COND_EXPR if seen_first => {
+                return !it
+                    .as_node()
+                    .is_some_and(|cond| has_token(cond, SyntaxKind::QUESTION))
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// The relationship a `RELATION_STMT` reifies, keyed on the keyword that
@@ -2262,6 +2286,7 @@ fn usage_kind(
         // bare `succession a then b` is a SuccessionAsUsage. The keyword
         // that follows is what tells them apart.
         Some(SUCCESSION_KW) if kws.get(1) == Some(&FLOW_KW) => "SuccessionFlowUsage",
+        Some(SUCCESSION_KW) if is_guarded_succession(node) => "TransitionUsage",
         Some(SUCCESSION_KW) => "SuccessionAsUsage",
         // KerML features
         Some(FEATURE_KW) => "Feature",

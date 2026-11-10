@@ -483,12 +483,8 @@ fn a_message_that_carries_an_id_is_always_answered() {
     assert_eq!(answers[0]["error"]["code"], -32600);
     assert_eq!(answers[0]["id"], 2);
 
-    // MCP carries no batches, and a client that sent one is waiting
-    for message in [
-        "[]",
-        "[{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}]",
-        "7",
-    ] {
+    // an empty batch is no request, and neither is a bare value
+    for message in ["[]", "7"] {
         let answers = talk(&format!("{message}\n"));
         assert_eq!(answers.len(), 1, "{message}");
         assert_eq!(answers[0]["error"]["code"], -32600, "{message}");
@@ -1999,4 +1995,167 @@ fn relations_names_every_other_link_and_find_says_what_is_documented() {
         "{found}"
     );
     assert!(found["found"][1].get("documentation").is_none(), "{found}");
+}
+
+/// A column is characters, as the command line's text report counts it
+/// and as `visible_names` takes it back: the JSON used to count bytes,
+/// so a finding after a wide character was placed columns away from the
+/// same finding in the terminal.
+#[test]
+fn a_column_is_counted_in_characters_both_ways() {
+    let text = "package P {\n\tpart def A;\n\tpart x : 'é😀名'; part y : Missing;\n}\n";
+    let found = answered(&session(&[call("check", json!({ "text": text }))])[0]);
+    let missing = found["unresolved"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["name"] == "Missing")
+        .expect("the unresolved name is reported")
+        .clone();
+    assert_eq!(missing["line"], 3, "{found}");
+    assert_eq!(missing["column"], 27, "{found}");
+    assert_eq!(missing["endColumn"], 34, "{found}");
+
+    // and the place a finding gives is a place `visible_names` takes
+    let visible = answered(
+        &session(&[call(
+            "visible_names",
+            json!({ "text": text, "line": 3, "column": 27 }),
+        )])[0],
+    );
+    assert!(
+        visible["visible"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["name"] == "A"),
+        "{visible}"
+    );
+    // a column past the last character of the line is refused, as one
+    // past the last byte was
+    let past = session(&[call(
+        "visible_names",
+        json!({ "text": "part 'é';", "line": 1, "column": 11 }),
+    )]);
+    assert_eq!(past[0]["result"]["isError"], true, "{past:?}");
+}
+
+/// A violation is placed as the command line places one -- path, line
+/// and column -- and its element is named the way it has to be written.
+#[test]
+fn a_violation_says_where_it_is_and_names_its_element_writably() {
+    let library = library();
+    let text = "package P {\n\tpart 'é😀' { objective o2; }\n}\n";
+    let said = answered(&with_library(&library, &[call("check", json!({ "text": text }))])[0]);
+    let violation = &said["rules"]["violations"][0];
+    assert_eq!(violation["element"], "P::'é😀'::o2", "{said}");
+    assert_eq!(violation["path"], "model.sysml", "{said}");
+    assert_eq!(violation["line"], 2, "{said}");
+    assert_eq!(violation["column"], 24, "{said}");
+}
+
+/// An argument of the wrong type was read as absent: `alongside` given
+/// one path as a string checked the model without it, and `text` given
+/// as a number answered about something else.
+#[test]
+fn an_argument_of_the_wrong_type_is_refused_not_ignored() {
+    for (arguments, about) in [
+        (
+            json!({ "text": "part def A;", "alongside": "lib.sysml" }),
+            "alongside",
+        ),
+        (
+            json!({ "text": "part def A;", "alongside": [7] }),
+            "alongside",
+        ),
+        (json!({ "text": 42 }), "text"),
+        (json!({ "text": "part def A;", "name": false }), "name"),
+        (json!({ "path": ["a.sysml"] }), "path"),
+    ] {
+        let answers = session(&[call("check", arguments.clone())]);
+        assert_eq!(answers[0]["result"]["isError"], true, "{arguments}");
+        let why = answered(&answers[0])["error"].as_str().unwrap().to_string();
+        assert!(why.contains(&format!("`{about}`")), "{arguments}: {why}");
+    }
+    // null is as good as leaving it out
+    let answers = session(&[call(
+        "check",
+        json!({ "text": "part def A;", "alongside": null, "name": null }),
+    )]);
+    assert_eq!(answered(&answers[0])["ok"], true, "{answers:?}");
+}
+
+/// `depth: 0` was answered as 1, and a negative depth as the default.
+#[test]
+fn an_outline_of_depth_zero_is_the_element_alone() {
+    let text = "package P {\n\tpart def A {\n\t\tpart b;\n\t}\n}\n";
+    let alone = answered(&session(&[call("outline", json!({ "text": text, "depth": 0 }))])[0]);
+    assert_eq!(alone["elements"][0]["name"], "P", "{alone}");
+    assert!(alone["elements"][0]["members"].is_null(), "{alone}");
+    let one = answered(&session(&[call("outline", json!({ "text": text, "depth": 1 }))])[0]);
+    assert_eq!(one["elements"][0]["members"][0]["name"], "P::A", "{one}");
+
+    for depth in [json!(-1), json!("2"), json!(1.5)] {
+        let answers = session(&[call("outline", json!({ "text": text, "depth": depth }))]);
+        assert_eq!(answers[0]["result"]["isError"], true, "{depth}");
+        let why = answered(&answers[0])["error"].as_str().unwrap().to_string();
+        assert!(why.contains("`depth`"), "{why}");
+    }
+}
+
+/// Revision 2025-03-26, which the server says it speaks, has a server
+/// take a batch: an array of requests, answered with an array.
+#[test]
+fn a_batch_is_answered_with_a_batch() {
+    let batch = json!([
+        {"jsonrpc": "2.0", "id": 1, "method": "ping"},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "no/such/method"},
+        [{"jsonrpc": "2.0", "id": 3, "method": "ping"}],
+    ]);
+    let answers = session(&[batch]);
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    let answers = answers[0].as_array().expect("a batch answer is an array");
+    // the notification draws nothing, and the rest are answered in order
+    assert_eq!(answers.len(), 3, "{answers:?}");
+    assert_eq!(answers[0]["id"], 1);
+    assert_eq!(answers[0]["result"], json!({}));
+    assert_eq!(answers[1]["id"], 2);
+    assert_eq!(answers[1]["error"]["code"], -32601);
+    // a batch inside a batch is not a request
+    assert_eq!(answers[2]["error"]["code"], -32600);
+
+    // a batch of notifications draws no answer at all
+    let answers = session(&[json!([{"jsonrpc": "2.0", "method": "notifications/initialized"}])]);
+    assert!(answers.is_empty(), "{answers:?}");
+}
+
+/// Inside a comment or a string no name is written, so none is offered.
+#[test]
+fn nothing_is_visible_inside_a_comment_or_a_string() {
+    let text = "package P {\n\tpart def A;\n\t/* prose */\n\t// a note\n\tattribute s = \"words\";\n\tpart b : ;\n}\n";
+    for (line, column) in [(3, 6), (4, 6), (5, 18)] {
+        let visible = answered(
+            &session(&[call(
+                "visible_names",
+                json!({ "text": text, "line": line, "column": column }),
+            )])[0],
+        );
+        assert_eq!(visible["visible"], json!([]), "{line}:{column}");
+    }
+    // and outside one, what is in scope is
+    let visible = answered(
+        &session(&[call(
+            "visible_names",
+            json!({ "text": text, "line": 6, "column": 11 }),
+        )])[0],
+    );
+    assert!(
+        visible["visible"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["name"] == "A"),
+        "{visible}"
+    );
 }

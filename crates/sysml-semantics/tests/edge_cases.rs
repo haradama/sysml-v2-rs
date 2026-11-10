@@ -64,6 +64,35 @@ fn reference_and_definition_queries() {
     assert!(ws.definition_at(0, TextSize::from(0)).is_none());
 }
 
+/// A declaration is asked about at its short name as at its name, and
+/// one with only a short name is named by it rather than by the whole
+/// of what it declares.
+#[test]
+fn a_short_name_is_a_declared_name_too() {
+    let text = "part def <W> Wheel;\npart def <X>;\npart def Plain;\n";
+    let ws = ws(&[("m.sysml", text)]);
+    let spelled = |range: sysml_syntax::TextRange| {
+        text[usize::from(range.start())..usize::from(range.end())].to_string()
+    };
+
+    let wheel = ws.definition_at(0, offset_of(text, "W>")).unwrap();
+    assert_eq!(ws.model().name(wheel), Some("Wheel"));
+    assert_eq!(ws.short_name_range(wheel).map(spelled), Some("W".into()));
+    assert_eq!(
+        ws.element_ranges(wheel).map(|(_, name)| spelled(name)),
+        Some("Wheel".into())
+    );
+
+    let x = ws.definition_at(0, offset_of(text, "X>")).unwrap();
+    assert_eq!(
+        ws.element_ranges(x).map(|(_, name)| spelled(name)),
+        Some("X".into())
+    );
+
+    let plain = ws.definition_at(0, offset_of(text, "Plain")).unwrap();
+    assert_eq!(ws.short_name_range(plain), None);
+}
+
 #[test]
 fn callable_at_misses() {
     let mut ws = ws(&[(
@@ -570,6 +599,114 @@ fn a_transition_owns_the_effect_it_declares() {
             .collect();
         assert!(!names.contains(&Some("effect")), "{names:?}");
     }
+}
+
+/// `first a if g then b` guards the succession it writes, with or without
+/// `succession s` in front of it: `GuardedSuccession : TransitionUsage`.
+/// Built as a plain succession, the guard was in the model nowhere and the
+/// step ran unconditionally.
+#[test]
+fn a_guarded_succession_is_a_transition_with_its_guard() {
+    let guarded = ws(&[(
+        "m.sysml",
+        "package P {
+    action def W {
+        attribute x;
+        action A1; action A2;
+        succession S first A1 if x == 0 then A2;
+        first A2 if x == 1 then A1;
+    }
+}
+",
+    )]);
+    assert!(
+        guarded.unresolved().is_empty(),
+        "{:?}",
+        guarded.unresolved()
+    );
+    let model = guarded.model();
+    let named = |name: &str| {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(name))
+            .unwrap()
+    };
+    let transitions: Vec<_> = model
+        .ids()
+        .filter(|&id| model.kind(id) == ElementKind::TransitionUsage)
+        .collect();
+    assert_eq!(transitions.len(), 2);
+    for (transition, ends) in transitions.into_iter().zip([["A1", "A2"], ["A2", "A1"]]) {
+        assert!(
+            model.maybe(transition, "guardExpression").is_some(),
+            "{transition:?} has no guard"
+        );
+        let succession = model
+            .owned(transition)
+            .iter()
+            .copied()
+            .find(|&it| model.kind(it) == ElementKind::SuccessionAsUsage)
+            .expect("a transition relates through a succession of its own");
+        assert_eq!(
+            model.maybe(succession, "relatedFeature"),
+            Some(&sysml_model::Value::RefList(vec![
+                named(ends[0]),
+                named(ends[1])
+            ]))
+        );
+    }
+    // a succession with no guard is still the succession it was
+    let plain = ws(&[(
+        "p.sysml",
+        "package P { action a; action b; succession s first a then b; }",
+    )]);
+    let model = plain.model();
+    assert!(model
+        .ids()
+        .all(|id| model.kind(id) != ElementKind::TransitionUsage));
+}
+
+/// `event m.sourceEvent;` is the event of that message: what it references
+/// is the chain through `m`, not the library's `sourceEvent` of any message
+/// (here, without the library, `m.e` stands in for it).
+/// Kept as the last feature alone, which message the event belonged to was
+/// nowhere in the model, and a sequence view could not draw it.
+#[test]
+fn an_event_written_through_a_message_references_the_chain() {
+    let events = ws(&[(
+        "m.sysml",
+        "package P {
+    occurrence def O { event occurrence e; }
+    part def S {
+        part m : O;
+        part c { event m.e; }
+    }
+}
+",
+    )]);
+    let model = events.model();
+    let m = model.ids().find(|&id| model.name(id) == Some("m")).unwrap();
+    let chained = model
+        .ids()
+        .filter(|&id| model.kind(id) == ElementKind::ReferenceSubsetting)
+        .filter_map(|id| match model.maybe(id, "referencedFeature") {
+            Some(sysml_model::Value::Ref(it)) => Some(*it),
+            _ => None,
+        })
+        .find_map(|it| match model.maybe(it, "chainingFeature") {
+            Some(sysml_model::Value::RefList(chain)) => Some(chain.clone()),
+            _ => None,
+        })
+        .expect("the event references a chain");
+    assert_eq!(chained.len(), 2);
+    assert_eq!(chained[0], m);
+    // and the event still answers to the name of the feature the chain
+    // ends at, as a reference to `e` alone did
+    let event = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::EventOccurrenceUsage && model.name(id).is_none())
+        .unwrap();
+    assert_eq!(model.effective_name(event), Some("e"));
 }
 
 /// `self` and `that` stand for the type an expression is written in --

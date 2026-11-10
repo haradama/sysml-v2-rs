@@ -315,26 +315,31 @@ impl Diagnostic {
 }
 
 /// Where a byte offset falls, counting lines and columns from one and
-/// measuring the column in bytes.
+/// measuring the column in characters.
 ///
 /// The command line prints this and the MCP server puts it in its
 /// answers; they had a copy each, identical but for whether they counted
 /// from zero. A language server needs a different measure -- the
 /// protocol counts a column in UTF-16 code units -- and keeps its own.
 ///
-/// The counting is over bytes rather than characters because an offset
-/// handed in from elsewhere -- a diagnostic that has been clipped, a
-/// column a user typed -- need not land on a character boundary, and
-/// slicing the text at one that does not is a panic.
+/// The column is characters because that is what the command line's text
+/// report counts: counted in bytes, `--format json` and the terminal gave
+/// the same finding different columns on any line with a wide character
+/// before it.
+///
+/// An offset handed in from elsewhere -- a diagnostic that has been
+/// clipped -- need not land on a character boundary, and slicing the text
+/// at one that does not is a panic; one inside a character is placed at
+/// that character.
 pub fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let prefix = &text.as_bytes()[..offset.min(text.len())];
-    let line = prefix.iter().filter(|&&byte| byte == b'\n').count() + 1;
-    let column = prefix
-        .iter()
-        .rposition(|&byte| byte == b'\n')
-        .map_or(prefix.len(), |at| prefix.len() - at - 1)
-        + 1;
-    (line, column)
+    let mut offset = offset.min(text.len());
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    let prefix = &text[..offset];
+    let line = prefix.matches('\n').count() + 1;
+    let start = prefix.rfind('\n').map_or(0, |at| at + 1);
+    (line, prefix[start..].chars().count() + 1)
 }
 
 #[cfg(test)]
@@ -345,16 +350,20 @@ mod line_col_tests {
         assert_eq!(super::line_col(text, 0), (1, 1));
         assert_eq!(super::line_col(text, 2), (1, 3));
         assert_eq!(super::line_col(text, 3), (2, 1));
-        // a column is bytes, so a wide character is more than one
-        assert_eq!(super::line_col("あb", 3), (1, 4));
         // past the end is the end
         assert_eq!(super::line_col(text, 99), (3, 1));
     }
 
     #[test]
-    fn an_offset_inside_a_character_still_answers() {
-        assert_eq!(super::line_col("あい", 1), (1, 2));
-        assert_eq!(super::line_col("a\nあ", 3), (2, 2));
+    fn a_column_counts_characters_not_bytes() {
+        assert_eq!(super::line_col("あb", 3), (1, 2));
+        assert_eq!(super::line_col("a\né😀名x", 11), (2, 4));
+    }
+
+    #[test]
+    fn an_offset_inside_a_character_is_placed_at_that_character() {
+        assert_eq!(super::line_col("あい", 1), (1, 1));
+        assert_eq!(super::line_col("a\nあい", 6), (2, 2));
     }
 }
 

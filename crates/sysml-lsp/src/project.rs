@@ -229,6 +229,15 @@ impl Server {
         files.sort();
         files
     }
+    /// Whether the files beside a document are read only because it is
+    /// open: it is outside every workspace folder, or in a directory the
+    /// project leaves out. The library is beside nothing, being loaded
+    /// already.
+    pub(crate) fn read_for_being_open(&self, path: &Path) -> bool {
+        let reached = self.roots.iter().any(|root| path.starts_with(root));
+        let left_out = self.excluded.iter().any(|dir| path.starts_with(dir));
+        (!reached || left_out) && !self.is_library_file(path)
+    }
     /// Whether a path is the standard library's own.
     fn is_library_file(&self, path: &Path) -> bool {
         self.library_dir

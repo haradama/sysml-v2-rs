@@ -26,6 +26,11 @@ fn write(dir: &Path, name: &str, text: &str) -> PathBuf {
     path
 }
 
+/// What a `--format json` run printed.
+fn json_of(out: &Output) -> serde_json::Value {
+    serde_json::from_slice(&out.stdout).expect("the output is JSON")
+}
+
 const OK_MODEL: &str = "package P {\n    part def Vehicle;\n    part car : Vehicle;\n}\n";
 
 #[test]
@@ -356,9 +361,10 @@ fn rustgen_generates_and_says_what_stopped_it() {
 }
 
 /// Re-spacing a file the parser could not follow can move where a quote
-/// ends, and `--write` puts that in the modeller's file. Printing it is
-/// safe -- every character is still there -- so only the rewrite is
-/// refused.
+/// ends, and `--write` puts that in the modeller's file. Printing it was
+/// thought safe, every character still being there, but the characters
+/// are not the tokens: `x : ::` came out as `x :::`, which reads as
+/// something else. So it is refused however it is asked for.
 #[test]
 fn fmt_will_not_rewrite_a_file_it_could_not_parse() {
     let dir = temp_dir("fmt-broken");
@@ -375,12 +381,92 @@ fn fmt_will_not_rewrite_a_file_it_could_not_parse() {
         "the file must be as it was"
     );
 
-    // printing it is still allowed, and loses nothing
+    // printing it is refused as well, rather than handed over as if formatted
     let out = sysml(&["fmt", broken.to_str().unwrap()]);
-    assert!(out.status.success());
-    let printed = String::from_utf8_lossy(&out.stdout);
-    let letters = |s: &str| -> String { s.chars().filter(|c| !c.is_whitespace()).collect() };
-    assert_eq!(letters(&printed), letters(text), "{printed}");
+    assert!(!out.status.success());
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("does not parse"), "{stderr}");
+
+    // and `--check` counts it as broken, not merely unformatted
+    let out = sysml(&[
+        "--format",
+        "json",
+        "fmt",
+        "--check",
+        broken.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    let v = json_of(&out);
+    assert_eq!(v["broken"][0], broken.display().to_string(), "{v}");
+    assert_eq!(v["unformatted"], serde_json::json!([]), "{v}");
+}
+
+/// `--check` writes nothing, so asking for it with `--write` asked for
+/// two things; `--check` used to win without a word.
+#[test]
+fn fmt_will_not_both_check_and_write() {
+    let dir = temp_dir("fmt-check-write");
+    let messy = write(&dir, "messy.sysml", "package   P{part def A;}");
+    let out = sysml(&["fmt", "--check", "--write", messy.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot be used with"), "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(&messy).unwrap(),
+        "package   P{part def A;}"
+    );
+}
+
+/// One file that cannot be read or written stopped the run there: the
+/// files after it were left as they were, and `--format json` printed
+/// nothing. Each is said, and the rest are formatted all the same.
+#[cfg(unix)]
+#[test]
+fn fmt_carries_on_past_a_file_it_cannot_read_or_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("fmt-carries-on");
+    let missing = dir.join("missing.sysml");
+    let locked_dir = dir.join("locked");
+    std::fs::create_dir_all(&locked_dir).unwrap();
+    let locked = write(&locked_dir, "locked.sysml", "package   L{part def A;}");
+    let messy = write(&dir, "messy.sysml", "package   P{part def A;}");
+    // the file can be read but not replaced: neither it nor its
+    // directory is writable
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o444)).unwrap();
+    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = sysml(&[
+        "--format",
+        "json",
+        "fmt",
+        "--write",
+        missing.to_str().unwrap(),
+        locked.to_str().unwrap(),
+        messy.to_str().unwrap(),
+    ]);
+    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!out.status.success());
+    let v = json_of(&out);
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(
+        v["unreadable"][0]["path"],
+        missing.display().to_string(),
+        "{v}"
+    );
+    assert_eq!(
+        v["unwritten"][0]["path"],
+        locked.display().to_string(),
+        "{v}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("cannot read"), "{stderr}");
+    assert!(stderr.contains("cannot write"), "{stderr}");
+    // and the file after them was formatted
+    assert_eq!(
+        std::fs::read_to_string(&messy).unwrap(),
+        "package P {\n    part def A;\n}\n"
+    );
 }
 
 #[test]
@@ -924,8 +1010,9 @@ fn corpus_measures_parse_rates() {
     let dir = temp_dir("corpus");
     write(&dir, "ok.sysml", OK_MODEL);
     write(&dir, "bad.sysml", "part def {{{\n");
+    // a file that does not parse fails the run, and the rate says how badly
     let out = sysml(&["corpus", dir.to_str().unwrap()]);
-    assert!(out.status.success());
+    assert!(!out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("1/2 files ok"), "{stdout}");
     assert!(stdout.contains("worst"), "{stdout}");
@@ -937,6 +1024,48 @@ fn corpus_measures_parse_rates() {
     let out = sysml(&["corpus", empty.to_str().unwrap()]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no .sysml"));
+
+    // and all of it parsing is a pass
+    let clean = temp_dir("corpus-clean");
+    write(&clean, "ok.sysml", OK_MODEL);
+    assert!(sysml(&["corpus", clean.to_str().unwrap()]).status.success());
+}
+
+/// `--format json` was taken and ignored: the text report came out, and
+/// a run with files that failed to parse exited 0.
+#[test]
+fn corpus_answers_in_json_when_asked_and_fails_with_its_files() {
+    let dir = temp_dir("corpus-json");
+    write(&dir, "ok.sysml", OK_MODEL);
+    let bad = write(&dir, "bad.sysml", "part def {{{\n");
+    let out = sysml(&["--format", "json", "corpus", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json_of(&out);
+    assert_eq!(v["command"], "corpus");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["extensions"]["sysml"]["files"], 2, "{v}");
+    assert_eq!(v["extensions"]["sysml"]["ok"], 1, "{v}");
+    assert_eq!(v["failing"][0]["path"], bad.display().to_string(), "{v}");
+    assert!(v["failing"][0]["errors"].as_u64().unwrap() > 0, "{v}");
+
+    let clean = temp_dir("corpus-json-clean");
+    write(&clean, "ok.sysml", OK_MODEL);
+    let out = sysml(&["--format", "json", "corpus", clean.to_str().unwrap()]);
+    assert!(out.status.success());
+    assert_eq!(json_of(&out)["ok"], true);
+
+    // nothing to measure is said as JSON too, and fails
+    let empty = temp_dir("corpus-json-empty");
+    let out = sysml(&["--format", "json", "corpus", empty.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert_eq!(json_of(&out)["ok"], false);
+    let missing = empty.join("not-there");
+    let out = sysml(&["--format", "json", "corpus", missing.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert_eq!(
+        json_of(&out)["unreadable"][0]["path"],
+        missing.display().to_string()
+    );
 }
 
 #[cfg(unix)]
@@ -949,6 +1078,13 @@ fn corpus_warns_on_unreadable_files() {
     std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
     let out = sysml(&["corpus", dir.to_str().unwrap()]);
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+    // a file that could not be looked at is not one that passed
+    assert!(!out.status.success());
+    let out = sysml(&["--format", "json", "corpus", dir.to_str().unwrap()]);
+    assert_eq!(
+        json_of(&out)["unreadable"][0]["path"],
+        hidden.display().to_string()
+    );
     std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
 
@@ -1374,7 +1510,6 @@ fn a_program_reads_one_document_and_an_exit_code_that_agrees() {
         "--format",
         "json",
         "fmt",
-        "--check",
         "--write",
         broken.to_str().unwrap(),
     ]);
@@ -1658,4 +1793,63 @@ fn check_says_when_a_name_names_the_wrong_kind_of_thing() {
         "{said}"
     );
     assert!(!said.contains("an import would"), "{said}");
+}
+
+/// The text report counts a column in characters, and `--format json`
+/// counted bytes: the same finding was at 2:27 in the terminal and at
+/// column 33 in the JSON. Both count characters now, a byte-order mark
+/// included.
+#[test]
+fn json_and_text_place_a_finding_in_the_same_column() {
+    let dir = temp_dir("columns-agree");
+    let wide = write(
+        &dir,
+        "wide.sysml",
+        "part def A;\npart x : 'é😀名' ; part y : Missing;\n",
+    );
+    let marked = write(&dir, "marked.sysml", "\u{feff}part y : Missing;\n");
+    for (path, line, column) in [(&wide, 2, 27), (&marked, 1, 11)] {
+        let out = sysml(&["--no-library", "check", path.to_str().unwrap()]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let place = format!("{}:{line}:{column}", path.display());
+        assert!(stderr.contains(&place), "{place} in {stderr}");
+
+        let out = sysml(&[
+            "--no-library",
+            "--format",
+            "json",
+            "check",
+            path.to_str().unwrap(),
+        ]);
+        let v = json_of(&out);
+        let missing = v["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|it| it["name"] == "Missing")
+            .expect("reported")
+            .clone();
+        assert_eq!(missing["line"], line, "{v}");
+        assert_eq!(missing["column"], column, "{v}");
+        assert_eq!(missing["endColumn"], column + 7, "{v}");
+    }
+}
+
+/// A violating element is named the way it has to be written, so the
+/// name can be pasted back: `P::é😀::o2` does not parse.
+#[test]
+fn a_violation_names_its_element_as_it_would_be_written() {
+    let dir = temp_dir("violation-quoted");
+    let model = write(
+        &dir,
+        "v.sysml",
+        "package P {\n\tpart 'é😀' { objective o2; }\n}\n",
+    );
+    let out = sysml(&["check", model.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`P::'é😀'::o2`"), "{stderr}");
+    let out = sysml(&["--format", "json", "check", model.to_str().unwrap()]);
+    let v = json_of(&out);
+    assert_eq!(v["violations"][0]["element"], "P::'é😀'::o2", "{v}");
 }

@@ -266,13 +266,53 @@ pub(crate) fn box_size(node: &Node, style: &Style) -> (f64, f64) {
 
 /// The block the nested parts occupy inside their parent: one row of boxes,
 /// held together by the padding rather than the gap that separates the
-/// top-level ones.
+/// top-level ones -- where nothing runs between two of them -- and under
+/// the row a band for each line joining two that are not side by side.
 pub(crate) fn children_block(node: &Node, style: &Style) -> (f64, f64) {
     let sizes = child_sizes(node, style);
     let width =
-        sizes.iter().map(|size| size.0).sum::<f64>() + style.padding * (sizes.len() as f64 - 1.0);
+        sizes.iter().map(|size| size.0).sum::<f64>() + gaps(node, style).iter().sum::<f64>();
     let height = sizes.iter().map(|size| size.1).fold(0.0f64, f64::max);
-    (width, height)
+    let detours = node.links.iter().filter(|link| skips(link)).count();
+    (width, height + detours as f64 * band(style))
+}
+
+/// Whether a line between two nested parts has parts between them, and
+/// so cannot run straight: drawn straight it ran behind them, and `a ->
+/// c` read as `a -> b -> c`.
+pub(crate) fn skips(link: &crate::Edge) -> bool {
+    link.from.abs_diff(link.to) > 1
+}
+
+/// How far below the row of nested parts each band a skipping line runs
+/// along is set from the last.
+pub(crate) fn band(style: &Style) -> f64 {
+    1.5 * style.line_height
+}
+
+/// The gap after each nested part but the last.
+///
+/// Where a line runs between two side by side, its port names and what
+/// it says are written in the gap: at the padding they were written over
+/// one another and over both borders. So the gap holds them, the widest
+/// line's worth -- lines between one pair are drawn one above another.
+fn gaps(node: &Node, style: &Style) -> Vec<f64> {
+    (1..node.children.len())
+        .map(|right| {
+            node.links
+                .iter()
+                .filter(|link| link.from.max(link.to) == right && !skips(link))
+                .map(|link| {
+                    let words: Vec<&String> = [&link.ends.0, &link.ends.1, &link.label]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                    let said: f64 = words.iter().map(|word| style.text_width(word)).sum();
+                    (said + (words.len() + 1) as f64 * style.padding).max(style.h_gap)
+                })
+                .fold(style.padding, f64::max)
+        })
+        .collect()
 }
 
 fn child_sizes(node: &Node, style: &Style) -> Vec<(f64, f64)> {
@@ -293,16 +333,20 @@ pub(crate) fn child_boxes(
     let (block_width, block_height) = children_block(node, style);
     let mut next = x + (width - block_width) / 2.0;
     let top = y + height - style.padding - block_height;
-    child_sizes(node, style)
+    let sizes = child_sizes(node, style);
+    let row = sizes.iter().map(|size| size.1).fold(0.0f64, f64::max);
+    let gaps = gaps(node, style);
+    sizes
         .into_iter()
-        .map(|(child_width, child_height)| {
+        .enumerate()
+        .map(|(at, (child_width, child_height))| {
             let placed = (
                 next,
-                top + (block_height - child_height) / 2.0,
+                top + (row - child_height) / 2.0,
                 child_width,
                 child_height,
             );
-            next += child_width + style.padding;
+            next += child_width + gaps.get(at).copied().unwrap_or_default();
             placed
         })
         .collect()
@@ -445,5 +489,143 @@ mod tests {
                 "{placed:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod room_tests {
+    use super::*;
+    use crate::tests::resolved;
+    use crate::{definition_diagram, interconnection_diagram, render};
+
+    fn apart(one: &Frame, other: &Frame) -> bool {
+        one.x + one.width <= other.x || other.x + other.width <= one.x
+    }
+
+    #[test]
+    fn a_package_widened_for_its_name_moves_its_neighbours_over() {
+        let ws = resolved(
+            "package G1 {\n\
+             \tpackage AVeryLongPackageNameThatIsMuchWiderThanItsOnlyBox { part def A; }\n\
+             \tpackage AnotherVeryLongPackageNameAlsoWiderThanItsBox { part def B; }\n\
+             \tpackage C { part def C1; }\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let laid_out = layout(&diagram, &style);
+        let frames = &laid_out.packages;
+        assert_eq!(frames.len(), 4);
+        // the three side by side, none over another, all inside G1
+        for one in 1..4 {
+            for other in one + 1..4 {
+                assert!(apart(&frames[one], &frames[other]), "{frames:?}");
+            }
+            assert!(frames[one].x >= frames[0].x, "{frames:?}");
+            assert!(
+                frames[one].x + frames[one].width <= frames[0].x + frames[0].width,
+                "{frames:?}"
+            );
+            // and each holds its own box
+            let held = &laid_out.placed[diagram.groups[one].nodes[0]];
+            assert!(held.x >= frames[one].x, "{held:?} {frames:?}");
+            assert!(held.x + held.width <= frames[one].x + frames[one].width);
+        }
+        assert!(frames[0].x + frames[0].width + style.margin <= laid_out.width + 0.5);
+    }
+
+    #[test]
+    fn a_frame_widened_moves_the_lines_right_of_it_with_their_boxes() {
+        let ws = resolved(
+            "package G2 {\n\
+             \tpackage AVeryLongPackageNameThatIsMuchWiderThanItsOnlyBox { part def A; }\n\
+             \tpart def B { part c : C; }\n\
+             \tpart def C;\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let laid_out = layout(&diagram, &Style::default());
+        for (edge, route) in diagram.edges.iter().zip(&laid_out.routes) {
+            let (first, last) = (route.first().unwrap(), route.last().unwrap());
+            let (from, to) = (&laid_out.placed[edge.from], &laid_out.placed[edge.to]);
+            assert!(
+                first.0 >= from.x && first.0 <= from.x + from.width,
+                "{route:?}"
+            );
+            assert!(last.0 >= to.x && last.0 <= to.x + to.width, "{route:?}");
+        }
+    }
+
+    #[test]
+    fn boxes_side_by_side_leave_room_for_the_names_on_their_borders() {
+        let name = "aParameterWithAVeryLongNameIndeed";
+        // both made part of one whole, so the engine sets them in one
+        // layer, side by side
+        let ws = resolved(&format!(
+            "part def A {{ port {name}; }}\npart def B {{ port {name}; }}\n\
+             part def W {{ part a : A; part b : B; }}\n"
+        ));
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let laid_out = layout(&diagram, &style);
+        let (a, b) = (&laid_out.placed[0], &laid_out.placed[1]);
+        let (left, right) = if a.x < b.x { (a, b) } else { (b, a) };
+        let gap = right.x - (left.x + left.width);
+        assert!(gap >= 2.0 * style.text_width(name), "{a:?} {b:?}");
+    }
+
+    fn nested(source: &str) -> (Diagram, String) {
+        let ws = resolved(source);
+        let owner = ws
+            .named_elements()
+            .find(|(_, name)| *name == "N")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), owner);
+        let svg = render(&diagram, &Style::default());
+        (diagram, svg)
+    }
+
+    #[test]
+    fn a_nested_line_past_a_sibling_runs_under_the_row() {
+        let (diagram, svg) = nested(
+            "action def N { action outer { action a; action b; action c; first a then c; } }\n",
+        );
+        let style = Style::default();
+        let node = &diagram.nodes[0];
+        let (_, height) = children_block(node, &style);
+        let row = node
+            .children
+            .iter()
+            .map(|child| box_size(child, &style).1)
+            .fold(0.0f64, f64::max);
+        // one band under the row for the one line that skips
+        assert_eq!(height, row + band(&style));
+        // and the line goes down, across and up rather than straight
+        assert!(svg.contains(" V ") && svg.contains(" H "), "{svg}");
+    }
+
+    #[test]
+    fn nested_lines_between_one_pair_are_set_apart_with_room_for_their_names() {
+        let (diagram, svg) = nested(
+            "part def N { part body {\n\
+             \tpart seat { port sp; port sq; }\n\tpart belt { port lp; port lq; }\n\
+             \tconnect seat.sp to belt.lp;\n\tconnect seat.sq to belt.lq;\n} }\n",
+        );
+        let style = Style::default();
+        let boxes = child_boxes(&diagram.nodes[0], (0.0, 0.0, 1000.0, 1000.0), &style);
+        let gap = boxes[1].0 - (boxes[0].0 + boxes[0].2);
+        assert!(
+            gap >= style.text_width("sp") + style.text_width("lp"),
+            "{boxes:?}"
+        );
+        // two lines, at two heights
+        let heights: std::collections::HashSet<String> = svg
+            .lines()
+            .filter(|line| line.contains("fill=\"none\" d=\"M "))
+            .filter_map(|line| line.split(" L ").nth(1))
+            .map(|rest| rest.split(' ').nth(1).unwrap_or_default().to_string())
+            .collect();
+        assert_eq!(heights.len(), 2, "{svg}");
     }
 }

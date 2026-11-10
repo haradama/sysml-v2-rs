@@ -940,6 +940,15 @@ impl Model {
             if !visited.insert(at) {
                 return None;
             }
+            // a feature chain is named by the last feature it runs through:
+            // `perform a.b;` borrows the name `b`
+            if let Some(&last) = match self.maybe(at, "chainingFeature") {
+                Some(Value::RefList(chain)) => chain.last(),
+                _ => None,
+            } {
+                at = last;
+                continue;
+            }
             at = self.owned(at).iter().find_map(|&rel| {
                 let target = match self.kind(rel) {
                     ElementKind::Redefinition => "redefinedFeature",

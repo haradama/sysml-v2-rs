@@ -12,7 +12,7 @@ use elkrs::alg_layered::options_gen::SPACING_NODE_NODE_BETWEEN_LAYERS;
 use elkrs::core::engine::RecursiveGraphLayoutEngine;
 use elkrs::core::options_gen::{
     Direction, ElkPadding, HierarchyHandling, ALGORITHM, DIRECTION, HIERARCHY_HANDLING, PADDING,
-    SPACING_NODE_NODE,
+    SPACING_COMPONENT_COMPONENT, SPACING_NODE_NODE,
 };
 use elkrs::graph::graph::{EdgeId, ElementId, ElkGraph, NodeId, ShapeId};
 
@@ -56,8 +56,7 @@ impl Built {
         let options = &built.graph.node(root).properties;
         options.set(&ALGORITHM, "layered".to_string());
         options.set(&DIRECTION, Direction::DOWN);
-        options.set(&SPACING_NODE_NODE, style.h_gap);
-        options.set(&SPACING_NODE_NODE_BETWEEN_LAYERS, style.v_gap);
+        spaced(options, diagram, style);
         // a package holds what it contains, so it goes to ELK as a node
         // with children and the engine arranges each package's contents
         // inside it
@@ -101,10 +100,14 @@ impl Built {
         // padding of exactly the tab would leave the first box's top
         // border drawn along the tab's bottom, which reads as one line
         let top = style.package_tab() + pad;
+        // and the names a box at either end writes beside its border,
+        // which would otherwise be written across the frame
+        let side = pad + border_room(diagram, style);
         let options = &self.graph.node(id).properties;
         options.set(&ALGORITHM, "layered".to_string());
         options.set(&DIRECTION, Direction::DOWN);
-        options.set(&PADDING, ElkPadding::new(top, pad, pad, pad));
+        spaced(options, diagram, style);
+        options.set(&PADDING, ElkPadding::new(top, side, pad, side));
 
         for &node in &diagram.groups[at].nodes {
             let (width, height) = sizes[node];
@@ -209,24 +212,40 @@ impl Built {
         // it. Asking the engine for a minimum size instead is worth less
         // than it looks: it applies one to a nested node along its own
         // axis, so a frame told to be wide comes back tall.
-        for frame in &mut packages {
+        //
+        // So the room is made here, by opening a strip of it down the
+        // whole canvas at the frame's right edge: what lies right of it
+        // moves over, and what spans it -- the frame itself and every
+        // package holding it -- grows. Widening the frame alone drew it
+        // over the package beside it and out of the one around it.
+        let mut placed: Vec<Placed> = placed;
+        let mut routes = self.routes(diagram, style);
+        let canvas = &self.graph.node(self.graph.root).shape;
+        let mut width = canvas.width + 2.0 * style.margin;
+        for at in 0..packages.len() {
             // room for the name and for the corner the tab is cut off
             // at, which the drawing would otherwise take out of it
-            frame.width = frame
-                .width
-                .max(style.name_width(&frame.name) + 2.0 * style.padding + style.package_slant());
+            let wanted =
+                style.name_width(&packages[at].name) + 2.0 * style.padding + style.package_slant();
+            let short = wanted - packages[at].width;
+            if short > 0.0 {
+                let strip = packages[at].x + packages[at].width;
+                widen(
+                    &mut packages,
+                    &mut placed,
+                    &mut routes,
+                    diagram,
+                    strip,
+                    short,
+                );
+                width += short;
+            }
         }
-        let canvas = &self.graph.node(self.graph.root).shape;
-        let width = packages
-            .iter()
-            .fold(canvas.width + 2.0 * style.margin, |canvas: f64, frame| {
-                canvas.max(frame.x + frame.width + style.margin)
-            });
         Layout {
             placed,
             width,
             height: canvas.height + 2.0 * style.margin,
-            routes: self.routes(diagram, style),
+            routes,
             // a laned view never reaches here; it is placed by this crate
             lanes: Vec::new(),
             packages,
@@ -280,6 +299,73 @@ impl Built {
                 })
             })
             .collect()
+    }
+}
+
+/// How far apart the engine is to set what one node holds.
+///
+/// A port's name and a parameter's are written beside the border they sit
+/// on, reading outwards, and the engine knows nothing of them: two boxes
+/// set the usual gap apart had the names of one written over the other.
+/// So the gap between two boxes side by side leaves room for a name from
+/// each, and so does the gap between two boxes nothing joins, which the
+/// engine sets apart as components rather than as nodes.
+fn spaced(options: &elkrs::graph::properties::PropertyMap, diagram: &Diagram, style: &Style) {
+    let apart = style.h_gap.max(2.0 * border_room(diagram, style));
+    options.set(&SPACING_NODE_NODE, apart);
+    options.set(&SPACING_COMPONENT_COMPONENT, apart);
+    options.set(&SPACING_NODE_NODE_BETWEEN_LAYERS, style.v_gap);
+}
+
+/// The most room any box needs outside its border for the names on it.
+fn border_room(diagram: &Diagram, style: &Style) -> f64 {
+    (0..diagram.nodes.len())
+        .map(|at| crate::svg::label_room(diagram, at, style))
+        .fold(0.0, f64::max)
+}
+
+/// Open a strip `room` wide down the canvas at `x`.
+///
+/// What starts at or right of it moves right; a package that starts left
+/// of it and reaches it holds it, and grows. A line keeps both its ends on
+/// the boxes they were on, and its bends move with whatever side of the
+/// strip they were on -- an upright stretch has both its ends on one side,
+/// so it stays upright, and a level one crossing the strip grows longer.
+fn widen(
+    packages: &mut [Frame],
+    placed: &mut [Placed],
+    routes: &mut [Vec<(f64, f64)>],
+    diagram: &Diagram,
+    x: f64,
+    room: f64,
+) {
+    for frame in packages.iter_mut() {
+        if frame.x >= x {
+            frame.x += room;
+        } else if frame.x + frame.width >= x {
+            frame.width += room;
+        }
+    }
+    let moved: Vec<bool> = placed.iter().map(|placed| placed.x >= x).collect();
+    for (placed, &moved) in placed.iter_mut().zip(&moved) {
+        if moved {
+            placed.x += room;
+        }
+    }
+    for (route, edge) in routes.iter_mut().zip(&diagram.edges) {
+        let last = route.len().saturating_sub(1);
+        for (nth, point) in route.iter_mut().enumerate() {
+            // an end goes where the box it is on went, wherever on the
+            // box it is
+            let shifts = match nth {
+                0 => moved[edge.from],
+                _ if nth == last => moved[edge.to],
+                _ => point.0 >= x,
+            };
+            if shifts {
+                point.0 += room;
+            }
+        }
     }
 }
 

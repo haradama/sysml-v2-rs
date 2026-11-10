@@ -85,8 +85,9 @@ fn corpus_subcommand_reports_a_clean_parse_rate() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // `corpus` exits 0 even when files fail to parse, so the printed rate --
-    // not the exit code -- is what this asserts on.
+    // `corpus` fails when a file does, so the exit code above already says
+    // every file parsed; the rate is asserted on as well, since it says
+    // how many files there were.
     let stdout = String::from_utf8_lossy(&out.stdout);
     for (ext, count) in &by_ext {
         let expected = format!(".{ext}: {count}/{count} files ok (100.0%), 0 total error(s)");

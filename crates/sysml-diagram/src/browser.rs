@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use sysml_model::{ElementId, Model};
+use sysml_model::{ElementId, ElementKind, Model};
 
 use crate::graph::keyword;
 use crate::svg::{document, escape};
@@ -53,19 +53,53 @@ pub fn browser_view(model: &Model, roots: &[ElementId]) -> Browser {
 }
 
 fn collect(model: &Model, element: ElementId, depth: usize, rows: &mut Vec<Row>) {
-    let named = model.name(element);
-    if let Some(name) = named {
+    let kind = model.kind(element);
+    // An end name resolution reified borrows the name of what it reaches,
+    // and an expression nobody named is a value rather than a member:
+    // what either holds is the language's machinery, and every parameter
+    // in it borrows a name from the library.
+    let machinery = model.name(element).is_none()
+        && (model.flag(element, "isEnd") || kind.is_a(ElementKind::Expression));
+    if machinery {
+        return;
+    }
+    let named = row_name(model, element);
+    // A feature declares members whether or not it is named -- `part :>>
+    // eng { attribute p; }` is `eng`'s, and `perform action { ... }` is
+    // nobody's but its own -- so it is a row of its own wherever it holds
+    // one, or what it holds is listed as its owner's.
+    let holds = named.is_some() || kind.is_a(ElementKind::Feature);
+    let at = rows.len();
+    if holds {
         rows.push(Row {
             id: element,
             depth,
-            keyword: keyword(model.kind(element)),
-            name: name.to_string(),
+            keyword: keyword(kind),
+            name: named.unwrap_or_default(),
         });
     }
-    let below = depth + usize::from(named.is_some());
+    let below = depth + usize::from(holds);
     for &child in model.owned(element) {
         collect(model, child, below, rows);
     }
+    // nameless and holding nothing named, it says nothing
+    if holds && rows.len() == at + 1 && rows[at].name.is_empty() {
+        rows.pop();
+    }
+}
+
+/// What a row calls its element: the name it answers to, which for
+/// `attribute :>> mass = 5.0;` is the one it redefines, or the short name
+/// where that is all it declares, written `<S1>` as it was declared.
+fn row_name(model: &Model, element: ElementId) -> Option<String> {
+    model
+        .effective_name(element)
+        .map(str::to_string)
+        .or_else(|| {
+            model
+                .effective_short_name(element)
+                .map(|short| format!("<{short}>"))
+        })
 }
 
 /// Render a browser view as a standalone SVG document.
@@ -182,6 +216,47 @@ mod tests {
         assert_eq!(browser.rows.len(), 3);
         assert!(browser.rows.iter().all(|row| !row.name.is_empty()));
         assert_eq!(browser.rows[2].depth, 1);
+    }
+
+    #[test]
+    fn what_an_unnamed_member_holds_is_listed_under_it() {
+        // `:>> mass` answers to the name it redefines, `<S1>` to its
+        // short name, and `part { ... }` named nothing at all still holds
+        // what it declares; an empty `perform action;` holds nothing and
+        // says nothing
+        let browser = tree(
+            "package B1 {\n\
+             \tpart def V { attribute mass; part eng; }\n\
+             \tpart v : V {\n\
+             \t\tattribute :>> mass = 5.0;\n\
+             \t\tpart :>> eng { attribute p; }\n\
+             \t\tpart { attribute q; }\n\
+             \t\tperform action;\n\
+             \t}\n\
+             \tpart def <S1>;\n\
+             }\n",
+        );
+        let shape: Vec<(usize, &str)> = browser
+            .rows
+            .iter()
+            .map(|row| (row.depth, row.name.as_str()))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                (0, "B1"),
+                (1, "V"),
+                (2, "mass"),
+                (2, "eng"),
+                (1, "v"),
+                (2, "mass"),
+                (2, "eng"),
+                (3, "p"),
+                (2, ""),
+                (3, "q"),
+                (1, "<S1>"),
+            ]
+        );
     }
 
     #[test]

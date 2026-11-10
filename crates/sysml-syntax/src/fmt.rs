@@ -485,6 +485,28 @@ fn is_note(kind: SyntaxKind) -> bool {
 
 /// Should a single space separate `prev` and `next`?
 fn space_between(prev: &SyntaxToken, next: &SyntaxToken) -> bool {
+    wants_space(prev, next) || would_fuse(prev.text(), next.text())
+}
+
+/// Whether two tokens written with nothing between them would be read
+/// back as something else.
+///
+/// The rules in [`wants_space`] are about tokens that belong together,
+/// and on text that parses they never put two together that lex apart.
+/// Text that does not parse can hold anything: `x : ::` came out as
+/// `x :::`, which reads as `::` then `:`. Only a pair of punctuation can
+/// run together that way, so only that is lexed again.
+fn would_fuse(prev: &str, next: &str) -> bool {
+    let punctuation = |c: Option<char>| c.is_some_and(|c| c.is_ascii_punctuation());
+    if !(punctuation(prev.chars().last()) && punctuation(next.chars().next())) {
+        return false;
+    }
+    let joined = format!("{prev}{next}");
+    let (tokens, _) = crate::lexer::lex(&joined);
+    !(tokens.len() == 2 && tokens[0].range.end == prev.len())
+}
+
+fn wants_space(prev: &SyntaxToken, next: &SyntaxToken) -> bool {
     let p = prev.kind();
     let n = next.kind();
 
@@ -549,6 +571,28 @@ mod tests {
 
     fn fmt(text: &str) -> String {
         format(text, Dialect::SysML)
+    }
+
+    /// Text that does not parse can put tokens side by side that no
+    /// model does, and run together they lex as others.
+    #[test]
+    fn two_tokens_are_never_run_together_into_others() {
+        let lexed = |text: &str| -> Vec<String> {
+            crate::lex(text)
+                .0
+                .iter()
+                .filter(|t| !t.kind.is_trivia())
+                .map(|t| text[t.range.clone()].to_string())
+                .collect()
+        };
+        for text in ["part x : ::A;", "part x = a. .b;", "part x : ::"] {
+            let formatted = fmt(text);
+            assert_eq!(lexed(&formatted), lexed(text), "{formatted}");
+        }
+        // and what is tight on text that parses stays tight
+        assert_eq!(fmt("import P::*;"), "import P::*;\n");
+        assert!(!would_fuse("P", "::"));
+        assert!(would_fuse(":", "::"));
     }
 
     #[test]

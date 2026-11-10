@@ -786,6 +786,13 @@ impl Workspace {
             if self.model.get(heir, "declaredName").is_some() {
                 continue;
             }
+            // a feature chain answers to the last feature it runs through,
+            // so `perform a.b;` -- which references the chain -- is a `b`
+            if let Some(Value::RefList(chain)) = self.model.maybe(heir, "chainingFeature") {
+                if let Some(&last) = chain.last() {
+                    borrowers.entry(last).or_default().push(heir);
+                }
+            }
             // Asked of the redefining side, which owns the relationship:
             // that way there is no side of it to be missing.
             for &rel in self.model.owned(heir) {
@@ -832,18 +839,27 @@ impl Workspace {
         self.references.iter().filter(move |r| r.target == target)
     }
 
-    /// The element whose declared-name range covers `offset` in `file`
-    /// (for rename/find-references started on a declaration).
+    /// The element whose declared name or short name covers `offset` in
+    /// `file` (for rename/find-references started on a declaration).
+    ///
+    /// The short name counts: `part def <W> Wheel;` is asked about at its
+    /// `W` as readily as at its `Wheel`, and answering nothing there left
+    /// find-references and rename with nothing to say.
     pub fn definition_at(&self, file: usize, offset: sysml_syntax::TextSize) -> Option<ElementId> {
         self.elements_of(file)
             .iter()
             .copied()
             .filter_map(|id| {
                 let node = self.source.get(&id)?;
-                let name = node.children().find(|c| c.kind() == SyntaxKind::NAME)?;
-                name.text_range()
-                    .contains_inclusive(offset)
-                    .then_some((id, name.text_range().len()))
+                let name = node
+                    .children()
+                    .find(|c| c.kind() == SyntaxKind::NAME)
+                    .map(|name| name.text_range());
+                [name, self.short_name_range(id)]
+                    .into_iter()
+                    .flatten()
+                    .find(|range| range.contains_inclusive(offset))
+                    .map(|range| (id, range.len()))
             })
             .min_by_key(|(_, len)| u32::from(*len))
             .map(|(id, _)| id)
@@ -1436,14 +1452,37 @@ impl Workspace {
     }
 
     /// Full node range and declared-name range of an element.
+    ///
+    /// One that declares only a short name is named by that: `part def
+    /// <W>;` answered with the whole declaration, and an editor pointing
+    /// at its name selected all of it.
     pub fn element_ranges(&self, elem: ElementId) -> Option<(TextRange, TextRange)> {
         let node = self.source.get(&elem)?;
         let name = node
             .children()
             .find(|c| c.kind() == SyntaxKind::NAME)
             .map(|n| n.text_range())
+            .or_else(|| self.short_name_range(elem))
             .unwrap_or_else(|| node.text_range());
         Some((node.text_range(), name))
+    }
+
+    /// Where a declaration spells its short name: the `W` of `part def
+    /// <W> Wheel;`, without the brackets around it.
+    pub fn short_name_range(&self, elem: ElementId) -> Option<TextRange> {
+        self.source
+            .get(&elem)?
+            .children()
+            .find(|c| c.kind() == SyntaxKind::SHORT_NAME)?
+            .children_with_tokens()
+            .filter_map(|it| it.into_token())
+            .find(|token| {
+                matches!(
+                    token.kind(),
+                    SyntaxKind::IDENT | SyntaxKind::UNRESTRICTED_NAME
+                )
+            })
+            .map(|token| token.text_range())
     }
 
     /// Owner-path qualified name of an element (for hovers).

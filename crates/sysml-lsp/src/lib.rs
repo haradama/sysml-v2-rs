@@ -455,15 +455,28 @@ fn begin(mut files: Files, params: serde_json::Value) -> Result<Box<Server>, Str
     // How wide a line may be before formatting breaks it. Read once, as
     // the library path is: a client that changes it restarts the server,
     // which is what changing any of these takes.
-    if let Some(width) = init
+    //
+    // A settings file holds `"40"` as readily as `40`, and the one that
+    // was a string was dropped without a word; a width that is neither
+    // is said to be, where the client collects this server's log.
+    if let Some(said) = init
         .initialization_options
         .as_ref()
         .and_then(|o| o.get("formatWidth"))
-        .and_then(serde_json::Value::as_u64)
     {
-        server.layout = sysml_syntax::fmt::Layout {
-            width: width as usize,
-        };
+        let width = said
+            .as_u64()
+            .or_else(|| said.as_str().and_then(|it| it.trim().parse().ok()));
+        match width {
+            Some(width) => {
+                server.layout = sysml_syntax::fmt::Layout {
+                    width: width as usize,
+                }
+            }
+            None => server.complaints.push(format!(
+                "the format width is not read: {said} is not a number of columns"
+            )),
+        }
     }
     // How the preview is painted: the name of a skin, or one written
     // out. A skin that will not read leaves the drawing as it was and
@@ -684,11 +697,12 @@ impl Server {
                 self.languages.remove(&params.text_document.uri);
                 self.published.remove(&params.text_document.uri);
                 // the buffer that spoke for the file is gone, so the
-                // file on disk speaks for it again
-                if self
-                    .file_of(&params.text_document.uri)
-                    .is_some_and(|path| self.substituted.contains(&path))
-                {
+                // file on disk speaks for it again; and a document that
+                // brought the files beside it in takes them away again,
+                // where they were kept, and answered for, until restart
+                if self.file_of(&params.text_document.uri).is_some_and(|path| {
+                    self.substituted.contains(&path) || self.read_for_being_open(&path)
+                }) {
                     self.project = None;
                 }
                 self.analysis = None;
@@ -770,9 +784,12 @@ impl Server {
                     DiagnosticSeverity::ERROR,
                     &(|what: &str| what.to_string()) as &dyn Fn(&str) -> String,
                 ),
+                // an error, as `sysml check` counts it: a name that
+                // reaches nothing fails the build there, and shown as a
+                // warning here it let a model look fine until CI said not
                 (
                     &found.names,
-                    DiagnosticSeverity::WARNING,
+                    DiagnosticSeverity::ERROR,
                     &(|what: &str| format!("unresolved reference `{what}`"))
                         as &dyn Fn(&str) -> String,
                 ),
@@ -936,7 +953,7 @@ impl Server {
             }
             Formatting::METHOD => {
                 let params = asked!(lsp_types::DocumentFormattingParams);
-                ok_response(id, self.format(&params.text_document.uri))
+                ok_response(id, self.format(&params.text_document.uri, &params.options))
             }
             CodeActionRequest::METHOD => {
                 let params = asked!(lsp_types::CodeActionParams);
@@ -1123,18 +1140,41 @@ fn symbol_for(
     index: &LineIndex,
 ) -> Option<DocumentSymbol> {
     let model = ws.model();
-    let name = shown_name(model.name(elem)?);
     let (full, name_range) = ws.element_ranges(elem)?;
     let children: Vec<DocumentSymbol> = model
         .owned(elem)
         .iter()
         .filter_map(|c| symbol_for(ws, *c, text, index))
         .collect();
+    // An element declared without a name is still somewhere a reader
+    // goes: `part :>> wheel { part hub; }`, a `perform action { ... }`,
+    // a transition. Left out, it took every named thing inside it along.
+    // What stands in for its name is the one it goes by -- its short
+    // name, or the one it borrows from what it redefines -- and failing
+    // both, a word saying it has none. What is no declaration of its own
+    // -- an expression, a comment, an import -- stays out unless
+    // something listed is inside it.
+    let kind = model.kind(elem);
+    let name = match model.name(elem) {
+        Some(name) => shown_name(name),
+        None => {
+            let declared = kind.is_a(ElementKind::Usage)
+                || (kind.is_a(ElementKind::Type) && !kind.is_a(ElementKind::Expression));
+            if !declared && children.is_empty() {
+                return None;
+            }
+            match (model.effective_short_name(elem), model.effective_name(elem)) {
+                (Some(short), _) => format!("<{short}>"),
+                (None, Some(borrowed)) => shown_name(borrowed),
+                (None, None) => "(unnamed)".to_string(),
+            }
+        }
+    };
     #[allow(deprecated)]
     Some(DocumentSymbol {
         name,
-        detail: Some(model.kind(elem).name().to_string()),
-        kind: pictured(model.kind(elem)).1,
+        detail: Some(kind.name().to_string()),
+        kind: pictured(kind).1,
         tags: None,
         deprecated: None,
         range: index.range(text, full),

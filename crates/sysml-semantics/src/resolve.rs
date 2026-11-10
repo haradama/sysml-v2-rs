@@ -486,8 +486,12 @@ impl Workspace {
             // `connection c : L connect a to b;` is written as a usage, so
             // its ends arrive here rather than through a connector
             // statement -- and so is KerML's `connector c from a to b;`,
-            // which is a `Connector` and not a usage at all.
-            if self.model.kind(id).is_a(ElementKind::Connector) {
+            // which is a `Connector` and not a usage at all. Nor is the
+            // transition `succession s first a if g then b;` declares,
+            // which relates its two through a succession of its own.
+            if self.model.kind(id).is_a(ElementKind::Connector)
+                || self.model.kind(id).is_a(ElementKind::TransitionUsage)
+            {
                 self.resolve_connector_ends(id, &node, &mut stats);
             }
             if self

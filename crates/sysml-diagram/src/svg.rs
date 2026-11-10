@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use crate::graph::{lines, Node};
-use crate::layout::child_boxes;
+use crate::layout::{band, child_boxes, skips};
 use crate::{Diagram, Edge, Feature, Layout, Placed, Relation, Shape, Style};
 
 /// The arrowheads and diamonds every view draws with, defined once so a
@@ -65,6 +65,11 @@ const MARKERS: &[(&str, &str, &str)] = &[
         "portion",
         "viewBox=\"0 0 10 10\" refX=\"0\" refY=\"5\" markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\"",
         "<circle class=\"diamond\" cx=\"5\" cy=\"5\" r=\"4\"/>",
+    ),
+    (
+        "membership",
+        "viewBox=\"0 0 12 12\" refX=\"0\" refY=\"6\" markerWidth=\"12\" markerHeight=\"12\" orient=\"auto\"",
+        "<circle class=\"hollow\" cx=\"6\" cy=\"6\" r=\"5\"/><path class=\"tip\" d=\"M1,6 L11,6 M6,1 L6,11\"/>",
     ),
 ];
 
@@ -432,7 +437,8 @@ impl<'a> Canvas<'a> {
                 | Relation::Portion
                 | Relation::Event
                 | Relation::Annotation
-                | Relation::Client => {
+                | Relation::Client
+                | Relation::Membership => {
                     // A connection ends at the port it names, where the box declares one: the
                     // standard draws the port on the border, and a second square beside it
                     // would be a port the model never had.
@@ -830,7 +836,7 @@ fn beside_room(style: &Style) -> f64 {
 /// The room one box needs outside itself for the names drawn on its
 /// border: its ports, its parameters, and the ends of the lines that
 /// arrive at it, each of which reads outwards, away from the box.
-fn label_room(diagram: &Diagram, at: usize, style: &Style) -> f64 {
+pub(crate) fn label_room(diagram: &Diagram, at: usize, style: &Style) -> f64 {
     let node = &diagram.nodes[at];
     let named = |name: &String| style.text_width(name);
     let ports = std::iter::once(node)
@@ -1412,6 +1418,9 @@ fn marker_of(relation: Relation) -> (Option<&'static str>, bool) {
         // `portion-relationship` marks the whole the way a composition
         // does, with a filled glyph of its own
         Relation::Portion => (Some("portion"), true),
+        // the circled plus at the namespace that owns what the line
+        // reaches
+        Relation::Membership => (Some("membership"), true),
         // what flows has the filled head; a message has the open dart the
         // standard keeps for it
         Relation::Flow | Relation::SuccessionFlow => (Some("flow"), false),
@@ -1688,11 +1697,58 @@ fn interconnections(out: &mut String, node: &Node, inners: &[(f64, f64, f64, f64
     // the names inside one box are written among themselves, and the
     // ones outside it are already down
     let mut written: Vec<Placed> = Vec::new();
-    for link in &node.links {
+    let row = inners
+        .iter()
+        .map(|&(_, y, _, height)| y + height)
+        .fold(f64::MIN, f64::max);
+    let detours = node.links.iter().filter(|link| skips(link)).count();
+    let mut detoured = 0usize;
+    let pair = |link: &Edge| (link.from.min(link.to), link.from.max(link.to));
+    for (nth, link) in node.links.iter().enumerate() {
         let (from, to) = (placed(link.from), placed(link.to));
+        let (marker, class) = pen(link.relation, &style.skin);
+        // A line between two parts with others between them leaves the
+        // bottom of the one, runs along a band of its own under the row,
+        // and comes up into the other: drawn straight it ran behind the
+        // parts between and read as a line through each of them.
+        if skips(link) {
+            let spread = (detoured as f64 - (detours as f64 - 1.0) / 2.0) * port_side(style);
+            let band = row + (detoured + 1) as f64 * band(style);
+            detoured += 1;
+            let (fx, tx) = (centre_of(&from).0 + spread, centre_of(&to).0 + spread);
+            let first = (fx, from.y + from.height);
+            let second = (tx, to.y + to.height);
+            writeln!(
+                out,
+                "<path{class} fill=\"none\" d=\"M {:.1} {:.1} V {band:.1} H {tx:.1} V {:.1}\"{marker}/>",
+                first.0, first.1, second.1
+            )
+            .unwrap();
+            if let Some(name) = &link.ends.0 {
+                port(out, &mut written, first, (fx, band), name, None, style);
+            }
+            if let Some(name) = &link.ends.1 {
+                port(out, &mut written, second, (tx, band), name, None, style);
+            }
+            if let Some(label) = &link.label {
+                beside(out, ((fx + tx) / 2.0, band), (tx, band), label, style);
+            }
+            continue;
+        }
+        // lines between the same two parts are set one above another,
+        // or they are drawn as one line with every name written on it
+        let siblings: Vec<usize> = (0..node.links.len())
+            .filter(|&other| pair(&node.links[other]) == pair(link))
+            .collect();
+        let lane = siblings.iter().position(|&other| other == nth).unwrap_or(0);
+        // -- as far apart as a line of text, or as the shorter border
+        // has room for, so that every one still ends on both
+        let room = from.height.min(to.height) - 2.0 * port_side(style);
+        let step = style.line_height.min(room / siblings.len() as f64);
+        let lift = (lane as f64 - (siblings.len() as f64 - 1.0) / 2.0) * step;
         let first = border_point(&from, centre_of(&to));
         let second = border_point(&to, centre_of(&from));
-        let (marker, class) = pen(link.relation, &style.skin);
+        let (first, second) = ((first.0, first.1 + lift), (second.0, second.1 + lift));
         writeln!(
             out,
             "<path{class} fill=\"none\" d=\"M {:.1} {:.1} L {:.1} {:.1}\"{marker}/>",

@@ -69,7 +69,8 @@ pub struct Sequence {
 /// interconnection view is assembled from.
 pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
     let mut sequence = Sequence::default();
-    for child in assembled_from(model, definition) {
+    let members = assembled_from(model, definition);
+    for &child in &members {
         // `sq-graphical-relationship = message | sq-succession`, and both
         // reach an event: `first m1 then m2` orders two messages rather
         // than joining two lifelines, so it is not one of these arrows.
@@ -77,7 +78,7 @@ pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
         if !matches!(relation, Relation::Message | Relation::Succession) {
             continue;
         }
-        let ends: Vec<Reach> = model
+        let mut ends: Vec<Reach> = model
             .owned(child)
             .iter()
             .filter_map(|&end| reach_of(model, end))
@@ -87,6 +88,9 @@ pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
                     .is_a(ElementKind::EventOccurrenceUsage)
             })
             .collect();
+        if ends.is_empty() && relation == Relation::Message {
+            ends = ends_named_by_events(model, &members, child);
+        }
         let [from, to] = &ends[..] else { continue };
         sequence.moments.push(Moment {
             from: lifeline_at(model, from, &mut sequence.lifelines),
@@ -129,6 +133,44 @@ fn reach_of(model: &Model, end: ElementId) -> Option<Reach> {
     })
 }
 
+/// The two ends of a message written the other way round: `message m of
+/// S;` names neither, and each participant says which of its events the
+/// message leaves or reaches -- `ref part driver { event m.sourceEvent; }`.
+/// The source first, then the target, each where some event names it;
+/// the participant is the chain of features the event is declared in.
+fn ends_named_by_events(model: &Model, members: &[ElementId], message: ElementId) -> Vec<Reach> {
+    let end = |wanted: &str| {
+        members
+            .iter()
+            .flat_map(|&member| model.descendants(member))
+            .filter(|&id| model.kind(id).is_a(ElementKind::EventOccurrenceUsage))
+            .find_map(|event| named_end(model, event, message, wanted))
+    };
+    end("sourceEvent")
+        .into_iter()
+        .chain(end("targetEvent"))
+        .collect()
+}
+
+/// Where `event` refers to the `wanted` end of `message`, the participant
+/// it belongs to.
+fn named_end(model: &Model, event: ElementId, message: ElementId, wanted: &str) -> Option<Reach> {
+    sysml_model::end_reaches(model, event)
+        .into_iter()
+        .filter_map(|reached| model.maybe(reached, "chainingFeature")?.as_ids())
+        .find(|chain| matches!(chain, [named, end] if *named == message && model.name(*end) == Some(wanted)))?;
+    let mut taking_part: Vec<ElementId> =
+        std::iter::successors(model.owner(event), |&above| model.owner(above))
+            .take_while(|&above| model.kind(above).is_a(ElementKind::Feature))
+            .collect();
+    taking_part.reverse();
+    Some(Reach {
+        id: *taking_part.last()?,
+        taking_part,
+        event,
+    })
+}
+
 /// The lifeline an end belongs to, added to `lifelines` the first time it
 /// takes part.
 fn lifeline_at(model: &Model, reach: &Reach, lifelines: &mut Vec<Lifeline>) -> usize {
@@ -161,7 +203,20 @@ pub fn to_svg(sequence: &Sequence, style: &Style) -> String {
         .fold(0.0f64, f64::max)
         .max(style.line_height * 4.0);
     let step = 2.0 * style.line_height;
-    let left = |at: usize| style.margin + at as f64 * (column + style.h_gap);
+    // A name is written across the span between the two lifelines it
+    // joins, so the lifelines stand far enough apart for the widest to
+    // fit there: spaced by their heads alone, a long one ran off the
+    // canvas at both ends.
+    let pitch = sequence
+        .moments
+        .iter()
+        .filter(|moment| moment.from != moment.to)
+        .filter_map(|moment| {
+            let span = moment.from.abs_diff(moment.to) as f64;
+            Some((style.text_width(moment.label.as_ref()?) + 2.0 * style.padding) / span)
+        })
+        .fold(column + style.h_gap, f64::max);
+    let left = |at: usize| style.margin + at as f64 * pitch;
     let centre = |at: usize| left(at) + column / 2.0;
 
     // A message whose two ends are on one lifeline crosses no distance:
@@ -171,7 +226,7 @@ pub fn to_svg(sequence: &Sequence, style: &Style) -> String {
     let hook = 2.0 * style.line_height;
     let drop = 0.8 * style.line_height;
     let beside = 0.35 * style.line_height;
-    let mut width = left(sequence.lifelines.len().max(1)) - style.h_gap + style.margin;
+    let mut width = left(sequence.lifelines.len().max(1) - 1) + column + style.margin;
     for moment in sequence.moments.iter().filter(|it| it.from == it.to) {
         // the hook and the name beside it reach past the lifeline they
         // leave, and the canvas has to hold them
@@ -435,6 +490,87 @@ mod tests {
         let label = svg.split("class=\"feature\" x=\"").nth(1).unwrap();
         let x: f64 = label.split('"').next().unwrap().parse().unwrap();
         assert!(x + style.text_width("answered") <= width, "{svg}");
+    }
+
+    #[test]
+    fn a_long_message_name_is_written_whole_between_its_lifelines() {
+        let name = "aVeryLongMessageNameThatGoesOnAndOnAndOnForeverAndEver";
+        let sequence = interaction(&format!(
+            "part def A {{ event occurrence sent; event occurrence got; }}\n\
+             part def B {{ event occurrence heard; }}\n\
+             occurrence def Interaction {{\n\
+             \tref part a : A;\n\
+             \tref part b : B;\n\
+             \tmessage {name} from a.sent to b.heard;\n\
+             \tmessage from b.heard to a.got;\n\
+             }}\n"
+        ));
+        let style = Style::default();
+        let svg = to_svg(&sequence, &style);
+        let width: f64 = svg
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        // centred between the two lifelines, and the canvas holds both ends
+        let at = svg.find(&format!(">{name}</text>")).unwrap();
+        let x: f64 = svg[..at]
+            .rsplit("x=\"")
+            .next()
+            .and_then(|rest| rest.split('"').next())
+            .unwrap()
+            .parse()
+            .unwrap();
+        let half = style.text_width(name) / 2.0;
+        assert!(x - half >= 0.0 && x + half <= width, "{svg}");
+    }
+
+    #[test]
+    fn a_message_whose_events_name_it_is_drawn_between_their_participants() {
+        // `message m;` with `ref part d { event m.sourceEvent; }` and its
+        // target alike, which the training's second interaction example
+        // writes, as the chain `m.sourceEvent` the event refers to
+        let mut model = Model::new();
+        let named = |model: &mut Model, kind, name: &str| {
+            let id = model.create(kind);
+            model.set(id, "declaredName", sysml_model::Value::String(name.into()));
+            id
+        };
+        let interaction = named(&mut model, ElementKind::OccurrenceDefinition, "I");
+        let message = named(&mut model, ElementKind::FlowUsage, "m");
+        model.set(message, "isAbstract", sysml_model::Value::Bool(true));
+        model.add_owned(interaction, message);
+        let source = named(&mut model, ElementKind::EventOccurrenceUsage, "sourceEvent");
+        let target = named(&mut model, ElementKind::EventOccurrenceUsage, "targetEvent");
+        for (part, end) in [("d", source), ("e", target)] {
+            let holder = named(&mut model, ElementKind::PartUsage, part);
+            model.add_owned(interaction, holder);
+            let event = model.create(ElementKind::EventOccurrenceUsage);
+            model.add_owned(holder, event);
+            let chain = model.create(ElementKind::Feature);
+            model.set(
+                chain,
+                "chainingFeature",
+                sysml_model::Value::RefList(vec![message, end]),
+            );
+            let refers = model.create(ElementKind::ReferenceSubsetting);
+            model.set(refers, "referencedFeature", sysml_model::Value::Ref(chain));
+            model.add_owned(event, refers);
+            model.add_owned(refers, chain);
+        }
+        let sequence = sequence_view(&model, interaction);
+        let lifelines: Vec<&str> = sequence.lifelines.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(lifelines, ["d", "e"]);
+        assert_eq!(
+            sequence
+                .moments
+                .iter()
+                .map(|moment| (moment.from, moment.to, moment.label.as_deref()))
+                .collect::<Vec<_>>(),
+            [(0, 1, Some("m"))]
+        );
     }
 
     #[test]

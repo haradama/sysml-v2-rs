@@ -186,8 +186,10 @@ fn what_the_importer_wrote_is_checked_before_it_is_written() {
         text(&out.stderr)
     );
     assert!(text(&out.stdout).contains("part def A :> Nowhere;"));
+    // `sysml fmt` will not print a file that does not parse, so the broken
+    // one is written out as it is
     let broken = write(&dir, "broken.sysml", "package P {\n\tpart def A;\n");
-    let out = sysml(&["import-code", "--via", &via, broken.to_str().unwrap()]);
+    let out = sysml(&["import-code", "--via", "cat", broken.to_str().unwrap()]);
     assert!(!out.status.success());
     assert!(
         text(&out.stderr).contains("expected R_BRACE, found EOF at 3:1 of what was written"),

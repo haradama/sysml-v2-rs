@@ -43,7 +43,7 @@
 //! answers to the name of what it redefines, or failing that references.
 //!
 //! Remaining simplification: derived properties beyond the ones named here
-//! are emitted at their defaults.
+//! and those `Writing::derived` computes are emitted at their defaults.
 
 use std::collections::HashMap;
 
@@ -1146,6 +1146,12 @@ impl Writing<'_> {
             "ownedUsage" if kind.is_a(ElementKind::Definition) => {
                 Some(self.owned_of_kind(id, ElementKind::Usage))
             }
+            // `isReference = not isComposite`: a `ref part`, a port and a
+            // part at package level are referential, and written at its
+            // default every one of them was said to be owned outright
+            "isReference" if kind.is_a(ElementKind::Usage) => {
+                Some((!self.model.flag(id, "isComposite")).into())
+            }
             "elementId" => Some(self.uuids[&id].to_string().into()),
             "name" => Some(self.model.effective_name(id).map_or(Json::Null, Json::from)),
             "shortName" => Some(
@@ -1981,6 +1987,36 @@ mod tests {
         let one_way = exported(a, b);
         assert!(one_way.contains_key("A::X"));
         assert_eq!(one_way, exported(b, a), "the load order moved the UUIDs");
+    }
+
+    /// `isReference = not isComposite`: a `ref part`, a port, an attribute
+    /// and a part at package level are referential, and a part owned by
+    /// a definition is not. Written at its default, every usage was said
+    /// to be owned outright.
+    #[test]
+    fn a_usage_is_a_reference_unless_it_is_composite() {
+        let parse = sysml_syntax::parse(
+            "package R { part def A { ref part q; part p; port pt; attribute a; } part top; }",
+        );
+        let model = build_model(&parse).0;
+        let json = to_json(&model);
+        let reference = |name: &str| {
+            json.as_array()
+                .unwrap()
+                .iter()
+                .find(|it| it["declaredName"] == name)
+                .map(|it| it["isReference"].clone())
+                .unwrap()
+        };
+        for (name, is) in [
+            ("q", true),
+            ("p", false),
+            ("pt", true),
+            ("a", true),
+            ("top", true),
+        ] {
+            assert_eq!(reference(name), Json::Bool(is), "{name}");
+        }
     }
 
     /// A name holding what reads as another segment of the path its UUID

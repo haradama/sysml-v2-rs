@@ -113,8 +113,9 @@ enum Command {
         /// Rewrite the files in place
         #[arg(short, long)]
         write: bool,
-        /// Exit non-zero if any file is not already formatted
-        #[arg(long)]
+        /// Exit non-zero if any file is not already formatted; writes
+        /// nothing, so it cannot be had with `--write`
+        #[arg(long, conflicts_with = "write")]
         check: bool,
         /// Columns a line may reach before it is broken at the readiest
         /// joint of what is on it; 0 leaves every line as long as it comes
@@ -558,7 +559,7 @@ fn main() -> ExitCode {
             dir,
             worst,
             failures,
-        } => corpus(&dir, worst, failures),
+        } => corpus(&dir, worst, failures, format),
     }
 }
 
@@ -765,18 +766,37 @@ fn fmt(
     let mut dirty = 0usize;
     let mut unformatted = Vec::new();
     let mut broken = Vec::new();
+    // A file that cannot be read or written stops nothing: the rest are
+    // formatted all the same, and each failure is said. Stopping at the
+    // first left the order of the arguments deciding which files were
+    // rewritten, and `--format json` saying nothing at all.
+    let mut unreadable = Vec::new();
+    let mut unwritten = Vec::new();
+    let failed = |path: &Path, verb, err: std::io::Error| {
+        let failed = Unreadable {
+            path: path.display().to_string(),
+            verb,
+            error: err.to_string(),
+        };
+        failed.say();
+        failed.json()
+    };
     for path in files {
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
-            Err(err) => return Unreadable::refuse(path, err, "fmt", format),
+            Err(err) => {
+                unreadable.push(failed(path, "read", err));
+                continue;
+            }
         };
         // Re-spacing a file the parser could not follow can move where a quote or
         // comment ends -- `package Name' {` runs the quote on to the next one --
         // and putting the tokens back differently puts the name somewhere else.
-        // Printing that is harmless; writing it over the modeller's file is not,
-        // so `--write` reports such a file instead.
+        // That is no formatting of the file, whether it is written over the
+        // modeller's, printed for them to paste or checked, so each refuses it
+        // the same way -- as the language server answers nothing for one.
         let parse = parse_file(path, &text);
-        if write && !parse.ok() {
+        if !parse.ok() {
             eprintln!(
                 "error: {} does not parse; `sysml parse` says where",
                 path.display()
@@ -797,29 +817,30 @@ fn fmt(
             }
         } else if write {
             if formatted != text {
-                if let Err(err) = std::fs::write(path, &formatted) {
-                    eprintln!("error: cannot write {}: {err}", path.display());
-                    return ExitCode::FAILURE;
+                match std::fs::write(path, &formatted) {
+                    Ok(()) => eprintln!("formatted {}", path.display()),
+                    Err(err) => unwritten.push(failed(path, "write", err)),
                 }
-                eprintln!("formatted {}", path.display());
             }
         } else {
             print!("{formatted}");
         }
     }
+    let ok = dirty == 0 && broken.is_empty() && unreadable.is_empty() && unwritten.is_empty();
     // `--write` refuses a file it could not parse and exits non-zero
     // for it, so the JSON has to name it too -- otherwise a program is
     // told nothing is wrong and handed a failure
     if format == Format::Json && (check_only || write) {
         report(serde_json::json!({
             "command": "fmt",
-            "ok": dirty == 0 && broken.is_empty(),
-            "unreadable": [],
+            "ok": ok,
+            "unreadable": unreadable,
+            "unwritten": unwritten,
             "unformatted": unformatted,
             "broken": broken,
         }));
     }
-    if dirty > 0 || !broken.is_empty() {
+    if !ok {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
@@ -2009,7 +2030,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     let violated = texts_of(&ws, placed.iter().map(|((file, _), _)| *file));
     let mut violations = Vec::new();
     for ((file, range), violation) in &placed {
-        let named = ws.qualified_name_of(violation.element);
+        let named = ws.qualified_name_written(violation.element);
         let path = ws.file_name(*file);
         let text = &violated[file];
         match format {
@@ -2145,14 +2166,29 @@ fn texts_of(
         .collect()
 }
 
-fn corpus(dir: &Path, worst: usize, list_failures: bool) -> ExitCode {
+/// How much of a directory parses, file by file.
+///
+/// A file that fails to parse, or cannot be read, fails the run: it
+/// used to exit 0 whatever it found, so the only way a script could tell
+/// was to read the rate out of the text -- and `--format json` printed
+/// that text too.
+fn corpus(dir: &Path, worst: usize, list_failures: bool, format: Format) -> ExitCode {
     let files = sysml_semantics::model_files(dir);
     if files.is_empty() {
         // the walk takes what it can reach, so a directory that is not
         // there and one with nothing under it look the same from here
-        match std::fs::read_dir(dir) {
-            Ok(_) => eprintln!("no .sysml/.kerml files found under {}", dir.display()),
-            Err(err) => eprintln!("error: cannot read {}: {err}", dir.display()),
+        if let Err(err) = std::fs::read_dir(dir) {
+            return Unreadable::refuse(dir, err, "corpus", format);
+        }
+        eprintln!("no .sysml/.kerml files found under {}", dir.display());
+        if format == Format::Json {
+            report(serde_json::json!({
+                "command": "corpus",
+                "ok": false,
+                "unreadable": [],
+                "extensions": {},
+                "failing": [],
+            }));
         }
         return ExitCode::FAILURE;
     }
@@ -2164,11 +2200,21 @@ fn corpus(dir: &Path, worst: usize, list_failures: bool) -> ExitCode {
     }
     let mut by_ext: std::collections::BTreeMap<String, Stat> = Default::default();
     let mut failing: Vec<(usize, PathBuf)> = Vec::new();
+    let mut unreadable = Vec::new();
 
     for path in &files {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            eprintln!("warning: cannot read {}", path.display());
-            continue;
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) => {
+                let failed = Unreadable {
+                    path: path.display().to_string(),
+                    verb: "read",
+                    error: err.to_string(),
+                };
+                failed.say();
+                unreadable.push(failed.json());
+                continue;
+            }
         };
         let parse = parse_file(path, &text);
         let ext = path
@@ -2189,29 +2235,62 @@ fn corpus(dir: &Path, worst: usize, list_failures: bool) -> ExitCode {
             failing.push((parse.errors().len(), path.clone()));
         }
     }
-
-    for (ext, stat) in &by_ext {
-        println!(
-            ".{ext}: {}/{} files ok ({:.1}%), {} total error(s)",
-            stat.ok,
-            stat.total,
-            100.0 * stat.ok as f64 / stat.total as f64,
-            stat.errors
-        );
-    }
-
     failing.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-    if list_failures {
-        for (errors, path) in &failing {
-            println!("FAIL {errors:5} {}", path.display());
+    let ok = failing.is_empty() && unreadable.is_empty();
+
+    if format == Format::Json {
+        // every failing file, not the worst few: a program works from the
+        // list, as `check` gives it every unresolved name
+        let extensions: serde_json::Map<String, serde_json::Value> = by_ext
+            .iter()
+            .map(|(ext, stat)| {
+                let counted = serde_json::json!({
+                    "files": stat.total,
+                    "ok": stat.ok,
+                    "errors": stat.errors,
+                });
+                (ext.clone(), counted)
+            })
+            .collect();
+        let failing: Vec<serde_json::Value> = failing
+            .iter()
+            .map(|(errors, path)| {
+                serde_json::json!({ "path": path.display().to_string(), "errors": errors })
+            })
+            .collect();
+        report(serde_json::json!({
+            "command": "corpus",
+            "ok": ok,
+            "unreadable": unreadable,
+            "extensions": extensions,
+            "failing": failing,
+        }));
+    } else {
+        for (ext, stat) in &by_ext {
+            println!(
+                ".{ext}: {}/{} files ok ({:.1}%), {} total error(s)",
+                stat.ok,
+                stat.total,
+                100.0 * stat.ok as f64 / stat.total as f64,
+                stat.errors
+            );
         }
-    } else if worst > 0 && !failing.is_empty() {
-        println!("\nworst {} file(s):", worst.min(failing.len()));
-        for (errors, path) in failing.iter().take(worst) {
-            println!("  {errors:5} error(s)  {}", path.display());
+        if list_failures {
+            for (errors, path) in &failing {
+                println!("FAIL {errors:5} {}", path.display());
+            }
+        } else if worst > 0 && !failing.is_empty() {
+            println!("\nworst {} file(s):", worst.min(failing.len()));
+            for (errors, path) in failing.iter().take(worst) {
+                println!("  {errors:5} error(s)  {}", path.display());
+            }
         }
     }
-    ExitCode::SUCCESS
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
