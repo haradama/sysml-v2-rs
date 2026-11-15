@@ -226,6 +226,13 @@ impl Workspace {
             ElementKind::Feature,
             &[("chainingFeature", Value::RefList(chain.clone()))],
         );
+        self.chainings(feature, chain);
+        feature
+    }
+    /// Give `feature` a `FeatureChaining` for each step of `chain`, which
+    /// it owns: `ownedFeatureChaining` is what `chainingFeature` is derived
+    /// from. Taken again on a later pass rather than made twice.
+    fn chainings(&mut self, feature: ElementId, chain: Vec<ElementId>) {
         for step in chain {
             self.reified(
                 feature,
@@ -236,7 +243,6 @@ impl Workspace {
                 ],
             );
         }
-        feature
     }
     /// The two types a relationship written as its own statement relates.
     ///
@@ -471,6 +477,19 @@ impl Workspace {
             .find(|&child| self.model.kind(child).is_a(ElementKind::SuccessionAsUsage))
             .filter(|_| self.model.kind(id).is_a(ElementKind::TransitionUsage))
             .unwrap_or(id);
+        // An end the source declared -- `connect [1] e ::> a.p to [2] b;` --
+        // is the builder's, and is not one to be made again here. Left
+        // unclaimed, it was the `ReferenceUsage` end the `b` looked for, and
+        // the connector came to relate `b` through `e` and to have one end
+        // instead of two.
+        let declared: Vec<ElementId> = self
+            .model
+            .owned(holder)
+            .iter()
+            .copied()
+            .filter(|&it| self.model.flag(it, "isEnd") && self.source.contains_key(&it))
+            .collect();
+        self.claimed.extend(declared);
         for step in reached {
             match step {
                 Reached::Written(segments, steps, cross) => {
@@ -994,7 +1013,15 @@ impl Workspace {
                     ],
                 );
             }
-            _ => self.try_set(end, "chainingFeature", Value::RefList(chain)),
+            // `connect a.x to b;` is an end chained through `a` to `x`, and
+            // `chainingFeature` is derived from the `FeatureChaining`s the
+            // end owns. Kept alone, the model said the end was a chain and
+            // held none of the relationships that make one, and a document
+            // written from it had no `ownedFeatureChaining` to read.
+            _ => {
+                self.try_set(end, "chainingFeature", Value::RefList(chain.clone()));
+                self.chainings(end, chain);
+            }
         }
     }
     /// Stand the last step of what a flow end names up as the feature that

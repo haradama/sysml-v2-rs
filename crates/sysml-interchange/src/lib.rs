@@ -1162,7 +1162,11 @@ impl Writing<'_> {
                         .filter(|&&it| !import || self.model.kind(it).is_a(ElementKind::Namespace))
                         .map(|it| self.reference(it))
                         .collect();
-                    fill_ends(&mut object, self.model.kind(id), owner.clone(), related);
+                    let (from, to) = match self.model.kind(id).is_a(ElementKind::Annotation) {
+                        true => self.annotation_ends(id, &owned, owner.clone(), related),
+                        false => (owner.clone(), related),
+                    };
+                    fill_ends(&mut object, self.model.kind(id), from, to);
                     // An annotation's ends each have an `owning` name, and
                     // that one says who owns it, not who it relates:
                     // `owningAnnotatedElement` is set only where the
@@ -1539,12 +1543,34 @@ impl Writing<'_> {
                 }
                 _ => Json::Null,
             }),
+            // the owner where it is the annotating element, and nothing
+            // where the element owning the annotation is the one annotated:
+            // `@M;` and a comment owned through an annotation are not their
+            // own owner's annotators. Read as the owner either way, it was
+            // the first answer the end chain found for `annotatingElement`.
+            "owningAnnotatingElement" if is_relationship => Some(match self.model.owner(id) {
+                Some(owner)
+                    if !bridged(self.model, id)
+                        && self.model.kind(owner).is_a(ElementKind::AnnotatingElement) =>
+                {
+                    self.reference(&owner)
+                }
+                _ => Json::Null,
+            }),
+            // `ownedRelatedElement->selectByKind(AnnotatingElement)`, of
+            // which there is one at most
+            "ownedAnnotatingElement" if is_relationship => Some(
+                self.model
+                    .owned(id)
+                    .iter()
+                    .find(|&&it| self.model.kind(it).is_a(ElementKind::AnnotatingElement))
+                    .map_or(Json::Null, |it| self.reference(it)),
+            ),
             "owningClassifier"
             | "owningFeature"
             | "owningFeatureOfType"
             | "membershipOwningNamespace"
             | "importOwningNamespace"
-            | "owningAnnotatingElement"
                 if is_relationship =>
             {
                 Some(match self.model.owner(id) {
@@ -1780,6 +1806,34 @@ impl Writing<'_> {
                 }
             })
             .collect()
+    }
+
+    /// Where an annotation's ends are to be found when the model stored
+    /// neither: `annotatingElement` is "the ownedAnnotatingElement, if any,
+    /// otherwise the owningAnnotatingElement", and the element annotated is
+    /// the one owning the annotation where that is not the annotating one.
+    ///
+    /// `OwnedAnnotation : Annotation = ownedRelatedElement +=
+    /// AnnotatingElement` is owned by the element it annotates, and owns the
+    /// comment or the metadata it relates. Read owner first, as the ends of
+    /// a specialization are, it said the annotated element annotated itself
+    /// and was about its own comment.
+    fn annotation_ends(
+        &self,
+        id: ElementId,
+        owned: &[ElementId],
+        owner: Option<Json>,
+        related: Vec<Json>,
+    ) -> (Option<Json>, Vec<Json>) {
+        let annotating = |it: &ElementId| self.model.kind(*it).is_a(ElementKind::AnnotatingElement);
+        if let Some(comment) = owned.iter().find(|it| annotating(it)) {
+            return (Some(self.reference(comment)), owner.into_iter().collect());
+        }
+        let owned_by_annotating = self.model.owner(id).is_some_and(|it| annotating(&it));
+        match owned_by_annotating {
+            true => (owner, related),
+            false => (None, owner.into_iter().chain(related).collect()),
+        }
     }
 
     fn owned_of_kind(&self, id: ElementId, wanted: ElementKind) -> Json {
@@ -2991,6 +3045,64 @@ mod tests {
             from_json(&wrong),
             Err(ImportError::SharedOwnership(id)) if id == "lit"
         ));
+    }
+
+    /// `OwnedAnnotation : Annotation = ownedRelatedElement +=
+    /// AnnotatingElement`: an element may own the annotation that annotates
+    /// it, and the annotation then owns the comment or the metadata it
+    /// relates. A document that writes that shape and leaves the
+    /// annotation's ends to be derived -- `annotatingElement` is
+    /// `ownedAnnotatingElement` or `owningAnnotatingElement`, and
+    /// `annotatedElement` the owner where it owns the annotation -- was read
+    /// the way a specialization is, owner first: the package came out
+    /// annotating itself, and the comment was what it annotated.
+    #[test]
+    fn an_annotation_its_annotated_element_owns_relates_the_comment_it_owns() {
+        let json = serde_json::json!([
+            { "@type": "Package", "@id": "p", "declaredName": "P",
+              "ownedRelationship": [{ "@id": "a1" }, { "@id": "a2" }] },
+            { "@type": "Annotation", "@id": "a1",
+              "owningRelatedElement": { "@id": "p" },
+              "ownedRelatedElement": [{ "@id": "c" }] },
+            { "@type": "Comment", "@id": "c", "body": "hi",
+              "owningRelationship": { "@id": "a1" } },
+            { "@type": "Annotation", "@id": "a2",
+              "owningRelatedElement": { "@id": "p" },
+              "annotatedElement": { "@id": "p" },
+              "ownedRelatedElement": [{ "@id": "m" }] },
+            { "@type": "MetadataUsage", "@id": "m",
+              "owningRelationship": { "@id": "a2" } },
+        ]);
+        let (model, _) = from_json(&json).unwrap();
+        let out = to_json(&model);
+        let objects = out.as_array().unwrap();
+        let of_type = |name: &str| {
+            objects
+                .iter()
+                .find(|it| it["@type"] == name)
+                .unwrap_or_else(|| panic!("no {name} was written"))
+        };
+        let package = of_type("Package");
+        for annotating in [of_type("Comment"), of_type("MetadataUsage")] {
+            let annotation = objects
+                .iter()
+                .find(|it| it["@id"] == annotating["owningRelationship"]["@id"])
+                .expect("the annotation owning it is written");
+            assert_eq!(annotation["@type"], "Annotation");
+            assert_eq!(annotation["annotatingElement"]["@id"], annotating["@id"]);
+            assert_eq!(
+                annotation["ownedAnnotatingElement"]["@id"],
+                annotating["@id"]
+            );
+            assert_eq!(annotation["owningAnnotatingElement"], Json::Null);
+            assert_eq!(annotation["annotatedElement"]["@id"], package["@id"]);
+            assert_eq!(annotation["owningAnnotatedElement"]["@id"], package["@id"]);
+            assert_eq!(annotation["source"][0]["@id"], annotating["@id"]);
+            assert_eq!(annotation["target"][0]["@id"], package["@id"]);
+        }
+        // and the document read back writes the same ends
+        let (rebuilt, _) = from_json(&out).unwrap();
+        assert_eq!(to_json(&rebuilt), out);
     }
 
     #[test]

@@ -484,7 +484,20 @@ fn build_node(
     if structured_node(kind) {
         reify_condition(model, node, id, built);
     }
-    if kind.feature("multiplicity").is_some() {
+    // `connect [1] lugNutPort ::> wheel.lugNutPort to ...` and `connect ([5]
+    // p1, [6] p2)` write the ends themselves, and what is in brackets is
+    // never the end's own: `ConnectorEnd = OwnedCrossMultiplicityMember? (
+    // declaredName = NAME REFERENCES )? ownedReferenceSubsetting` has no
+    // place for one. It is the cross multiplicity, as it is before an end
+    // written as a plain name, and the end is one thing like every other.
+    // Built as its own, the `[5]` said the end was five things, which no end
+    // may be.
+    if declares_an_end(model, node, owner) {
+        if let Some(clause) = crossing_clause(node) {
+            cross_multiplicity(model, id, &clause, built);
+        }
+        counts_one(model, id);
+    } else if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id, built);
     }
     if counts_its_ends(kind) {
@@ -751,15 +764,99 @@ fn counts_its_ends(kind: ElementKind) -> bool {
     kind.is_a(ElementKind::Connector) && !kind.is_a(ElementKind::Flow)
 }
 
-/// Whether a multiplicity clause is written right before the name of an
-/// end: `connect [1] p1 to [0..*] p2;`.
+/// The end a multiplicity clause is written right before: the `p1` of
+/// `connect [1] p1 to [0..*] p2;`, or the declaration `lugNutPort ::>
+/// wheel.lugNutPort` of `connect [1] lugNutPort ::> wheel.lugNutPort to
+/// ...`.
+fn end_counted(clause: &SyntaxNode) -> Option<SyntaxNode> {
+    if clause.kind() != SyntaxKind::MULTIPLICITY {
+        return None;
+    }
+    std::iter::successors(clause.next_sibling_or_token(), |it| {
+        it.next_sibling_or_token()
+    })
+    .find(|it| !it.kind().is_trivia())?
+    .into_node()
+    .filter(|it| {
+        matches!(it.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR) || writes_an_end(it)
+    })
+}
+
+/// Whether a multiplicity clause is written right before an end.
 fn counts_an_end(clause: &SyntaxNode) -> bool {
-    clause.kind() == SyntaxKind::MULTIPLICITY
-        && std::iter::successors(clause.next_sibling_or_token(), |it| {
-            it.next_sibling_or_token()
+    end_counted(clause).is_some()
+}
+
+/// Whether a declaration written among a connector's ends, rather than in
+/// its body, is one of them: `( declaredName = NAME REFERENCES )?
+/// ownedReferenceSubsetting`, which is the only declaration the grammar
+/// lets an end be. `[5] p1` in an n-ary list is one as well -- the
+/// subsetting written with no name before it.
+fn writes_an_end(node: &SyntaxNode) -> bool {
+    node.kind() == SyntaxKind::USAGE
+        && node
+            .parent()
+            .is_some_and(|it| it.kind() != SyntaxKind::BODY)
+        && node
+            .children()
+            .any(|it| it.kind() == SyntaxKind::REFERENCES)
+}
+
+/// Whether `node` declares one of the ends of the connector it is built
+/// under, counted where it is written.
+fn declares_an_end(model: &Model, node: &SyntaxNode, owner: Option<ElementId>) -> bool {
+    owner.is_some_and(|it| counts_its_ends(model.kind(it))) && writes_an_end(node)
+}
+
+/// The cross multiplicity written for an end its connector declares: inside
+/// the declaration where the n-ary list puts it (`([5] p1, ...)`), and in
+/// front of it where the binary form does (`connect [1] e ::> a to ...`).
+fn crossing_clause(end: &SyntaxNode) -> Option<SyntaxNode> {
+    end.children()
+        .find(|it| it.kind() == SyntaxKind::MULTIPLICITY)
+        .or_else(|| {
+            std::iter::successors(end.prev_sibling_or_token(), |it| it.prev_sibling_or_token())
+                .find(|it| !it.kind().is_trivia())?
+                .into_node()
+                .filter(|it| it.kind() == SyntaxKind::MULTIPLICITY)
         })
-        .find(|it| !it.kind().is_trivia())
-        .is_some_and(|it| matches!(it.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
+}
+
+/// Stand up one cross multiplicity under `holder`: a feature of no name
+/// owning the range, through a plain membership.
+fn cross_multiplicity(
+    model: &mut Model,
+    holder: ElementId,
+    clause: &SyntaxNode,
+    built: &mut Built,
+) {
+    let cross = model.create(ElementKind::Feature);
+    model.add_owned(holder, cross);
+    model.set_owning_member(cross);
+    built.source.push((cross, clause.clone()));
+    reify_range(model, clause.children_with_tokens().collect(), cross, built);
+}
+
+/// An end is one thing.
+///
+/// `validateFeatureEndMultiplicity` -- "if a Feature has isEnd = true, then
+/// it must have multiplicity 1..1" -- and the notation writes it nowhere.
+/// Name resolution gives the ends it makes for plain names the same range;
+/// an end written as a declaration is made here, and here is where it is
+/// given one.
+fn counts_one(model: &mut Model, end: ElementId) {
+    let range = model.create(ElementKind::MultiplicityRange);
+    model.add_owned(end, range);
+    let mut one = || {
+        let bound = model.create(ElementKind::LiteralInteger);
+        model.add_owned(range, bound);
+        model.set(bound, "value", Value::Int(1));
+        bound
+    };
+    let (lower, upper) = (one(), one());
+    model.set(range, "lowerBound", Value::Ref(lower));
+    model.set(range, "upperBound", Value::Ref(upper));
+    model.set(end, "multiplicity", Value::Ref(range));
 }
 
 /// Stand up the cross multiplicity written before each end a connector
@@ -779,12 +876,13 @@ fn reify_cross_multiplicities(
     connector: ElementId,
     built: &mut Built,
 ) {
-    for clause in node.children().filter(counts_an_end) {
-        let cross = model.create(ElementKind::Feature);
-        model.add_owned(connector, cross);
-        model.set_owning_member(cross);
-        built.source.push((cross, clause.clone()));
-        reify_range(model, clause.children_with_tokens().collect(), cross, built);
+    // an end written as a declaration is built with the connector, and
+    // takes the one written in front of it as it is built
+    for clause in node
+        .children()
+        .filter(|clause| end_counted(clause).is_some_and(|end| !writes_an_end(&end)))
+    {
+        cross_multiplicity(model, connector, &clause, built);
     }
 }
 

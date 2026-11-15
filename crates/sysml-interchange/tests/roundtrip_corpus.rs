@@ -135,3 +135,79 @@ fn a_chain_and_a_conjugated_port_typing_round_trip_as_written() {
     let (rebuilt, _roots) = sysml_interchange::from_json(&json).unwrap();
     assert_eq!(sysml_interchange::to_json(&rebuilt), json);
 }
+
+/// A connector end written as a dotted name is a chain of its own:
+/// `chainingFeature` is derived from the `FeatureChaining`s the end owns,
+/// so a document that says `connect a.x to b;` relates `a.x` writes those
+/// relationships, and reads back the same. Written with the steps alone and
+/// no chaining, a reader that derives `chainingFeature` as the standard
+/// does found the end chained through nothing.
+#[test]
+fn an_end_written_as_a_dotted_name_round_trips_its_chainings() {
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "m.sysml",
+        "part def A {\n\
+         \tpart a { port x; attribute m; action s; }\n\
+         \tpart b;\n\
+         \tattribute w { attribute h; }\n\
+         \tconnection connect a.x to b;\n\
+         \tbind w.h = a.m;\n\
+         \taction z { first a.s then b; }\n\
+         }\n",
+    );
+    ws.resolve_all();
+    // and a second pass takes the chainings it made rather than making more
+    ws.resolve_all();
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let json = sysml_interchange::to_json(ws.model());
+    let objects = json.as_array().unwrap();
+    let chained: Vec<&serde_json::Value> = objects
+        .iter()
+        .filter(|it| {
+            it["isEnd"] == true
+                && it["chainingFeature"]
+                    .as_array()
+                    .is_some_and(|c| !c.is_empty())
+        })
+        .collect();
+    let mut steps: Vec<(&str, &str)> = Vec::new();
+    for end in &chained {
+        let chainings = end["ownedFeatureChaining"].as_array().unwrap();
+        assert_eq!(
+            chainings.len(),
+            end["chainingFeature"].as_array().unwrap().len(),
+            "a chaining for each step"
+        );
+        for (chaining, step) in chainings
+            .iter()
+            .zip(end["chainingFeature"].as_array().unwrap())
+        {
+            let chaining = objects
+                .iter()
+                .find(|it| it["@id"] == chaining["@id"])
+                .expect("the chaining is written");
+            assert_eq!(chaining["@type"], "FeatureChaining");
+            assert_eq!(chaining["featureChained"]["@id"], end["@id"]);
+            assert_eq!(chaining["owningRelatedElement"]["@id"], end["@id"]);
+            assert_eq!(&chaining["chainingFeature"], step);
+        }
+        let first = objects
+            .iter()
+            .find(|it| it["@id"] == end["chainingFeature"][0]["@id"])
+            .unwrap();
+        let last = objects
+            .iter()
+            .find(|it| it["@id"] == end["chainingFeature"][1]["@id"])
+            .unwrap();
+        steps.push((
+            first["declaredName"].as_str().unwrap(),
+            last["declaredName"].as_str().unwrap(),
+        ));
+    }
+    steps.sort();
+    assert_eq!(steps, [("a", "m"), ("a", "s"), ("a", "x"), ("w", "h")]);
+
+    let (rebuilt, _roots) = sysml_interchange::from_json(&json).unwrap();
+    assert_eq!(sysml_interchange::to_json(&rebuilt), json);
+}

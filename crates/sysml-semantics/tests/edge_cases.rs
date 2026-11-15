@@ -5247,3 +5247,107 @@ fn what_is_written_before_an_end_counts_that_end() {
         .expect("`n` is declared");
     assert_eq!(ws.references_to(n).count(), 1, "`[n]` names `n`");
 }
+
+/// An end the connector writes as a declaration is counted the same way as
+/// one written as a plain name. `ConnectorEnd = OwnedCrossMultiplicityMember?
+/// ( declaredName = NAME REFERENCES )? ownedReferenceSubsetting` gives the
+/// end no multiplicity of its own to write, so the `[5]` of `connect ([5]
+/// p1, [6] p2)` and the `[1]` of `connect [1] e ::> p1.q to ...` are cross
+/// multiplicities, and the end itself is one thing like any other --
+/// `validateFeatureEndMultiplicity`. Kept as the end's own, `[5]` said the
+/// end was five things; written in front of a named end, the `[1]` was not
+/// kept at all. And the plain `p2` written beside a declared end is an end
+/// of its own, not a second name for the declared one.
+#[test]
+fn an_end_written_as_a_declaration_is_counted_where_it_is_written() {
+    let bounds = |model: &sysml_model::Model, holder: sysml_model::ElementId| {
+        let range = model
+            .maybe(holder, "multiplicity")
+            .and_then(|v| v.as_id())
+            .expect("a range");
+        ["bound", "lowerBound", "upperBound"]
+            .iter()
+            .filter_map(|it| model.maybe(range, it).and_then(|v| v.as_id()))
+            .map(|bound| match model.maybe(bound, "value") {
+                Some(sysml_model::Value::Int(n)) => n.to_string(),
+                _ => match model.kind(bound) {
+                    ElementKind::LiteralInfinity => "*".to_string(),
+                    other => format!("{other:?}"),
+                },
+            })
+            .collect::<Vec<String>>()
+            .join("..")
+    };
+    let mut ws = ws(&[
+        (
+            "c.sysml",
+            "part def A {\n\
+             \tpart p1 { port q; }\n\
+             \tpart p2;\n\
+             \tconnection c connect ([5] p1, [6] p2);\n\
+             \tconnection d connect [1] e ::> p1.q to [2] p2;\n\
+             \tconnection f connect [0..*] g ::> p2 to p1;\n\
+             }\n",
+        ),
+        (
+            "k.kerml",
+            "classifier K {\n\
+             \tfeature p1;\n\
+             \tfeature p2;\n\
+             \tconnector h from [3] y references p1 to [4] z references p2;\n\
+             \tconnector i ([7] x ::> p1, p2);\n\
+             }\n",
+        ),
+    ]);
+    // and a second pass does the same work over without doubling it
+    ws.resolve_all();
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let model = ws.model();
+    let mut seen = Vec::new();
+    for connector in model
+        .ids()
+        .filter(|&id| model.kind(id).is_a(ElementKind::Connector))
+        .filter(|&id| ws.element_file(id).is_some())
+    {
+        let own = model
+            .maybe(connector, "multiplicity")
+            .map(|_| bounds(model, connector));
+        assert_eq!(own, None, "nothing written counts the connection itself");
+        let ends: Vec<(String, Option<String>)> = model
+            .owned(connector)
+            .iter()
+            .copied()
+            .filter(|&it| model.flag(it, "isEnd"))
+            .map(|end| {
+                let crossing: Vec<sysml_model::ElementId> = model
+                    .owned(end)
+                    .iter()
+                    .copied()
+                    .filter(|&it| model.kind(it) == ElementKind::Feature)
+                    .filter(|&it| {
+                        sysml_model::membership_kind(model, it) == ElementKind::OwningMembership
+                    })
+                    .collect();
+                assert!(crossing.len() <= 1, "one cross multiplicity at most");
+                (
+                    bounds(model, end),
+                    crossing.first().map(|&it| bounds(model, it)),
+                )
+            })
+            .collect();
+        seen.push((model.name(connector).map(str::to_string), ends));
+    }
+    let one = || "1..1".to_string();
+    let cross = |it: &str| Some(it.to_string());
+    let named = |it: &str| Some(it.to_string());
+    assert_eq!(
+        seen,
+        [
+            (named("c"), vec![(one(), cross("5")), (one(), cross("6"))]),
+            (named("d"), vec![(one(), cross("1")), (one(), cross("2"))]),
+            (named("f"), vec![(one(), cross("0..*")), (one(), None)]),
+            (named("h"), vec![(one(), cross("3")), (one(), cross("4"))]),
+            (named("i"), vec![(one(), cross("7")), (one(), None)]),
+        ]
+    );
+}
