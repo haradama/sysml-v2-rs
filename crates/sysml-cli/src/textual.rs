@@ -1578,6 +1578,10 @@ impl Writer<'_> {
                     .and_then(Value::as_str)
                     .unwrap_or("when");
                 let argument = self.arguments(value).into_iter().next()?;
+                // `accept sig after 10 [s]` names the payload it waits on
+                if let Some(name) = model.name(payload) {
+                    let _ = write!(said, "{} ", sysml_syntax::quote(name));
+                }
                 let _ = write!(said, "{how} {}", self.expr(argument)?);
             }
             Some(_) => return None,

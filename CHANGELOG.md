@@ -12,7 +12,7 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 
 ### One spelling for every key, a name for every element, and the whole model written back
 
-`sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`
+`sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`, `sysmlv2-model`
 
 - **Breaking:** every key `sysml --format json` and `sysml mcp` name
   themselves is `snake_case`, as the arguments already were:
@@ -38,13 +38,23 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
   the document kept of it, which `sysml export` keeps of each, and
   otherwise from its structure. Exported again, what it writes of each
   official example whose names all resolve is the document it was read
-  from in 31 of 32 training directories, 35 of 38 example and validation
+  from in 31 of 32 training directories, 37 of 38 example and validation
   directories, and 8 of 13 KerML ones.
 - Each name it writes is the one that finds the element from where it
   stands -- through an import, from the nearest namespace that holds it,
   or from `$::` past a nearer declaration of the same name -- rather than
   its whole qualified name, which does not reach a private member and
   which a package of the model's own can hide.
+- `interface a to b;` connects `a` and `b`. It was read as an interface
+  named `a` with the one end `b`: SysML writes an interface's declaration
+  only in front of `connect`, as KerML writes a connector's only in front
+  of `from`.
+- The unit in `accept after 5 [s] then off;` is part of the time it
+  waits, and no longer the multiplicity of the transition: only a step's
+  name takes one in a statement, as `then timeslice t[0..*]` does.
+- `import A::**;` is the import of `A` and everything under it, a
+  `MembershipImport`, and no longer the `NamespaceImport` that
+  `A::*::**` is, which does not bring `A` in.
 - Writing `[*]` asked `LiteralInfinity` for a value it has no property
   for, which a debug build stops on.
 - An element that declares no name of its own but borrows one, such as

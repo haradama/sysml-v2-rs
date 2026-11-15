@@ -687,7 +687,29 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId, bu
         Some(clause) => clause.children_with_tokens().collect(),
         None if connector => return,
         None if node.kind() == CONTROL_STMT => {
-            let Some(indexed) = node.children().find(|child| child.kind() == INDEX_EXPR) else {
+            // what counts a step is an index on its name; the unit of
+            // `accept after 5 [s]`, and a bracket in a guard or a value,
+            // belong to the expression they are written in
+            let counts_a_step = |indexed: &SyntaxNode| {
+                let named = indexed
+                    .children()
+                    .next()
+                    .is_some_and(|base| base.kind() == NAME_REF);
+                let after = std::iter::successors(indexed.prev_sibling_or_token(), |it| {
+                    it.prev_sibling_or_token()
+                })
+                .find(|it| !it.kind().is_trivia())
+                .map(|it| it.kind());
+                named
+                    && !matches!(
+                        after,
+                        Some(AT_KW | AFTER_KW | WHEN_KW | IF_KW | VIA_KW | EQ | COLON_EQ | TO_KW)
+                    )
+            };
+            let Some(indexed) = node
+                .children()
+                .find(|child| child.kind() == INDEX_EXPR && counts_a_step(child))
+            else {
                 return;
             };
             indexed
@@ -2398,7 +2420,7 @@ fn filter_package_import_kind(node: &SyntaxNode) -> ElementKind {
         .filter(|child| child.kind() == QUALIFIED_NAME)
         .flat_map(|qname| qname.descendants_with_tokens())
         .filter_map(|e| e.into_token())
-        .any(|t| matches!(t.kind(), STAR | STAR_STAR));
+        .any(|t| t.kind() == STAR);
     match wildcard {
         true => ElementKind::NamespaceImport,
         false => ElementKind::MembershipImport,
@@ -2407,10 +2429,15 @@ fn filter_package_import_kind(node: &SyntaxNode) -> ElementKind {
 
 fn import_kind(node: &SyntaxNode) -> ElementKind {
     use SyntaxKind::*;
+    // `ImportedNamespace = QualifiedName '::' '*' ( '::' isRecursive ?=
+    // '**' )?` and `ImportedMembership = QualifiedName ( '::' isRecursive
+    // ?= '**' )?`: the `*` is what imports a namespace's members. `import
+    // A::**;` imports `A` itself and everything under it; read as the
+    // import of `A`'s members, it was `A::*::**` and `A` did not arrive.
     let wildcard = node
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .any(|t| matches!(t.kind(), STAR | STAR_STAR));
+        .any(|t| t.kind() == STAR);
     // `expose` is not an import: a view exposes what it shows, and the
     // standard has metaclasses of its own for it
     // (`exposes-compartment-element = MembershipExpose | NamespaceExpose`).
@@ -3073,6 +3100,13 @@ fn names_an_end(node: &SyntaxNode) -> bool {
     has_token(node, SyntaxKind::CONNECTOR_KW)
         && has_token(node, SyntaxKind::TO_KW)
         && !has_token(node, SyntaxKind::FROM_KW)
+        // `InterfaceUsageDeclaration = UsageDeclaration ValuePart? (
+        // 'connect' InterfacePart )? | InterfacePart` -- a declaration
+        // only in front of a `connect`: `interface b to c;` connects `b`
+        // and `c`, and read as an interface called `b` it had one end
+        || has_token(node, SyntaxKind::INTERFACE_KW)
+            && has_token(node, SyntaxKind::TO_KW)
+            && !has_token(node, SyntaxKind::CONNECT_KW)
         || has_token(node, SyntaxKind::BINDING_KW)
             && !has_token(node, SyntaxKind::BIND_KW)
             && !has_token(node, SyntaxKind::OF_KW)
@@ -4612,6 +4646,49 @@ mod tests {
         assert_eq!(asks(otherwise).as_deref(), Some("q"));
     }
 
+    /// `InterfaceUsageDeclaration = UsageDeclaration ValuePart? ( 'connect'
+    /// InterfacePart )? | InterfacePart` -- without a `connect` there is no
+    /// declaration, and the name after the keyword is the first end.
+    #[test]
+    fn an_interface_without_connect_names_its_ends() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "package P {\n\tinterface a to b;\n\tinterface i connect a to b;\n}\n",
+        ));
+        let interfaces = model.owned(roots[0]).to_vec();
+        assert_eq!(model.name(interfaces[0]), None);
+        assert_eq!(model.name(interfaces[1]), Some("i"));
+    }
+
+    /// `accept after 5 [s] then off;` waits five seconds; the bracket is
+    /// the unit of the time, and the transition counts nothing.
+    #[test]
+    fn the_unit_of_a_time_trigger_is_no_multiplicity() {
+        let (model, _) = build_model(&sysml_syntax::parse(
+            "state def S {\n\tstate off;\n\taccept after 5 [s] then off;\n\tthen timeslice t[0..*];\n}\n",
+        ));
+        let transition = model
+            .ids()
+            .find(|&id| model.kind(id) == ElementKind::TransitionUsage)
+            .expect("the accept is a transition");
+        assert_eq!(model.maybe(transition, "multiplicity"), None);
+        assert!(
+            !model
+                .owned(transition)
+                .iter()
+                .any(|&it| model.kind(it) == ElementKind::MultiplicityRange),
+            "the transition counts nothing"
+        );
+        // a step named in a statement still takes one
+        let portion = model
+            .ids()
+            .find(|&id| model.name(id) == Some("t"))
+            .expect("the timeslice is declared");
+        assert!(model
+            .owned(portion)
+            .iter()
+            .any(|&it| model.kind(it) == ElementKind::MultiplicityRange));
+    }
+
     /// `WhileLoopNode : WhileLoopActionUsage = ... ( 'until'
     /// ExpressionParameterMember ';' )?` -- the parser writes the `until`
     /// as a statement of its own, and a second loop standing for it says
@@ -4659,6 +4736,14 @@ mod tests {
             model.get(imports[1], "isRecursive"),
             Some(&Value::Bool(true))
         );
+        // `Q::**` imports `Q` and all under it; `Q::*::**` what is in it
+        assert_eq!(model.kind(imports[1]), ElementKind::MembershipImport);
+        let (model, roots) =
+            build_model(&sysml_syntax::parse("package P {\n\timport Q::*::**;\n}\n"));
+        assert_eq!(
+            model.kind(model.owned(roots[0])[0]),
+            ElementKind::NamespaceImport
+        );
     }
 
     /// `import Lib::**[@Meta];` imports a package that imports `Lib::**`
@@ -4671,9 +4756,10 @@ mod tests {
             "package P {\n\timport all Lib::**[@Meta][@Other];\n\timport Lib::Q[@Meta];\n}\n",
         ));
         let imports = model.owned(roots[0]).to_vec();
+        // `Lib::**` imports `Lib` and what is under it, as one membership
         for (import, named) in imports
             .iter()
-            .zip([ElementKind::NamespaceImport, ElementKind::MembershipImport])
+            .zip([ElementKind::MembershipImport, ElementKind::MembershipImport])
         {
             assert_eq!(model.kind(*import), ElementKind::NamespaceImport);
             let [package] = model.owned(*import) else {

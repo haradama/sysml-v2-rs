@@ -3689,7 +3689,7 @@ fn import_json_writes_back_what_exports_the_same() {
         "for i : Integer in (1, 2, 3) {",
         "accept when car.engine.power > 100 do send Go() to car then off;",
         "transition stopped first on if false then off;",
-        "public import car::*::**[@Safety];",
+        "public import car::**[@Safety];",
         "private attribute color : Color = Color::red;",
         "comment about Engine /* engines\n     *   burn fuel\n     */",
     ] {

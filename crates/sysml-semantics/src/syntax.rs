@@ -45,7 +45,8 @@ pub(crate) fn listed_end(child: &SyntaxNode) -> bool {
                 .any(|it| it.kind() == SyntaxKind::REFERENCES)
 }
 
-/// Whether the name after `connector` is the end it runs from.
+/// Whether the name after `connector` or `interface` is the end it runs
+/// from.
 ///
 /// KerML writes a connector's declaration only in front of a `from`, so
 /// `connector eng to tanks.main1;` names no connector: it relates `eng`
@@ -58,6 +59,9 @@ pub(crate) fn names_an_end(node: &SyntaxNode) -> bool {
             .any(|it| it.kind() == wanted)
     };
     has(SyntaxKind::CONNECTOR_KW) && has(SyntaxKind::TO_KW) && !has(SyntaxKind::FROM_KW)
+        // SysML's interface likewise only in front of a `connect`:
+        // `interface b to c;` connects `b` and `c`
+        || has(SyntaxKind::INTERFACE_KW) && has(SyntaxKind::TO_KW) && !has(SyntaxKind::CONNECT_KW)
         || has(SyntaxKind::BINDING_KW)
             && !has(SyntaxKind::BIND_KW)
             && !has(SyntaxKind::OF_KW)
