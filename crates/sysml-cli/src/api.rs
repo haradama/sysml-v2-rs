@@ -29,6 +29,10 @@ pub enum Error {
     Transport(String),
     /// An answer that could not be read as what was asked for.
     Io(std::io::Error),
+    /// An id that cannot name anything in a URL path: `.` and `..` are
+    /// read as "here" and "up" however they are encoded, so asking for
+    /// project `..` would ask for something else entirely.
+    Id(String),
 }
 
 impl std::fmt::Display for Error {
@@ -43,6 +47,7 @@ impl std::fmt::Display for Error {
             }
             Error::Transport(what) => write!(f, "{what}"),
             Error::Io(e) => write!(f, "I/O error: {e}"),
+            Error::Id(id) => write!(f, "`{id}` cannot be an id in a URL path"),
         }
     }
 }
@@ -221,7 +226,7 @@ impl Client {
 
     /// `GET /projects/{id}`
     pub fn project(&self, project_id: &str) -> Result<Project, Error> {
-        self.get_json(&format!("/projects/{project_id}"))
+        self.get_json(&format!("/projects/{}", segment(project_id)?))
     }
 
     /// `POST /projects`
@@ -234,7 +239,7 @@ impl Client {
 
     /// `GET /projects/{id}/commits`
     pub fn commits(&self, project_id: &str) -> Result<Vec<Commit>, Error> {
-        self.get_all(&format!("/projects/{project_id}/commits"))
+        self.get_all(&format!("/projects/{}/commits", segment(project_id)?))
     }
 
     /// `POST /projects/{id}/commits` — `changes` are element payloads as
@@ -257,7 +262,7 @@ impl Client {
             })
             .collect();
         self.post_json(
-            &format!("/projects/{project_id}/commits"),
+            &format!("/projects/{}/commits", segment(project_id)?),
             serde_json::json!({
                 "@type": "Commit",
                 "description": description,
@@ -269,7 +274,9 @@ impl Client {
     /// `GET /projects/{pid}/commits/{cid}/elements`
     pub fn elements(&self, project_id: &str, commit_id: &str) -> Result<Vec<Json>, Error> {
         self.get_all(&format!(
-            "/projects/{project_id}/commits/{commit_id}/elements"
+            "/projects/{}/commits/{}/elements",
+            segment(project_id)?,
+            segment(commit_id)?
         ))
     }
 
@@ -281,30 +288,106 @@ impl Client {
         element_id: &str,
     ) -> Result<Json, Error> {
         self.get_json(&format!(
-            "/projects/{project_id}/commits/{commit_id}/elements/{element_id}"
+            "/projects/{}/commits/{}/elements/{}",
+            segment(project_id)?,
+            segment(commit_id)?,
+            segment(element_id)?
         ))
     }
 }
 
-/// Where a `Link` header says the next page is, if it says.
+/// `id` written as one segment of a URL path. An id is whatever the
+/// server or the user says it is, and spliced in as it stands a space, a
+/// `/`, a `?` or a `#` in it would make the request ask for another path,
+/// a query or a fragment: `a b/c?d=1` asked for `/projects/a%20b/c?d=1`.
+/// Everything but the unreserved characters of RFC 3986 is
+/// percent-encoded, and the dot segments, which no encoding keeps from
+/// being read as "here" and "up", are refused.
+fn segment(id: &str) -> Result<String, Error> {
+    if matches!(id, "" | "." | "..") {
+        return Err(Error::Id(id.to_string()));
+    }
+    let mut out = String::with_capacity(id.len());
+    for byte in id.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    Ok(out)
+}
+
+/// Where a `Link` header says the next page is, if it says. The header is
+/// read as RFC 8288 writes it: a comma separates two links only outside
+/// the `<...>` of a target and outside a quoted parameter value, so
+/// `</commits?a=1,2>; rel="next"` is one link, which splitting on every
+/// comma made two (and the client asked for `2`). A `rel` may name
+/// several relations, separated by spaces.
 fn next_page(link: &str) -> Option<String> {
-    link.split(',').find_map(|entry| {
-        let (url, params) = entry.split_once(';')?;
-        params
-            .split(';')
-            .any(|param| {
-                matches!(
-                    param.trim().to_ascii_lowercase().as_str(),
-                    "rel=\"next\"" | "rel=next"
-                )
-            })
-            .then(|| {
-                url.trim()
-                    .trim_start_matches('<')
-                    .trim_end_matches('>')
-                    .to_string()
-            })
-    })
+    let mut rest = link;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c == ',' || c.is_whitespace());
+        let target = rest.strip_prefix('<')?;
+        let close = target.find('>')?;
+        let url = &target[..close];
+        rest = &target[close + 1..];
+        let mut next = false;
+        // the parameters, up to the comma that ends this link
+        loop {
+            rest = rest.trim_start();
+            let Some(after) = rest.strip_prefix(';') else {
+                break;
+            };
+            let after = after.trim_start();
+            let name_end = after
+                .find(|c: char| matches!(c, '=' | ';' | ',') || c.is_whitespace())
+                .unwrap_or(after.len());
+            let name = &after[..name_end];
+            rest = after[name_end..].trim_start();
+            let mut value = String::new();
+            if let Some(after) = rest.strip_prefix('=') {
+                let after = after.trim_start();
+                if let Some(quoted) = after.strip_prefix('"') {
+                    let mut chars = quoted.char_indices();
+                    let mut end = quoted.len();
+                    while let Some((at, c)) = chars.next() {
+                        match c {
+                            '\\' => {
+                                if let Some((_, escaped)) = chars.next() {
+                                    value.push(escaped);
+                                }
+                            }
+                            '"' => {
+                                end = at + 1;
+                                break;
+                            }
+                            c => value.push(c),
+                        }
+                    }
+                    rest = &quoted[end..];
+                } else {
+                    let end = after
+                        .find(|c: char| matches!(c, ';' | ',') || c.is_whitespace())
+                        .unwrap_or(after.len());
+                    value.push_str(&after[..end]);
+                    rest = &after[end..];
+                }
+            }
+            if name.eq_ignore_ascii_case("rel")
+                && value
+                    .split_ascii_whitespace()
+                    .any(|rel| rel.eq_ignore_ascii_case("next"))
+            {
+                next = true;
+            }
+        }
+        if next {
+            return Some(url.to_string());
+        }
+        // whatever is left of a link that is not well formed, to its comma
+        rest = rest.find(',').map_or("", |at| &rest[at..]);
+    }
 }
 
 #[cfg(test)]
@@ -573,6 +656,67 @@ mod tests {
             )
         });
         assert_eq!(Client::new(base, QUICK).projects().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn an_id_is_one_segment_of_the_path() {
+        // a space, a slash, a query and a fragment in an id are the id's,
+        // not the URL's: spliced in as they stood, the request asked for
+        // `/projects/a%20b/c?d=1`, another path with a query
+        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = std::sync::Arc::clone(&asked);
+        let base = serve(2, move |_, target| {
+            seen.lock().unwrap().push(target.to_string());
+            response("200 OK", &[], r#"{"@id":"x"}"#)
+        });
+        let client = Client::new(base, QUICK);
+        client.project("a b/c?d=1#frag").unwrap();
+        client.element("p/1", "c 1", "é").unwrap();
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [
+                "/projects/a%20b%2Fc%3Fd%3D1%23frag",
+                "/projects/p%2F1/commits/c%201/elements/%C3%A9",
+            ]
+        );
+        // and `..`, which asked for `/commits/x` when it led a path, is
+        // refused before anything is sent: no encoding of a dot segment
+        // keeps a URL parser from reading it as "up"
+        for id in ["..", ".", ""] {
+            assert!(matches!(
+                Client::new("http://127.0.0.1:9", QUICK).project(id),
+                Err(Error::Id(_))
+            ));
+        }
+        assert!(matches!(
+            Client::new("http://127.0.0.1:9", QUICK).elements("p", ".."),
+            Err(Error::Id(_))
+        ));
+        // `../commits/x` is one segment once its slash is encoded
+        assert_eq!(segment("../commits/x").unwrap(), "..%2Fcommits%2Fx");
+    }
+
+    #[test]
+    fn a_comma_inside_a_link_target_does_not_end_the_link() {
+        // RFC 8288 separates links with commas, but only outside `<...>`
+        // and outside a quoted value: splitting on every comma read this
+        // header as `</projects/pg/commits?a=1` and `2>; rel="next"`
+        assert_eq!(
+            next_page(r#"</projects/pg/commits?a=1,2>; rel="next""#).as_deref(),
+            Some("/projects/pg/commits?a=1,2")
+        );
+        // a quoted parameter may hold a comma and a semicolon too
+        assert_eq!(
+            next_page(r#"</a>; title="x, y; rel=next", </b>; rel="next""#).as_deref(),
+            Some("/b")
+        );
+        // a rel may name several relations
+        assert_eq!(
+            next_page(r#"</p>; rel="prev", </n>; rel="last next""#).as_deref(),
+            Some("/n")
+        );
+        assert_eq!(next_page(r#"</p>; rel="prev""#), None);
+        assert_eq!(next_page("</p>; rel=NEXT").as_deref(), Some("/p"));
     }
 
     #[test]
