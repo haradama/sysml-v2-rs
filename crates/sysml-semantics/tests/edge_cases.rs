@@ -370,6 +370,56 @@ fn what_a_model_means_by_naming_something_it_already_has() {
     );
 }
 
+/// A parameter of a behaviour stands for the parameter at the same
+/// position in what its owner specializes, whatever it is called:
+/// `checkFeatureParameterRedefinition` counts positions, not names. So
+/// `y` below is `A`'s `x` under a name of its own and has what a `T` has;
+/// the second parameter is the second, though the first is spelled like
+/// it; a type that declares no parameter of its own passes on the ones
+/// it inherits; and a result parameter stands for the result, wherever it
+/// is written. A port's directed feature is no parameter, and it is
+/// still read by its name.
+#[test]
+fn a_parameter_redefines_the_one_at_its_position_and_not_the_one_of_its_name() {
+    let text = "package X {\n\
+        \tpart def T { attribute m; }\n\
+        \tpart def U { attribute n; }\n\
+        \taction def A { in x : T; in w : U; }\n\
+        \taction a : A { in y; attribute q :> y.m; }\n\
+        \taction b : A { in w; in x; attribute q :> w.m; attribute r :> x.n; }\n\
+        \taction def B :> A;\n\
+        \taction c : B { in y; out z; attribute q :> y.m; attribute r :> z.n; }\n\
+        \tcalc def C { in x : T; return r : U; }\n\
+        \tcalc d : C { in y; return s; attribute q :> y.m; attribute r :> s.n; }\n\
+        \tport def P { in item x : T; }\n\
+        \tport p : P { in item x; attribute q :> x.m; }\n\
+        }\n";
+    let positional = ws(&[("m.sysml", text)]);
+    assert!(
+        positional.unresolved().is_empty(),
+        "{:?}",
+        positional.unresolved()
+    );
+
+    // and read by position, the name it shares with another parameter
+    // brings nothing of that one's
+    let swapped = ws(&[(
+        "n.sysml",
+        "package X {\n\
+         \tpart def T { attribute m; }\n\
+         \tpart def U { attribute n; }\n\
+         \taction def A { in x : T; in w : U; }\n\
+         \taction b : A { in w; attribute q :> w.n; }\n\
+         }\n",
+    )]);
+    let names: Vec<&str> = swapped
+        .unresolved()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(names, ["w.n"]);
+}
+
 /// A keyword whose base type is chosen by a condition names both, and
 /// which one an element gets is decided by an expression this resolver
 /// does not evaluate. A name either of them declares is one the model
@@ -1995,6 +2045,25 @@ fn a_root_package_named_after_a_library_one_is_reported_and_read_from_its_own_si
         );
         // and the collision is reported in the file it is written in
         assert!(ws.findings(&[0]).collisions.len() + ws.findings(&[1]).collisions.len() == 1);
+    }
+}
+
+/// What an action specializes without saying so is the library's
+/// `Actions::Action`, and a model's own root package called `Actions`
+/// does not stand in for it: the implied base is the library's name, not
+/// one the model wrote, so it is read in the library. Read from the
+/// model's side of the boundary, the model's `Actions` held no `Action`,
+/// and every action in the workspace lost `start` and `done`.
+#[test]
+fn a_root_package_named_after_a_library_one_does_not_take_its_implied_bases() {
+    let library = "standard library package Actions {\n    abstract action def Action {\n        action start;\n        action done;\n    }\n}\n";
+    let mine = "package Actions {\n    action def Go;\n    action go : Go {\n        first start then done;\n    }\n}\npackage M {\n    action def Run {\n        first start then done;\n    }\n}\n";
+    for order in [
+        [("lib.sysml", library), ("m.sysml", mine)],
+        [("m.sysml", mine), ("lib.sysml", library)],
+    ] {
+        let ws = ws(&order);
+        assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
     }
 }
 
@@ -4657,4 +4726,124 @@ fn what_is_offered_after_a_qualifier_is_what_the_qualifier_holds() {
     assert!(offered("part z :> c.").contains(&"w".to_string()));
     // and with no qualifier, the names around the cursor as before
     assert!(offered("part c : ").contains(&"Car".to_string()));
+}
+
+/// An alias is a member of the namespace it is written in, and `import
+/// A::**` brings in every visible member nested anywhere below `A`. The
+/// walk below stepped over every relationship, and an alias membership is
+/// one, so an alias in `A::N` was the only thing there the import missed.
+#[test]
+fn a_recursive_import_brings_in_a_nested_alias() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package A { package N { part def D; alias AL for D; private alias Hidden for D; } }\n\
+         package B { import A::**; part e : AL; part f : Hidden; }\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    // and one kept private there stays out of reach, as a declaration would
+    assert_eq!(names, ["Hidden"]);
+}
+
+/// `part y : Lib { @Md; }` names its metadata from inside `y`, where `Md`
+/// is had only through `Lib`. Finding it asks for `y`'s supertypes while
+/// they are being worked out; answered with none, `Md` went unfound and
+/// `y` was left without the base type its metadata gives it -- though
+/// `#Md part w` in front of a declaration, looked up the same way from one
+/// scope further out, always found it.
+#[test]
+fn metadata_inside_a_body_is_found_through_what_the_body_is_typed_by() {
+    let ws = ws(&[(
+        "m.sysml",
+        "package P {\n\
+         \tmetadata def SemanticMetadata { attribute baseType; }\n\
+         \tmetadata def X;\n\
+         \tpart def Lib {\n\
+         \t\tmetadata def Md :> SemanticMetadata { :>> baseType = things meta X; }\n\
+         \t\tpart things { attribute special; }\n\
+         \t}\n\
+         \tpart y : Lib { @Md; attribute q :> special; }\n\
+         \tpart y3 : Lib { #Md part w { attribute q :> special; } }\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+}
+
+/// `[@Step]` asks what an element is only where `Step` is the reflective
+/// model's own metaclass. A model's `metadata def Step;` is a keyword of
+/// its own that shares the name, and filtering by it admits what carries
+/// it -- not every step in the package, which is what reading it by its
+/// name did.
+#[test]
+fn a_filter_by_a_keyword_named_like_a_metaclass_asks_for_the_keyword() {
+    let ws = ws(&[
+        (
+            "lib.kerml",
+            "standard library package KerML { metaclass Step; }\n",
+        ),
+        (
+            "m.sysml",
+            "package G {\n\
+             \tmetadata def Step;\n\
+             \tpackage Src { #Step part def Stepped; action plainAction; }\n\
+             \tpackage Mine { import Src::*[@Step]; part a : Stepped; action b :> plainAction; }\n\
+             \tpackage Its { import Src::*[@KerML::Step]; action b :> plainAction; }\n\
+             }\n",
+        ),
+    ]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["plainAction"]);
+}
+
+/// An alias chain resolves whichever way round it is written. Written
+/// front to back -- `alias A0 for A1; ... alias A1999 for X;` -- each link
+/// is worked out inside the one before it, and the walk ran out of depth
+/// with all but the last few hundred links naming nothing, at a cost
+/// that grew with the square of the chain. A chain that closes on itself
+/// still names nothing, however long it is.
+#[test]
+fn an_alias_chain_resolves_in_whatever_order_it_is_written() {
+    let n = 2000;
+    let mut text = String::from("package D {\n\tpart def X;\n");
+    for i in 0..n {
+        text.push_str(&format!("\talias A{i} for A{};\n", i + 1));
+    }
+    text.push_str(&format!("\talias A{n} for X;\n\tpart first : A0;\n"));
+    let ring = 2000;
+    for i in 0..ring {
+        text.push_str(&format!("\talias R{i} for R{};\n", (i + 1) % ring));
+    }
+    text.push_str("\talias S for T;\n\talias T for S;\n\tpart lost : R0;\n}\n");
+    let started = std::time::Instant::now();
+    let ws = ws(&[("m.sysml", &text)]);
+    let mut names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut expected: Vec<String> = (0..ring).map(|i| format!("R{i}")).collect();
+    expected.extend(["S".to_string(), "T".to_string()]);
+    expected.sort_unstable();
+    assert_eq!(names, expected);
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+/// `disjoint from` says a type is not the other, so nothing of the
+/// other's is inherited through it. Read as a specialization, every
+/// occurrence had the `self` of a data value beside its own, because the
+/// library writes `class Occurrence specializes Anything disjoint from
+/// DataValue`.
+#[test]
+fn a_disjoint_type_inherits_nothing_of_what_it_is_disjoint_from() {
+    let ws = ws(&[(
+        "m.kerml",
+        "package K {\n\
+         \tclassifier A { feature a; }\n\
+         \tclassifier B { feature b; }\n\
+         \tclassifier C specializes B disjoint from A { feature p subsets b; feature q subsets a; }\n\
+         }\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["a"]);
 }

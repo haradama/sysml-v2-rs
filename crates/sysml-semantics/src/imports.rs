@@ -16,7 +16,7 @@ use sysml_model::{ElementId, ElementKind, Vis};
 use sysml_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::syntax::*;
-use crate::{Access, ImportScope, ImportTarget, Workspace};
+use crate::{Access, ImportScope, ImportTarget, Workspace, MAX_ALIAS_NESTING};
 
 impl Workspace {
     /// All references resolving to `target`.
@@ -365,16 +365,35 @@ impl Workspace {
                 return true;
             }
         }
+        // Only the reflective model's own definitions say what an element
+        // is. A model's `metadata def Step;` is a keyword of its own that
+        // happens to share a metaclass's name; read by that name, `[@Step]`
+        // admitted every step in the package, annotated or not.
         let names_a_metaclass = matches!(
             self.model.kind(wanted),
             ElementKind::Metaclass | ElementKind::MetadataDefinition
-        );
+        ) && self.in_reflective_model(wanted);
         names_a_metaclass
             && self
                 .model
                 .name(wanted)
                 .and_then(ElementKind::from_name)
                 .is_some_and(|kind| self.model.kind(member).is_a(kind))
+    }
+    /// Is `elem` declared in the standard library's reflective model of
+    /// the abstract syntax -- the `KerML` and `SysML` library packages,
+    /// where `metaclass Structure` and `metadata def PartUsage` stand for
+    /// the metaclasses of those names?
+    fn in_reflective_model(&self, elem: ElementId) -> bool {
+        let mut at = elem;
+        while let Some(owner) = self.model.owner(at) {
+            if owner == self.root {
+                return self.model.kind(at).is_a(ElementKind::LibraryPackage)
+                    && matches!(self.model.name(at), Some("KerML" | "SysML"));
+            }
+            at = owner;
+        }
+        false
     }
     pub(crate) fn import_target(&mut self, import: ElementId) -> Option<ImportTarget> {
         if let Some(cached) = self.imports.get(&import) {
@@ -390,7 +409,24 @@ impl Workspace {
         self.lookups += 1;
         let cut = self.blocked;
         let result = (|| {
-            let node = self.source.get(&import)?.clone();
+            // `import A::*[@Safety];` imports the filter package it owns,
+            // and that package imports `A::*` -- the import the text was
+            // written for
+            let Some(node) = self.source.get(&import).cloned() else {
+                let package = self
+                    .model
+                    .owned(import)
+                    .iter()
+                    .copied()
+                    .find(|&it| self.model.kind(it).is_a(ElementKind::Package))?;
+                return Some(ImportTarget {
+                    target: package,
+                    scope: ImportScope::Members,
+                    leaf: None,
+                    all: self.model.flag(import, "isImportAll"),
+                    filters: Vec::new(),
+                });
+            };
             let qname = node
                 .children()
                 .find(|c| c.kind() == SyntaxKind::QUALIFIED_NAME)?;
@@ -453,6 +489,67 @@ impl Workspace {
         if let Some(cached) = self.aliases.get(&alias) {
             return *cached;
         }
+        if self.alias_nesting >= MAX_ALIAS_NESTING {
+            // Too deep to go on here: the alias is worked out later, from
+            // the outermost one, and every answer that waited on it is
+            // held back until then.
+            if self.deferred_alias.is_none() {
+                self.deferred_alias = Some(alias);
+                self.deferred_waiting = self
+                    .resolving
+                    .iter()
+                    .copied()
+                    .filter(|&it| self.model.kind(it) == ElementKind::Membership)
+                    .collect();
+            }
+            self.blocked += 1;
+            return None;
+        }
+        if self.alias_nesting > 0 {
+            return self.resolve_alias_once(alias);
+        }
+        // The outermost alias. Where one deep inside it was set aside, that
+        // one is worked out first -- itself perhaps setting aside one
+        // deeper still -- and then the one that waited on it again, so a
+        // chain of any length resolves a bounded stretch at a time.
+        let mut pending = vec![alias];
+        let mut waiting = HashSet::new();
+        while let Some(&next) = pending.last() {
+            self.deferred_alias = None;
+            self.resolve_alias_once(next);
+            let Some(deeper) = self.deferred_alias.take() else {
+                pending.pop();
+                continue;
+            };
+            waiting.extend(std::mem::take(&mut self.deferred_waiting));
+            // What waited on `deeper` is worked out again once it is
+            // known, so the answers given in its absence are dropped.
+            for id in std::mem::take(&mut self.provisional) {
+                self.imports.remove(&id);
+                self.aliases.remove(&id);
+                self.supertypes.remove(&id);
+                self.semantic_bases.remove(&id);
+            }
+            if waiting.contains(&deeper) || pending.contains(&deeper) {
+                // Each alias waiting here leads to the next, and the last
+                // leads back to one already waiting: a cycle, `alias A for
+                // B; alias B for A;` written long, and nothing on it or
+                // leading into it names anything. Every link is told so at
+                // once; left to be found again from each of them, a long
+                // ring was walked once per link.
+                for id in pending.drain(..).chain(waiting.drain()) {
+                    self.aliases.insert(id, None);
+                }
+                break;
+            }
+            pending.push(deeper);
+        }
+        self.aliases.get(&alias).copied().flatten()
+    }
+    fn resolve_alias_once(&mut self, alias: ElementId) -> Option<ElementId> {
+        if let Some(cached) = self.aliases.get(&alias) {
+            return *cached;
+        }
         if !self.in_progress.insert(alias) {
             if self.resolving.last() != Some(&alias) {
                 self.blocked += 1;
@@ -461,7 +558,9 @@ impl Workspace {
         }
         self.resolving.push(alias);
         self.lookups += 1;
+        self.alias_nesting += 1;
         let cut = self.blocked;
+        let set_aside = self.deferred_alias;
         let result = (|| {
             let node = self.source.get(&alias)?.clone();
             let qname = node
@@ -470,10 +569,15 @@ impl Workspace {
             let segments = name_segments(&qname);
             self.resolve_from(alias, &segments)
         })();
+        self.alias_nesting -= 1;
         self.resolving.pop();
         self.in_progress.remove(&alias);
         self.aliases.insert(alias, result);
-        if result.is_none() && self.blocked != cut {
+        // An alias set aside below this one may be what the name meant,
+        // and the lookup carried on past it to whatever else answers to
+        // the name: an answer found that way is held back too.
+        let waited = self.deferred_alias != set_aside;
+        if (result.is_none() || waited) && self.blocked != cut {
             self.provisional.insert(alias);
         }
         result

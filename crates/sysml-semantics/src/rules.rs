@@ -638,7 +638,19 @@ impl Workspace {
         // that keeps nothing says one thing where the model has such
         // elements elsewhere and another where it has none anywhere:
         // the second is this toolchain not building them.
-        let present: HashSet<ElementKind> = by_kind.keys().copied().collect();
+        //
+        // Anywhere in the model, and not only under the files asked: what
+        // the toolchain builds does not depend on which files are checked.
+        // Tallied over those alone, a check of SysML files -- which have no
+        // `chains` -- had no `FeatureChaining`, and every rule reading a
+        // `featureTarget` went unevaluated until an unrelated KerML file
+        // with one was checked beside them.
+        let present: HashSet<ElementKind> = self
+            .model()
+            .ids()
+            .map(|it| self.model().kind(it))
+            .chain(by_kind.keys().copied())
+            .collect();
 
         let mut checked = Checked::default();
         for (rule, expr, refused) in &parsed {
@@ -725,7 +737,195 @@ impl Workspace {
     /// nothing answers to the name of what it redefines, and two of those
     /// redefining different things are a model the resolver reads without
     /// complaint.
-    fn distinguishable(&self, namespace: ElementId) -> bool {
+    ///
+    /// A type's memberships are its inherited ones as well (KerML 7.3.2.2:
+    /// "the member names of all inherited memberships must be distinct
+    /// from each other and from the member names of all owned
+    /// memberships"), so those are compared too -- see
+    /// [`inherited_distinguishable`](Self::inherited_distinguishable).
+    fn distinguishable(&mut self, namespace: ElementId) -> bool {
+        self.owned_distinguishable(namespace)
+            && (!self.model().kind(namespace).is_a(ElementKind::Type)
+                || self.inherited_distinguishable(namespace))
+    }
+
+    /// The owned memberships of `namespace`, each with the member it
+    /// holds -- what an alias stands for, where it is one -- and the
+    /// names it answers to.
+    fn named_memberships(
+        &self,
+        memberships: impl IntoIterator<Item = ElementId>,
+    ) -> Vec<(ElementId, ElementId, Vec<String>)> {
+        let model = self.model();
+        let mut out = Vec::new();
+        for owned in memberships {
+            let kind = model.kind(owned);
+            let member = if kind == ElementKind::Membership {
+                match model.maybe(owned, "memberElement") {
+                    Some(sysml_model::Value::Ref(target)) => *target,
+                    _ => continue,
+                }
+            } else if is_bare_relationship(kind) {
+                continue;
+            } else {
+                owned
+            };
+            let mut names: Vec<String> = Vec::new();
+            for name in [
+                model.name(owned),
+                model
+                    .get(owned, "declaredShortName")
+                    .and_then(sysml_model::Value::as_str),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !names.iter().any(|it| it == name) {
+                    names.push(name.to_string());
+                }
+            }
+            out.push((owned, member, names));
+        }
+        out
+    }
+
+    /// The inherited half of `validateNamespaceDistinguishibility`: no
+    /// inherited membership may share a name with an owned one or with
+    /// another inherited one where the metaclass of either member conforms
+    /// to the other's.
+    ///
+    /// `part def B :> A { part x; }` beside `A`'s own `part x` declares a
+    /// second `x` rather than redefining the first, and a reader of `B::x`
+    /// cannot tell which is meant. What a redefinition has replaced is not
+    /// inherited at all (`removeRedefinedFeatures`), and one membership
+    /// reached through two supertypes is one membership. Where one of two
+    /// clashing members specializes the other -- a parameter redefining
+    /// the one at its position, which the model does not write down, or a
+    /// redefinition inherited beside what it redefined by another path --
+    /// the refinement stands in its place, as a lookup takes it, and the
+    /// two are not told apart by name because they need not be.
+    fn inherited_distinguishable(&mut self, ty: ElementId) -> bool {
+        let owned = self.model().owned(ty).to_vec();
+        let mut seen: Vec<(String, ElementId, ElementKind)> = Vec::new();
+        let mut candidates: Vec<ElementId> = Vec::new();
+        for (owned, member, names) in self.named_memberships(owned) {
+            candidates.push(member);
+            // The builder names what it stands up for a statement that
+            // writes none -- a transition's inline `do send s to p` is
+            // reified as the `effect` it redefines -- and a name the model
+            // never wrote is not one it can be faulted for repeating.
+            if !self.source.contains_key(&owned) {
+                continue;
+            }
+            let kind = self.model().kind(member);
+            for name in names {
+                seen.push((name, member, kind));
+            }
+        }
+        let mut inherited: Vec<ElementId> = Vec::new();
+        let mut members: HashSet<ElementId> = HashSet::new();
+        // What a supertype imports is left out: an import whose name
+        // clashes with a member there is hidden there and not one of its
+        // memberships, and which of them is hidden is the importing
+        // namespace's business, not a reason to fault this one.
+        for (from, membership) in self.inherited_memberships(ty) {
+            if self.model().owner(membership) == Some(from)
+                && !self.model().kind(membership).is_a(ElementKind::Import)
+            {
+                inherited.push(membership);
+            }
+        }
+        let inherited = self.named_memberships(inherited);
+        candidates.extend(inherited.iter().map(|&(_, member, _)| member));
+        for (_, member, names) in inherited {
+            if !members.insert(member) {
+                continue;
+            }
+            let kind = self.model().kind(member);
+            for name in names {
+                let clashes: Vec<ElementId> = seen
+                    .iter()
+                    .filter(|(other_name, other, other_kind)| {
+                        *other_name == name
+                            && *other != member
+                            && (kind.is_a(*other_kind) || other_kind.is_a(kind))
+                    })
+                    .map(|&(_, other, _)| other)
+                    .collect();
+                if clashes.is_empty() {
+                    seen.push((name, member, kind));
+                    continue;
+                }
+                // Redefined by a member of its own name or of another --
+                // `in v` standing at the place of an inherited `in x`,
+                // which the model does not write down -- it is not
+                // inherited at all (`removeRedefinedFeatures`).
+                let replaced = candidates
+                    .clone()
+                    .into_iter()
+                    .any(|other| other != member && self.reaches(other, member));
+                if replaced {
+                    continue;
+                }
+                for other in clashes {
+                    if !self.reaches(member, other)
+                        && !self.refine_alike(member, other)
+                        && !self.reached_through_a_namesake(member, ty)
+                        && !self.reached_through_a_namesake(other, ty)
+                    {
+                        return false;
+                    }
+                }
+                seen.push((name, member, kind));
+            }
+        }
+        true
+    }
+
+    /// Whether two features redefine one feature between them: `in item
+    /// fuelCmd redefines pwrCmd` written in a port typed by a definition
+    /// whose own `fuelCmd` redefines `pwrCmd` too. Each stands in the
+    /// place of the same inherited feature, under the same name, and
+    /// which of the two a reader means makes no difference to what
+    /// either is the refinement of. The specification's own examples
+    /// write this, and the reference implementation lets it pass.
+    fn refine_alike(&self, one: ElementId, other: ElementId) -> bool {
+        let mut of_one = HashSet::new();
+        self.collect_redefined(one, &mut of_one);
+        if of_one.is_empty() {
+            return false;
+        }
+        let mut of_other = HashSet::new();
+        self.collect_redefined(other, &mut of_other);
+        !of_one.is_disjoint(&of_other)
+    }
+
+    /// Whether `elem` comes from a file other than `ty`'s, under a root
+    /// package that another file declares a root package of the same
+    /// name beside. Which of the two a name then reaches is the
+    /// collision's doing, and `findings` reports the collision: the KerML
+    /// and the SysML editions of the specification's examples both
+    /// declare `VehicleDefinitions`, and loaded together a KerML usage
+    /// inherits the SysML `Wheel`'s `hub` beside the one it declares.
+    fn reached_through_a_namesake(&mut self, elem: ElementId, ty: ElementId) -> bool {
+        if self.element_file(elem) == self.element_file(ty) {
+            return false;
+        }
+        let root = self.root();
+        let mut at = elem;
+        while let Some(owner) = self.model().owner(at) {
+            if owner == root {
+                let Some(name) = self.model().name(at).map(String::from) else {
+                    return false;
+                };
+                return self.members_named(root, &name).len() > 1;
+            }
+            at = owner;
+        }
+        false
+    }
+
+    fn owned_distinguishable(&self, namespace: ElementId) -> bool {
         let model = self.model();
         let mut by_name: HashMap<&str, Vec<(ElementId, ElementKind)>> = HashMap::new();
         for &owned in model.owned(namespace) {
@@ -767,6 +967,94 @@ impl Workspace {
             }
         }
         true
+    }
+
+    /// Every membership a type inherits: those of everything it specializes,
+    /// and of everything those specialize in turn, less what is private to
+    /// them and less what a redefinition has replaced.
+    ///
+    /// A supertype's imports are inherited with its own memberships, and the
+    /// resolver works out what an import brings in already.
+    pub(crate) fn inherited_memberships(&mut self, elem: ElementId) -> Vec<(ElementId, ElementId)> {
+        let mut queue = self.supertypes(elem);
+        let mut seen = vec![elem];
+        let mut at = 0;
+        let mut memberships: Vec<(ElementId, ElementId)> = Vec::new();
+        while at < queue.len() {
+            let up = queue[at];
+            at += 1;
+            if seen.contains(&up) {
+                continue;
+            }
+            seen.push(up);
+            for member in self.model().owned(up).to_vec() {
+                // what a type keeps to itself is not inherited
+                if self.model().member_visibility(member) == Some(sysml_model::Vis::Private) {
+                    continue;
+                }
+                memberships.push((up, member));
+            }
+            for member in self.inheritable_imported_members(up) {
+                memberships.push((up, member));
+            }
+            queue.extend(self.supertypes(up));
+        }
+        // A feature that redefines another stands in its place, so what
+        // it replaced is not inherited beside it -- whether the
+        // redefining feature is one of these or one the type declares
+        // itself.
+        let mut replaced = HashSet::new();
+        let mine = self.model().owned(elem).to_vec();
+        for &feature in memberships
+            .iter()
+            .map(|(_, member)| member)
+            .chain(mine.iter())
+        {
+            self.collect_redefined(feature, &mut replaced);
+        }
+        // A member declared with a role the standard allows one of
+        // stands in the place of the one that would be inherited: a
+        // requirement's own subject replaces the subject it inherits,
+        // as a function's own result parameter replaces the one of the
+        // function it specializes. The standard says so with an implied
+        // redefinition, which is written into a model only where the
+        // implied relationships are materialised.
+        let mut taken: Vec<Role> = mine
+            .iter()
+            .filter_map(|&it| role_of_one(self, it))
+            .collect();
+        memberships.retain(|(_, member)| {
+            if replaced.contains(member) {
+                return false;
+            }
+            match role_of_one(self, *member) {
+                // nearest first, so the first of a role is the one that
+                // stands and the rest are the ones it stands for
+                Some(role) if taken.contains(&role) => false,
+                Some(role) => {
+                    taken.push(role);
+                    true
+                }
+                None => true,
+            }
+        });
+        memberships
+    }
+
+    /// Everything a feature redefines, directly or through what it
+    /// redefines in turn.
+    fn collect_redefined(&self, feature: ElementId, into: &mut HashSet<ElementId>) {
+        // `redefinedFeature` is Redefinition's alone, so what holds one
+        // is a redefinition and what does not is not
+        for owned in self.model().owned(feature) {
+            let target = match self.model().maybe(*owned, "redefinedFeature") {
+                Some(Value::Ref(target)) => *target,
+                _ => continue,
+            };
+            if into.insert(target) {
+                self.collect_redefined(target, into);
+            }
+        }
     }
 
     /// Evaluate one constraint of one element: whether it holds, or why
@@ -1530,95 +1818,14 @@ impl Scope<'_> {
         }
     }
 
-    /// Every membership a type inherits: those of everything it specializes,
-    /// and of everything those specialize in turn, less what is private to
-    /// them and less what a redefinition has replaced.
-    ///
-    /// A supertype's imports are inherited with its own memberships, and the
-    /// resolver works out what an import brings in already.
+    /// Every membership a type inherits; see
+    /// [`Workspace::inherited_memberships`].
     fn inherited(&mut self, elem: ElementId) -> Vec<Val> {
-        let mut queue = self.ws.supertypes(elem);
-        let mut seen = vec![elem];
-        let mut at = 0;
-        let mut memberships: Vec<(ElementId, ElementId)> = Vec::new();
-        while at < queue.len() {
-            let up = queue[at];
-            at += 1;
-            if seen.contains(&up) {
-                continue;
-            }
-            seen.push(up);
-            for member in self.ws.model().owned(up).to_vec() {
-                // what a type keeps to itself is not inherited
-                if self.ws.model().member_visibility(member) == Some(sysml_model::Vis::Private) {
-                    continue;
-                }
-                memberships.push((up, member));
-            }
-            for member in self.ws.inheritable_imported_members(up) {
-                memberships.push((up, member));
-            }
-            queue.extend(self.ws.supertypes(up));
-        }
-        // A feature that redefines another stands in its place, so what
-        // it replaced is not inherited beside it -- whether the
-        // redefining feature is one of these or one the type declares
-        // itself.
-        let mut replaced = HashSet::new();
-        let mine = self.ws.model().owned(elem).to_vec();
-        for &feature in memberships
-            .iter()
-            .map(|(_, member)| member)
-            .chain(mine.iter())
-        {
-            self.collect_redefined(feature, &mut replaced);
-        }
-        // A member declared with a role the standard allows one of
-        // stands in the place of the one that would be inherited: a
-        // requirement's own subject replaces the subject it inherits,
-        // as a function's own result parameter replaces the one of the
-        // function it specializes. The standard says so with an implied
-        // redefinition, which is written into a model only where the
-        // implied relationships are materialised.
-        let mut taken: Vec<Role> = mine
-            .iter()
-            .filter_map(|&it| role_of_one(self.ws, it))
-            .collect();
-        memberships.retain(|(_, member)| {
-            if replaced.contains(member) {
-                return false;
-            }
-            match role_of_one(self.ws, *member) {
-                // nearest first, so the first of a role is the one that
-                // stands and the rest are the ones it stands for
-                Some(role) if taken.contains(&role) => false,
-                Some(role) => {
-                    taken.push(role);
-                    true
-                }
-                None => true,
-            }
-        });
-        memberships
+        self.ws
+            .inherited_memberships(elem)
             .into_iter()
             .map(|(owner, member)| Val::Membership { owner, member })
             .collect()
-    }
-
-    /// Everything a feature redefines, directly or through what it
-    /// redefines in turn.
-    fn collect_redefined(&self, feature: ElementId, into: &mut HashSet<ElementId>) {
-        // `redefinedFeature` is Redefinition's alone, so what holds one
-        // is a redefinition and what does not is not
-        for owned in self.ws.model().owned(feature) {
-            let target = match self.ws.model().maybe(*owned, "redefinedFeature") {
-                Some(Value::Ref(target)) => *target,
-                _ => continue,
-            };
-            if into.insert(target) {
-                self.collect_redefined(target, into);
-            }
-        }
     }
 
     /// A derived property, worked out the way the specification says.

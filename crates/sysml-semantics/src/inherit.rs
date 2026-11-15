@@ -105,9 +105,17 @@ impl Workspace {
                 // inherited through them: read as specializations, a
                 // connector typed by a union of two associations had
                 // the ends of both.
+                //
+                // `disjoint from` says the opposite of a specialization:
+                // `class Occurrence specializes Anything disjoint from
+                // DataValue` is no `DataValue`, and read as one every
+                // part had the `self` of a data value beside its own.
                 if matches!(
                     part,
-                    SyntaxKind::UNIONS_KW | SyntaxKind::INTERSECTS_KW | SyntaxKind::DIFFERENCES_KW
+                    SyntaxKind::UNIONS_KW
+                        | SyntaxKind::INTERSECTS_KW
+                        | SyntaxKind::DIFFERENCES_KW
+                        | SyntaxKind::DISJOINT_KW
                 ) {
                     continue;
                 }
@@ -127,7 +135,19 @@ impl Workspace {
             // `#cause 'battery old' { ... }` and `class C1 { @B; }` --
             // semantic metadata makes what it annotates specialize the
             // metaclass's `baseType`
-            for base in self.semantic_bases_of(elem) {
+            //
+            // `part y : Lib { @Md; }` names its metadata from inside `y`,
+            // and `Md` may be had only through what `y` is typed by. That
+            // lookup asks for the very supertypes being worked out here,
+            // and the guard against a cycle answered it with none, so `Md`
+            // went unfound and `y` cached a list without its `baseType`.
+            // What `y` declares it specializes is known by now, and is
+            // what a name written in it can see: the bases its metadata
+            // adds cannot be needed to find that metadata.
+            self.supertypes.insert(elem, supers.clone());
+            let semantic = self.semantic_bases_of(elem);
+            self.supertypes.remove(&elem);
+            for base in semantic {
                 push_supertype(&mut supers, elem, base);
             }
             // `feature b = a#(1).b;` is one of the `b`s `a#(1)` has
@@ -236,21 +256,42 @@ impl Workspace {
                 push_supertype(&mut supers, elem, target);
             }
         }
-        // A parameter can redeclare an inherited one by naming it the
-        // same: `in p { ... }` inside a specialization stands for the
-        // `p` its supertype declares, and inherits what that one has --
-        // the standard implies that redefinition for the parameters of a
-        // behaviour. Only where nothing else was written about it -- an
-        // explicit typing or subsetting is the whole story -- and only for
-        // a parameter: a `part m;` that happens to share an inherited
-        // name redefines nothing, and reading it as though it did walked
-        // a specialization the model does not have.
-        let is_parameter = self.model.maybe(elem, "direction").is_some();
-        if supers.is_empty() && is_parameter {
-            if let (Some(name), Some(owner)) = (
-                self.model.name(elem).map(String::from),
-                self.model.owner(elem),
-            ) {
+        // A parameter of a behaviour or a step redefines the parameter at
+        // the same position in each of its owner's supertypes --
+        // `checkFeatureParameterRedefinition` -- and a result parameter
+        // the result -- `checkFeatureResultRedefinition`. Position and not
+        // name: in `action a : A { in y; }`, where `A` declares `in x : T`,
+        // `y` is `x` under a name of its own and has what a `T` has. Read
+        // by name, `y.m` named nothing, and an `in x` written second
+        // stood for the first parameter's `x`.
+        //
+        // An argument of an invocation is a parameter too, but one
+        // written with a redefinition of its own -- `f(x = 1)` -- is left
+        // alone by the standard, and an invocation's arguments are left
+        // to the reading by name below, as they always were.
+        let is_parameter = self.model.maybe(elem, "direction").is_some()
+            || self.model.member_role(elem) == Some(Role::Return);
+        let owner = self.model.owner(elem);
+        let behavioural = owner.is_some_and(|owner| {
+            let kind = self.model.kind(owner);
+            (kind.is_a(ElementKind::Behavior) || kind.is_a(ElementKind::Step))
+                && !kind.is_a(ElementKind::InvocationExpression)
+        });
+        if let (true, true, Some(owner)) = (is_parameter, behavioural, owner) {
+            for target in self.redefined_by_position(elem, owner) {
+                if !reaches(&self.model, target, elem) {
+                    push_supertype(&mut supers, elem, target);
+                }
+            }
+        } else if supers.is_empty() && is_parameter {
+            // A directed feature of anything else -- a port's `in item
+            // x`, an argument -- redefines nothing by position, and a
+            // redeclaration of one is read by its name, as it always was:
+            // `in p { ... }` stands for the `p` its supertype declares.
+            // Only where nothing else was written about it, and only for
+            // a directed feature: a `part m;` that happens to share an
+            // inherited name redefines nothing.
+            if let (Some(name), Some(owner)) = (self.model.name(elem).map(String::from), owner) {
                 for sup in self.supertypes_of(owner) {
                     for sibling in self.model.owned(sup).to_vec() {
                         if self.model.name(sibling) == Some(name.as_str()) {
@@ -279,15 +320,12 @@ impl Workspace {
             }
         }
         for path in self.implied_bases_of(elem) {
-            // From the root: these are the standard library's own
+            // In the library: these are the standard library's own
             // names, and a model is free to declare a package called
             // `Requirements` of its own -- `SimpleVehicleModel` does --
             // which would otherwise stand in front of the library's and
             // leave the usage specializing nothing.
-            let segments: Vec<String> = std::iter::once(String::new())
-                .chain(path.split("::").map(String::from))
-                .collect();
-            if let Some(target) = self.resolve_from(elem, &segments) {
+            if let Some(target) = self.library_type(elem, path) {
                 if target != elem
                     && !supers.contains(&target)
                     && !reaches(&self.model, target, elem)
@@ -310,6 +348,81 @@ impl Workspace {
         }
         self.supertypes.insert(elem, supers.clone());
         supers
+    }
+    /// What a parameter of `owner` redefines by where it stands.
+    ///
+    /// KerML's `checkFeatureParameterRedefinition`: "for each direct
+    /// supertype of its `owningType` that is also a `Behavior` or `Step`, it
+    /// must redefine the `parameter` at the same position, if any" -- the
+    /// position counted over the owner's own directed features, the result
+    /// left out. A supertype's `parameter`s are all of its directed
+    /// features, the inherited ones as well as its own, as the prose says
+    /// and as the pilot implementation reads it: the OCL beside it counts
+    /// only the supertype's own, which leaves `action b : B { in y; }`
+    /// redefining nothing where `B :> A` declares no parameter of its own
+    /// and `A` declares `in x`. A result parameter redefines the result
+    /// instead -- `checkFeatureResultRedefinition` -- whatever its position.
+    fn redefined_by_position(&mut self, elem: ElementId, owner: ElementId) -> Vec<ElementId> {
+        if self.model.member_role(elem) == Some(Role::Return) {
+            return self.inherited_result(owner, elem).into_iter().collect();
+        }
+        let Some(at) = self
+            .owned_parameters(owner)
+            .iter()
+            .position(|&it| it == elem)
+        else {
+            return Vec::new();
+        };
+        let mut found = Vec::new();
+        for sup in self.supertypes_of(owner) {
+            let kind = self.model.kind(sup);
+            if !(kind.is_a(ElementKind::Behavior) || kind.is_a(ElementKind::Step)) {
+                continue;
+            }
+            let parameters = self.parameters_in_order(sup, &mut vec![owner]);
+            if let Some(&there) = parameters.get(at) {
+                if there != elem && !found.contains(&there) {
+                    found.push(there);
+                }
+            }
+        }
+        found
+    }
+    /// The directed features a type declares itself, in the order it
+    /// declares them, its result parameter left out.
+    fn owned_parameters(&self, ty: ElementId) -> Vec<ElementId> {
+        self.model
+            .owned(ty)
+            .iter()
+            .copied()
+            .filter(|&it| {
+                self.model.maybe(it, "direction").is_some()
+                    && self.model.member_role(it) != Some(Role::Return)
+            })
+            .collect()
+    }
+    /// Every directed feature a type has, in order: its own first, then
+    /// those of each of its supertypes in turn, less the ones its own
+    /// stand in the place of. The result parameter is left out, as
+    /// `checkFeatureParameterRedefinition` leaves it out.
+    fn parameters_in_order(&mut self, ty: ElementId, seen: &mut Vec<ElementId>) -> Vec<ElementId> {
+        let mut parameters = self.owned_parameters(ty);
+        if seen.contains(&ty) {
+            return parameters;
+        }
+        seen.push(ty);
+        let mut replaced = Vec::new();
+        for own in parameters.clone() {
+            replaced.extend(self.supertypes_of(own));
+        }
+        for sup in self.supertypes_of(ty) {
+            for inherited in self.parameters_in_order(sup, seen) {
+                if !parameters.contains(&inherited) && !replaced.contains(&inherited) {
+                    parameters.push(inherited);
+                }
+            }
+        }
+        parameters
     }
     /// What the semantic metadata annotating an element makes it specialize.
     ///

@@ -88,6 +88,32 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
         "package P {\n\tpart def <A> A;\n}\n",
         &[],
     ),
+    // A type's memberships are its inherited ones too (KerML 7.3.2.2), so
+    // a member of the name of an inherited one that does not redefine it
+    // is a second `x`, and so are two unrelated `x`s from two supertypes
+    (
+        "an owned member of the name of an inherited one",
+        "package P {\n\tpart def A { part x; }\n\tpart def B :> A { part x; }\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    (
+        "two inherited members of one name",
+        "package P {\n\tpart def A { part x; }\n\tpart def E { part x; }\n\tpart def F :> A, E;\n}\n",
+        &["validateNamespaceDistinguishibility"],
+    ),
+    // ... and not where one stands in the place of the other: redefined
+    // by name, by position as a parameter, or inherited beside what it
+    // redefines by another path, or where the metaclasses do not conform
+    (
+        "a redefinition, a parameter by position, a diamond",
+        "package P {\n\tpart def A { part x; attribute q; }\n\
+         \tpart def C :> A { attribute x; }\n\
+         \tpart def D :> A { part x :>> x; }\n\
+         \tpart def G :> A, D;\n\
+         \taction def S { in a; in b; }\n\
+         \taction def T :> S { in b; in a; }\n}\n",
+        &[],
+    ),
     (
         "an objective belongs to a case",
         "package P {\n\tpart def E {\n\t\tobjective o;\n\t}\n}\n",
@@ -211,6 +237,41 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
         "and what a `when` watches is a change",
         "package P {\n\tpart def Q;\n\tpart q : Q;\n\taction def A {\n\t\taccept when q;\n\t}\n}\n",
         &["validateTriggerInvocationExpressionWhenArgument"],
+    ),
+    // A model of SysML alone writes no `chains`, and a rule that reads
+    // a `featureTarget` is asked of it all the same: which kinds this
+    // toolchain builds is a question of the whole model, and not of
+    // the files a check happens to be asked about.
+    (
+        "what is performed is an action, and this is a part",
+        "package P {\n\tpart pp;\n\tpart def Perf {\n\t\tperform pp;\n\t}\n}\n",
+        &["validatePerformActionUsageReference"],
+    ),
+    (
+        "and what is exhibited is a state",
+        "package P {\n\taction aa;\n\tpart def Exh {\n\t\texhibit aa;\n\t}\n}\n",
+        &["validateExhibitStateUsageReference"],
+    ),
+    // "The subject of a case definition or usage is modeled as its first
+    // parameter" (SysML 7.22.2), and a parameter redefines the one at its
+    // position in what its owner specializes: an actor declared first
+    // takes the place of `Case::subj`, which leaves the case with no
+    // subject, so `input->first() = subjectParameter` is false. The pilot
+    // implementation says the same, "Subject must be first parameter.",
+    // and the corpus writes `subject;` before an actor wherever it has
+    // nothing more to say of the subject.
+    (
+        "an actor where the subject goes",
+        "package P {\n\tpart def Q;\n\tuse case def U {\n\t\tactor a : Q;\n\t}\n}\n",
+        &["validateCaseDefinitionSubjectParameterPosition"],
+    ),
+    (
+        "and the same actor after its subject",
+        "package P {\n\tpart def Q;\n\tuse case def U {\n\t\tsubject;\n\t\tactor a : Q;\n\t}\n\
+         \tuse case u : U {\n\t\tsubject;\n\t\tactor b : Q;\n\t}\n\
+         \trequirement def R {\n\t\tsubject s : Q;\n\t\tstakeholder h : Q;\n\t}\n\
+         \trequirement r : R;\n}\n",
+        &[],
     ),
     (
         "a verification verifies inside its objective, not beside it",

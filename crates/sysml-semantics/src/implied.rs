@@ -357,10 +357,7 @@ impl Workspace {
             }
             let mut bases = Vec::new();
             for path in self.implied_bases_of(elem) {
-                let segments: Vec<String> = std::iter::once(String::new())
-                    .chain(path.split("::").map(String::from))
-                    .collect();
-                if let Some(target) = self.resolve_from(elem, &segments) {
+                if let Some(target) = self.library_type(elem, path) {
                     if target != elem && !bases.contains(&target) {
                         bases.push(target);
                     }
@@ -458,7 +455,11 @@ impl Workspace {
     /// and inherits it in turn -- `LiteralBooleanEvaluation` through
     /// `BooleanEvaluation` -- so the walk carries on up rather than
     /// stopping where the first general type is silent.
-    fn inherited_result(&mut self, elem: ElementId, mine: ElementId) -> Option<ElementId> {
+    pub(crate) fn inherited_result(
+        &mut self,
+        elem: ElementId,
+        mine: ElementId,
+    ) -> Option<ElementId> {
         let mut queue = self.supertypes_of(elem);
         let mut seen = vec![elem];
         let mut at = 0;

@@ -77,6 +77,13 @@ use sysml_syntax::{parse_dialect, Dialect, Parse, SyntaxKind, SyntaxNode, TextRa
 /// nothing instead. The parser bounds its own nesting the same way.
 pub(crate) const MAX_INHERITANCE: usize = 512;
 
+/// How many aliases deep one alias is worked out through the aliases it
+/// names before the deepest is set aside and worked out first, on a
+/// stack of its own. A chain written front to back -- `alias A0 for A1;
+/// ... alias A999 for X;` -- otherwise nests a lookup per link, and past
+/// [`MAX_INHERITANCE`] every link but the last few hundred named nothing.
+pub(crate) const MAX_ALIAS_NESTING: usize = 64;
+
 /// Whether a resolution pass replaces what was found about the files it
 /// touches, or adds to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -384,6 +391,16 @@ pub struct Workspace {
     /// than the truth. The other guards settle for an incomplete answer
     /// and cache it, so what they return is at least the same every time.
     blocked: u64,
+    /// How many aliases are being worked out, one inside the other:
+    /// `alias A0 for A1; alias A1 for A2; ...` resolves `A1` while
+    /// resolving `A0`. See [`MAX_ALIAS_NESTING`].
+    alias_nesting: usize,
+    /// The alias the nesting bound turned away first, for the outermost
+    /// alias to work out on its own before trying again.
+    deferred_alias: Option<ElementId>,
+    /// The aliases that were being worked out when that one was set
+    /// aside, each waiting on the next.
+    deferred_waiting: Vec<ElementId>,
     /// How deep the walk through inherited members is. Nothing else
     /// bounds it: what a namespace specializes is written in the
     /// model, and the model can say it thousands of times over.
@@ -477,6 +494,9 @@ impl Clone for Workspace {
             resolving: Vec::new(),
             blocked: 0,
             walking: 0,
+            alias_nesting: 0,
+            deferred_alias: None,
+            deferred_waiting: Vec::new(),
             filtering: Vec::new(),
             provisional: HashSet::new(),
             lookups: self.lookups,
@@ -525,6 +545,9 @@ impl Workspace {
             resolving: Vec::new(),
             blocked: 0,
             walking: 0,
+            alias_nesting: 0,
+            deferred_alias: None,
+            deferred_waiting: Vec::new(),
             filtering: Vec::new(),
             provisional: HashSet::new(),
             lookups: 0,

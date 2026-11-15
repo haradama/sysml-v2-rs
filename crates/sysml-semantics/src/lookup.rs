@@ -265,12 +265,23 @@ impl Workspace {
     ) {
         stats.unresolved += 1;
         let wrong_kind = self.wrong_kind.take();
+        // Read from the smallest node holding the name rather than the
+        // whole file: rendering the file per miss made a file of many
+        // unresolved names cost the square of its length.
         let written = self.files.get(file).and_then(|it| {
-            it.parse
-                .syntax()
-                .text()
+            let root = it.parse.syntax();
+            if !root.text_range().contains_range(range) {
+                return None;
+            }
+            let cover = root.covering_element(range);
+            let node = match cover.as_node() {
+                Some(node) => node.clone(),
+                None => cover.parent()?,
+            };
+            let start = node.text_range().start();
+            node.text()
                 .to_string()
-                .get(usize::from(range.start())..usize::from(range.end()))
+                .get(usize::from(range.start() - start)..usize::from(range.end() - start))
                 .map(str::to_string)
         });
         let name = written
@@ -463,6 +474,17 @@ impl Workspace {
         if !guard.insert((ns, reach.access, reach.inherited)) {
             return None;
         }
+        // An alias was set aside for being too deep to work out here, and
+        // everything until the outermost alias takes it up again is held
+        // back and asked again afterwards. Searching on would only pay for
+        // answers that are thrown away: a failed lookup goes on to the
+        // namespace's imports, the scopes around it and a second walk, and
+        // over a long chain of aliases that is a scan of the whole
+        // namespace per link.
+        if self.deferred_alias.is_some() {
+            self.blocked += 1;
+            return None;
+        }
         // A namespace inherits from a namespace that inherits from a
         // namespace: the walk goes as deep as the model specializes,
         // and a model can specialize deeper than a stack goes. Past
@@ -509,6 +531,11 @@ impl Workspace {
             } else {
                 return Some(child);
             }
+        }
+        // the alias just asked for was set aside, and with it whatever
+        // this walk would find: see `lookup_guarded`
+        if self.deferred_alias.is_some() {
+            return None;
         }
         // inherited members through specializations/typings. Private members
         // are not inherited; through an external path only public ones are
@@ -602,11 +629,21 @@ impl Workspace {
                 }
                 if imp.scope.reaches_below() {
                     for desc in self.nested_visible(imp.target, target_access) {
-                        if Some(desc) != reach.exclude
-                            && self.member_name_matches(desc, name)
-                            && self.admits(desc, &imp.filters)
-                        {
-                            return Some(desc);
+                        if Some(desc) == reach.exclude || !self.member_name_matches(desc, name) {
+                            continue;
+                        }
+                        // an alias answers with what it names, and it is
+                        // that which the filters have to admit
+                        let found = if self.model.kind(desc) == ElementKind::Membership {
+                            match self.resolve_alias(desc) {
+                                Some(target) => target,
+                                None => continue,
+                            }
+                        } else {
+                            desc
+                        };
+                        if self.admits(found, &imp.filters) {
+                            return Some(found);
                         }
                     }
                 }
@@ -616,7 +653,7 @@ impl Workspace {
     }
     /// The members of `ns` that answer to `name`, in the order a walk
     /// of the namespace would have met them.
-    fn members_named(&mut self, ns: ElementId, name: &str) -> Vec<ElementId> {
+    pub(crate) fn members_named(&mut self, ns: ElementId, name: &str) -> Vec<ElementId> {
         if !self.members.contains_key(&ns) {
             let index = self.member_index(ns);
             self.members.insert(ns, index);
@@ -668,6 +705,36 @@ impl Workspace {
         }
         false
     }
+    /// One of the standard library's own types, `Actions::Action`, for an
+    /// element that specializes it without saying so.
+    ///
+    /// The path is the library's and not a name the model wrote, so it is
+    /// read in the library: a model is free to declare a root package
+    /// called `Requirements` or `Actions` of its own -- `SimpleVehicleModel`
+    /// does -- and asked from the root as a name written in that model, the
+    /// model's package stood in front of the library's, held no
+    /// `Actions::Action`, and every action in the workspace specialized
+    /// nothing: `start`, `done` and `subj` named nothing.
+    /// Where no library package of that name is loaded, the path is asked
+    /// as though written at `elem`, which is what it always was.
+    pub(crate) fn library_type(&mut self, elem: ElementId, path: &str) -> Option<ElementId> {
+        let mut segments = path.split("::");
+        let first = segments.next()?;
+        let library = self
+            .members_named(self.root, first)
+            .into_iter()
+            .find(|&it| self.in_library(it));
+        let Some(mut current) = library else {
+            let written: Vec<String> = std::iter::once(String::new())
+                .chain(path.split("::").map(String::from))
+                .collect();
+            return self.resolve_from(elem, &written);
+        };
+        for seg in segments {
+            current = self.lookup(current, seg, Reach::all(Access::External))?;
+        }
+        Some(current)
+    }
     /// Everything an `import N::**` reaches below `ns`: the members
     /// `access` can see, then the members of those, and so on down.
     ///
@@ -679,7 +746,20 @@ impl Workspace {
         let mut out = Vec::new();
         let mut stack: Vec<ElementId> = self.model.owned(ns).iter().rev().copied().collect();
         while let Some(at) = stack.pop() {
-            if self.model.kind(at).is_a(ElementKind::Relationship) || !self.visible(at, access) {
+            if !self.visible(at, access) {
+                continue;
+            }
+            // An alias is a membership of the namespace it is written in,
+            // and so as much a visible member there as anything declared:
+            // `import A::**;` reaches `alias AL for D;` in `A::N` as it
+            // reaches `D`. It is the one relationship that is, and it has
+            // nothing below it to walk into.
+            let kind = self.model.kind(at);
+            if kind == ElementKind::Membership {
+                out.push(at);
+                continue;
+            }
+            if kind.is_a(ElementKind::Relationship) {
                 continue;
             }
             out.push(at);
