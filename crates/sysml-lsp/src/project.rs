@@ -330,14 +330,21 @@ impl Server {
                     }
                 };
             }
-            // The project layer leaves out every file whose buffer has
-            // stopped matching what is on disk, so a project file that
-            // names something declared in one of them was resolved
-            // without it. What that file could not find may be in a
-            // buffer that is here now, so anything with a name missing
-            // is resolved again -- normally nothing at all, and never
-            // the whole project.
-            if !self.substituted.is_empty() {
+            // The project layer was resolved without every buffer added
+            // here: one whose file it left out for no longer matching
+            // the disk, and one with no file under it at all -- a new
+            // file not yet saved, an `untitled:` one, a file deleted
+            // while it was open. A project file that names something
+            // declared in one of them could not find it, and what it
+            // could not find may be here now, so anything with a name
+            // missing is resolved again -- normally nothing at all, and
+            // never the whole project. Asked only when this layer added
+            // a buffer of its own, which is the only way a declaration
+            // the layer below lacked can be here; it used to be asked
+            // only for the first kind, so `part a : B;` went on
+            // underlining `B` after a new buffer declared it until `a`
+            // itself was edited.
+            if !open.is_empty() {
                 let mut stale: Vec<usize> = ws
                     .unresolved()
                     .iter()

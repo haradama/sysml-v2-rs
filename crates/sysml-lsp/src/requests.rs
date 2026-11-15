@@ -7,7 +7,7 @@
 //! file, so a document with a wide character in it lands in the wrong
 //! place unless every crossing goes through `placed`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lsp_types::*;
 use sysml_syntax::TextSize;
@@ -409,41 +409,48 @@ impl Server {
         }])
     }
     pub(crate) fn workspace_symbols(&mut self, query: &str) -> Option<WorkspaceSymbolResponse> {
-        // the same search the MCP server's `library_search` runs, so an
-        // exact match comes first here too
-        let matches: Vec<(sysml_model::ElementId, String, sysml_model::ElementKind)> = {
-            let analysis = self.analysis();
-            analysis
-                .ws
-                .search_names(query, 128)
-                .into_iter()
-                .map(|id| {
-                    let name = crate::shown_name(analysis.ws.model().name(id).unwrap_or_default());
-                    (id, name, analysis.ws.model().kind(id))
-                })
-                .collect()
-        };
+        // As many as an editor's picker shows.
+        const SHOWN: usize = 128;
+        // The same search the MCP server's `library_search` runs, so an
+        // exact match comes first here too -- every match of it, and the
+        // first that can be shown kept. Cut to the limit first, the hits
+        // that have no place to go to were dropped after the cut: the
+        // library built into this binary is no file, and a query as short
+        // as `e` filled the limit with it and answered with one of the
+        // project's own definitions where there were three.
+        let ranked: Vec<sysml_model::ElementId> =
+            self.analysis().ws.search_names(query, usize::MAX);
+        // a file with no place is asked once, not once per element in it
+        let mut nowhere: HashSet<usize> = HashSet::new();
         let mut symbols = Vec::new();
-        for (id, name, kind) in matches {
-            let place = {
-                let analysis = self.analysis();
-                analysis
-                    .ws
-                    .element_file(id)
-                    .zip(analysis.ws.element_ranges(id).map(|(_, n)| n))
-            };
-            let location = place.and_then(|(file, range)| self.location(file, range));
-            if let Some(location) = location {
-                #[allow(deprecated)]
-                symbols.push(SymbolInformation {
-                    name,
-                    kind: pictured(kind).1,
-                    tags: None,
-                    deprecated: None,
-                    location,
-                    container_name: None,
-                });
+        for id in ranked {
+            if symbols.len() == SHOWN {
+                break;
             }
+            let place = {
+                let ws = &self.analysis().ws;
+                ws.element_file(id)
+                    .zip(ws.element_ranges(id).map(|(_, n)| n))
+            };
+            let Some((file, range)) = place.filter(|(file, _)| !nowhere.contains(file)) else {
+                continue;
+            };
+            let Some(location) = self.location(file, range) else {
+                nowhere.insert(file);
+                continue;
+            };
+            let model = self.analysis().ws.model();
+            let name = crate::shown_name(model.name(id).unwrap_or_default());
+            let kind = model.kind(id);
+            #[allow(deprecated)]
+            symbols.push(SymbolInformation {
+                name,
+                kind: pictured(kind).1,
+                tags: None,
+                deprecated: None,
+                location,
+                container_name: None,
+            });
         }
         Some(WorkspaceSymbolResponse::Flat(symbols))
     }
@@ -496,10 +503,14 @@ impl Server {
     pub(crate) fn code_actions(&mut self, uri: &Url, range: Range) -> Option<CodeActionResponse> {
         let text = self.docs.get(uri)?.clone();
         let index = LineIndex::new(&text);
-        let asked = TextRange::new(
+        // A range written end first is the same stretch of text, as
+        // `apply_change` reads one; `TextRange::new` asserts the order,
+        // and a client that sent it backwards took the server down.
+        let (start, end) = (
             index.offset(&text, range.start)?,
             index.offset(&text, range.end)?,
         );
+        let asked = TextRange::new(start.min(end), start.max(end));
         let file = *self.analysis().doc_files.get(uri)?;
         let ws = &self.analysis().ws;
 

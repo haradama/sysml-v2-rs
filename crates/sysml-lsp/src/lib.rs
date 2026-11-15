@@ -55,6 +55,7 @@ use sysml_syntax::{TextRange, TextSize};
 
 mod files;
 mod line_index;
+pub mod wire;
 pub use files::Files;
 use line_index::LineIndex;
 
@@ -693,6 +694,12 @@ impl Server {
                 let Some(params) = taken::<lsp_types::DidCloseTextDocumentParams>(note, out) else {
                     return;
                 };
+                // A buffer the project layer did not hold -- a new file,
+                // perhaps saved since, that the layer was built before --
+                // leaves a file on disk the layer has never read. Kept,
+                // `part a : B;` went on missing a `B` just saved and
+                // closed, until `a` itself was edited.
+                let unheld = self.outside_the_project(&params.text_document.uri);
                 self.docs.remove(&params.text_document.uri);
                 self.languages.remove(&params.text_document.uri);
                 self.published.remove(&params.text_document.uri);
@@ -700,9 +707,11 @@ impl Server {
                 // file on disk speaks for it again; and a document that
                 // brought the files beside it in takes them away again,
                 // where they were kept, and answered for, until restart
-                if self.file_of(&params.text_document.uri).is_some_and(|path| {
-                    self.substituted.contains(&path) || self.read_for_being_open(&path)
-                }) {
+                if unheld
+                    || self.file_of(&params.text_document.uri).is_some_and(|path| {
+                        self.substituted.contains(&path) || self.read_for_being_open(&path)
+                    })
+                {
                     self.project = None;
                 }
                 self.analysis = None;

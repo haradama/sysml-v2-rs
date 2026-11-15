@@ -594,3 +594,93 @@ fn a_handover_this_server_cannot_read_is_said_rather_than_obeyed() {
     assert!(symbols.is_array(), "{symbols}");
     client.stop(handle);
 }
+
+/// A buffer with no file under it -- a new file not saved yet, an
+/// `untitled:` one, a file deleted while it was open -- declares what it
+/// says as much as one on disk does. An open project file whose buffer
+/// still matched the disk was not resolved again when one arrived, so
+/// `part a : B;` went on underlining `B` after `part def B;` was opened
+/// beside it, and hover on `B` answered nothing, until `a` was edited. A
+/// buffer that differed from its file had always been the trigger; the
+/// answer cannot depend on that.
+#[test]
+fn a_buffer_with_no_file_under_it_is_what_the_project_resolves_against() {
+    let root = workspace("sysml-lsp-buffer-only-test");
+    let a = root.join("a.sysml");
+    std::fs::write(&a, "part a : B;\n").unwrap();
+    let (mut client, handle) = over(&root);
+    let a_uri = lsp_types::Url::from_file_path(&a).unwrap();
+    let open = |client: &mut Client, uri: &str, text: &str| {
+        client.notify(
+            lsp_types::notification::DidOpenTextDocument::METHOD,
+            json!({ "textDocument": {
+                "uri": uri, "languageId": "sysml", "version": 1, "text": text
+            }}),
+        );
+    };
+    open(&mut client, a_uri.as_str(), "part a : B;\n");
+    let found = client.diagnostics(1);
+    assert_eq!(
+        Client::messages(&found[a_uri.as_str()]),
+        ["unresolved reference `B`"]
+    );
+    let hover = |client: &mut Client| {
+        client.request(
+            lsp_types::request::HoverRequest::METHOD,
+            json!({
+                "textDocument": { "uri": a_uri },
+                "position": { "line": 0, "character": 9 }
+            }),
+        )
+    };
+
+    // not on disk: a file the editor has made and not yet written
+    let b_uri = lsp_types::Url::from_file_path(root.join("b.sysml")).unwrap();
+    open(&mut client, b_uri.as_str(), "part def B;\n");
+    let found = client.diagnostics(2);
+    assert!(found[a_uri.as_str()].is_empty(), "{found:?}");
+    assert!(!hover(&mut client).is_null(), "hover on `B` finds it");
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": b_uri } }),
+    );
+    // the closed one cleared, and `a` without it
+    let found = client.diagnostics(2);
+    assert_eq!(
+        Client::messages(&found[a_uri.as_str()]),
+        ["unresolved reference `B`"]
+    );
+
+    // and one that is no file at all
+    open(&mut client, "untitled:Untitled-1", "part def B;\n");
+    let found = client.diagnostics(2);
+    assert!(found[a_uri.as_str()].is_empty(), "{found:?}");
+    assert!(!hover(&mut client).is_null(), "hover on `B` finds it");
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": "untitled:Untitled-1" } }),
+    );
+    client.diagnostics(2);
+
+    // A new file saved and then closed is the file on disk from then on,
+    // though the project was read before it was written. With no watcher
+    // to say so, closing it is what says so.
+    open(&mut client, b_uri.as_str(), "part def B;\n");
+    client.diagnostics(2);
+    std::fs::write(root.join("b.sysml"), "part def B;\n").unwrap();
+    client.notify(
+        lsp_types::notification::DidSaveTextDocument::METHOD,
+        json!({ "textDocument": { "uri": b_uri } }),
+    );
+    client.notify(
+        lsp_types::notification::DidCloseTextDocument::METHOD,
+        json!({ "textDocument": { "uri": b_uri } }),
+    );
+    // `a` says what it said, so only the closed one is published: what
+    // `a` resolves against is asked by hovering on the name
+    let found = client.diagnostics(1);
+    assert!(found[b_uri.as_str()].is_empty(), "{found:?}");
+    assert!(!hover(&mut client).is_null(), "hover on `B` finds it");
+    client.stop(handle);
+    let _ = std::fs::remove_dir_all(&root);
+}

@@ -26,14 +26,63 @@ const unbuilt = {
       "-p sysmlv2-wasm --target wasm32-unknown-unknown --profile wasm`)",
 };
 
+/// `WebAssembly` as the worker sees it, with the module's first instance
+/// trapping on the first message that asks `trapOn` -- and on every call
+/// after it, as a module left mid-call by a panic does.
+///
+/// The server has no panic left to set one off with on purpose, and
+/// keeping one in it for a test's sake is keeping a bug; so the trap is
+/// set off here, at the one boundary the worker can see, while every
+/// answer still comes from the module that ships.
+function trapping(trapOn) {
+  let traps = trapOn ? 1 : 0;
+  const wrap = (instance) => {
+    const real = instance.exports;
+    let at = 0;
+    let dead = false;
+    const trap = () => {
+      dead = true;
+      throw new WebAssembly.RuntimeError("unreachable executed");
+    };
+    const exports = {
+      ...real,
+      take(length) {
+        if (dead) trap();
+        at = real.take(length);
+        return at;
+      },
+      handle(length) {
+        if (dead) trap();
+        const said = new TextDecoder().decode(new Uint8Array(real.memory.buffer, at, length));
+        if (traps > 0 && JSON.parse(said).method === trapOn) {
+          traps -= 1;
+          trap();
+        }
+        return real.handle(length);
+      },
+      answers: () => (dead ? trap() : real.answers()),
+    };
+    return { exports };
+  };
+  return {
+    ...WebAssembly,
+    RuntimeError: WebAssembly.RuntimeError,
+    compile: (bytes) => WebAssembly.compile(bytes),
+    instantiate: async (module, imports) => wrap(await WebAssembly.instantiate(module, imports)),
+    Instance: function Instance(module, imports) {
+      return wrap(new WebAssembly.Instance(module, imports));
+    },
+  };
+}
+
 /// The worker, running the module, with the handles a test drives it by.
-function serving() {
+function serving({ trapOn } = {}) {
   const posted = [];
   const sandbox = {
     postMessage: (message) => posted.push(message),
     TextEncoder,
     TextDecoder,
-    WebAssembly,
+    WebAssembly: trapOn ? trapping(trapOn) : WebAssembly,
     // A worker is one realm, and this is two: without these the
     // answers come back as arrays and objects built by the context's
     // own constructors, which are not the ones this file compares
@@ -198,4 +247,57 @@ test("the preview is drawn by the same module", unbuilt, async () => {
   );
   assert.match(answer.result.svg, /^<svg xmlns=/);
   assert.match(answer.result.svg, /Engine/);
+});
+
+/// The module is built with `panic = "abort"`, so a panic is a trap that
+/// leaves the instance unusable. The question that trapped is answered
+/// with an error rather than left waiting, and a new instance is told
+/// what the old one knew -- the handshake, the handed-over files and
+/// each open document as it reads after its edits -- so the next
+/// question is answered as though nothing had happened.
+///
+/// The trap is set off by `trapping`, on the first `codeAction` asked.
+test("a panic answers its question and the server goes on", unbuilt, async () => {
+  const server = serving({ trapOn: "textDocument/codeAction" });
+  initialize(server, [{ uri: "file:///model/parts.sysml", text: "part def Wheel;\n" }]);
+  server.say({ method: "initialized", params: {} });
+
+  const uri = "file:///model/car.sysml";
+  open(server, uri, "part def Car {\n    part w : Wheeel;\n}\n");
+  await server.wait(diagnostics(uri), "nothing was published");
+  // an edit, so that what is replayed is the document as edited
+  server.say({
+    method: "textDocument/didChange",
+    params: {
+      textDocument: { uri, version: 2 },
+      contentChanges: [
+        { range: { start: { line: 1, character: 15 }, end: { line: 1, character: 16 } }, text: "" },
+      ],
+    },
+  });
+
+  server.posted.length = 0;
+  const trapped = server.ask("textDocument/codeAction", {
+    textDocument: { uri },
+    range: { start: { line: 0, character: 0 }, end: { line: 1, character: 5 } },
+    context: { diagnostics: [] },
+  });
+  const refused = await server.wait(
+    (message) => message.id === trapped,
+    "the question that trapped was never answered"
+  );
+  assert.equal(refused.error.code, -32603);
+  assert.match(refused.error.message, /codeAction/);
+  // the new instance republishes what it makes of the document: the
+  // edit fixed the typo, against a file handed over in the handshake
+  const republished = await server.wait(diagnostics(uri), "nothing was republished");
+  assert.deepEqual(republished.params.diagnostics, [], "the edit and the handed file both reached it");
+
+  const id = server.ask("textDocument/hover", {
+    textDocument: { uri },
+    position: { line: 1, character: 15 },
+  });
+  const hovered = await server.wait((message) => message.id === id, "no answer after the restart");
+  assert.equal(hovered.error, undefined, JSON.stringify(hovered));
+  assert.match(JSON.stringify(hovered.result), /Wheel/);
 });

@@ -150,3 +150,37 @@ fn a_model_with_nothing_wrong_is_offered_nothing() {
 
     client.stop(handle);
 }
+
+/// A range written end first is the same stretch of text, as an edit's
+/// is: `TextRange::new` asserted the order, and a client that sent one
+/// backwards had an internal error -- and, in the browser, where a panic
+/// aborts, lost the server.
+#[test]
+fn a_range_written_end_first_is_the_same_range() {
+    let (mut client, handle) = serving();
+    client.initialize();
+
+    let uri = "file:///backwards.sysml";
+    opened(
+        &mut client,
+        uri,
+        "package P {\n    part def Wheel;\n    part w : Wheeel;\n}\n",
+    );
+    let actions = client.request(
+        lsp_types::request::CodeActionRequest::METHOD,
+        json!({
+            "textDocument": { "uri": uri },
+            "range": { "start": { "line": 3, "character": 0 }, "end": { "line": 2, "character": 0 } },
+            "context": { "diagnostics": [] },
+        }),
+    );
+    let titles: Vec<&str> = actions
+        .as_array()
+        .expect("an array of actions, not an error")
+        .iter()
+        .filter_map(|action| action["title"].as_str())
+        .collect();
+    assert!(titles.contains(&"did you mean `P::Wheel`?"), "{actions:?}");
+
+    client.stop(handle);
+}

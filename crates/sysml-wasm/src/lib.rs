@@ -47,10 +47,14 @@ thread_local! {
 
 /// Take one message and hand back the answers, as a JSON array.
 pub fn handle(message: &[u8]) -> Vec<u8> {
-    let Ok(message) = serde_json::from_slice::<Message>(message) else {
-        // a host with a bug of its own, and stopping here would cost the
-        // editor every name in the file and say nothing about why
-        return said(&[]);
+    // Half of a surrogate pair in a document, which `JSON.stringify`
+    // writes and serde_json refuses, is mended rather than dropped:
+    // dropped, the edit it carried was lost and the server answered from
+    // text the editor no longer showed. What cannot be mended is
+    // answered with an error, so that a request in it is not waited on.
+    let message = match sysml_lsp::wire::read(message) {
+        Ok(message) => message,
+        Err(answer) => return serde_json::to_vec(&[answer]).unwrap_or_else(|_| b"[]".to_vec()),
     };
     let mut out = Vec::new();
     let flow = SERVER.with(|server| server.borrow_mut().handle(message, &mut out));
@@ -278,10 +282,52 @@ mod tests {
     }
 
     /// A host with a bug of its own is not a reason to take the editor's
-    /// language support away.
+    /// language support away, and a request in what it sent is answered.
     #[test]
     fn nonsense_is_not_fatal() {
-        assert!(handle(b"not a message") == b"[]");
+        let said: Vec<serde_json::Value> =
+            serde_json::from_slice(&handle(b"not a message")).expect("an array");
+        assert_eq!(said[0]["error"]["code"], -32700, "{said:?}");
+        let said: Vec<serde_json::Value> =
+            serde_json::from_slice(&handle(br#"{"jsonrpc":"2.0","id":7.5,"method":"x"}"#))
+                .expect("an array");
+        assert_eq!(said[0]["id"], 7.5, "{said:?}");
+        assert_eq!(said[0]["error"]["code"], -32600, "{said:?}");
+    }
+
+    /// Half a character in a document, which `JSON.stringify` writes as a
+    /// lone `\ud83d`, costs that character and not the edit around it.
+    ///
+    /// Dropped whole, the edit never reached the server, which went on
+    /// answering from text the editor no longer showed.
+    #[test]
+    fn an_edit_with_half_a_character_in_it_still_arrives() {
+        ask(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "capabilities": {}, "initializationOptions": { "noLibrary": true } },
+        }));
+        ask(serde_json::json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }));
+        ask(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": { "textDocument": {
+                "uri": "untitled:a", "languageId": "sysml", "version": 1,
+                "text": "part a : B;\n",
+            }},
+        }));
+        let answers = handle(
+            br#"{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"untitled:a","version":2},"contentChanges":[{"text":"// \ud83d\npart def B;\npart a : B;\n"}]}}"#,
+        );
+        let answers: Vec<serde_json::Value> = serde_json::from_slice(&answers).expect("an array");
+        let published = answers
+            .iter()
+            .find(|message| message["method"] == "textDocument/publishDiagnostics")
+            .expect("the edit is diagnosed");
+        assert_eq!(
+            published["params"]["diagnostics"].as_array().map(Vec::len),
+            Some(0),
+            "{published}"
+        );
     }
 
     /// The four exports, called the way a browser calls them.

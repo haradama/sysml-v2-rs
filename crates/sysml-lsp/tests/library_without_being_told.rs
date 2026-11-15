@@ -10,6 +10,7 @@ mod common;
 
 use common::serving;
 use lsp_types::notification::Notification as _;
+use lsp_types::request::Request as _;
 use serde_json::json;
 
 /// `ISQ::MassValue` is in the Quantities and Units domain library and is
@@ -97,4 +98,37 @@ fn a_library_that_cannot_be_read_falls_back_too() {
     let found = diagnostics_for(json!({ "libraryPath": shut.to_str().unwrap() }), REACHES);
     std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert!(found.is_empty(), "{found:?}");
+}
+
+/// The copy built in is no file, so nothing in it has a place for a
+/// workspace-symbol answer to go to -- and the search was cut to its limit
+/// before those were dropped. A query as short as `e` matches thousands of
+/// the library's names, so the limit was spent on them and the answer held
+/// one of this document's three. What has nowhere to go is passed over
+/// before anything is counted.
+#[test]
+fn the_library_built_in_does_not_crowd_out_the_documents_own_symbols() {
+    let (mut client, handle) = serving();
+    client.initialize_with(json!({}));
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": {
+            "uri": "file:///p/a.sysml", "languageId": "sysml", "version": 1,
+            "text": "package Mine {\n  attribute def MyValueThing;\n  part def Engine;\n  part def Part;\n}\n",
+        }}),
+    );
+    client.wait_diagnostics();
+    let found = client.request(
+        lsp_types::request::WorkspaceSymbolRequest::METHOD,
+        json!({ "query": "e" }),
+    );
+    let mut names: Vec<&str> = found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Engine", "Mine", "MyValueThing"]);
+    client.stop(handle);
 }
