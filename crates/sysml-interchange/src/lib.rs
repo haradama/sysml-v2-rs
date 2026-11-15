@@ -79,6 +79,12 @@ pub enum ImportError {
     NotJson(String),
     /// An element at this position that is not a JSON object.
     NotAnObject(usize),
+    /// An element at this position that is an object but cannot be read
+    /// as one: a number no JSON reader can hold (`1e999`), or an `@id` or
+    /// `@type` that is not a string. Said as what it is; reported as a
+    /// missing `@type`, it sent a reader looking for something that was
+    /// there all along.
+    Unreadable(usize, String),
 }
 
 impl std::fmt::Display for ImportError {
@@ -93,6 +99,7 @@ impl std::fmt::Display for ImportError {
             ImportError::UnknownReference(id) => write!(f, "reference to unknown element {id:?}"),
             ImportError::NotJson(why) => write!(f, "not JSON: {why}"),
             ImportError::NotAnObject(i) => write!(f, "element {i} is not a JSON object"),
+            ImportError::Unreadable(i, why) => write!(f, "element {i} cannot be read: {why}"),
             ImportError::SharedOwnership(id) => write!(f, "two elements own {id:?}"),
             ImportError::OwnershipCycle(id) => {
                 write!(
@@ -2202,19 +2209,41 @@ enum Element<'a> {
 /// Asked without building the element, which is the point: text that is
 /// skipped is not allocated, so a pass that wants two strings does not
 /// pay for the forty properties beside them.
+///
+/// `@type` and `@id` are read as whatever JSON value they are, so that one
+/// that is not a string is said to be that rather than missing, and one
+/// written with an escape (`"Pack\u0061ge"`) is read at all.
 #[derive(serde::Deserialize)]
-struct Head<'a> {
-    #[serde(rename = "@type", borrow, default)]
-    kind: Option<&'a str>,
-    #[serde(rename = "@id", borrow, default)]
-    uuid: Option<&'a str>,
+struct Head {
+    #[serde(rename = "@type", default)]
+    kind: Option<Json>,
+    #[serde(rename = "@id", default)]
+    uuid: Option<Json>,
     #[serde(rename = "ownedRelatedElement", default)]
     owned: Option<serde::de::IgnoredAny>,
 }
 
+impl Head {
+    /// A field of the head that has to be a string, where it is given.
+    fn text<'h>(
+        field: &'h Option<Json>,
+        name: &str,
+        at: usize,
+    ) -> Result<Option<&'h str>, ImportError> {
+        match field {
+            None | Some(Json::Null) => Ok(None),
+            Some(Json::String(text)) => Ok(Some(text)),
+            Some(other) => Err(ImportError::Unreadable(
+                at,
+                format!("{name:?} is {other}, not a string"),
+            )),
+        }
+    }
+}
+
 impl<'a> Element<'a> {
     /// What the first pass needs, and no more.
-    fn head(&self, at: usize) -> Result<Head<'a>, ImportError> {
+    fn head(&self, at: usize) -> Result<Head, ImportError> {
         // `Head` reads from a JSON array as readily as from an object --
         // `["Package", "abc"]` is its two strings in order -- and pass two
         // then met an element that was no object
@@ -2227,15 +2256,14 @@ impl<'a> Element<'a> {
         }
         match self {
             Element::Built(json) => Ok(Head {
-                kind: json["@type"].as_str(),
-                uuid: json["@id"].as_str(),
+                kind: json.get("@type").cloned(),
+                uuid: json.get("@id").cloned(),
                 owned: json
                     .get("ownedRelatedElement")
                     .map(|_| serde::de::IgnoredAny),
             }),
-            Element::Text(raw) => {
-                serde_json::from_str(raw.get()).map_err(|_| ImportError::MissingType(at))
-            }
+            Element::Text(raw) => serde_json::from_str(raw.get())
+                .map_err(|why| ImportError::Unreadable(at, why.to_string())),
         }
     }
 
@@ -2245,7 +2273,7 @@ impl<'a> Element<'a> {
             Element::Built(json) => Ok(std::borrow::Cow::Borrowed(json)),
             Element::Text(raw) => serde_json::from_str(raw.get())
                 .map(std::borrow::Cow::Owned)
-                .map_err(|_| ImportError::MissingType(at)),
+                .map_err(|why| ImportError::Unreadable(at, why.to_string())),
         }
     }
 }
@@ -2269,13 +2297,16 @@ fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), Impor
         // pass two asks it what it brings in; every other element is
         // built there instead, one at a time.
         let head = source.head(index)?;
-        let type_name = head.kind.ok_or(ImportError::MissingType(index))?;
+        let type_name =
+            Head::text(&head.kind, "@type", index)?.ok_or(ImportError::MissingType(index))?;
         let kind = ElementKind::from_name(type_name)
             .ok_or_else(|| ImportError::UnknownType(type_name.to_string()))?;
         if kind.is_abstract() {
             return Err(ImportError::AbstractType(type_name.to_string()));
         }
-        let uuid = head.uuid.ok_or(ImportError::MissingId(index))?.to_string();
+        let uuid = Head::text(&head.uuid, "@id", index)?
+            .ok_or(ImportError::MissingId(index))?
+            .to_string();
         if by_uuid.contains_key(&uuid) || bridges.contains_key(&uuid) {
             return Err(ImportError::DuplicateId(uuid));
         }
@@ -2868,6 +2899,10 @@ mod tests {
             (ImportError::SharedOwnership("u".into()), "two elements own"),
             (ImportError::OwnershipCycle("u".into()), "owned by itself"),
             (ImportError::NotAnObject(2), "not a JSON object"),
+            (
+                ImportError::Unreadable(4, "why".into()),
+                "element 4 cannot be read: why",
+            ),
         ] {
             assert!(error.to_string().contains(needle), "{error}");
             assert!(!format!("{error:?}").is_empty());
@@ -4208,6 +4243,45 @@ mod tests {
         let right = json!([{ "@type": "PartDefinition", "@id": "a",
             "isAbstract": true, "declaredName": null, "visibility": "nowhere" }]);
         assert!(from_json(&right).is_ok());
+    }
+
+    /// An element that cannot be read is said to be unreadable, and why.
+    ///
+    /// Every failure to read one used to come out as a missing `@type`:
+    /// `1e999`, which no JSON reader holds, and an `@id` written as a
+    /// number both sent the reader looking for a `@type` that was there.
+    /// And `@type` was read borrowed, so one spelled with an escape --
+    /// `"Pack\u0061ge"`, which is `Package` -- could not be read at all.
+    #[test]
+    fn an_element_that_cannot_be_read_says_why() {
+        let said = |text: &str| match read_json(text.as_bytes()) {
+            Err(error) => error.to_string(),
+            Ok(_) => "read".to_string(),
+        };
+        let huge = said(r#"[{"@id":"a","@type":"Package","declaredName":1e999}]"#);
+        assert!(huge.starts_with("element 0 cannot be read:"), "{huge}");
+        assert!(huge.contains("number out of range"), "{huge}");
+        assert_eq!(
+            said(r#"[{"@id":5,"@type":"Package"}]"#),
+            r#"element 0 cannot be read: "@id" is 5, not a string"#
+        );
+        assert_eq!(
+            said(r#"[{"@id":"a","@type":["Package"]}]"#),
+            r#"element 0 cannot be read: "@type" is ["Package"], not a string"#
+        );
+        // a `Json` already built says the same of a field that is no string
+        assert!(matches!(
+            from_json(&json!([{ "@id": 5, "@type": "Package" }])),
+            Err(ImportError::Unreadable(0, _))
+        ));
+        // what is missing is still said to be missing
+        assert_eq!(said(r#"[{"@id":"a"}]"#), r#"element 0 has no "@type""#);
+        assert_eq!(
+            said(r#"[{"@type":"Package"}]"#),
+            r#"element 0 has no "@id""#
+        );
+        // and an escape is a spelling, not a fault
+        assert_eq!(said(r#"[{"@id":"a","@type":"Pack\u0061ge"}]"#), "read");
     }
 
     #[test]
