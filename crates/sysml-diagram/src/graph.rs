@@ -931,7 +931,7 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
     }
 
     let mut edges = Vec::new();
-    specializations_of(model, definition, &index, &mut edges);
+    specializations_of(model, &members, &index, &mut edges);
     // `action A1; then J;` continues from whatever came before it, so a
     // succession that names only where it goes needs its source remembered
     let mut previous: Option<usize> = None;
@@ -1903,13 +1903,19 @@ fn original_port(model: &Model, ty: ElementId) -> ElementId {
 /// same thing between two usages is a subsetting, and a redeclaration
 /// of one is a redefinition. All three are type relationships the
 /// standard draws.
+///
+/// Read from everything the boxes were drawn from, inherited members
+/// included: `part def SportsCar :> Car` holds Car's `part big :> eng`
+/// as boxes of its own, and reading only what SportsCar owns drew the
+/// two side by side as if unrelated -- and said nothing in words either,
+/// since both ends were on the canvas.
 fn specializations_of(
     model: &Model,
-    definition: ElementId,
+    members: &[ElementId],
     index: &HashMap<ElementId, usize>,
     edges: &mut Vec<Edge>,
 ) {
-    for &child in model.owned(definition) {
+    for &child in members {
         let Some(&from) = index.get(&child) else {
             continue;
         };
@@ -1925,7 +1931,13 @@ fn specializations_of(
             let Some(&to) = index.get(&target) else {
                 continue;
             };
-            if from == to {
+            // a redeclaration and what it redeclares are one box, and
+            // what both of them say is one line
+            if from == to
+                || edges
+                    .iter()
+                    .any(|edge| (edge.from, edge.to, edge.relation) == (from, to, relation))
+            {
                 continue;
             }
             edges.push(Edge {
@@ -2114,14 +2126,49 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
 ///
 /// Read from the same owners `nested_parts` draws from, so a connection a
 /// supertype declared joins the parts a subtype inherited.
+///
+/// And joins them where the subtype redeclared them: `connect a to b` in
+/// `Base` is written in terms of Base's `a`, which `part redefines a` in
+/// `Sub` replaces with a box of its own. Knowing only the boxes drawn, a
+/// `part s : Sub` held both ends and no line between them.
 fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge> {
-    let at: HashMap<ElementId, usize> = children
+    let owners = nesting_owners(model, usage);
+    let mut at: HashMap<ElementId, usize> = children
         .iter()
         .enumerate()
         .map(|(index, child)| (child.id, index))
         .collect();
+    // what each box redefines, and what that redefined in turn, is the
+    // same box
+    for (index, child) in children.iter().enumerate() {
+        let mut pending: Vec<ElementId> = redefined(model, child.id).collect();
+        while let Some(gone) = pending.pop() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = at.entry(gone) {
+                entry.insert(index);
+                pending.extend(redefined(model, gone));
+            }
+        }
+    }
+    // and a part a nearer owner declared again under its own name stands
+    // for the one further up, as `nested_parts` drew it
+    for &owner in &owners {
+        for &part in model.owned(owner) {
+            if at.contains_key(&part) || !is_structure_box(model.kind(part)) {
+                continue;
+            }
+            let Some(name) = model.effective_name(part) else {
+                continue;
+            };
+            if let Some(index) = children
+                .iter()
+                .position(|child| model.effective_name(child.id) == Some(name))
+            {
+                at.insert(part, index);
+            }
+        }
+    }
     let mut links = Vec::new();
-    for owner in nesting_owners(model, usage) {
+    for owner in owners {
         for &child in model.owned(owner) {
             let ends = connector_ends(model, child);
             let [first, second] = &ends[..] else { continue };
@@ -2156,7 +2203,7 @@ fn links_between(model: &Model, usage: ElementId, children: &[Node]) -> Vec<Edge
 ///
 /// A definition names no type and answers with itself and its supertypes;
 /// a usage answers with the type's.
-fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
+pub(crate) fn nesting_owners(model: &Model, usage: ElementId) -> Vec<ElementId> {
     let mut seen = HashSet::new();
     itself_and_supertypes(model, usage)
         .into_iter()
@@ -2215,6 +2262,7 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
     let mut out: Vec<Node> = Vec::new();
     let mut drawn: HashSet<&str> = HashSet::new();
     let mut replaced: HashSet<ElementId> = HashSet::new();
+    let mut otherwise_last: Vec<Node> = Vec::new();
     for owner in nesting_owners(model, usage) {
         for &part in model.owned(owner) {
             // an action's steps and a state's states nest the same way a
@@ -2224,29 +2272,51 @@ fn nested_parts(model: &Model, usage: ElementId) -> Vec<Node> {
             if !is_structure_box(model.kind(part)) {
                 continue;
             }
-            let Some(name) = model.effective_name(part) else {
+            // `else if q { ... }` is the branch an `if` was handed, an `if`
+            // of its own and nameless as every one is. Left out, the steps
+            // it guards were nowhere in the drawing; it is drawn as the
+            // node it is, with the question it asks and what it runs.
+            let otherwise = model.kind(part) == ElementKind::IfActionUsage
+                && model.kind(owner) == ElementKind::IfActionUsage;
+            let Some(name) = model.effective_name(part).or(otherwise.then_some("")) else {
                 continue;
             };
             // what this one redefines is gone too, whether it is drawn or
             // was itself redefined by something nearer
             replaced.extend(redefined(model, part));
-            if replaced.contains(&part) || !drawn.insert(name) {
+            if replaced.contains(&part) || (!otherwise && !drawn.insert(name)) {
                 continue;
             }
             let label = box_label(model, part, name);
-            out.push(Node {
+            let (compartments, children) = if otherwise {
+                (
+                    into_compartments(&label, features_of(model, part)),
+                    nested_parts(model, part),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            let node = Node {
                 id: part,
                 name: label,
                 keyword: box_keyword(model, part),
-                compartments: Vec::new(),
+                compartments,
                 is_abstract: is_abstract(model, part),
                 rounded: model.kind(part).is_a(ElementKind::Usage),
                 shape: shape_of(model.kind(part)),
-                children: Vec::new(),
+                children,
                 links: Vec::new(),
-            });
+            };
+            // the branch taken otherwise is written after the one taken
+            // first, and is read in that order
+            if otherwise {
+                otherwise_last.push(node);
+            } else {
+                out.push(node);
+            }
         }
     }
+    out.extend(otherwise_last);
     out
 }
 
@@ -2368,17 +2438,44 @@ fn features_except(
 
 /// The compartment the condition of an `if` or a loop goes in, named for
 /// the question the node asks: `if-condition ='if condition'`,
-/// `while-condition ='while condition'`, `iteration ='for iterator'`.
+/// `while-condition ='while condition'`, `until-condition ='until
+/// condition'`, `iteration ='for iterator'`.
 fn condition_compartment(model: &Model, member: ElementId) -> Option<&'static str> {
     if !model.kind(member).is_a(ElementKind::Expression) {
         return None;
     }
-    match model.kind(model.owner(member)?) {
+    let owner = model.owner(member)?;
+    match model.kind(owner) {
         ElementKind::IfActionUsage => Some("if condition"),
+        // `loop { ... } until n == 7;` stops once the condition holds,
+        // which is the opposite of what a `while` asks. The standard has
+        // the `untilArgument` be the loop's third parameter -- after the
+        // `while` (or the empty one a bare `loop` is handed) and the body
+        // -- and drawn under `while condition` it said the loop ran for
+        // as long as `n == 7`.
+        ElementKind::WhileLoopActionUsage if is_until_argument(model, owner, member) => {
+            Some("until condition")
+        }
         ElementKind::WhileLoopActionUsage => Some("while condition"),
         ElementKind::ForLoopActionUsage => Some("for iterator"),
         _ => None,
     }
+}
+
+/// Is `member` what a `while` loop asks after each pass, rather than
+/// before it?
+///
+/// `deriveWhileLoopActionUsageUntilArgument` -- the `untilArgument` is the
+/// third input parameter, the first two being what the loop asks before
+/// each pass (empty for a bare `loop`) and the body it repeats.
+fn is_until_argument(model: &Model, owner: ElementId, member: ElementId) -> bool {
+    model
+        .owned(owner)
+        .iter()
+        .copied()
+        .filter(|&child| direction_of(model, child) == Some("in"))
+        .nth(2)
+        == Some(member)
 }
 
 /// The comments written about anything on the canvas, as notes joined to
@@ -5447,6 +5544,97 @@ mod interconnection_tests {
     }
 
     #[test]
+    fn a_loop_that_stops_when_asked_says_until_and_not_while() {
+        // `until-condition ='until condition'`: `until n == 7` ends the
+        // loop once it holds, the opposite of what a `while` asks, and
+        // both were drawn as a `while condition`
+        let ws = resolved(
+            "attribute def Integer;\n\
+             action def Step;\n\
+             action def M {\n\
+             \tattribute n : Integer;\n\
+             \tloop { action l : Step; } until n == 7;\n\
+             \twhile n < 10 { action w : Step; } until n == 5;\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "M"));
+        let asked: Vec<Vec<(&str, String)>> = diagram
+            .nodes
+            .iter()
+            .filter(|node| node.keyword == "loop")
+            .map(|node| {
+                node.compartments
+                    .iter()
+                    .flat_map(|compartment| {
+                        compartment
+                            .lines
+                            .iter()
+                            .map(move |line| (compartment.label, line.label()))
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            asked,
+            [
+                vec![("until condition", "n == 7".to_string())],
+                vec![
+                    ("while condition", "n < 10".to_string()),
+                    ("until condition", "n == 5".to_string()),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn an_else_if_is_drawn_inside_the_if_it_is_the_otherwise_of() {
+        // `else if q { ... }` hands the first `if` a second one, which
+        // was drawn nowhere -- and with it every step it guards
+        let ws = resolved(
+            "action def Step;\n\
+             action def A {\n\
+             \tin p; in q;\n\
+             \tif p { action x : Step; } else if q { action y : Step; } else { action z : Step; }\n\
+             }\n",
+        );
+        let diagram = interconnection_diagram(ws.model(), definition(&ws, "A"));
+        let first = diagram
+            .nodes
+            .iter()
+            .find(|node| node.keyword == "if")
+            .expect("the first `if` is drawn");
+        let asks = |node: &Node| -> Vec<(&str, String)> {
+            node.compartments
+                .iter()
+                .flat_map(|compartment| {
+                    compartment
+                        .lines
+                        .iter()
+                        .map(move |line| (compartment.label, line.label()))
+                })
+                .collect()
+        };
+        assert_eq!(asks(first), [("if condition", "p".to_string())]);
+        let inside: Vec<&str> = first
+            .children
+            .iter()
+            .map(|it| it.keyword.as_str())
+            .collect();
+        // the branch taken first, then the one taken otherwise
+        assert_eq!(first.children.len(), 2, "{inside:?}");
+        assert!(first.children[0].name.starts_with('x'));
+        let otherwise = &first.children[1];
+        assert_eq!(otherwise.keyword, "if");
+        assert_eq!(asks(otherwise), [("if condition", "q".to_string())]);
+        let steps: Vec<&str> = otherwise
+            .children
+            .iter()
+            .map(|it| it.name.as_str())
+            .collect();
+        assert_eq!(steps, ["y : Step", "z : Step"]);
+    }
+
+    #[test]
     fn a_bare_loop_is_the_same_node_asking_nothing() {
         // `WhileLoopNode : WhileLoopActionUsage = ... ( 'while'
         // ExpressionParameterMember | 'loop' EmptyParameterMember ) ...`
@@ -6348,6 +6536,65 @@ mod faithfulness_tests {
         let diagram = internal(source, "Sub");
         let names: Vec<&str> = diagram.nodes.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, ["x : Y", "k2 : Y"]);
+    }
+
+    #[test]
+    fn a_subsetting_between_inherited_parts_is_drawn_in_the_subtype_too() {
+        // the subtype draws Car's `eng` and `big` as boxes of its own, and
+        // reading the relationships from what SportsCar owns alone left
+        // the two side by side as if unrelated
+        let source = "part def Car { part eng; part big :> eng; part other; }\n\
+             part def SportsCar :> Car { part more; }\n\
+             part def Tuned :> Car { part big2 :>> big; }\n";
+        for name in ["Car", "SportsCar", "Tuned"] {
+            let diagram = internal(source, name);
+            let drawn: Vec<(&str, &str)> = diagram
+                .edges
+                .iter()
+                .filter(|edge| edge.relation == Relation::Subsetting)
+                .map(|edge| {
+                    (
+                        diagram.nodes[edge.from].name.as_str(),
+                        diagram.nodes[edge.to].name.as_str(),
+                    )
+                })
+                .collect();
+            // a redeclaration of `big` is the box that subsets `eng` now,
+            // and says so once
+            let big = if name == "Tuned" { "big2" } else { "big" };
+            assert_eq!(drawn, [(big, "eng")], "{name}");
+        }
+    }
+
+    #[test]
+    fn a_connection_a_nested_part_inherits_reaches_the_parts_redeclared() {
+        // Base's connections are written in terms of Base's `a` and `c`,
+        // and the boxes drawn for `s : Sub` are Sub's redeclarations of
+        // them: the connections were dropped for want of an end
+        let diagram = internal(
+            "part def Base { part a; part b; part c; connect a to b; connect b to c; }\n\
+             part def Sub :> Base { part redefines a; part c2 :>> c; }\n\
+             part def Top { part s : Sub; part t : Base; }\n",
+            "Top",
+        );
+        for node in &diagram.nodes {
+            let mut joined: Vec<(&str, &str)> = node
+                .links
+                .iter()
+                .map(|link| {
+                    (
+                        node.children[link.from].name.as_str(),
+                        node.children[link.to].name.as_str(),
+                    )
+                })
+                .collect();
+            joined.sort();
+            let expected = match node.name.as_str() {
+                "s : Sub" => [("a", "b"), ("b", "c2")],
+                _ => [("a", "b"), ("b", "c")],
+            };
+            assert_eq!(joined, expected, "{}", node.name);
+        }
     }
 
     #[test]

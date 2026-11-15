@@ -4,13 +4,15 @@
 //! `sequence-view = (sq-graphical-element)*`, drawn as the standard has
 //! it: a head node per participant across the top, a dashed lifeline
 //! hanging from each, and one arrow per message or succession between
-//! them, in the order the model declares.
+//! them, in the order the model says they happen.
 
 use std::fmt::Write;
 
 use sysml_model::{ElementId, ElementKind, Model};
 
-use crate::graph::{assembled_from, connector_label, connector_relation, keyword, Relation};
+use crate::graph::{
+    assembled_from, connector_label, connector_relation, keyword, nesting_owners, Relation,
+};
 use crate::svg::{document, escape, markers};
 use crate::Style;
 
@@ -35,7 +37,7 @@ impl Lifeline {
 }
 
 /// One thing that passes between two lifelines, in the order the model
-/// declares it.
+/// says it happens.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Moment {
     /// Indices into [`Sequence::lifelines`].
@@ -65,18 +67,43 @@ pub struct Sequence {
 /// chain without its last step, which is what a lifeline stands for.
 ///
 /// An interaction that specializes another carries on the exchange it
-/// inherits, so the messages are read off the same list the
-/// interconnection view is assembled from.
+/// inherits, so the messages are read off the same owners the
+/// interconnection view is assembled from -- the most general first,
+/// since what a subtype adds comes after the exchange it carries on.
+///
+/// The order the arrows are drawn in is the order the model says they
+/// happen: `first m1 then m2` puts `m1` above `m2` wherever the two were
+/// written, and so does a succession between the events they reach.
+/// What no succession orders stays in the order it was declared.
 pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
-    let mut sequence = Sequence::default();
     let members = assembled_from(model, definition);
-    for &child in &members {
+    let mut owners = nesting_owners(model, definition);
+    owners.reverse();
+    let general_first: Vec<ElementId> = owners
+        .into_iter()
+        .flat_map(|owner| model.owned(owner).iter().copied())
+        .collect();
+    let mut arrows: Vec<Arrow> = Vec::new();
+    let mut orderings: Vec<(ElementId, ElementId)> = Vec::new();
+    for &child in &general_first {
         // `sq-graphical-relationship = message | sq-succession`, and both
         // reach an event: `first m1 then m2` orders two messages rather
         // than joining two lifelines, so it is not one of these arrows.
         let relation = connector_relation(model, child);
         if !matches!(relation, Relation::Message | Relation::Succession) {
             continue;
+        }
+        if relation == Relation::Succession {
+            // what a succession puts first and what it puts after, the
+            // messages or the events it names
+            let reached: Vec<ElementId> = model
+                .owned(child)
+                .iter()
+                .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
+                .collect();
+            if let [earlier, later] = reached[..] {
+                orderings.push((earlier, later));
+            }
         }
         let mut ends: Vec<Reach> = model
             .owned(child)
@@ -91,15 +118,85 @@ pub fn sequence_view(model: &Model, definition: ElementId) -> Sequence {
         if ends.is_empty() && relation == Relation::Message {
             ends = ends_named_by_events(model, &members, child);
         }
-        let [from, to] = &ends[..] else { continue };
-        sequence.moments.push(Moment {
-            from: lifeline_at(model, from, &mut sequence.lifelines),
-            to: lifeline_at(model, to, &mut sequence.lifelines),
+        let Ok([from, to]) = <[Reach; 2]>::try_from(ends) else {
+            continue;
+        };
+        arrows.push(Arrow {
+            id: child,
+            from,
+            to,
             label: connector_label(model, child, relation),
             dashed: relation == Relation::Succession,
         });
     }
+    let mut sequence = Sequence::default();
+    for at in in_order(&arrows, &orderings) {
+        let arrow = &arrows[at];
+        sequence.moments.push(Moment {
+            from: lifeline_at(model, &arrow.from, &mut sequence.lifelines),
+            to: lifeline_at(model, &arrow.to, &mut sequence.lifelines),
+            label: arrow.label.clone(),
+            dashed: arrow.dashed,
+        });
+    }
     sequence
+}
+
+/// One arrow before it has a place in the drawing.
+struct Arrow {
+    /// The message or succession it is drawn for.
+    id: ElementId,
+    from: Reach,
+    to: Reach,
+    label: Option<String>,
+    dashed: bool,
+}
+
+impl Arrow {
+    /// Whether a succession naming `named` is about this arrow: it names
+    /// the message itself, or an event the arrow leaves or reaches. A
+    /// succession arrow is placed where it was written and is ordered by
+    /// nothing, or `first a.s then b.r` would be put after itself.
+    fn is_named_by(&self, named: ElementId) -> bool {
+        !self.dashed && (self.id == named || self.from.event == named || self.to.event == named)
+    }
+}
+
+/// The arrows in the order they happen: each after whatever a succession
+/// puts before it, and otherwise in the order they were read.
+///
+/// Successions that contradict one another leave no arrow free to go
+/// next, and the earliest-read of those left is drawn then rather than
+/// none of them at all.
+fn in_order(arrows: &[Arrow], orderings: &[(ElementId, ElementId)]) -> Vec<usize> {
+    let mut before: Vec<Vec<usize>> = vec![Vec::new(); arrows.len()];
+    for &(earlier, later) in orderings {
+        for (first, arrow) in arrows.iter().enumerate() {
+            if !arrow.is_named_by(earlier) {
+                continue;
+            }
+            for (then, other) in arrows.iter().enumerate() {
+                if then != first && other.is_named_by(later) {
+                    before[then].push(first);
+                }
+            }
+        }
+    }
+    let mut placed = vec![false; arrows.len()];
+    let mut order = Vec::with_capacity(arrows.len());
+    while order.len() < arrows.len() {
+        let free = (0..arrows.len())
+            .filter(|&at| !placed[at])
+            .find(|&at| before[at].iter().all(|&first| placed[first]));
+        let next = free.unwrap_or_else(|| {
+            (0..arrows.len())
+                .find(|&at| !placed[at])
+                .expect("an arrow is left while the order is short")
+        });
+        placed[next] = true;
+        order.push(next);
+    }
+    order
 }
 
 /// One end of an arrow: the participant it belongs to, and the event it
@@ -444,14 +541,15 @@ mod tests {
              }\n",
         );
         // the inherited message is drawn, and so are the participants it
-        // is the only thing to name
+        // is the only thing to name -- and it comes first: what the
+        // subtype adds carries on from the exchange it inherits
         assert_eq!(
             sequence
                 .moments
                 .iter()
                 .map(|moment| (moment.from, moment.to, moment.label.as_deref()))
                 .collect::<Vec<_>>(),
-            [(0, 0, Some("answered")), (0, 1, Some("reported"))]
+            [(0, 1, Some("reported")), (0, 0, Some("answered"))]
         );
         assert_eq!(
             sequence
@@ -461,6 +559,60 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "b"]
         );
+    }
+
+    fn labels(sequence: &Sequence) -> Vec<&str> {
+        sequence
+            .moments
+            .iter()
+            .filter_map(|moment| moment.label.as_deref())
+            .collect()
+    }
+
+    #[test]
+    fn a_succession_between_two_messages_orders_them_however_they_were_written() {
+        // `first first1 then second` says which happens first, and drawing
+        // them in the order they were written put `second` above it
+        let source = "part def A { event occurrence s1; event occurrence r2; }\n\
+             part def B { event occurrence r1; event occurrence s2; }\n\
+             occurrence def Interaction {\n\
+             \tref part a : A;\n\
+             \tref part b : B;\n\
+             \tmessage second from b.s2 to a.r2;\n\
+             \tmessage first1 from a.s1 to b.r1;\n\
+             \tfirst first1 then second;\n\
+             }\n";
+        let sequence = interaction(source);
+        assert_eq!(labels(&sequence), ["first1", "second"]);
+        // and the lifelines take their places in that order too
+        let names: Vec<&str> = sequence.lifelines.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+        // a succession between the events the two reach says the same
+        let sequence = interaction(&source.replace(
+            "first first1 then second;",
+            "succession first a.s1 then a.r2;",
+        ));
+        assert_eq!(labels(&sequence), ["first1", "second"]);
+        assert_eq!(sequence.moments.len(), 3);
+    }
+
+    #[test]
+    fn successions_that_contradict_each_other_still_draw_every_message() {
+        let sequence = interaction(
+            "part def A { event occurrence e1; event occurrence e2; }\n\
+             occurrence def Interaction {\n\
+             \tref part a : A;\n\
+             \tmessage m1 from a.e1 to a.e2;\n\
+             \tmessage m2 from a.e2 to a.e1;\n\
+             \tmessage m3 from a.e1 to a.e2;\n\
+             \tfirst m1 then m2;\n\
+             \tfirst m2 then m1;\n\
+             \tfirst m3 then m1;\n\
+             }\n",
+        );
+        let mut drawn = labels(&sequence);
+        drawn.sort();
+        assert_eq!(drawn, ["m1", "m2", "m3"]);
     }
 
     #[test]

@@ -1498,7 +1498,11 @@ pub(crate) fn document(width: f64, height: f64, style: &Style, body: &str) -> St
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
          viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"{}\" \
          font-size=\"{:.0}\">",
-        style.skin.font, style.font_size
+        // a skin's font is CSS as its author wrote it, quotes and all --
+        // `"Helvetica Neue", Arial` -- and written bare into the attribute
+        // the first quote ended it, which left the drawing no SVG at all
+        escape(&style.skin.font),
+        style.font_size
     )
     .expect("writing to a String cannot fail");
     writeln!(out, "<style>\n{}</style>", style.skin.stylesheet()).unwrap();
@@ -4646,6 +4650,26 @@ mod tests {
         assert!(svg.contains("prefers-color-scheme: dark"));
         assert!(svg.contains("viewBox=\"0 0 "));
         assert!(svg.contains("font-family="));
+    }
+
+    /// A skin's font is CSS, and CSS quotes a family with a space in its
+    /// name. Written bare, the first quote ended the attribute: the
+    /// drawing was no SVG at all, and a font could add attributes of its
+    /// own to the document element.
+    #[test]
+    fn a_font_is_written_as_text_in_its_attribute() {
+        let ws = resolved("part def A;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let mut style = Style::default();
+        style.skin.font = "\"Helvetica Neue\", Arial".to_string();
+        let svg = render(&diagram, &style);
+        assert!(
+            svg.contains("font-family=\"&quot;Helvetica Neue&quot;, Arial\""),
+            "{svg}"
+        );
+        style.skin.font = "x\" onload=\"alert(1)".to_string();
+        let svg = render(&diagram, &style);
+        assert!(!svg.contains(" onload=\""), "{svg}");
     }
 
     #[test]
