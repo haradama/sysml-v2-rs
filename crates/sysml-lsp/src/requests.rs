@@ -418,8 +418,22 @@ impl Server {
         // library built into this binary is no file, and a query as short
         // as `e` filled the limit with it and answered with one of the
         // project's own definitions where there were three.
-        let ranked: Vec<sysml_model::ElementId> =
+        //
+        // The library is a place to go to now that the copy built in is
+        // written out where there are files, and its names would crowd
+        // the project's out the same way: what the project and its open
+        // buffers declare comes first, in its rank, and the library's
+        // after it, in its own.
+        let library_files = self.library.file_count();
+        let mut ranked: Vec<sysml_model::ElementId> =
             self.analysis().ws.search_names(query, usize::MAX);
+        {
+            let ws = &self.analysis().ws;
+            ranked.sort_by_key(|id| {
+                ws.element_file(*id)
+                    .is_some_and(|file| file < library_files)
+            });
+        }
         // a file with no place is asked once, not once per element in it
         let mut nowhere: HashSet<usize> = HashSet::new();
         let mut symbols = Vec::new();

@@ -175,7 +175,7 @@ impl Session {
             Phase::Starting(files) => starting(files, message, out),
             Phase::Greeting(server) => greeting(server, message, out),
             Phase::Open(server) => open(server, message, out),
-            Phase::Closing => (Phase::Over, closing(message)),
+            Phase::Closing => closing(message, out),
             Phase::Over => (Phase::Over, Flow::Over(Ok(()))),
         };
         self.phase = phase;
@@ -300,6 +300,21 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
             out.push(Response::new_ok(req.id, ()).into());
             (Phase::Closing, Flow::Go)
         }
+        // `initialize` is said once a session: a second one is a request
+        // the session is in the wrong state for, not a method this
+        // server does not know, which is what answering it as any other
+        // request said
+        Message::Request(req) if req.method == lsp_types::request::Initialize::METHOD => {
+            out.push(
+                Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidRequest as i32,
+                    "`initialize` was already answered in this session".to_string(),
+                )
+                .into(),
+            );
+            (Phase::Open(server), Flow::Go)
+        }
         // A panic answering one question is that question's failure, not
         // the session's: unwound to here, the editor is told this one
         // went wrong and goes on being served, where a server that died
@@ -351,15 +366,33 @@ fn open(mut server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
 }
 
 /// After `shutdown`, where `exit` is the message the specification names
-/// and no other is.
-fn closing(message: Message) -> Flow {
+/// as the end. Anything else is not a reason to end: the specification
+/// says a request after `shutdown` is answered with `InvalidRequest`, and
+/// a server that exited instead left the client waiting for an answer
+/// that never came, and then saw it fail with nothing said.
+fn closing(message: Message, out: &mut Vec<Message>) -> (Phase, Flow) {
     match message {
         Message::Notification(note) if note.method == lsp_types::notification::Exit::METHOD => {
-            Flow::Over(Ok(()))
+            (Phase::Over, Flow::Over(Ok(())))
         }
-        other => Flow::Over(Err(format!(
-            "expected `exit` after `shutdown`, got {other:?}"
-        ))),
+        Message::Request(req) => {
+            out.push(
+                Response::new_err(
+                    req.id,
+                    lsp_server::ErrorCode::InvalidRequest as i32,
+                    format!(
+                        "`{}` after `shutdown`: only `exit` may follow it",
+                        req.method
+                    ),
+                )
+                .into(),
+            );
+            (Phase::Closing, Flow::Go)
+        }
+        // a notification has no answer to carry a refusal, and one that
+        // was already on its way when the client asked to shut down is
+        // no reason to end any sooner
+        Message::Notification(_) | Message::Response(_) => (Phase::Closing, Flow::Go),
     }
 }
 
@@ -1148,12 +1181,34 @@ fn symbol_for(
     text: &str,
     index: &LineIndex,
 ) -> Option<DocumentSymbol> {
+    symbol_within(ws, elem, text, index).map(|(symbol, _)| symbol)
+}
+
+/// [`symbol_for`], with the range it ends up covering.
+///
+/// An element's own range and the ranges of what it owns are each where
+/// the parser saw them, and they need not nest: for `end [1] port a : P;`
+/// the cross feature the end owns was given more of the line than the
+/// end itself. A client draws the outline, and matches the cursor to it,
+/// by containment, so an element's range is widened to cover what is
+/// listed under it -- all of it is written in the one declaration.
+fn symbol_within(
+    ws: &Workspace,
+    elem: sysml_model::ElementId,
+    text: &str,
+    index: &LineIndex,
+) -> Option<(DocumentSymbol, TextRange)> {
     let model = ws.model();
-    let (full, name_range) = ws.element_ranges(elem)?;
+    let (mut full, name_range) = ws.element_ranges(elem)?;
+    full = full.cover(name_range);
     let children: Vec<DocumentSymbol> = model
         .owned(elem)
         .iter()
-        .filter_map(|c| symbol_for(ws, *c, text, index))
+        .filter_map(|c| symbol_within(ws, *c, text, index))
+        .map(|(child, covered)| {
+            full = full.cover(covered);
+            child
+        })
         .collect();
     // An element declared without a name is still somewhere a reader
     // goes: `part :>> wheel { part hub; }`, a `perform action { ... }`,
@@ -1180,7 +1235,7 @@ fn symbol_for(
         }
     };
     #[allow(deprecated)]
-    Some(DocumentSymbol {
+    let symbol = DocumentSymbol {
         name,
         detail: Some(kind.name().to_string()),
         kind: pictured(kind).1,
@@ -1193,7 +1248,8 @@ fn symbol_for(
         } else {
             Some(children)
         },
-    })
+    };
+    Some((symbol, full))
 }
 
 fn ok_response<T: serde::Serialize>(id: RequestId, value: Option<T>) -> Response {
@@ -1417,15 +1473,54 @@ mod tests {
     }
 
     #[test]
-    fn nothing_but_exit_follows_a_shutdown() {
+    fn only_exit_ends_a_session_after_shutdown() {
         let (mut session, mut out) = waiting();
         started(&mut session, &mut out);
         assert!(matches!(
             session.handle(request(2, "shutdown", serde_json::Value::Null), &mut out),
             Flow::Go
         ));
-        let flow = session.handle(notification("initialized"), &mut out);
-        assert!(matches!(flow, Flow::Over(Err(_))), "{flow:?}");
+        // a request after `shutdown` is refused as the specification
+        // says, with `InvalidRequest`, and the session waits on for
+        // `exit`; it used to end there, unanswered and failed
+        out.clear();
+        let flow = session.handle(
+            request(3, "textDocument/hover", serde_json::json!({})),
+            &mut out,
+        );
+        assert!(matches!(flow, Flow::Go), "{flow:?}");
+        let answers = said(&out);
+        assert_eq!(answers[0]["id"], 3, "{answers:?}");
+        assert_eq!(
+            answers[0]["error"]["code"],
+            lsp_server::ErrorCode::InvalidRequest as i32,
+            "{answers:?}"
+        );
+        // a notification is no reason to end either
+        assert!(matches!(
+            session.handle(notification("initialized"), &mut out),
+            Flow::Go
+        ));
+        assert!(!session.over());
+        let flow = session.handle(notification("exit"), &mut out);
+        assert!(matches!(flow, Flow::Over(Ok(()))), "{flow:?}");
+    }
+
+    #[test]
+    fn a_second_initialize_is_an_invalid_request() {
+        let (mut session, mut out) = waiting();
+        started(&mut session, &mut out);
+        out.clear();
+        let params = serde_json::json!({ "capabilities": {} });
+        let flow = session.handle(request(9, "initialize", params), &mut out);
+        assert!(matches!(flow, Flow::Go), "{flow:?}");
+        let answers = said(&out);
+        // it was answered as an unknown method, -32601
+        assert_eq!(
+            answers[0]["error"]["code"],
+            lsp_server::ErrorCode::InvalidRequest as i32,
+            "{answers:?}"
+        );
     }
 
     /// The project is what the client hands over, and it may change

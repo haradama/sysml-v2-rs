@@ -38,6 +38,79 @@ pub(crate) enum Library {
     None,
 }
 
+/// The directory the library built in is written out to, with every file
+/// in it saying what the binary holds, or `None` where it cannot be.
+///
+/// Under the OS cache directory, named by the release and by a hash of
+/// what the files say, so that two builds holding different copies never
+/// share one, and a copy found there already is taken as it is only when
+/// it says the same. Each file is written beside its place and renamed
+/// into it, so a server starting while another writes the same copy reads
+/// either the old file whole or the new one whole.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn written_out_library() -> Option<PathBuf> {
+    // FNV-1a over every name and text: a dozen milliseconds at most,
+    // and what tells this binary's copy from another's
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, text) in sysml_stdlib::FILES {
+        for byte in name.bytes().chain([0]).chain(text.bytes()).chain([0]) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let dir = cache_home()?
+        .join("sysml-lsp")
+        .join(format!("library-{}-{hash:016x}", sysml_stdlib::RELEASE));
+    for (name, text) in sysml_stdlib::FILES {
+        let path = dir.join(name);
+        if std::fs::read(&path).is_ok_and(|held| held == text.as_bytes()) {
+            continue;
+        }
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        // a name no other writer uses, the servers of one process too
+        static WRITTEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let partial = path.with_extension(format!(
+            "partial-{}-{}",
+            std::process::id(),
+            WRITTEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&partial, text).ok()?;
+        if std::fs::rename(&partial, &path).is_err() {
+            let _ = std::fs::remove_file(&partial);
+            // another server may have put the same file there first
+            if !std::fs::read(&path).is_ok_and(|held| held == text.as_bytes()) {
+                return None;
+            }
+        }
+    }
+    std::fs::canonicalize(&dir).ok()
+}
+
+#[cfg(target_family = "wasm")]
+pub(crate) fn written_out_library() -> Option<PathBuf> {
+    None
+}
+
+/// Where this OS keeps what a program may rebuild: `$XDG_CACHE_HOME` or
+/// `~/.cache`, `~/Library/Caches`, `%LOCALAPPDATA%`, and the temporary
+/// directory where none of those is set.
+#[cfg(not(target_family = "wasm"))]
+fn cache_home() -> Option<PathBuf> {
+    let set = |var: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    let home = if cfg!(windows) {
+        set("LOCALAPPDATA")
+    } else if cfg!(target_os = "macos") {
+        set("HOME").map(|home| home.join("Library").join("Caches"))
+    } else {
+        set("XDG_CACHE_HOME").or_else(|| set("HOME").map(|home| home.join(".cache")))
+    };
+    Some(home.unwrap_or_else(std::env::temp_dir))
+}
+
 impl Server {
     pub(crate) fn new(
         files: Files,
@@ -46,15 +119,32 @@ impl Server {
         excluded: &[PathBuf],
     ) -> Server {
         let mut library = Workspace::new();
-        let library_dir = match &wanted {
+        let mut library_dir = match &wanted {
             Library::At(dir) => Some(dir.clone()),
             _ => None,
         };
         let mut complaints = Vec::new();
-        let built_in = |library: &mut Workspace| {
+        // The copy built in is no file, and a definition inside it had no
+        // URL to jump to: go-to-definition on `Part` answered null. Where
+        // there is a filesystem it is written out once per release to a
+        // cache directory and read under those paths, which is then the
+        // library's directory as a named one would be. Where there is
+        // none (the browser's worker), or the cache cannot be written, it
+        // keeps the names it was built with and a jump into it still
+        // answers nothing.
+        let mut built_in_dir = None;
+        let mut built_in = |library: &mut Workspace| {
+            let home = match &files {
+                Files::Disk => written_out_library(),
+                Files::Handed(_) => None,
+            };
             for (name, text) in sysml_stdlib::FILES {
-                library.add_file(*name, text);
+                match &home {
+                    Some(dir) => library.add_file(dir.join(name).to_string_lossy(), text),
+                    None => library.add_file(*name, text),
+                };
             }
+            built_in_dir = home;
         };
         match &wanted {
             // A named directory that will not load falls back to the
@@ -120,6 +210,13 @@ impl Server {
         // resolve the library once; the caches are cloned into every
         // layer above, so this cost is paid only at startup
         library.resolve_all();
+        // a named directory that fell back to the copy built in is left
+        // out of the project still, and the copy is the library now
+        let mut excluded_dirs: Vec<PathBuf> = library_dir.iter().cloned().collect();
+        if let Some(dir) = built_in_dir {
+            excluded_dirs.push(dir.clone());
+            library_dir = Some(dir);
+        }
         // by the path with every link resolved, since what it is
         // compared against is an open document's resolved path
         let resolved_library_dir = library_dir.as_deref().map(|dir| files.resolved(dir));
@@ -131,7 +228,7 @@ impl Server {
             library_dir: resolved_library_dir,
             // the library is already loaded, so its own files are never
             // part of the project even when a workspace folder holds them
-            excluded: library_dir
+            excluded: excluded_dirs
                 .into_iter()
                 .chain(excluded.iter().cloned())
                 .collect(),

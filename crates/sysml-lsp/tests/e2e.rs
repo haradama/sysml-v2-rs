@@ -1045,3 +1045,56 @@ fn an_unresolved_name_is_an_error() {
     assert_eq!(diagnostics[0]["severity"], 1, "{said}");
     client.stop(handle);
 }
+
+/// A client draws the outline, and finds where the cursor is in it, by
+/// containment, so a symbol listed under another lies inside it. Taken as
+/// the parser placed each element, the cross feature an end owns in
+/// `end [1] port a : P;` was given more of the line than the end it is
+/// listed under.
+#[test]
+fn every_symbol_lies_inside_the_one_it_is_listed_under() {
+    let uri = "file:///ends.sysml";
+    let (mut client, handle) = opened(
+        uri,
+        "package Ends {\n    port def P;\n    interface def I {\n        end [1] port a : P;\n        end [0..*] port b : P;\n    }\n    connection def C {\n        end [1] part x : Ends::I;\n    }\n}\n",
+    );
+    let symbols = client.request(
+        lsp_types::request::DocumentSymbolRequest::METHOD,
+        json!({ "textDocument": { "uri": uri } }),
+    );
+    let at = |position: &Value| {
+        (
+            position["line"].as_u64().unwrap(),
+            position["character"].as_u64().unwrap(),
+        )
+    };
+    let within = |inner: &Value, outer: &Value| {
+        at(&outer["start"]) <= at(&inner["start"]) && at(&inner["end"]) <= at(&outer["end"])
+    };
+    fn walk(symbol: &Value, check: &dyn Fn(&Value, &Value) -> bool, seen: &mut usize) {
+        *seen += 1;
+        assert!(
+            check(&symbol["selectionRange"], &symbol["range"]),
+            "{} names itself outside its range: {symbol}",
+            symbol["name"]
+        );
+        for child in symbol["children"].as_array().into_iter().flatten() {
+            assert!(
+                check(&child["range"], &symbol["range"]),
+                "{} is listed under {} and lies outside it: {} not in {}",
+                child["name"],
+                symbol["name"],
+                child["range"],
+                symbol["range"]
+            );
+            walk(child, check, seen);
+        }
+    }
+    let mut seen = 0;
+    for symbol in symbols.as_array().unwrap() {
+        walk(symbol, &within, &mut seen);
+    }
+    // the ends themselves, and what they own, were all looked at
+    assert!(seen >= 7, "{symbols}");
+    client.stop(handle);
+}
