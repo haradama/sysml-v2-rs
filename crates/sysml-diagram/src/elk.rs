@@ -8,11 +8,15 @@
 //! layout arranged for bends ends up where ELK left no room. Where ELK
 //! routes nothing, the renderer routes for itself.
 
-use elkrs::alg_layered::options_gen::SPACING_NODE_NODE_BETWEEN_LAYERS;
+use elkrs::alg_layered::options_gen::{
+    SPACING_EDGE_EDGE_BETWEEN_LAYERS, SPACING_EDGE_NODE_BETWEEN_LAYERS,
+    SPACING_NODE_NODE_BETWEEN_LAYERS,
+};
 use elkrs::core::engine::RecursiveGraphLayoutEngine;
 use elkrs::core::options_gen::{
-    Direction, ElkPadding, HierarchyHandling, ALGORITHM, DIRECTION, HIERARCHY_HANDLING, PADDING,
-    SPACING_COMPONENT_COMPONENT, SPACING_NODE_NODE,
+    Direction, ElkPadding, HierarchyHandling, PortConstraints, PortSide, ALGORITHM, DIRECTION,
+    HIERARCHY_HANDLING, PADDING, PORT_CONSTRAINTS, PORT_SIDE, SPACING_COMPONENT_COMPONENT,
+    SPACING_NODE_NODE, SPACING_PORT_PORT,
 };
 use elkrs::graph::graph::{EdgeId, ElementId, ElkGraph, NodeId, ShapeId};
 
@@ -147,8 +151,27 @@ impl Built {
             };
             let (tail, head) = (self.at(tail), self.at(head));
             let id = self.graph.create_edge(Some(holder));
-            self.graph.add_edge_source(id, ShapeId::Node(tail));
-            self.graph.add_edge_target(id, ShapeId::Node(head));
+            // Each end leaves by a port of its own, on the border the
+            // layering points it out of: the bottom of the box above, the
+            // top of the box below. Where on that border is left to the
+            // engine, which orders a side's ports so that what leaves
+            // them crosses as little as it can -- left to itself, it
+            // shared one point of the border between every line and
+            // spread them in no order, and a box's three diamonds went
+            // to the three boxes below it criss-crossed. A line from a
+            // box to itself is the engine's own to place.
+            match tail == head {
+                true => {
+                    self.graph.add_edge_source(id, ShapeId::Node(tail));
+                    self.graph.add_edge_target(id, ShapeId::Node(head));
+                }
+                false => {
+                    let leaving = self.port_on(tail, PortSide::SOUTH);
+                    let arriving = self.port_on(head, PortSide::NORTH);
+                    self.graph.add_edge_source(id, ShapeId::Port(leaving));
+                    self.graph.add_edge_target(id, ShapeId::Port(arriving));
+                }
+            }
             self.edges[at] = Some(id);
             // What a line says is written across the middle of it, and a
             // transition's trigger and effect can be longer than
@@ -167,6 +190,18 @@ impl Built {
                 self.edges_within(diagram, owners, style, Some(at));
             }
         }
+    }
+
+    /// A port of `node`'s own on `side`, for one end of one line: the
+    /// node keeps each to its side and orders them itself.
+    fn port_on(&mut self, node: NodeId, side: PortSide) -> elkrs::graph::graph::PortId {
+        self.graph
+            .node(node)
+            .properties
+            .set(&PORT_CONSTRAINTS, PortConstraints::FIXED_SIDE);
+        let port = self.graph.create_port(node);
+        self.graph.port(port).properties.set(&PORT_SIDE, side);
+        port
     }
 
     /// The ELK node a box became.
@@ -315,7 +350,24 @@ fn spaced(options: &elkrs::graph::properties::PropertyMap, diagram: &Diagram, st
     options.set(&SPACING_NODE_NODE, apart);
     options.set(&SPACING_COMPONENT_COMPONENT, apart);
     options.set(&SPACING_NODE_NODE_BETWEEN_LAYERS, style.v_gap);
+    // What a line carries at its end -- a composition's diamond, a
+    // specialization's triangle -- is drawn along the first stretch of
+    // it, and a line run across that stretch reads as one ending in the
+    // marker. So the first stretch is twice a marker long before any line
+    // between the layers may cross it, the lines between two layers are
+    // a marker's breadth and more apart, and so are the ports along a
+    // border, so two markers side by side do not touch.
+    options.set(&SPACING_EDGE_NODE_BETWEEN_LAYERS, 2.0 * MARKER_LENGTH);
+    options.set(&SPACING_EDGE_EDGE_BETWEEN_LAYERS, MARKER_BREADTH + 4.0);
+    options.set(&SPACING_PORT_PORT, 2.0 * MARKER_BREADTH);
 }
+
+/// How long the longest marker a line ends in is drawn: a composition's
+/// diamond, along the line.
+const MARKER_LENGTH: f64 = 16.0;
+
+/// How broad the broadest marker is drawn, across the line.
+const MARKER_BREADTH: f64 = 10.0;
 
 /// The most room any box needs outside its border for the names on it.
 fn border_room(diagram: &Diagram, style: &Style) -> f64 {
@@ -699,6 +751,92 @@ mod tests {
         assert!(start.1 >= from.y, "{route:?}");
         assert!(finish.1 <= to.y + to.height, "{route:?}");
         assert_eq!(layout.routes.len(), diagram.edges.len());
+    }
+
+    /// Wholes over the parts they share, each part named by all of them:
+    /// the lines of one whole cross the lines of another in the gap
+    /// between the rows.
+    const SHARED: &str = "part def Engine;\npart def Wheel;\npart def Gearbox;\n\
+                          part def Car { part e : Engine; part w : Wheel; part g : Gearbox; }\n\
+                          part def Van { part e : Engine; part w : Wheel; part g : Gearbox; }\n\
+                          part def Bus { part e : Engine; part w : Wheel; part g : Gearbox; }\n";
+
+    /// A line's first stretch is twice a diamond long before it turns,
+    /// and nothing between the rows crosses it: a line run across the
+    /// diamond read as the one it belonged to.
+    #[test]
+    fn a_line_leaves_its_box_for_twice_a_marker_before_it_turns() {
+        let ws = resolved(SHARED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let layout = laid_out(&diagram, &style);
+        let mut stubs = Vec::new();
+        for (edge, route) in diagram.edges.iter().zip(&layout.routes) {
+            let whole = &layout.placed[edge.from];
+            let bottom = whole.y + whole.height;
+            // it leaves the bottom border straight down
+            assert!((route[0].1 - bottom).abs() < 0.5, "{route:?}");
+            assert!((route[1].0 - route[0].0).abs() < 0.5, "{route:?}");
+            assert!(
+                route[1].1 - bottom >= 2.0 * MARKER_LENGTH - 0.5,
+                "{route:?}"
+            );
+            stubs.push((route[0].0, bottom, bottom + 2.0 * MARKER_LENGTH));
+        }
+        // and no level stretch of any line runs across another's stub
+        for route in &layout.routes {
+            for leg in route.windows(2) {
+                let ((x1, y1), (x2, y2)) = (leg[0], leg[1]);
+                if (y1 - y2).abs() > 0.5 {
+                    continue;
+                }
+                let (low, high) = (x1.min(x2), x1.max(x2));
+                for &(x, top, foot) in &stubs {
+                    let across = low < x - 0.5 && x + 0.5 < high;
+                    assert!(!(across && top < y1 && y1 < foot), "{route:?} crosses {x}");
+                }
+            }
+        }
+    }
+
+    /// The lines leaving one box leave it in the order of where they are
+    /// going, so that two of them never cross just under it; and the
+    /// level stretches between two rows are each at a height of their own.
+    #[test]
+    fn a_box_lets_its_lines_out_in_the_order_they_go() {
+        let ws = resolved(SHARED);
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let layout = laid_out(&diagram, &style);
+        for whole in 0..diagram.nodes.len() {
+            let mut leaving: Vec<(f64, f64)> = diagram
+                .edges
+                .iter()
+                .zip(&layout.routes)
+                .filter(|(edge, _)| edge.from == whole)
+                .map(|(_, route)| (route[0].0, route[route.len() - 1].0))
+                .collect();
+            leaving.sort_by(|one, other| one.0.total_cmp(&other.0));
+            for pair in leaving.windows(2) {
+                assert!(pair[0].1 <= pair[1].1 + 0.5, "{leaving:?}");
+            }
+        }
+        let mut heights: Vec<(f64, (f64, f64))> = Vec::new();
+        for route in &layout.routes {
+            for leg in route.windows(2) {
+                if (leg[0].1 - leg[1].1).abs() < 0.5 && (leg[0].0 - leg[1].0).abs() > 0.5 {
+                    let span = (leg[0].0.min(leg[1].0), leg[0].0.max(leg[1].0));
+                    for &(y, (low, high)) in &heights {
+                        let overlap = span.0 < high && low < span.1;
+                        assert!(
+                            !(overlap && (y - leg[0].1).abs() < MARKER_BREADTH),
+                            "two level stretches share a height near {y}"
+                        );
+                    }
+                    heights.push((leg[0].1, span));
+                }
+            }
+        }
     }
 
     #[test]

@@ -10,6 +10,20 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 
 ## Unreleased
 
+### Lines that can be told apart
+
+`sysmlv2-diagram`
+
+- A line leaves its box straight for twice the length of the marker it
+  carries before it turns, and no other line crosses that stretch: a
+  line run just under a row of diamonds read as ending in whichever
+  diamond it passed.
+- Each end of a line has a port of its own on the border the layering
+  points it out of, ordered along that border so that what leaves a box
+  goes the way its lines are going.
+- The level stretches between two rows are a marker's breadth and more
+  apart. A drawing with many lines between its rows is taller for it.
+
 ### One spelling for every key, a name for every element, and the whole model written back
 
 `sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`, `sysmlv2-model`
