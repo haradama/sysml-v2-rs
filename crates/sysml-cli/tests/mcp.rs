@@ -136,7 +136,10 @@ fn a_client_handshakes_lists_and_calls() {
             "library_search",
             "relations",
             "find",
-            "format"
+            "format",
+            "definition",
+            "references",
+            "rename"
         ]
     );
     // a client builds its call from the schema, so it has to be there
@@ -2366,4 +2369,372 @@ fn a_focused_check_reports_on_the_file_it_names() {
     // miss is reported
     assert_eq!(names(&focused), ["Tyre"], "{focused}");
     assert_eq!(answers[2]["result"]["isError"], true);
+}
+
+/// A small project to navigate: a definition in one file, used in the
+/// other as a type, through a redefinition that borrows a name, and at
+/// the end of a feature chain.
+fn navigated(name: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let dir = scratch(name);
+    let parts = dir.join("parts.sysml");
+    std::fs::write(
+        &parts,
+        "package Chassis {\n\tpart def Wheel {\n\t\tdoc /* What a car rolls on. */\n\t\tattribute mass;\n\t}\n}\n",
+    )
+    .unwrap();
+    let car = dir.join("car.sysml");
+    std::fs::write(
+        &car,
+        "package Car {\n\tprivate import Chassis::*;\n\tpart def Car {\n\t\tpart w : Wheel [4];\n\t}\n\tpart def Racer :> Car {\n\t\tpart :>> w;\n\t}\n\tpart r : Racer {\n\t\tattribute m = r.w.mass;\n\t}\n}\n",
+    )
+    .unwrap();
+    (dir, parts, car)
+}
+
+/// What a name resolves to and where that is declared, asked at the name
+/// or by the element's own name -- including one the standard library
+/// declares and re-exports under another package.
+#[test]
+fn definition_says_where_a_name_is_declared_and_what_it_is() {
+    let (dir, parts, car) = navigated("sysml-mcp-definition");
+    let car_path = car.to_str().unwrap();
+    let answers = in_project(
+        &dir,
+        &[
+            // the `Wheel` in `part w : Wheel [4];`
+            call(
+                "definition",
+                json!({ "path": car_path, "line": 4, "column": 13 }),
+            ),
+            call("definition", json!({ "element": "Car::Car::w" })),
+            call("definition", json!({ "element": "ISQ::MassValue" })),
+            call(
+                "definition",
+                json!({ "path": car_path, "line": 1, "column": 1 }),
+            ),
+            call("definition", json!({})),
+        ],
+    );
+    let wheel = answered(&answers[0]);
+    assert_eq!(wheel["element"], "Chassis::Wheel", "{wheel}");
+    assert_eq!(wheel["kind"], "PartDefinition", "{wheel}");
+    assert_eq!(wheel["documentation"], "What a car rolls on.", "{wheel}");
+    let declared = &wheel["declared"];
+    assert_eq!(
+        declared["path"],
+        std::fs::canonicalize(&parts).unwrap().to_str().unwrap(),
+        "{wheel}"
+    );
+    assert_eq!(
+        (
+            &declared["line"],
+            &declared["column"],
+            &declared["endColumn"]
+        ),
+        (&json!(2), &json!(11), &json!(16)),
+        "{wheel}"
+    );
+    assert_eq!(declared["text"], "part def Wheel {", "{wheel}");
+
+    let w = answered(&answers[1]);
+    assert_eq!(w["kind"], "PartUsage", "{w}");
+    assert_eq!(w["type"], "Chassis::Wheel", "{w}");
+    assert_eq!(w["declared"]["line"], 4, "{w}");
+
+    // `ISQ::MassValue` is how a model names it, and `ISQ` only
+    // re-exports it: the answer is where it is declared
+    let mass = answered(&answers[2]);
+    assert_eq!(answers[2]["result"]["isError"], false, "{mass}");
+    assert!(
+        mass["declared"]["path"].as_str().unwrap().contains("ISQ"),
+        "{mass}"
+    );
+
+    // a keyword is not a name, and a call has to say what it asks about
+    assert_eq!(answers[3]["result"]["isError"], true);
+    assert!(answered(&answers[3])["error"]
+        .as_str()
+        .unwrap()
+        .contains("nothing is named there"));
+    assert_eq!(answers[4]["result"]["isError"], true);
+    assert!(answered(&answers[4])["error"]
+        .as_str()
+        .unwrap()
+        .contains("`element`"));
+}
+
+/// Every place an element is named: the declaration first and marked,
+/// then what reaches it through a redefinition that borrows its name and
+/// through a feature chain -- none of which a search for the text tells
+/// apart from a name that only shares the spelling.
+#[test]
+fn references_lists_the_declaration_and_every_use() {
+    let (dir, _, car) = navigated("sysml-mcp-references");
+    let car_path = car.to_str().unwrap();
+    let answers = in_project(
+        &dir,
+        &[
+            call("references", json!({ "element": "Car::Car::w" })),
+            // asked at a use, it is the same element
+            call(
+                "references",
+                json!({ "path": car_path, "line": 10, "column": 19 }),
+            ),
+            call("references", json!({ "element": "ScalarValues::Real" })),
+        ],
+    );
+    let w = answered(&answers[0]);
+    assert_eq!(w["element"], "Car::Car::w", "{w}");
+    let places: Vec<(i64, i64, bool)> = w["references"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| {
+            (
+                it["line"].as_i64().unwrap(),
+                it["column"].as_i64().unwrap(),
+                it["declaration"] == true,
+            )
+        })
+        .collect();
+    assert_eq!(
+        places,
+        [(4, 8, true), (7, 12, false), (10, 19, false)],
+        "{w}"
+    );
+    assert_eq!(w["references"][1]["text"], "part :>> w;", "{w}");
+    assert_eq!(answered(&answers[1])["references"], w["references"]);
+
+    // the library names its own scalars everywhere, and none of that is
+    // the model's: counted, not listed
+    let real = answered(&answers[2]);
+    let listed = real["references"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{real}");
+    assert_eq!(listed[0]["declaration"], true, "{real}");
+    assert_eq!(listed[0]["library"], true, "{real}");
+    assert!(real["in_library"].as_u64().unwrap() > 0, "{real}");
+}
+
+/// Apply one file's edits as `rename` answers them, last first.
+fn applied(text: &str, edits: &Value) -> String {
+    let mut out = text.to_string();
+    let mut edits: Vec<&Value> = edits.as_array().unwrap().iter().collect();
+    edits.sort_by_key(|edit| edit["offset"].as_u64().unwrap());
+    for edit in edits.into_iter().rev() {
+        let from = edit["offset"].as_u64().unwrap() as usize;
+        let to = edit["endOffset"].as_u64().unwrap() as usize;
+        out.replace_range(from..to, edit["newText"].as_str().unwrap());
+    }
+    out
+}
+
+/// A rename is answered as every edit it takes, across files and through
+/// what borrows the name, quoted where the name needs it -- and tried: the
+/// edits made in memory and the model resolved again. Nothing is written.
+#[test]
+fn rename_answers_every_edit_and_writes_none_of_them() {
+    let (dir, parts, car) = navigated("sysml-mcp-rename");
+    let before = (
+        std::fs::read_to_string(&parts).unwrap(),
+        std::fs::read_to_string(&car).unwrap(),
+    );
+    let car_path = car.to_str().unwrap();
+    let answers = in_project(
+        &dir,
+        &[
+            // at a use of `w`, two files away from nothing
+            call(
+                "rename",
+                json!({ "path": car_path, "line": 7, "column": 12, "new_name": "wheels" }),
+            ),
+            call(
+                "rename",
+                json!({ "element": "Chassis::Wheel", "new_name": "'Road Wheel'" }),
+            ),
+        ],
+    );
+    let wheels = answered(&answers[0]);
+    assert_eq!(wheels["element"], "Car::Car::w", "{wheels}");
+    assert_eq!(wheels["edits"], 3, "{wheels}");
+    assert_eq!(wheels["written"], false, "{wheels}");
+    assert_eq!(wheels["checked"]["ok"], true, "{wheels}");
+    let files = wheels["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "{wheels}");
+    let renamed = applied(&before.1, &files[0]["edits"]);
+    assert!(renamed.contains("part wheels : Wheel [4];"), "{renamed}");
+    assert!(renamed.contains("part :>> wheels;"), "{renamed}");
+    assert!(renamed.contains("r.wheels.mass"), "{renamed}");
+
+    // a name that has to be quoted is, in every file it is written in
+    let road = answered(&answers[1]);
+    assert_eq!(road["checked"]["ok"], true, "{road}");
+    let files = road["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "{road}");
+    for file in files {
+        for edit in file["edits"].as_array().unwrap() {
+            assert_eq!(edit["newText"], "'Road Wheel'", "{road}");
+        }
+    }
+
+    // and what was answered is what the model says once it is written:
+    // both files, edited and checked where they were written
+    let written = scratch("sysml-mcp-rename-written");
+    for file in files {
+        let path = std::path::Path::new(file["path"].as_str().unwrap());
+        let text = std::fs::read_to_string(path).unwrap();
+        std::fs::write(
+            written.join(path.file_name().unwrap()),
+            applied(&text, &file["edits"]),
+        )
+        .unwrap();
+    }
+    let checked = answered(&in_project(&written, &[call("check", json!({}))])[0]);
+    assert_eq!(checked["ok"], true, "{checked}");
+    assert_eq!(checked["resolved"], checked["references"], "{checked}");
+
+    // nothing on disk moved
+    assert_eq!(std::fs::read_to_string(&parts).unwrap(), before.0);
+    assert_eq!(std::fs::read_to_string(&car).unwrap(), before.1);
+}
+
+/// A name of one notation's keywords is a name in the other, and is
+/// quoted where it is written into a file that would read it as the
+/// keyword.
+#[test]
+fn rename_quotes_the_name_in_each_file_as_that_file_needs() {
+    let dir = scratch("sysml-mcp-rename-dialects");
+    std::fs::write(
+        dir.join("base.kerml"),
+        "package Base {\n\tclassifier Thing;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("use.sysml"),
+        "package Use {\n\tprivate import Base::*;\n\tpart t : Thing;\n}\n",
+    )
+    .unwrap();
+    let answer = answered(
+        &in_project(
+            &dir,
+            &[call(
+                "rename",
+                json!({ "element": "Base::Thing", "new_name": "part" }),
+            )],
+        )[0],
+    );
+    assert_eq!(answer["checked"]["ok"], true, "{answer}");
+    let written: Vec<(bool, String)> = answer["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| {
+            (
+                file["path"].as_str().unwrap().ends_with(".kerml"),
+                file["edits"][0]["newText"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        written,
+        [(true, "part".to_string()), (false, "'part'".to_string())],
+        "{answer}"
+    );
+}
+
+/// What would not be a rename is refused, and says why.
+#[test]
+fn rename_refuses_what_would_not_be_a_rename() {
+    let (dir, _, _) = navigated("sysml-mcp-rename-refused");
+    let refused = |arguments: Value| -> String {
+        let answer = &in_project(&dir, &[call("rename", arguments)])[0];
+        assert_eq!(answer["result"]["isError"], true, "{answer}");
+        answered(answer)["error"].as_str().unwrap().to_string()
+    };
+    let w = |new_name: &str| json!({ "element": "Car::Car::w", "new_name": new_name });
+    assert!(refused(w("part")).contains("keyword"));
+    assert!(refused(w("two words")).contains("not a name"));
+    assert!(refused(w("''")).contains("empty name"));
+    // `Wheel` is imported into the package `w` is declared in, so every
+    // `w` written there would bind to it
+    assert!(refused(w("Wheel")).contains("already visible"));
+    assert!(
+        refused(json!({ "element": "ScalarValues::Real", "new_name": "R" }))
+            .contains("standard library")
+    );
+    assert!(refused(json!({ "element": "Car::Car::w" })).contains("`new_name`"));
+}
+
+/// The project as a long-lived server keeps it, after an edit on disk,
+/// answers as a server started afresh does -- for a check of the whole
+/// project, a question about one element, and a check of an edit brought
+/// as text.
+#[test]
+fn a_kept_project_answers_as_a_fresh_server_would() {
+    let (dir, _, car) = navigated("sysml-mcp-kept");
+    let car_path = car.to_str().unwrap().to_string();
+    let asked = || {
+        vec![
+            call("check", json!({})),
+            call("references", json!({ "element": "Chassis::Wheel" })),
+            call(
+                "check",
+                json!({ "text": "package Car {\n\tpart x : Wheel;\n}\n", "name": car_path }),
+            ),
+            call("find", json!({ "kind": "PartUsage" })),
+        ]
+    };
+    let mut kept = sysml_cli::mcp::Server::with_project(None, Some(&dir));
+    let answer = |server: &mut sysml_cli::mcp::Server, request: &Value| {
+        server.handle(request).unwrap()["result"]["structuredContent"].clone()
+    };
+    let first: Vec<Value> = asked().iter().map(|r| answer(&mut kept, r)).collect();
+    // asked twice, the same
+    let again: Vec<Value> = asked().iter().map(|r| answer(&mut kept, r)).collect();
+    assert_eq!(first, again);
+    assert_eq!(first[0]["ok"], true, "{}", first[0]);
+
+    std::fs::write(
+        &car,
+        "package Car {\n\tprivate import Chassis::*;\n\tpart def Car {\n\t\tpart w : Wheel;\n\t\tpart v : Wheel;\n\t\tpart t : Tyre;\n\t}\n}\n",
+    )
+    .unwrap();
+    let after: Vec<Value> = asked().iter().map(|r| answer(&mut kept, r)).collect();
+    let mut fresh = sysml_cli::mcp::Server::with_project(None, Some(&dir));
+    let expected: Vec<Value> = asked().iter().map(|r| answer(&mut fresh, r)).collect();
+    assert_eq!(after, expected);
+    // and the edit was seen at all: `Tyre` is new, and so is `v`
+    assert_eq!(after[0]["ok"], false, "{}", after[0]);
+    assert_ne!(after[1], first[1]);
+}
+
+/// A file written beside the project or taken away between calls is in,
+/// or out of, the next answer.
+#[test]
+fn a_file_added_or_removed_on_disk_is_seen() {
+    let dir = scratch("sysml-mcp-kept-files");
+    std::fs::write(
+        dir.join("car.sysml"),
+        "package Car {\n\tprivate import Chassis::*;\n\tpart w : Wheel;\n}\n",
+    )
+    .unwrap();
+    let mut server = sysml_cli::mcp::Server::with_project(None, Some(&dir));
+    let mut check = || answered(&server.handle(&call("check", json!({}))).unwrap());
+    assert_eq!(check()["ok"], false);
+
+    let parts = dir.join("parts.sysml");
+    std::fs::write(&parts, "package Chassis {\n\tpart def Wheel;\n}\n").unwrap();
+    let added = check();
+    assert_eq!(added["ok"], true, "{added}");
+
+    std::fs::remove_file(&parts).unwrap();
+    let removed = check();
+    assert_eq!(removed["ok"], false, "{removed}");
+    assert!(
+        removed["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["name"] == "Wheel"),
+        "{removed}"
+    );
 }

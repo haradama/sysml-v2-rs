@@ -38,6 +38,7 @@
 //! | --- | --- |
 //! | `resolve` | What gets resolved, in what order, and what is cleared first |
 //! | `lookup` | Working a written name out to the element it names |
+//! | `navigate` | Where an element is named, and what renaming it rewrites |
 //! | `inherit` | What a type reaches through what it specializes |
 //! | `imports` | What an `import` brings in, and what an `alias` stands for |
 //! | `reify` | Turning a resolved name into the relationship the model keeps |
@@ -55,6 +56,7 @@ mod implied;
 mod imports;
 mod inherit;
 mod lookup;
+mod navigate;
 mod ocl;
 mod reify;
 mod resolve;
@@ -63,6 +65,7 @@ mod resolve;
 pub mod rules;
 mod syntax;
 
+pub use navigate::{is_one_name, refuse_name, RenameEdit, Renaming};
 use syntax::*;
 
 use std::collections::{HashMap, HashSet};

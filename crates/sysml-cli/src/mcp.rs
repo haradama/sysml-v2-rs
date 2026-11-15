@@ -17,9 +17,14 @@
 //! - `generate_rust` / `import_rust` -- the Rust a model implies, and the
 //!   model a crate's API already is
 //! - `format` -- how does `sysml fmt` lay this out?
+//! - `definition` / `references` -- what does this name resolve to, and
+//!   where else is that named?
+//! - `rename` -- what edits rename it everywhere, and does the model still
+//!   resolve once they are made?
 //!
 //! Every tool reads and none writes, and each says so in its annotations,
-//! so a client may run them without asking each time. An answer comes as
+//! so a client may run them without asking each time. `rename` too: it
+//! answers the edits and the client makes them. An answer comes as
 //! structured content and as the same JSON in text, for clients of either
 //! revision.
 //!
@@ -72,7 +77,15 @@ To read a model rather than write one, ask instead of opening files: \
 `find` lists elements by kind, namespace, name or a relation they lack \
 (an unverified requirement, an unallocated function), `relations` gives \
 everything one element is linked to in both directions, and `outline` \
-the resolved shape under a name.
+the resolved shape under a name. `definition` says what a name at a \
+point resolves to and where that is declared, and `references` every \
+place an element is named, inheritance included -- ask it before \
+changing or deleting a declaration.
+
+Rename with `rename`, not by search and replace: it answers every edit \
+the rename takes, across files and through redefinitions, with the new \
+name quoted where it has to be, and says whether the model still \
+resolves once they are made. It writes nothing; you apply the edits.
 
 This holds for what you say as much as for what you write. Before \
 telling anyone that SysML v2 has something, or has not got it, ask: \
@@ -126,6 +139,47 @@ pub struct Server {
     library: Option<String>,
     /// The model being worked on, where the launcher named one.
     project: Option<Project>,
+    /// The workspaces the last few calls were answered against, newest
+    /// first.
+    ///
+    /// Opening a project of a hundred files over the library and
+    /// resolving it took a third of a second, and putting the
+    /// specification's constraints to it two seconds more -- every call,
+    /// though nothing on disk had changed since the last. What a call is
+    /// answered against is decided by the name and text of every file it
+    /// opens, so that is what one is kept under: a file edited, added or
+    /// removed is a different list, and the walk that reads the project
+    /// is redone on every call to find out.
+    cache: Vec<Cached>,
+}
+
+/// How many workspaces [`Server::cache`] keeps. Two, so that a client
+/// asking about one file by its `path` between questions about the whole
+/// project does not throw the project's away each time.
+const KEPT: usize = 2;
+
+/// One workspace a call was answered against, kept for the next call that
+/// opens the same files.
+struct Cached {
+    /// What was opened over the library, in order, and whether the last
+    /// of it is the file the call named.
+    files: Composition,
+    /// It, resolved, before any tool has asked it anything. A call is
+    /// answered against a copy, so whatever a tool works out on the way
+    /// to its answer is not left behind for the next one to find.
+    opened: Opened,
+    /// What `check` answered of it, unfocused and focused: the
+    /// constraints are most of what a check costs, and the same files
+    /// draw the same answer.
+    checked: [Option<Value>; 2],
+}
+
+/// The files one call opens over the library, each as it was named and
+/// what it said, and whether the last of them is the one the call named.
+#[derive(Clone, PartialEq, Eq)]
+struct Composition {
+    files: Vec<(String, String)>,
+    focused: bool,
 }
 
 /// The model a call is about when it names no source of its own.
@@ -212,6 +266,7 @@ impl Server {
                 root: root.display().to_string(),
                 files: Vec::new(),
             }),
+            cache: Vec::new(),
         };
         server.refresh();
         server
@@ -330,6 +385,9 @@ impl Server {
             "relations" => self.relations(&arguments),
             "find" => self.find(&arguments),
             "format" => self.format(&arguments),
+            "definition" => self.definition(&arguments),
+            "references" => self.references(&arguments),
+            "rename" => self.rename(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
         // The answer twice: as structured content, which a client of the
@@ -360,7 +418,13 @@ impl Server {
     /// Compared as written, `name: "lib.sysml"` replaced nothing, the
     /// project's copy on disk was loaded beside the edit, and an edit that
     /// deleted a definition another file uses was answered `ok`.
-    fn opened(&self, arguments: &Value) -> Result<Opened, String> {
+    fn opened(&mut self, arguments: &Value) -> Result<Opened, String> {
+        let files = self.composition(arguments)?;
+        Ok(self.open(&files))
+    }
+
+    /// Which files a call opens over the library, read as they are now.
+    fn composition(&self, arguments: &Value) -> Result<Composition, String> {
         let named = self.source(arguments)?;
         let named_as = named.as_ref().map(|(name, _)| self.canonical(name));
         // each once, and none that is the file the call's text replaces
@@ -370,23 +434,59 @@ impl Server {
             .filter(|path| seen.insert(self.canonical(path)))
             .collect();
         let replaced = seen;
+        let mut files: Vec<(String, String)> = self
+            .project
+            .iter()
+            .flat_map(|project| &project.files)
+            .filter(|(path, _)| !replaced.contains(path))
+            .cloned()
+            .collect();
+        for path in alongside {
+            let text = self.read(&path)?;
+            files.push((path, text));
+        }
+        let focused = named.is_some();
+        files.extend(named);
+        Ok(Composition { files, focused })
+    }
+
+    /// Those files opened over the library and resolved -- or a copy of
+    /// them as they were when the same files were last opened.
+    ///
+    /// Every tool that opens a model resolves it before it answers, and
+    /// the few that refuse on the way do so on what the text says alone,
+    /// so resolving here first changes no answer.
+    fn open(&mut self, files: &Composition) -> Opened {
+        if let Some(at) = self.cache.iter().position(|it| it.files == *files) {
+            let kept = self.cache.remove(at);
+            let opened = kept.opened.clone();
+            self.cache.insert(0, kept);
+            return opened;
+        }
         let mut ws = self.base.clone();
-        let mut open = Vec::new();
-        for (path, text) in self.project.iter().flat_map(|project| &project.files) {
-            if !replaced.contains(path) {
-                open.push(ws.add_file(path.clone(), text));
-            }
-        }
-        for path in &alongside {
-            let text = self.read(path)?;
-            open.push(ws.add_file(path.clone(), &text));
-        }
-        let focus = named.map(|(name, text)| {
-            let file = ws.add_file(name, &text);
-            open.push(file);
-            file
-        });
-        Ok(Opened { ws, open, focus })
+        let open: Vec<usize> = files
+            .files
+            .iter()
+            .map(|(name, text)| ws.add_file(name.clone(), text))
+            .collect();
+        let focus = files.focused.then(|| *open.last().expect("the file named"));
+        let stats = ws.resolve_files(&open);
+        let opened = Opened {
+            ws,
+            open,
+            focus,
+            stats,
+        };
+        self.cache.insert(
+            0,
+            Cached {
+                files: files.clone(),
+                opened: opened.clone(),
+                checked: [None, None],
+            },
+        );
+        self.cache.truncate(KEPT);
+        opened
     }
 
     /// The file a name a call gives stands for, spelled as the project's
@@ -453,12 +553,29 @@ impl Server {
             Some(Value::Bool(it)) => *it,
             Some(_) => return Err("`focus` must be true or false".to_string()),
         };
+        let files = self.composition(arguments)?;
+        let kept = self.cache.iter().position(|it| it.files == files);
+        if let Some(said) = kept.and_then(|at| self.cache[at].checked[usize::from(focused)].clone())
+        {
+            return Ok(said);
+        }
+        let said = self.checked(&files, focused)?;
+        // kept with the workspace it was answered against, which opening
+        // it has just put first
+        if let Some(kept) = self.cache.iter_mut().find(|it| it.files == files) {
+            kept.checked[usize::from(focused)] = Some(said.clone());
+        }
+        Ok(said)
+    }
+
+    /// What `check` answers of those files, worked out.
+    fn checked(&mut self, files: &Composition, focused: bool) -> Result<Value, String> {
         let Opened {
             mut ws,
             open,
             focus,
-            ..
-        } = self.opened(arguments)?.about_something()?;
+            stats,
+        } = self.open(files).about_something()?;
         // `focus` asks about the file the call named and nothing else:
         // in a project of a hundred files, an edit to one was answered
         // with what is wrong in all of them, and what the edit itself
@@ -526,7 +643,6 @@ impl Server {
             }));
         }
 
-        let stats = ws.resolve_files(&open);
         // The names, the root packages that collide with the library's, and --
         // if the model is in any state to be asked -- what the specification
         // requires of it. The order and the stop are `diagnose`'s: putting every
@@ -640,11 +756,7 @@ impl Server {
         self.refresh();
         let line = number(arguments, "line")?;
         let column = number(arguments, "column")?;
-        let Opened {
-            mut ws,
-            open,
-            focus,
-        } = self.opened(arguments)?.about_something()?;
+        let Opened { mut ws, focus, .. } = self.opened(arguments)?.about_something()?;
         // a position is in a file, and the project is a great many of
         // them: this is the one tool that has to be told which
         let file = focus
@@ -669,7 +781,6 @@ impl Server {
         if in_prose {
             return Ok(json!({ "visible": [] }));
         }
-        ws.resolve_files(&open);
         let names: Vec<Value> = ws
             .visible_names(file, (offset as u32).into())
             .into_iter()
@@ -705,12 +816,12 @@ impl Server {
             mut ws,
             open,
             focus,
+            ..
         } = if arguments.get("within").is_some() {
             opened
         } else {
             opened.about_something()?
         };
-        ws.resolve_files(&open);
         let roots = match arguments.get("within").and_then(Value::as_str) {
             Some(within) => vec![ws
                 .named_globally(within)
@@ -737,9 +848,10 @@ impl Server {
     fn generate_rust(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
         let Opened {
-            mut ws,
+            ws,
             open,
             focus,
+            stats,
         } = self.opened(arguments)?.about_something()?;
         // What a file that does not parse declares is the parser's guess,
         // and the code would be generated from the guess.
@@ -755,7 +867,6 @@ impl Server {
                 broken.join(", ")
             ));
         }
-        let stats = ws.resolve_files(&open);
         // Generated code would silently miss whatever did not resolve --
         // a struct without the field whose type was misspelt reads as a
         // model that never had it.
@@ -884,8 +995,8 @@ impl Server {
             mut ws,
             open,
             focus,
+            ..
         } = self.opened(arguments)?.about_something()?;
-        ws.resolve_files(&open);
         let roots: Vec<ElementId> = match arguments.get("within").and_then(Value::as_str) {
             Some(within) => vec![ws
                 .named_globally(within)
@@ -930,13 +1041,12 @@ impl Server {
             true => None,
             false => {
                 self.refresh();
-                let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
-                // Resolved, because what a match *is* is not written in
+                let Opened { ws, open, .. } = self.opened(arguments)?.about_something()?;
+                // Resolved -- as everything opened is -- because what a match *is* is not written in
                 // the text of it: an `alias Rueda for Wheel;` read
                 // unresolved is a `Membership` with no documentation and
                 // nothing to say what it names, which is the answer a
                 // caller least wants and the one it used to get.
-                ws.resolve_files(&open);
                 Some((ws, open))
             }
         };
@@ -1013,7 +1123,6 @@ impl Server {
             .and_then(Value::as_str)
             .ok_or_else(|| "`element` names what to ask about".to_string())?;
         let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
-        ws.resolve_files(&open);
         let elem = element_named(&mut ws, &open, wanted)?;
         let mut files = Texts::default();
         let edges = edges(&ws, &open);
@@ -1054,7 +1163,6 @@ impl Server {
         let kind = text("kind").map(str::to_lowercase);
         let query = text("query").map(str::to_lowercase);
         let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
-        ws.resolve_files(&open);
         let candidates: Vec<ElementId> = match text("within") {
             Some(within) => {
                 let root = element_named(&mut ws, &open, within)?;
@@ -1122,6 +1230,304 @@ impl Server {
             .collect();
         Ok(json!({ "found": found, "total": passing.len() }))
     }
+}
+
+impl Server {
+    /// Where the element at a point, or of a name, is declared, and what
+    /// it is -- what an editor's go-to-definition and hover say together.
+    fn definition(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let Opened {
+            mut ws,
+            open,
+            focus,
+            ..
+        } = self.opened(arguments)?;
+        let elem = asked_about(&mut ws, &open, focus, arguments)?;
+        let model = ws.model();
+        let mut said = json!({
+            "element": qualified(&ws, elem),
+            "kind": model.kind(elem).name(),
+        });
+        if let Some(short) = model.effective_short_name(elem) {
+            said["shortName"] = json!(short);
+        }
+        if let Some(ty) = model.type_of(elem) {
+            said["type"] = json!(ws.qualified_name_written(ty));
+        }
+        // An alias is a name for something else, and what it names is
+        // what a caller asking about it wants next.
+        if let Some(names) = ws.alias_target(elem) {
+            said["alias_for"] = json!(ws.qualified_name_written(names));
+        }
+        if let Some(doc) = ws.documentation_of(elem) {
+            said["documentation"] = json!(doc);
+        }
+        said["declared"] = match ws.declared_at(elem) {
+            Some((file, range)) => placed(&ws, file, range, json!({})),
+            // made by the toolchain rather than written: nowhere to go
+            None => Value::Null,
+        };
+        Ok(said)
+    }
+
+    /// Every place the element at a point, or of a name, is named.
+    fn references(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let Opened {
+            mut ws,
+            open,
+            focus,
+            ..
+        } = self.opened(arguments)?;
+        let found = asked_about(&mut ws, &open, focus, arguments)?;
+        // A feature that declares no name answers to the one it borrows,
+        // and what is named that is the declaration it came from -- the
+        // same element a rename of it would rename.
+        let elem = ws.model().naming_element(found).unwrap_or(found);
+        let mut places: Vec<(usize, sysml_syntax::TextRange)> = ws.mentions(elem);
+        // in the order they are written, and each once
+        places.sort_by_key(|&(file, range)| (file, range.start(), range.end()));
+        places.dedup();
+        // The library names what it declares thousands of times, and
+        // none of those is anything the model's author wrote or can
+        // change; they are counted rather than listed.
+        let in_library = places
+            .iter()
+            .filter(|(file, _)| !open.contains(file))
+            .count();
+        let mut listed = Vec::new();
+        if let Some((file, range)) = ws.declared_at(elem) {
+            let mut place = placed(&ws, file, range, json!({ "declaration": true }));
+            if !open.contains(&file) {
+                place["library"] = json!(true);
+            }
+            listed.push(place);
+        }
+        for (file, range) in places.into_iter().filter(|(file, _)| open.contains(file)) {
+            listed.push(placed(&ws, file, range, json!({})));
+        }
+        Ok(json!({
+            "element": qualified(&ws, elem),
+            "kind": ws.model().kind(elem).name(),
+            "references": listed,
+            "in_library": in_library,
+        }))
+    }
+
+    /// The edits that rename an element everywhere it is named, and what
+    /// the model would say once they were made. Answered, not written.
+    fn rename(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let new_name = optional_str(arguments, "new_name")?
+            .ok_or_else(|| "`new_name` is what to rename it to".to_string())?;
+        let Opened {
+            mut ws,
+            open,
+            focus,
+            ..
+        } = self.opened(arguments)?.about_something()?;
+        // Where the rename is asked from: the point given, or the name the
+        // element is declared with -- its short name where that is what
+        // the call wrote, since that is then the name being given up.
+        let (file, offset) = match optional_str(arguments, "element")? {
+            Some(wanted) => {
+                let elem = element_asked(&mut ws, &open, wanted)?;
+                let short = wanted.trim_matches(|c| c == '<' || c == '>' || c == '\'');
+                let model = ws.model();
+                let by_short = model.effective_short_name(elem) == Some(short)
+                    && model.effective_name(elem) != Some(short);
+                let at = match by_short {
+                    true => ws.element_file(elem).zip(ws.short_name_range(elem)),
+                    false => ws.declared_at(elem),
+                };
+                let (file, range) = at.ok_or_else(|| {
+                    format!("`{wanted}` is not written anywhere, so there is no name to rename")
+                })?;
+                (file, range.start())
+            }
+            None => position(&ws, focus, arguments)?,
+        };
+        let dialect = sysml_syntax::Dialect::from_path(ws.file_name(file));
+        let renaming = ws.prepare_rename(file, offset, new_name, dialect)?;
+        // The library's files are the ones opened before anything of the
+        // model's, and none of them is anybody's to rewrite.
+        if renaming.declared.0 < self.base.file_count() {
+            return Err(format!(
+                "`{}` is declared in the standard library, which is not yours to rename",
+                ws.qualified_name_written(renaming.target)
+            ));
+        }
+        let element = qualified(&ws, renaming.target);
+        let edits = ws.rename_edits(&renaming, |_, name| sysml_syntax::Dialect::from_path(name))?;
+
+        // The edits, made in memory to every file they touch, and the
+        // model opened again from what that leaves: a rename that the
+        // checks above let through and that still leaves a name dangling
+        // is said to, rather than found out after the client has written
+        // it.
+        let mut once = HashSet::new();
+        let open: Vec<usize> = open.into_iter().filter(|&f| once.insert(f)).collect();
+        let mut texts: Vec<String> = open
+            .iter()
+            .map(|&f| ws.file_parse(f).syntax().text().to_string())
+            .collect();
+        let mut said = Vec::new();
+        let mut count = 0;
+        for (file, mut written) in edits {
+            written.sort_by_key(|edit| edit.range.start());
+            written.dedup();
+            count += written.len();
+            let at = open.iter().position(|&f| f == file);
+            let text = ws.file_parse(file).syntax().text().to_string();
+            let listed: Vec<Value> = written
+                .iter()
+                .map(|edit| crate::at(&text, edit.range, json!({ "newText": edit.new_text })))
+                .collect();
+            if let Some(at) = at {
+                for edit in written.iter().rev() {
+                    texts[at].replace_range(
+                        usize::from(edit.range.start())..usize::from(edit.range.end()),
+                        &edit.new_text,
+                    );
+                }
+            }
+            if !listed.is_empty() {
+                said.push(json!({ "path": ws.file_name(file), "edits": listed }));
+            }
+        }
+        let before: Vec<(String, String)> = ws
+            .findings(&open)
+            .names
+            .iter()
+            .map(|f| (ws.file_name(f.file).to_string(), f.what.clone()))
+            .collect();
+        let mut after = self.base.clone();
+        let reopened: Vec<usize> = open
+            .iter()
+            .zip(&texts)
+            .map(|(&f, text)| after.add_file(ws.file_name(f).to_string(), text))
+            .collect();
+        after.resolve_files(&reopened);
+        let found = after.findings(&reopened);
+        let place = |finding: &sysml_semantics::Finding, extra: Value| {
+            let which = reopened
+                .iter()
+                .position(|&f| f == finding.file)
+                .expect("a finding in a file that was opened");
+            let mut extra = crate::at(&texts[which], finding.range, extra);
+            extra["path"] = json!(after.file_name(finding.file));
+            extra
+        };
+        let parse_errors: Vec<Value> = found
+            .syntax
+            .iter()
+            .map(|f| place(f, json!({ "message": f.what })))
+            .collect();
+        // What dangles after that did not before. Compared by file and
+        // name rather than by place, since the rename moves the text
+        // after every edit it makes.
+        let mut was = before.clone();
+        let introduced: Vec<Value> = found
+            .names
+            .iter()
+            .filter(|f| {
+                let key = (after.file_name(f.file).to_string(), f.what.clone());
+                match was.iter().position(|it| *it == key) {
+                    Some(at) => {
+                        was.remove(at);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .map(|f| place(f, json!({ "name": f.what })))
+            .collect();
+        Ok(json!({
+            "element": element,
+            "new_name": new_name,
+            "files": said,
+            "edits": count,
+            "written": false,
+            "checked": {
+                "ok": parse_errors.is_empty() && introduced.is_empty(),
+                "parseErrors": parse_errors,
+                "introduced": introduced,
+                "unresolved": found.names.len(),
+                "unresolved_before": before.len(),
+            },
+        }))
+    }
+}
+
+/// A range in a file, placed the way `check` places a finding, with the
+/// text of the line it starts on -- which is what a reader of a list of
+/// places looks at to tell them apart.
+fn placed(ws: &Workspace, file: usize, range: sysml_syntax::TextRange, extra: Value) -> Value {
+    let text = ws.file_parse(file).syntax().text().to_string();
+    let mut placed = crate::at(&text, range, extra);
+    placed["path"] = json!(ws.file_name(file));
+    let start = usize::from(range.start()).min(text.len());
+    let line_start = text[..start].rfind('\n').map_or(0, |at| at + 1);
+    let line_end = text[start..].find('\n').map_or(text.len(), |at| start + at);
+    placed["text"] = json!(text[line_start..line_end].trim());
+    placed
+}
+
+/// The element a navigation call is about: the one it names as `element`,
+/// or the one at `line` and `column` in the file it names.
+fn asked_about(
+    ws: &mut Workspace,
+    open: &[usize],
+    focus: Option<usize>,
+    arguments: &Value,
+) -> Result<ElementId, String> {
+    if let Some(wanted) = optional_str(arguments, "element")? {
+        return element_asked(ws, open, wanted);
+    }
+    let (file, offset) = position(ws, focus, arguments)?;
+    ws.target_at(file, offset).ok_or_else(|| {
+        "nothing is named there: point at a name, where it is declared or where it is used"
+            .to_string()
+    })
+}
+
+/// An element by the name a call gives it, as [`element_named`] finds one
+/// -- or, failing that, as the name would resolve written at the top of a
+/// file: `ISQ::MassValue` is how the library's own users write it, and
+/// it is declared in `ISQBase` and only re-exported by `ISQ`.
+fn element_asked(ws: &mut Workspace, open: &[usize], wanted: &str) -> Result<ElementId, String> {
+    element_named(ws, open, wanted).or_else(|missed| {
+        // A lookup starts in the scope around the element it is asked
+        // from, so it is asked from one of the root packages: what is
+        // around that is the global namespace a file's own top level sees.
+        let Some(&top) = ws.model().owned(ws.root()).first() else {
+            return Err(missed);
+        };
+        ws.resolve_from(top, &sysml_syntax::split_qualified(wanted))
+            .ok_or(missed)
+    })
+}
+
+/// The point `line` and `column` name in the file the call names.
+fn position(
+    ws: &Workspace,
+    focus: Option<usize>,
+    arguments: &Value,
+) -> Result<(usize, sysml_syntax::TextSize), String> {
+    if arguments.get("line").is_none() && arguments.get("column").is_none() {
+        return Err(
+            "give `element`, or `line` and `column` in the file `text` or `path` names".to_string(),
+        );
+    }
+    let line = number(arguments, "line")?;
+    let column = number(arguments, "column")?;
+    let file =
+        focus.ok_or_else(|| "give either `text` or `path`: a position is in a file".to_string())?;
+    let text = ws.file_parse(file).syntax().text().to_string();
+    let offset = offset_of(&text, line, column)
+        .ok_or_else(|| format!("line {line}, column {column} is past the end of the text"))?;
+    Ok((file, (offset as u32).into()))
 }
 
 /// One link between two elements, and where the text says so.
@@ -1561,7 +1967,8 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
     entry
 }
 
-/// The workspace one call is answered against.
+/// The workspace one call is answered against, resolved.
+#[derive(Clone)]
 struct Opened {
     ws: Workspace,
     /// Every file opened over the library: the project's and the call's.
@@ -1569,6 +1976,8 @@ struct Opened {
     /// The file the call named, where it named one. What a position is
     /// measured in.
     focus: Option<usize>,
+    /// What resolving `open` came to.
+    stats: sysml_semantics::ResolveStats,
 }
 
 impl Opened {
@@ -1834,6 +2243,56 @@ fn tools() -> Value {
                     "name": source_properties["name"],
                     "width": { "type": "integer", "description": "The line width to fit, 0 for none (default that of `sysml fmt`)" },
                 },
+            },
+        },
+        {
+            "name": "definition",
+            "description": "Where an element is declared and what it is: its qualified name (which every other tool takes back as `element`), metaclass, short name, type, what an alias stands for, documentation, and `declared` -- the path and the line/column range of the name it is declared with, or null for an element the toolchain made rather than anyone wrote. Ask about a name as it is used, by `line` and `column` in the file `text` or `path` gives, or about an element by `element`. Use this to find out what a name in front of you actually resolves to -- which may be something in the standard library, or an inherited feature a definition never spells out -- instead of guessing from the spelling.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element": { "type": "string", "description": "A qualified name (`Vehicle::engine`) or a short name, instead of a position" },
+                    "line": { "type": "integer", "description": "Line of the name, counting from one, in the file `text` or `path` gives" },
+                    "column": { "type": "integer", "description": "Column in characters, counting from one -- where `check` places a finding is a place this takes" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+            },
+        },
+        {
+            "name": "references",
+            "description": "Every place the model names an element, each with its path, line/column range and the text of that line -- the declaration first, marked `declaration: true` (and `library: true` where it is in the standard library), then every use in the model's own files in the order written: as a type, a specialization, a redefinition, an import, a step of a qualified name or a feature chain, and through a feature that borrows the name by redefining it without one of its own (`l.component` where `l` holds `:>> component`). These are exactly the places `rename` rewrites. Uses inside the standard library are counted in `in_library` rather than listed. Ask about an element by `element`, or by `line` and `column` in the file `text` or `path` gives. Ask this before changing or deleting a declaration, to know what depends on it; searching the text for the name misses what reaches it through inheritance and finds what merely shares its spelling.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element": { "type": "string", "description": "A qualified name or a short name, instead of a position" },
+                    "line": { "type": "integer", "description": "Line of the name, counting from one, in the file `text` or `path` gives" },
+                    "column": { "type": "integer", "description": "Column in characters, counting from one" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+            },
+        },
+        {
+            "name": "rename",
+            "description": "The complete set of text edits that renames an element of the model everywhere it is named -- its declaration, every reference, every step of a qualified name or feature chain through it, and every redefinition that borrows its name -- the same edits the language server makes, with the new name quoted in each file where that file's notation needs it (`'two words'`, or a word that is a keyword in SysML but not in KerML). Nothing is written: this answers the edits, under `files` (each a `path` and its `edits`, each a range in that file as it is now and the `newText` to put there, in the order they appear -- apply them last first, or all at once, so the earlier ranges hold), and you write them yourself. `checked` is the rename already tried: the edits made in memory and the model resolved again, `ok` when nothing parses wrong and no name dangles that did not before (`introduced` lists any that do). Asked at a short name (`<W>`), it renames the short name. A new name that is not one legal name, one already visible where the declaration or a use of it stands (which the rename would capture), an alias, an element declared in the standard library, and one reached some way no rename can follow are each refused with why. Rename with this rather than by search and replace, which renames whatever shares the spelling and misses what reaches the element through inheritance.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "new_name": { "type": "string", "description": "The name to give it, written as one name is written in the file the rename is asked in: `Wheel`, or `'Wheel Unit'` quoted, since unquoted that is two names. Another file that would not read it as one name gets it quoted." },
+                    "element": { "type": "string", "description": "A qualified name or a short name, instead of a position" },
+                    "line": { "type": "integer", "description": "Line of a name, counting from one, in the file `text` or `path` gives -- at the declaration or at any use" },
+                    "column": { "type": "integer", "description": "Column in characters, counting from one" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+                "required": ["new_name"],
             },
         },
     ]);

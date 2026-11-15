@@ -51,7 +51,7 @@ use lsp_types::{
 };
 use sysml_model::ElementKind;
 use sysml_semantics::Workspace;
-use sysml_syntax::{TextRange, TextSize};
+use sysml_syntax::TextRange;
 
 mod files;
 mod line_index;
@@ -1024,22 +1024,6 @@ impl Server {
     }
 }
 
-/// Where inside a recorded range the name being renamed is written.
-///
-/// What was recorded is not always the name alone. A mention can be a
-/// feature chain -- `system.sub1`, ending on the step that names what is
-/// being renamed -- and a declaration whose tree holds no name node of its
-/// own is recorded as the whole of it: `then fork F { ... }`, which the
-/// new name would replace, body and all.
-fn name_token(ws: &Workspace, file: usize, range: TextRange, name: &str) -> Option<TextRange> {
-    let syntax = ws.file_parse(file).syntax();
-    let first = syntax.token_at_offset(range.start()).right_biased();
-    std::iter::successors(first, sysml_syntax::SyntaxToken::next_token)
-        .take_while(|token| range.contains_range(token.text_range()))
-        .find(|token| sysml_syntax::unquote(token.text()) == name)
-        .map(|token| token.text_range())
-}
-
 /// The element an `internal` view is asked for, by the name a reader
 /// typed.
 ///
@@ -1136,26 +1120,6 @@ fn apply_change(text: &mut String, change: lsp_types::TextDocumentContentChangeE
     let at = |position| index.offset(text, position).map_or(text.len(), usize::from);
     let (start, end) = (at(range.start), at(range.end));
     text.replace_range(start.min(end)..start.max(end), &change.text);
-}
-
-/// Whether the name written at `at` in `file` is looked up in the scope
-/// that surrounds it.
-///
-/// A segment that follows `::` or `.` is looked up inside whatever the
-/// segment before it named, so nothing about the scope it is written in
-/// decides where it lands.
-fn looked_up_in_place(ws: &Workspace, file: usize, at: TextSize) -> bool {
-    let syntax = ws.file_parse(file).syntax();
-    let mut token = syntax.token_at_offset(at).left_biased();
-    while token.as_ref().is_some_and(|t| t.kind().is_trivia()) {
-        token = token.and_then(|t| t.prev_token());
-    }
-    !token.is_some_and(|t| {
-        matches!(
-            t.kind(),
-            sysml_syntax::SyntaxKind::COLON_COLON | sysml_syntax::SyntaxKind::DOT
-        )
-    })
 }
 
 /// How an editor should picture an element, in the two vocabularies it

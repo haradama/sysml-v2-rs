@@ -70,12 +70,7 @@ impl Server {
     /// the declaration whose name covers the position.
     fn target_at(&mut self, uri: &Url, position: Position) -> Option<sysml_model::ElementId> {
         let (file, offset) = self.locate(uri, position)?;
-        let analysis = self.analysis();
-        analysis
-            .ws
-            .reference_at(file, offset)
-            .map(|r| r.target)
-            .or_else(|| analysis.ws.definition_at(file, offset))
+        self.analysis().ws.target_at(file, offset)
     }
     /// Every place the element under the cursor is named, by its name
     /// alone.
@@ -96,10 +91,10 @@ impl Server {
         let ws = &self.analysis().ws;
         let target = ws.model().naming_element(found).unwrap_or(found);
         let declared = include_declaration
-            .then(|| declared_at(ws, target))
+            .then(|| ws.declared_at(target))
             .flatten();
         let places: Vec<(usize, TextRange)> =
-            declared.into_iter().chain(mentions(ws, target)).collect();
+            declared.into_iter().chain(ws.mentions(target)).collect();
         let mut locations = Vec::new();
         for (file, range) in places {
             locations.extend(self.location(file, range));
@@ -111,182 +106,73 @@ impl Server {
     /// offered: the new name has to be a name, nothing already visible
     /// where the declaration stands may answer to it, and what is being
     /// renamed has to be the project's rather than the library's.
+    ///
+    /// The walk and each of those refusals are the workspace's, shared
+    /// with the MCP server's `rename`; what is decided here is only which
+    /// files this editor may write and how a range is counted in it.
     pub(crate) fn rename(
         &mut self,
         uri: &Url,
         position: Position,
         new_name: &str,
     ) -> Result<WorkspaceEdit, String> {
-        // What may stand there is what this file's lexer reads as one
-        // name and nothing else. Spelling the rule again here got it
-        // wrong three ways: `\u{540d}\u{524d}` passed a Unicode
-        // alphabetic test that the ASCII lexer refuses, so the rename
-        // was applied and the file stopped lexing; a quoted `'two
-        // words'` was refused although it is a name; and `frame` was
-        // refused in KerML, where it is not a keyword.
         let dialect = self.dialect_of(uri);
-        if !one_name(new_name, dialect) {
-            let (tokens, _) = sysml_syntax::lex_dialect(new_name, dialect);
-            return Err(match tokens.as_slice() {
-                [token] if dialect.is_keyword(token.kind) => format!("`{new_name}` is a keyword"),
-                _ => format!("`{new_name}` is not a name"),
-            });
+        // Refused before anything is looked up, so a name that is no name
+        // is said to be one whatever the cursor is on.
+        if let Some(why) = sysml_semantics::refuse_name(new_name, dialect) {
+            return Err(why);
         }
-        // `''` lexes as a name and denotes none: what was renamed to it
-        // would read as unnamed, and the refusal that caught it said the
-        // name was already taken
-        let denoted = sysml_syntax::unquote(new_name);
-        if denoted.is_empty() {
-            return Err(format!("`{new_name}` is an empty name"));
-        }
-
-        let Some(found) = self.target_at(uri, position) else {
+        let Some((file, offset)) = self.locate(uri, position) else {
             return Err("there is nothing to rename here".to_string());
         };
-        let asked = self.spelled_at(uri, position);
-        // A feature that declares no name answers to the name of what it
-        // redefines or references, and there is nothing in it to rewrite.
-        // Renaming is asked of the declaration that name came from, which
-        // is what every mention of it -- this one included -- follows.
-        let analysis = self.analysis();
-        let Some(target) = analysis.ws.model().naming_element(found) else {
-            return Err("that element declares no name to rename".to_string());
-        };
-        // A name reached through `alias X for Y;` resolves to Y, and
-        // nothing records that X was the way in. Renaming X would move
-        // the declaration and leave every use of it behind, so it is
-        // refused rather than half done.
-        if analysis.ws.is_alias(target) {
-            return Err("renaming an alias would leave what uses it behind".to_string());
-        }
-        // Every name this element answers to. The first is the one its
-        // declaration spells; the other is its short name. Which of them
-        // is renamed is the one the cursor is on: renaming at a `W` that
-        // stands for `<W> Wheel` rewrote `Wheel`, a name nobody pointed
-        // at, and left the `W` that was.
-        let model = analysis.ws.model();
-        let names: Vec<String> = model
-            .effective_name(target)
-            .into_iter()
-            .chain(model.effective_short_name(target))
-            .map(String::from)
-            .collect();
-        let by_short = names.len() == 2 && asked.as_ref() == names.get(1) && names[0] != names[1];
-        let renamed = names
-            .get(usize::from(by_short))
-            .cloned()
-            .unwrap_or_default();
-        let decl_file = analysis
+        let renaming = self
+            .analysis()
             .ws
-            .element_file(target)
-            .ok_or("that element belongs to no file".to_string())?;
-        let decl_range = match by_short {
-            true => analysis.ws.short_name_range(target),
-            false => analysis.ws.element_ranges(target).map(|(_, name)| name),
-        }
-        .ok_or("that element declares no name to rename".to_string())?;
-        // What names it, and what names a feature that borrows its name:
-        // renaming the declaration without those is a model that no
-        // longer resolves.
-        let mut edits: Vec<(usize, sysml_syntax::TextRange)> = vec![(decl_file, decl_range)];
-        edits.extend(mentions(&analysis.ws, target));
+            .prepare_rename(file, offset, new_name, dialect)?;
 
         // the declaration must be somewhere the editor may write --
         // library elements are not
-        if !self.writable(decl_file) {
+        if !self.writable(renaming.declared.0) {
             return Err("that element is declared outside the project".to_string());
         }
 
-        // a name already visible where the declaration stands would
-        // capture, or be captured by, the renamed one
-        // compared as the name it denotes: `'Other'` is `Other`, and
-        // compared as written it slipped past and declared a second one
-        let start = decl_range.start();
-        let taken = self
+        // An open document is in the notation its client declared for
+        // it, which its URL need not say; every other file is named by
+        // its path, whose suffix does.
+        let opened: Vec<(usize, Url)> = self
             .analysis()
-            .ws
-            .visible_names(decl_file, start)
+            .doc_files
+            .iter()
+            .map(|(url, file)| (*file, url.clone()))
+            .collect();
+        let declared: HashMap<usize, sysml_syntax::Dialect> = opened
             .into_iter()
-            .any(|(name, _)| name == denoted);
-        if taken {
-            return Err(format!("`{new_name}` is already visible there"));
-        }
-        // The declaration's own scope is not the only place a capture
-        // can happen. Every mention of the element stands in a scope of
-        // its own, and one that already reaches something under the new
-        // name binds to that instead the moment it is rewritten --
-        // quietly, because the file still parses and still resolves.
-        let wanted = [denoted.clone()];
-        for (file, range) in &edits {
-            let (file, at) = (*file, range.start());
-            if !looked_up_in_place(&self.analysis().ws, file, at) {
-                continue;
-            }
-            let ws = &mut self.analysis().ws;
-            let scope = ws.innermost_element(file, at);
-            if ws
-                .resolve_from(scope, &wanted)
-                .is_some_and(|other| other != target)
-            {
-                return Err(format!(
-                    "`{new_name}` is already visible where this one is used"
-                ));
-            }
-        }
+            .map(|(file, url)| (file, self.dialect_of(&url)))
+            .collect();
+        let edits = self.analysis().ws.rename_edits(&renaming, |file, name| {
+            declared
+                .get(&file)
+                .copied()
+                .unwrap_or_else(|| sysml_syntax::Dialect::from_path(name))
+        })?;
 
-        // one text and one line index per file, however many of its
-        // names this rename touches
-        let mut by_file: HashMap<usize, Vec<TextRange>> = HashMap::new();
-        for (file, range) in edits {
-            by_file.entry(file).or_default().push(range);
-        }
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-        for (file, ranges) in by_file {
-            let spelt: Vec<(TextRange, Option<TextRange>)> = {
-                let ws = &self.analysis().ws;
-                ranges
-                    .into_iter()
-                    .map(|range| (range, name_token(ws, file, range, &renamed)))
-                    .collect()
-            };
+        for (file, written) in edits {
             // Every one of these is writable without being asked: what
             // holds a reference to a project element is a project file
             // or an open buffer, never the library, which resolves
             // before any of them exists and so cannot name one.
             let name = self.analysis().ws.file_name(file).to_string();
-            let unread = || format!("`{name}` cannot be read");
-            // Each file in its own notation. The name was read as a name
-            // in the file the rename was asked in, and `part` is one in
-            // KerML: written unquoted into a SysML file that names the
-            // same element, it is a keyword and the file stops parsing.
-            let url = self.placed(file).ok_or_else(unread)?.url.clone();
-            let written_as = match one_name(new_name, self.dialect_of(&url)) {
-                true => new_name.to_string(),
-                false => sysml_syntax::quote(&denoted),
-            };
-            let placed = self.placed(file).ok_or_else(unread)?;
-            let mut written = Vec::new();
-            for (range, at) in spelt {
-                let Some(at) = at else {
-                    // Nothing there spells the name, so the model
-                    // reaches this element some other way: by a short
-                    // name, which this rename leaves standing, or
-                    // through an `alias B for A;` whose own `for A`
-                    // nothing records and no rename can follow.
-                    let at = usize::from(range.start())..usize::from(range.end());
-                    let spelled = sysml_syntax::unquote(&placed.text[at]);
-                    if !names.contains(&spelled) {
-                        return Err(format!(
-                            "`{spelled}` stands for this one by a way no rename can follow"
-                        ));
-                    }
-                    continue;
-                };
-                written.push(TextEdit {
-                    range: placed.index.range(&placed.text, at),
-                    new_text: written_as.clone(),
-                });
-            }
+            let placed = self
+                .placed(file)
+                .ok_or_else(|| format!("`{name}` cannot be read"))?;
+            let written: Vec<TextEdit> = written
+                .into_iter()
+                .map(|edit| TextEdit {
+                    range: placed.index.range(&placed.text, edit.range),
+                    new_text: edit.new_text,
+                })
+                .collect();
             changes
                 .entry(placed.url.clone())
                 .or_default()
@@ -657,65 +543,12 @@ impl Server {
         };
         Some(DiagramResult { svg })
     }
-    /// The name written under the cursor, as the name it denotes.
-    fn spelled_at(&mut self, uri: &Url, position: Position) -> Option<String> {
-        let (file, offset) = self.locate(uri, position)?;
-        let syntax = self.analysis().ws.file_parse(file).syntax();
-        let mut around = syntax.token_at_offset(offset);
-        around
-            .find(|token| {
-                matches!(
-                    token.kind(),
-                    sysml_syntax::SyntaxKind::IDENT | sysml_syntax::SyntaxKind::UNRESTRICTED_NAME
-                )
-            })
-            .map(|token| sysml_syntax::unquote(token.text()))
-    }
     fn locate(&mut self, uri: &Url, position: Position) -> Option<(usize, TextSize)> {
         let text = self.docs.get(uri)?.clone();
         let file = *self.analysis().doc_files.get(uri)?;
         let index = LineIndex::new(&text);
         Some((file, index.offset(&text, position)?))
     }
-}
-
-/// Whether `text` is one name and nothing else to a file of `dialect`.
-fn one_name(text: &str, dialect: sysml_syntax::Dialect) -> bool {
-    let (tokens, complaints) = sysml_syntax::lex_dialect(text, dialect);
-    complaints.is_empty()
-        && matches!(
-            tokens.as_slice(),
-            [token] if matches!(
-                token.kind,
-                sysml_syntax::SyntaxKind::IDENT | sysml_syntax::SyntaxKind::UNRESTRICTED_NAME
-            )
-        )
-}
-
-/// Every place `target` is named, as the name alone: what resolved to it,
-/// and what resolved to a feature that borrows its name -- `l.component`
-/// where `l` holds a `:>> component`. What references reports and what a
-/// rename rewrites, so the two cannot disagree.
-fn mentions(ws: &Workspace, target: sysml_model::ElementId) -> Vec<(usize, TextRange)> {
-    std::iter::once(target)
-        .chain(ws.named_after(target))
-        .flat_map(|named| ws.references_to(named))
-        .map(|r| (r.file, r.name_range))
-        .collect()
-}
-
-/// Where `target` is declared, as the name it is declared with. A
-/// declaration recorded as the whole of itself -- `then fork F { ... }`
-/// -- is narrowed to the name in it.
-fn declared_at(ws: &Workspace, target: sysml_model::ElementId) -> Option<(usize, TextRange)> {
-    let file = ws.element_file(target)?;
-    let (_, range) = ws.element_ranges(target)?;
-    let model = ws.model();
-    let name = model
-        .effective_name(target)
-        .or(model.effective_short_name(target))
-        .unwrap_or_default();
-    Some((file, name_token(ws, file, range, name).unwrap_or(range)))
 }
 
 /// Whether `offset` falls inside a comment, a string or a quoted name,
