@@ -190,10 +190,19 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     // `validateDefinitionVariationOwnedFeatureMembership` -- "a
     // variation owns no feature membership" -- says of `#Security enum
     // def C` and of `variation part x[1]`.
+    //
+    // The check is on `MetadataFeature`, which `MetadataUsage` specializes:
+    // KerML's `#M class Tagged;` builds the former, and checked against the
+    // SysML one only it came out a feature of the class it annotates.
+    //
+    // The bounds of a multiplicity are its members and not its features
+    // either: `MultiplicityExpressionMember : OwningMembership`.
     if !model.kind(owned).is_a(ElementKind::Feature)
         || model.kind(owned).is_a(ElementKind::Multiplicity)
-        || model.kind(owned).is_a(ElementKind::MetadataUsage)
+        || model.kind(owned).is_a(ElementKind::MetadataFeature)
         || !owner_kind.is_a(ElementKind::Type)
+        || model.owning_member(owned)
+        || is_bound_of(model, owned)
     {
         return ElementKind::OwningMembership;
     }
@@ -222,15 +231,25 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
     ElementKind::FeatureMembership
 }
 
+/// Whether `owned` is a bound of the multiplicity range that owns it.
+fn is_bound_of(model: &Model, owned: ElementId) -> bool {
+    let Some(range) = model.owner(owned) else {
+        return false;
+    };
+    model.kind(range).is_a(ElementKind::MultiplicityRange)
+        && ["bound", "lowerBound", "upperBound"]
+            .iter()
+            .any(|end| model.maybe(range, end) == Some(&Value::Ref(owned)))
+}
+
 /// The cross feature an end feature owns, where the notation wrote one.
 ///
 /// `ownedCrossFeature()` is "the first ownedMember of the Feature that is
 /// a Feature, but not a Multiplicity or a MetadataFeature, and whose
-/// owningMembership is not a FeatureMembership". This model works the
-/// memberships out from shape, so the last test has nothing to read -- but
-/// `end [1] part bead : TireBead;` writes the cross feature between the
-/// `end` and the declaration, so where one was written it is always the
-/// first member owned.
+/// owningMembership is not a FeatureMembership". The builder records which
+/// those are -- the `[1]` of `end [1] part bead : TireBead;`, and a
+/// `member feature` written in the end's body -- so a feature the end owns
+/// as one of its own, `end feature b { feature c; }`, is not taken for one.
 pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
     if !model.flag(end, "isEnd") {
         return None;
@@ -238,7 +257,8 @@ pub fn owned_cross_feature(model: &Model, end: ElementId) -> Option<ElementId> {
     model.owned(end).iter().copied().find(|&it| {
         model.kind(it).is_a(ElementKind::Feature)
             && !model.kind(it).is_a(ElementKind::Multiplicity)
-            && !model.kind(it).is_a(ElementKind::MetadataUsage)
+            && !model.kind(it).is_a(ElementKind::MetadataFeature)
+            && !membership_kind(model, it).is_a(ElementKind::FeatureMembership)
     })
 }
 
@@ -520,13 +540,18 @@ pub fn end_reaches(model: &Model, end: ElementId) -> Vec<ElementId> {
     // A flow end keeps the path to what it relates and the feature that
     // flows through it apart -- `FlowEnd = ( OwnedReferenceSubsetting
     // '.' )? FlowFeatureMember` -- and the notation wrote them as one
-    // name, which is what a reader of an end wants back.
+    // name, which is what a reader of an end wants back. What flows is a
+    // `Feature` in KerML and a `ReferenceUsage` in SysML, and the range
+    // counting the end one is a feature too.
     if model.kind(end) == ElementKind::FlowEnd {
         reached.extend(
             model
                 .owned(end)
                 .iter()
-                .filter(|&&child| model.kind(child) == ElementKind::Feature)
+                .filter(|&&child| {
+                    model.kind(child).is_a(ElementKind::Feature)
+                        && !model.kind(child).is_a(ElementKind::Multiplicity)
+                })
                 .flat_map(|&child| model.owned(child))
                 .filter(|&&it| model.kind(it) == ElementKind::Redefinition)
                 .filter_map(|&it| model.maybe(it, "redefinedFeature")?.as_id()),
@@ -647,6 +672,10 @@ struct MemberSide {
     /// The syntactic role that picks the membership's metaclass, when
     /// the member was declared in one. See [`Role`] for the roles.
     role: Option<Role>,
+    /// Whether the notation owns this feature through a plain
+    /// `OwningMembership` although its owner is a type. See
+    /// [`Model::set_owning_member`].
+    owning: bool,
 }
 
 /// Arena holding every element of one model.
@@ -703,6 +732,27 @@ impl Model {
     /// The declared role of `id`, when it has one.
     pub fn member_role(&self, id: ElementId) -> Option<Role> {
         self.elements[id.index()].membership.role
+    }
+
+    /// Record that `id` is a member of its owner without being one of its
+    /// features: owned through a plain `OwningMembership`.
+    ///
+    /// A type owns most of the features written in it through a
+    /// `FeatureMembership`, and the shape of the model says which ones it
+    /// does not -- a multiplicity, a metadata annotation, a bound. Two
+    /// productions say so with nothing the shape keeps: `TypeFeatureMember
+    /// : OwningMembership = MemberPrefix 'member' FeatureElement`, and
+    /// `OwnedCrossFeatureMember : OwningMembership`, the `[0..1]` of
+    /// `end b2[0..1] feature b`. Which is why it is recorded rather than
+    /// worked out, as the role is.
+    pub fn set_owning_member(&mut self, id: ElementId) {
+        self.elements[id.index()].membership.owning = true;
+    }
+
+    /// Whether `id` was declared a member and not a feature of its owner.
+    /// See [`Model::set_owning_member`].
+    pub fn owning_member(&self, id: ElementId) -> bool {
+        self.elements[id.index()].membership.owning
     }
 
     /// Whether it holds none.
@@ -869,14 +919,15 @@ impl Model {
     /// written.
     ///
     /// A typing is not a property on the feature: parsing reifies each
-    /// one as an owned [`ElementKind::FeatureTyping`] whose `type` is
-    /// filled in once the name resolves, which is where every reader of
-    /// a type has to look. A typing that never resolved is skipped, so
+    /// one as an owned [`ElementKind::FeatureTyping`] -- or the
+    /// [`ElementKind::ConjugatedPortTyping`] that specializes it, for
+    /// `port p : ~PD;` -- whose `type` is filled in once the name
+    /// resolves, which is where every reader of a type has to look. A typing that never resolved is skipped, so
     /// this yields fewer answers than the model wrote.
     pub fn types_of(&self, feature: ElementId) -> impl Iterator<Item = ElementId> + '_ {
         self.owned(feature)
             .iter()
-            .filter(|&&child| self.kind(child) == ElementKind::FeatureTyping)
+            .filter(|&&child| self.kind(child).is_a(ElementKind::FeatureTyping))
             .filter_map(|&child| self.get(child, "type").and_then(Value::as_id))
     }
 

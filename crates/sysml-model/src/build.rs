@@ -139,6 +139,7 @@ fn build_node(
         // their own — their references are handled during name resolution
         return None;
     };
+    let kind = in_dialect(kind, built.dialect);
 
     // `EnumerationUsageMember : VariantMembership = MemberPrefix
     // ownedRelatedElement += EnumeratedValue` -- every value written in an
@@ -199,6 +200,15 @@ fn build_node(
                 model.set(id, "direction", Value::EnumLit(direction));
             }
         }
+    }
+    // `member feature g : B;` and the `[0..1]` of `end b2[0..1] feature b`
+    // are members of the type they are written in without being features
+    // of it: `TypeFeatureMember : OwningMembership` and
+    // `OwnedCrossFeatureMember : OwningMembership`. The `member` is the
+    // whole of the difference between the first and `feature g : B;`, so
+    // it is kept here or nowhere.
+    if crossed.is_some() || scope_has(node, MEMBER_KW) {
+        model.set_owning_member(id);
     }
     if let Some(direction) = declared_direction(node) {
         if kind.feature("direction").is_some() {
@@ -477,14 +487,23 @@ fn build_node(
     if kind.feature("multiplicity").is_some() {
         reify_multiplicity(model, node, id, built);
     }
+    if counts_its_ends(kind) {
+        reify_cross_multiplicities(model, node, id, built);
+    }
     // every feature, not only the usages SysML layers on them: the
     // standard puts a `FeatureValue` on `Feature`, and KerML writes
     // `feature x = 5;` as readily as SysML writes `attribute x = 5;`
     //
     // An assignment is the exception: `assign x := 1;` gives the value to
     // `x`, and reading it as the assignment's own value says the action
-    // itself is one.
-    if kind.is_a(ElementKind::Feature) && !kind.is_a(ElementKind::AssignmentActionUsage) {
+    // itself is one. So is a binding: the `= a.m` of `bind w.h = a.m;` is
+    // the second of the two features it binds, which name resolution
+    // reifies as its end, and read as a value as well it gave the
+    // connector a third thing to relate.
+    if kind.is_a(ElementKind::Feature)
+        && !kind.is_a(ElementKind::AssignmentActionUsage)
+        && !kind.is_a(ElementKind::BindingConnector)
+    {
         reify_feature_value(model, node, id, built);
     }
 
@@ -632,25 +651,62 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId, bu
     // whole, as one `..` expression rather than as bounds either side of
     // it, so it is opened up to be read the one way; any other expression
     // is one bound.
-    let written: Vec<sysml_syntax::SyntaxElement> =
-        match node.children().find(|child| child.kind() == MULTIPLICITY) {
-            Some(clause) => clause.children_with_tokens().collect(),
-            None if node.kind() == CONTROL_STMT => {
-                let Some(indexed) = node.children().find(|child| child.kind() == INDEX_EXPR) else {
-                    return;
-                };
-                indexed
-                    .children_with_tokens()
-                    .skip_while(|part| part.kind() != L_BRACKET)
-                    .collect()
-            }
-            None => return,
-        };
+    // A connector's own multiplicity is written with its declaration, and
+    // what follows the keyword that introduces its ends counts an end:
+    // `connect [1] p1 to [0..*] p2;` writes `ConnectorEnd = (
+    // ownedRelationship += OwnedCrossMultiplicityMember )? ...` twice and
+    // says nothing of how many connections there are. Read as the
+    // connector's, the `[1]` made the connection one of exactly one.
+    //
+    // Nor is the `[3]` of `interface [3] p1 to [4] p2;`, which writes no
+    // keyword before its first end: `InterfaceUsageDeclaration = ... |
+    // InterfacePart`, and KerML's `connector [1] a to b;` likewise. What
+    // stands right before an end's name counts that end.
+    let connector = model.kind(owner).is_a(ElementKind::Connector);
+    let counted = counts_its_ends(model.kind(owner));
+    let own_clause = node
+        .children_with_tokens()
+        .take_while(|part| !(connector && introduces_connector_end(part.kind())))
+        .filter_map(|part| part.into_node())
+        .filter(|child| !(counted && counts_an_end(child)))
+        .find(|child| child.kind() == MULTIPLICITY);
+    let written: Vec<sysml_syntax::SyntaxElement> = match own_clause {
+        Some(clause) => clause.children_with_tokens().collect(),
+        None if connector => return,
+        None if node.kind() == CONTROL_STMT => {
+            let Some(indexed) = node.children().find(|child| child.kind() == INDEX_EXPR) else {
+                return;
+            };
+            indexed
+                .children_with_tokens()
+                .skip_while(|part| part.kind() != L_BRACKET)
+                .collect()
+        }
+        None => return,
+    };
+    reify_range(model, written, owner, built);
+}
+
+/// Stand up the range a multiplicity clause writes, as `owner`'s.
+fn reify_range(
+    model: &mut Model,
+    written: Vec<sysml_syntax::SyntaxElement>,
+    owner: ElementId,
+    built: &mut Built,
+) {
+    use SyntaxKind::*;
     let written: Vec<sysml_syntax::SyntaxElement> =
         written.into_iter().flat_map(opened_ranges).collect();
-    let range = model.create(ElementKind::MultiplicityRange);
-    model.add_owned(owner, range);
-    model.set(owner, "multiplicity", Value::Ref(range));
+    // `multiplicity mm [1..*];` declares the range the brackets write,
+    // which holds its bounds itself
+    let range = if model.kind(owner).is_a(ElementKind::MultiplicityRange) {
+        owner
+    } else {
+        let range = model.create(ElementKind::MultiplicityRange);
+        model.add_owned(owner, range);
+        model.set(owner, "multiplicity", Value::Ref(range));
+        range
+    };
 
     // How many bounds there are is what the brackets say, not how many
     // of them we could read. Dropping one changes what the others mean:
@@ -684,6 +740,63 @@ fn reify_multiplicity(model: &mut Model, node: &SyntaxNode, owner: ElementId, bu
         }
         _ => {}
     }
+}
+
+/// Whether a connector's ends may each be counted where they are written.
+///
+/// `ConnectorEnd = ( ownedRelationship += OwnedCrossMultiplicityMember )?
+/// ...` in either language; a flow's ends are `FlowEnd`s, which the grammar
+/// gives no multiplicity, so what a flow writes in brackets is its own.
+fn counts_its_ends(kind: ElementKind) -> bool {
+    kind.is_a(ElementKind::Connector) && !kind.is_a(ElementKind::Flow)
+}
+
+/// Whether a multiplicity clause is written right before the name of an
+/// end: `connect [1] p1 to [0..*] p2;`.
+fn counts_an_end(clause: &SyntaxNode) -> bool {
+    clause.kind() == SyntaxKind::MULTIPLICITY
+        && std::iter::successors(clause.next_sibling_or_token(), |it| {
+            it.next_sibling_or_token()
+        })
+        .find(|it| !it.kind().is_trivia())
+        .is_some_and(|it| matches!(it.kind(), SyntaxKind::NAME_REF | SyntaxKind::PATH_EXPR))
+}
+
+/// Stand up the cross multiplicity written before each end a connector
+/// names: `connect [1] p1 to [0..*] p2;` says that one `p1` goes with any
+/// number of `p2`s, and nothing about how many connections there are.
+///
+/// `OwnedCrossMultiplicityMember : OwningMembership = ownedRelatedElement
+/// += OwnedCrossMultiplicity` and `OwnedCrossMultiplicity : Feature =
+/// ownedRelationship += OwnedMultiplicity`: a feature of no name that
+/// holds the range, owned by the end through a plain membership. The end
+/// it belongs to is only made once its name has resolved, so the feature
+/// is the connector's until then -- the clause it was built from is what
+/// says which end takes it.
+fn reify_cross_multiplicities(
+    model: &mut Model,
+    node: &SyntaxNode,
+    connector: ElementId,
+    built: &mut Built,
+) {
+    for clause in node.children().filter(counts_an_end) {
+        let cross = model.create(ElementKind::Feature);
+        model.add_owned(connector, cross);
+        model.set_owning_member(cross);
+        built.source.push((cross, clause.clone()));
+        reify_range(model, clause.children_with_tokens().collect(), cross, built);
+    }
+}
+
+/// Whether a keyword written in a connector introduces the ends it
+/// relates: `connect a to b`, `bind a = b`, `allocate a to b`, KerML's
+/// `connector from a to b`, `succession first a then b`.
+fn introduces_connector_end(kind: SyntaxKind) -> bool {
+    use SyntaxKind::*;
+    matches!(
+        kind,
+        CONNECT_KW | BIND_KW | ALLOCATE_KW | FROM_KW | TO_KW | FIRST_KW | THEN_KW | EQ
+    )
 }
 
 /// A part of a multiplicity with every `..` in it laid out flat:
@@ -2090,8 +2203,12 @@ fn relation_tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
 /// isAbstract = true }` -- the specification has no metaclass of its own
 /// for a message and marks it this way instead, which is what tells
 /// `message m from a to b` from `flow f from a to b`.
-const KEYWORD_FLAGS: [(SyntaxKind, &str); 12] = [
+const KEYWORD_FLAGS: [(SyntaxKind, &str); 13] = [
     (SyntaxKind::ABSTRACT_KW, "isAbstract"),
+    // `class all C;`, `feature all f;`, `connector all from a to b;` --
+    // `isSufficient ?= 'all'`. The same word in `import all P::*;` is
+    // `isImportAll`, which an import carries and `isSufficient` it does not.
+    (SyntaxKind::ALL_KW, "isSufficient"),
     (SyntaxKind::MESSAGE_KW, "isAbstract"),
     (SyntaxKind::CONSTANT_KW, "isConstant"),
     (SyntaxKind::CONST_KW, "isConstant"),
@@ -2114,7 +2231,7 @@ const KEYWORD_FLAGS: [(SyntaxKind, &str); 12] = [
 /// so what the specification declares as the property's default is the
 /// answer. Any other property missing is this builder not building it,
 /// which says nothing about the model at all.
-pub const BUILT_FLAGS: [&str; 13] = [
+pub const BUILT_FLAGS: [&str; 14] = [
     "isAbstract",
     "isConstant",
     "isDerived",
@@ -2125,6 +2242,7 @@ pub const BUILT_FLAGS: [&str; 13] = [
     "isParallel",
     "isPortion",
     "isStandard",
+    "isSufficient",
     "isUnique",
     "isVariable",
     "isVariation",
@@ -2404,6 +2522,14 @@ fn usage_kind(
         Some(INV_KW) => "Invariant",
         Some(CONNECTOR_KW) => "Connector",
         Some(BINDING_KW) => "BindingConnector",
+        // `MultiplicitySubset : Multiplicity = 'multiplicity' Identification
+        // Subsets TypeBody` and `MultiplicityRange = 'multiplicity'
+        // Identification MultiplicityBounds TypeBody`: written with bounds,
+        // the declaration is the range itself and not a multiplicity
+        // owning one.
+        Some(MULTIPLICITY_KW) if node.children().any(|it| it.kind() == MULTIPLICITY) => {
+            "MultiplicityRange"
+        }
         Some(MULTIPLICITY_KW) => "Multiplicity",
         // `EnumeratedValue : EnumerationUsage = 'enum'? Usage` -- a value
         // written in an enumeration body names no kind, and reading it as
@@ -2425,6 +2551,32 @@ fn usage_kind(
         _ => "ReferenceUsage",
     };
     kind_or(name, ElementKind::Usage)
+}
+
+/// The metaclass each notation gives the connectors both write alike.
+///
+/// KerML and SysML share `flow`, `succession flow`, `succession` and
+/// `binding`, and each builds its own metaclass from them: KerML's `Flow`,
+/// `SuccessionFlow`, `Succession` and `BindingConnector` are steps and
+/// features, and SysML's `FlowUsage`, `SuccessionFlowUsage`,
+/// `SuccessionAsUsage` and `BindingConnectorAsUsage` the usages that
+/// specialize them (`Flow : FlowUsage = ...`, `BindingConnector :
+/// BindingConnectorAsUsage = ...` in the SysML grammar). The keywords say
+/// which connector; the file says which of the pair.
+fn in_dialect(kind: ElementKind, dialect: sysml_syntax::Dialect) -> ElementKind {
+    match dialect {
+        sysml_syntax::Dialect::KerML => match kind {
+            ElementKind::FlowUsage => ElementKind::Flow,
+            ElementKind::SuccessionFlowUsage => ElementKind::SuccessionFlow,
+            ElementKind::SuccessionAsUsage => ElementKind::Succession,
+            ElementKind::BindingConnectorAsUsage => ElementKind::BindingConnector,
+            other => other,
+        },
+        sysml_syntax::Dialect::SysML => match kind {
+            ElementKind::BindingConnector => ElementKind::BindingConnectorAsUsage,
+            other => other,
+        },
+    }
 }
 
 fn kind_or(name: &str, fallback: ElementKind) -> ElementKind {
@@ -4706,5 +4858,265 @@ mod tests {
             negated,
             [(Some("held"), false), (Some("never"), true), (None, false)]
         );
+    }
+
+    /// The first element named `name`, of whatever kind.
+    fn named(model: &Model, name: &str) -> ElementId {
+        model
+            .ids()
+            .find(|&id| model.name(id) == Some(name))
+            .unwrap_or_else(|| panic!("`{name}` is declared"))
+    }
+
+    fn kerml(text: &str) -> (Model, Vec<ElementId>) {
+        let parse = sysml_syntax::parse_dialect(text, sysml_syntax::Dialect::KerML);
+        assert!(parse.ok(), "{text} parses");
+        build_model(&parse)
+    }
+
+    /// What a type owns without its being a feature of it.
+    ///
+    /// The bounds of a multiplicity (`MultiplicityExpressionMember :
+    /// OwningMembership`), KerML's prefix metadata (`#M class Tagged;`
+    /// builds a `MetadataFeature`, which the check once read as the SysML
+    /// `MetadataUsage` only), a `member feature` (`TypeFeatureMember :
+    /// OwningMembership`) and a cross feature (`OwnedCrossFeatureMember :
+    /// OwningMembership`) all came out behind a `FeatureMembership`, as
+    /// features of what they were written in.
+    #[test]
+    fn what_a_type_owns_as_a_member_is_not_its_feature() {
+        let (model, _) = kerml(
+            "metaclass M;\n\
+             class B;\n\
+             #M class Tagged;\n\
+             struct S {\n\
+             \tfeature f : B [1..2];\n\
+             \tmember feature g : B;\n\
+             \tfeature h : B;\n\
+             }\n\
+             assoc struct LS {\n\
+             \tend b2[0..1] feature b : B { feature c : B; }\n\
+             \tend feature a : B { feature d : B; }\n\
+             }\n",
+        );
+        let membership = |id| crate::membership_kind(&model, id);
+
+        let tagged = named(&model, "Tagged");
+        let metadata = model.owned(tagged)[0];
+        assert!(model.kind(metadata).is_a(ElementKind::MetadataFeature));
+        assert_eq!(membership(metadata), ElementKind::OwningMembership);
+
+        let f = named(&model, "f");
+        let range = reference(&model, f, "multiplicity").unwrap();
+        for &bound in model.owned(range) {
+            assert_eq!(membership(bound), ElementKind::OwningMembership);
+        }
+        assert_eq!(model.owned(range).len(), 2);
+
+        assert_eq!(
+            membership(named(&model, "g")),
+            ElementKind::OwningMembership
+        );
+        assert_eq!(
+            membership(named(&model, "h")),
+            ElementKind::FeatureMembership
+        );
+
+        let b = named(&model, "b");
+        let cross = named(&model, "b2");
+        assert_eq!(model.owner(cross), Some(b));
+        assert_eq!(membership(cross), ElementKind::OwningMembership);
+        assert_eq!(crate::owned_cross_feature(&model, b), Some(cross));
+        assert_eq!(
+            membership(named(&model, "c")),
+            ElementKind::FeatureMembership
+        );
+        // an end with no cross feature written has none, whatever it owns
+        let a = named(&model, "a");
+        assert_eq!(crate::owned_cross_feature(&model, a), None);
+    }
+
+    /// `bind w.h = a.m;` and KerML's `binding f = g;` write their second end
+    /// after an `=`, and the end is all it is: the connector owns no
+    /// `FeatureValue`, which would make the expression `a.m` its value.
+    #[test]
+    fn the_second_end_of_a_binding_is_not_its_value() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def C {\n\tpart w { port h; }\n\tpart a { port m; }\n\tbind w.h = a.m;\n\tbinding b bind w.h = a.m;\n\tattribute x = 1;\n}\n",
+        ));
+        let (kerml, _) = kerml("struct S {\n\tfeature f;\n\tfeature g;\n\tbinding f = g;\n}\n");
+        let valued = |model: &Model, id: ElementId| {
+            model
+                .owned(id)
+                .iter()
+                .any(|&it| model.kind(it) == ElementKind::FeatureValue)
+        };
+        let bindings: Vec<bool> = model
+            .owned(roots[0])
+            .iter()
+            .filter(|&&it| model.kind(it).is_a(ElementKind::BindingConnector))
+            .map(|&it| valued(&model, it))
+            .collect();
+        assert_eq!(bindings, [false, false]);
+        // an ordinary value is still kept
+        assert!(valued(&model, named(&model, "x")));
+        let binding = kerml
+            .ids()
+            .find(|&it| kerml.kind(it).is_a(ElementKind::BindingConnector))
+            .expect("the binding is built");
+        assert!(!valued(&kerml, binding));
+    }
+
+    /// `isSufficient ?= 'all'`: a type, a feature and a connector that say
+    /// `all` are sufficient, and were interchanged as not being.
+    #[test]
+    fn all_makes_a_type_sufficient() {
+        let (model, _) = kerml(
+            "class A;\n\
+             class all C specializes A;\n\
+             class N;\n\
+             struct S {\n\
+             \tfeature f;\n\
+             \tfeature g;\n\
+             \tfeature all suf : A;\n\
+             \tconnector all from f to g;\n\
+             \tconnector plain from f to g;\n\
+             }\n",
+        );
+        let sufficient = |id| model.get(id, "isSufficient") == Some(&Value::Bool(true));
+        assert!(sufficient(named(&model, "C")));
+        assert!(!sufficient(named(&model, "N")));
+        assert!(sufficient(named(&model, "suf")));
+        assert!(!sufficient(named(&model, "plain")));
+        let connectors: Vec<bool> = model
+            .ids()
+            .filter(|&it| model.kind(it) == ElementKind::Connector)
+            .map(sufficient)
+            .collect();
+        assert_eq!(connectors, [true, false]);
+        // and `import all` is an import of everything, not a sufficient one
+        let (model, roots) = build_model(&sysml_syntax::parse("package P { import all Q::*; }"));
+        let import = model.owned(roots[0])[0];
+        assert_eq!(model.maybe(import, "isSufficient"), None);
+        assert_eq!(model.get(import, "isImportAll"), Some(&Value::Bool(true)));
+    }
+
+    /// The connectors KerML and SysML both write build the metaclass of the
+    /// file's own notation: `flow`, `succession flow` and `succession` in a
+    /// `.kerml` file are KerML's `Flow`, `SuccessionFlow` and `Succession`,
+    /// not the SysML usages, and `binding` in a `.sysml` file is SysML's
+    /// `BindingConnectorAsUsage`, not KerML's `BindingConnector`.
+    #[test]
+    fn a_connector_is_of_the_notation_it_is_written_in() {
+        let (model, roots) = kerml(
+            "struct S {\n\
+             \tfeature f;\n\
+             \tfeature g;\n\
+             \tsuccession su first f then g;\n\
+             \tbinding bi of f = g;\n\
+             }\n\
+             flow fl of S from S::f to S::g;\n\
+             succession flow sfl from S::f to S::g;\n",
+        );
+        assert_eq!(model.kind(named(&model, "su")), ElementKind::Succession);
+        assert_eq!(
+            model.kind(named(&model, "bi")),
+            ElementKind::BindingConnector
+        );
+        assert_eq!(model.kind(named(&model, "fl")), ElementKind::Flow);
+        assert_eq!(
+            model.kind(named(&model, "sfl")),
+            ElementKind::SuccessionFlow
+        );
+        assert_eq!(roots.len(), 3);
+
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def A {\n\
+             \tport p1;\n\
+             \tport p2;\n\
+             \tbinding b1 bind p1 = p2;\n\
+             \tbinding bind p1 = p2;\n\
+             \tbind p1 = p2;\n\
+             \tsuccession s first p1 then p2;\n\
+             \tflow fl from p1 to p2;\n\
+             }\n",
+        ));
+        let kinds: Vec<ElementKind> = model
+            .owned(roots[0])
+            .iter()
+            .map(|&it| model.kind(it))
+            .filter(|kind| kind.is_a(ElementKind::Connector))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ElementKind::BindingConnectorAsUsage,
+                ElementKind::BindingConnectorAsUsage,
+                ElementKind::BindingConnectorAsUsage,
+                ElementKind::SuccessionAsUsage,
+                ElementKind::FlowUsage,
+            ]
+        );
+    }
+
+    /// `multiplicity mm [1..*];` is `MultiplicityRange = 'multiplicity'
+    /// Identification MultiplicityBounds TypeBody`: the range, named, and
+    /// owning its two bounds -- not a `Multiplicity` owning a nameless one.
+    #[test]
+    fn a_multiplicity_declared_with_bounds_is_the_range() {
+        let (model, roots) = kerml("multiplicity mm [1..*];\nmultiplicity m;\n");
+        let mm = roots[0];
+        assert_eq!(model.kind(mm), ElementKind::MultiplicityRange);
+        assert_eq!(model.name(mm), Some("mm"));
+        assert_eq!(model.maybe(mm, "multiplicity"), None);
+        let lower = reference(&model, mm, "lowerBound").expect("a lower bound");
+        let upper = reference(&model, mm, "upperBound").expect("an upper bound");
+        assert_eq!(model.owned(mm), [lower, upper]);
+        assert_eq!(model.kind(lower), ElementKind::LiteralInteger);
+        assert_eq!(model.kind(upper), ElementKind::LiteralInfinity);
+        assert_eq!(
+            crate::membership_kind(&model, lower),
+            ElementKind::OwningMembership
+        );
+        // and one with none is the multiplicity it always was
+        assert_eq!(model.kind(roots[1]), ElementKind::Multiplicity);
+    }
+
+    /// What stands after the keyword that introduces a connector's ends
+    /// counts an end, not the connector: `connect [1] p1 to [0..*] p2;`
+    /// declares a connection with no multiplicity of its own. Read as the
+    /// connector's, the `[1]` made it one of exactly one.
+    #[test]
+    fn an_end_multiplicity_is_not_the_connectors() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "part def A {\n\
+             \tport p1;\n\
+             \tport p2;\n\
+             \tconnect [1] p1 to [0..*] p2;\n\
+             \tconnection c2 [2] connect [3] p1 to [4] p2;\n\
+             \tsuccession s first [1] p1 then [1] p2;\n\
+             \tpart x [5];\n\
+             }\n",
+        ));
+        let (kerml, _) = kerml(
+            "struct S {\n\tfeature f;\n\tfeature g;\n\tconnector c [6] from [7] f to [8] g;\n}\n",
+        );
+        let bound = |model: &Model, id: ElementId| {
+            let range = reference(model, id, "multiplicity")?;
+            let bound = reference(model, range, "bound")?;
+            match model.get(bound, "value") {
+                Some(Value::Int(n)) => Some(*n),
+                _ => None,
+            }
+        };
+        let members = model.owned(roots[0]);
+        let connectors: Vec<Option<i64>> = members
+            .iter()
+            .filter(|&&it| model.kind(it).is_a(ElementKind::Connector))
+            .map(|&it| bound(&model, it))
+            .collect();
+        assert_eq!(connectors, [None, Some(2), None]);
+        assert_eq!(bound(&model, named(&model, "x")), Some(5));
+        assert_eq!(bound(&kerml, named(&kerml, "c")), Some(6));
     }
 }
