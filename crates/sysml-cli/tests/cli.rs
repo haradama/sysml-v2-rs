@@ -1855,6 +1855,38 @@ fn a_violation_names_its_element_as_it_would_be_written() {
     assert_eq!(v["violations"][0]["element"], "P::'é😀'::o2", "{v}");
 }
 
+/// A name declared twice is said where it is declared again, with which
+/// name it is and where it was first, rather than of the package around
+/// both in the specification's general words.
+#[test]
+fn a_name_declared_again_is_said_where_it_is_repeated() {
+    let dir = temp_dir("declared-again");
+    let model = write(
+        &dir,
+        "twice.sysml",
+        "package P {\n\tpart def A;\n\tpart def A;\n}\n",
+    );
+    let out = sysml(&["check", model.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("twice.sysml:3:11"), "{stderr}");
+    assert!(stderr.contains("`A` is declared again in `P`"), "{stderr}");
+    assert!(stderr.contains("first declared at"), "{stderr}");
+    assert!(stderr.contains("twice.sysml:2:11"), "{stderr}");
+    let out = sysml(&["--format", "json", "check", model.to_str().unwrap()]);
+    let v = json_of(&out);
+    let violation = &v["violations"][0];
+    assert_eq!(violation["line"], 3, "{v}");
+    assert!(violation["detail"].as_str().unwrap().contains("`A`"), "{v}");
+    assert!(
+        violation["first"]
+            .as_str()
+            .unwrap()
+            .ends_with("twice.sysml:2:11"),
+        "{v}"
+    );
+}
+
 /// A violation inside a redefinition names the redefinition by the name it
 /// borrows: `part :>> engine` declares none, and was `P::Truck::'?'::o2`.
 #[test]

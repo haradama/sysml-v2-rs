@@ -24,6 +24,22 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 - The level stretches between two rows are a marker's breadth and more
   apart. A drawing with many lines between its rows is taller for it.
 
+### A name declared twice is said where it is repeated
+
+`sysmlv2-semantics`, `sysmlv2-cli`, `sysmlv2-lsp`
+
+- Two declarations of one name in one namespace are reported at the
+  second, saying which name it is and where the first is -- in
+  `sysml check`'s text and JSON (`detail`, `first`), in `check` over
+  MCP, and in the editor, with the first declaration as related
+  information. They were one violation of the namespace around them,
+  in the specification's general words, and six `part def Vehicle`
+  read as one unnamed complaint about the package.
+- The editor and the playground show it as an error, as `sysml check`
+  counts it. The other constraints stay warnings there: they are asked
+  of what this toolchain builds of the abstract syntax, and a repeated
+  name is in the text itself.
+
 ### One spelling for every key, a name for every element, and the whole model written back
 
 `sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`, `sysmlv2-model`

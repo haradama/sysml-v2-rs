@@ -2120,12 +2120,30 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
             )
         })
         .collect();
-    let violated = texts_of(&ws, placed.iter().map(|((file, _), _)| *file));
+    // where the other element a violation is about is declared: the first
+    // of two declarations of one name, said beside the second
+    let also: Vec<Option<(usize, sysml_syntax::TextRange)>> = placed
+        .iter()
+        .map(|(_, violation)| violation.also.and_then(|it| ws.element_place(it)))
+        .collect();
+    let violated = texts_of(
+        &ws,
+        placed
+            .iter()
+            .map(|((file, _), _)| *file)
+            .chain(also.iter().flatten().map(|(file, _)| *file)),
+    );
     let mut violations = Vec::new();
-    for ((file, range), violation) in &placed {
+    for (((file, range), violation), also) in placed.iter().zip(&also) {
         let named = ws.qualified_name_written(violation.element);
         let path = ws.file_name(*file);
         let text = &violated[file];
+        // `path:line:column` of the first declaration
+        let first = also.map(|(file, range)| {
+            let (line, column) =
+                sysml_syntax::line_col(&violated[&file], usize::from(range.start()));
+            format!("{}:{line}:{column}", ws.file_name(file))
+        });
         match format {
             Format::Text => say(&Said {
                 severity: Severity::Error,
@@ -2137,19 +2155,32 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
                 path,
                 text,
                 span: span(*range),
-                label: Some(format!("`{named}`")),
-                helps: Vec::new(),
+                label: Some(
+                    violation
+                        .detail
+                        .clone()
+                        .unwrap_or_else(|| format!("`{named}`")),
+                ),
+                helps: first
+                    .iter()
+                    .map(|first| format!("first declared at {first}"))
+                    .collect(),
             }),
-            Format::Json => violations.push(sysml_cli::at(
-                text,
-                *range,
-                serde_json::json!({
+            Format::Json => {
+                let mut said = serde_json::json!({
                     "path": path,
                     "rule": violation.rule,
                     "says": violation.says,
                     "element": named,
-                }),
-            )),
+                });
+                if let Some(detail) = &violation.detail {
+                    said["detail"] = serde_json::json!(detail);
+                }
+                if let Some(first) = &first {
+                    said["first"] = serde_json::json!(first);
+                }
+                violations.push(sysml_cli::at(text, *range, said))
+            }
         }
     }
 

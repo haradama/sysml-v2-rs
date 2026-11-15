@@ -870,12 +870,54 @@ impl Server {
                     .ws
                     .element_place(violation.element)
                     .unwrap_or_default();
+                // The other declaration a violation is about -- the first
+                // of a name declared twice -- where it is in a document
+                // this server holds: said in the message, since not every
+                // client shows related information, and as that too.
+                let first = violation
+                    .also
+                    .and_then(|it| analysis.ws.element_place(it))
+                    .and_then(|(at, range)| {
+                        let (url, _) = analysis.doc_files.iter().find(|(_, &it)| it == at)?;
+                        let held = docs.get(url)?;
+                        let range = LineIndex::new(held).range(held, range);
+                        Some((url.clone(), range))
+                    });
+                let mut message = violation
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| violation.says.to_string());
+                if let Some((at, range)) = &first {
+                    match at == url {
+                        true => {
+                            message.push_str(&format!(
+                                " (first declared on line {})",
+                                range.start.line + 1
+                            ));
+                        }
+                        false => {
+                            message.push_str(&format!(" (first declared in {at})"));
+                        }
+                    }
+                }
                 diagnostics.push(Diagnostic {
                     range: index.range(text, range),
-                    severity: Some(DiagnosticSeverity::WARNING),
+                    // a certain one is an error, as `sysml check` counts
+                    // every one; the rest are warnings while the model they
+                    // are asked of is only as right as this toolchain builds it
+                    severity: Some(match violation.certain() {
+                        true => DiagnosticSeverity::ERROR,
+                        false => DiagnosticSeverity::WARNING,
+                    }),
                     source: Some("sysml".into()),
                     code: Some(NumberOrString::String(violation.rule.into())),
-                    message: violation.says.into(),
+                    message,
+                    related_information: first.map(|(uri, range)| {
+                        vec![lsp_types::DiagnosticRelatedInformation {
+                            location: lsp_types::Location { uri, range },
+                            message: "first declared here".into(),
+                        }]
+                    }),
                     ..Default::default()
                 });
             }

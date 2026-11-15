@@ -1046,6 +1046,55 @@ fn an_unresolved_name_is_an_error() {
     client.stop(handle);
 }
 
+/// A name declared twice in one namespace is an error where it is
+/// declared again, saying which name and where it was first -- in the
+/// message, for a client that shows nothing more, and as related
+/// information -- rather than a warning in the specification's general
+/// words on the namespace around it.
+#[test]
+fn a_name_declared_again_is_an_error_where_it_is_repeated() {
+    // the constraints are asked of a model with the library to ask them
+    // against, as `sysml check` asks them
+    let library = std::path::Path::new("../sysml-stdlib/library");
+    if !library.is_dir() {
+        return;
+    }
+    let (mut client, handle) = serving();
+    client.request(
+        lsp_types::request::Initialize::METHOD,
+        json!({
+            "capabilities": {},
+            "initializationOptions": { "libraryPath": library.to_str().unwrap() },
+        }),
+    );
+    client.notify(lsp_types::notification::Initialized::METHOD, json!({}));
+    let uri = "file:///twice.sysml";
+    let text = "package P {\n    part def A;\n    part def A;\n}\n";
+    client.notify(
+        lsp_types::notification::DidOpenTextDocument::METHOD,
+        json!({ "textDocument": { "uri": uri, "languageId": "sysml", "version": 1, "text": text } }),
+    );
+    let said = client.wait_diagnostics();
+    let diagnostics = said["diagnostics"].as_array().unwrap();
+    let repeated: Vec<&Value> = diagnostics
+        .iter()
+        .filter(|it| it["code"] == "validateNamespaceDistinguishibility")
+        .collect();
+    assert_eq!(repeated.len(), 1, "{said}");
+    let repeat = repeated[0];
+    assert_eq!(repeat["severity"], 1, "{said}");
+    assert_eq!(repeat["range"]["start"]["line"], 2, "{said}");
+    let message = repeat["message"].as_str().unwrap();
+    assert!(message.contains("`A`"), "{message}");
+    assert!(message.contains("first declared on line 2"), "{message}");
+    let related = &repeat["relatedInformation"][0]["location"];
+    assert_eq!(related["uri"], uri, "{said}");
+    assert_eq!(related["range"]["start"]["line"], 1, "{said}");
+    client.request(lsp_types::request::Shutdown::METHOD, json!(null));
+    client.notify(lsp_types::notification::Exit::METHOD, json!(null));
+    handle.join().unwrap();
+}
+
 /// A client draws the outline, and finds where the cursor is in it, by
 /// containment, so a symbol listed under another lies inside it. Taken as
 /// the parser placed each element, the cross feature an end owns in

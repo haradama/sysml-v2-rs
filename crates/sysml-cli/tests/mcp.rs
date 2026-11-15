@@ -1330,6 +1330,32 @@ fn without_the_library_the_constraints_are_not_put_at_all() {
 /// name and not a broken constraint. It is the third thing `check` has
 /// to say, and the MCP server used not to say it at all: an agent
 /// writing `package Parts` of its own was told the model was sound.
+/// A name declared twice is answered where it is declared again, with
+/// which name and where the first is -- what an agent needs to fix it.
+#[test]
+fn check_says_which_name_is_declared_again_and_where_first() {
+    let library = library();
+    let said = answered(
+        &with_library(
+            &library,
+            &[call(
+                "check",
+                json!({ "text": "package P {\n\tpart def A;\n\tpart def A;\n}\n", "name": "twice.sysml" }),
+            )],
+        )[0],
+    );
+    let violations = said["rules"]["violations"].as_array().unwrap();
+    assert_eq!(violations.len(), 1, "{said}");
+    let repeat = &violations[0];
+    assert_eq!(repeat["rule"], "validateNamespaceDistinguishibility");
+    assert_eq!(repeat["line"], 3, "{said}");
+    assert!(repeat["detail"].as_str().unwrap().contains("`A`"), "{said}");
+    assert!(
+        repeat["first"].as_str().unwrap().ends_with(":2:11"),
+        "{said}"
+    );
+}
+
 #[test]
 fn check_reports_a_root_package_named_after_a_library_one() {
     let library = library();

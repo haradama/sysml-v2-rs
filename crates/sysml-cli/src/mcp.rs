@@ -822,11 +822,20 @@ impl Server {
                         .is_some_and(|(file, _)| in_report(file))
             })
             .map(|violation| {
-                let said = json!({
+                let mut said = json!({
                     "rule": violation.rule,
                     "says": violation.says,
                     "element": qualified(&ws, violation.element),
                 });
+                // which name is declared twice, and where it was first
+                if let Some(detail) = &violation.detail {
+                    said["detail"] = json!(detail);
+                }
+                if let Some((file, range)) = violation.also.and_then(|it| ws.element_place(it)) {
+                    let text = ws.file_parse(file).syntax().text().to_string();
+                    let (line, column) = sysml_syntax::line_col(&text, usize::from(range.start()));
+                    said["first"] = json!(format!("{}:{line}:{column}", ws.file_name(file)));
+                }
                 // placed where the element is declared, as the command
                 // line places it, wherever that is one of the files opened
                 ws.element_place(violation.element)

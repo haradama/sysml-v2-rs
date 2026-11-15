@@ -328,6 +328,50 @@ fn a_model_the_standard_rejects_is_reported_as_rejected() {
     }
 }
 
+/// A name declared twice in one namespace is said at each repeat, with
+/// the first declaration beside it, and is certain: the text says it twice,
+/// whatever the toolchain builds of it. A namespace whose members are told
+/// apart only through what it inherits is said of the namespace, as before.
+#[test]
+fn a_name_declared_again_is_said_where_it_is_repeated() {
+    let mut ws = Workspace::new();
+    let file = ws.add_file(
+        "twice.sysml",
+        "package P {\n\
+         \tpart def A;\n\
+         \tpart def B;\n\
+         \tpart def A;\n\
+         \tpart def A;\n\
+         \tattribute def B;\n\
+         }\n",
+    );
+    ws.resolve_all();
+    let checked = ws.check_rules(&[file]);
+    let repeats: Vec<_> = checked
+        .violations
+        .iter()
+        .filter(|it| it.rule == "validateNamespaceDistinguishibility")
+        .collect();
+    let line = |elem| {
+        let (_, range) = ws.element_place(elem).unwrap();
+        let text = ws.file_parse(file).syntax().text().to_string();
+        sysml_syntax::line_col(&text, usize::from(range.start())).0
+    };
+    // the second and third `A`, each pointing back at the first; `B` is a
+    // part definition and an attribute definition, neither of which is
+    // the other, and is not a repeat
+    let said: Vec<(usize, usize)> = repeats
+        .iter()
+        .map(|it| (line(it.element), line(it.also.expect("the first"))))
+        .collect();
+    assert_eq!(said, [(4, 2), (5, 2)], "{repeats:?}");
+    for repeat in &repeats {
+        assert!(repeat.certain(), "{repeat:?}");
+        let detail = repeat.detail.as_deref().unwrap();
+        assert!(detail.contains("`A`") && detail.contains("`P`"), "{detail}");
+    }
+}
+
 /// The same question asked of the corpus, by breaking it on purpose.
 ///
 /// Writing a wrong model by hand reaches the constraints one at a time,

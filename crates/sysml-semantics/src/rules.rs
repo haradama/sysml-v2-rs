@@ -529,6 +529,27 @@ pub struct Violation {
     pub says: &'static str,
     /// The element it does not hold of.
     pub element: ElementId,
+    /// What of that element breaks it, said of this model rather than in
+    /// the specification's general words, where that can be said: which
+    /// name is declared twice.
+    pub detail: Option<String>,
+    /// The other element it is about, where there is one: the first
+    /// declaration of the name a second one repeats.
+    pub also: Option<ElementId>,
+}
+
+impl Violation {
+    /// Whether it is certain, and so an error wherever it is shown.
+    ///
+    /// Every constraint fails a check on the command line, but an editor
+    /// shows most of them as warnings: several are asked of what this
+    /// toolchain builds of the abstract syntax, and are only as right as
+    /// that. Two declarations of one name in one namespace are not a
+    /// matter of how the model was built -- the text says it twice -- and
+    /// a name that means both reaches only one of them.
+    pub fn certain(&self) -> bool {
+        self.detail.is_some() && self.rule == "validateNamespaceDistinguishibility"
+    }
 }
 
 /// What running the constraints over a model came to.
@@ -677,10 +698,40 @@ impl Workspace {
             let mut unknown = None;
             let mut unknowns = 0;
             for (elem, it) in about {
-                let answer = match rule.name {
-                    "validateNamespaceDistinguishibility" => Ok(self.distinguishable(elem)),
-                    _ => self.holds(expr, &it, &present),
-                };
+                // a name declared twice is said at the second declaration,
+                // with the first, rather than of the namespace both are in
+                if rule.name == "validateNamespaceDistinguishibility" {
+                    let repeated = self.owned_repeats(elem);
+                    asked = true;
+                    if repeated.is_empty() {
+                        if !self.distinguishable(elem) {
+                            checked.violations.push(Violation {
+                                rule: rule.name,
+                                says: rule.says,
+                                element: elem,
+                                detail: None,
+                                also: None,
+                            });
+                        }
+                        continue;
+                    }
+                    let within = self.qualified_name_written(elem);
+                    for (again, first, name) in repeated {
+                        checked.violations.push(Violation {
+                            rule: rule.name,
+                            says: rule.says,
+                            element: again,
+                            detail: Some(format!(
+                                "`{}` is declared again in `{within}`, and a name that means it \
+                                 reaches only one of the two",
+                                sysml_syntax::quote(&name)
+                            )),
+                            also: Some(first),
+                        });
+                    }
+                    continue;
+                }
+                let answer = self.holds(expr, &it, &present);
                 match answer {
                     Ok(true) => asked = true,
                     Ok(false) => {
@@ -689,6 +740,8 @@ impl Workspace {
                             rule: rule.name,
                             says: rule.says,
                             element: elem,
+                            detail: None,
+                            also: None,
                         });
                     }
                     // an element that cannot answer says nothing about
@@ -926,6 +979,14 @@ impl Workspace {
     }
 
     fn owned_distinguishable(&self, namespace: ElementId) -> bool {
+        self.owned_repeats(namespace).is_empty()
+    }
+
+    /// Each owned membership of `namespace` that answers to a name an
+    /// earlier one of a conforming metaclass answers to: the repeat, the
+    /// first, and the name.
+    fn owned_repeats(&self, namespace: ElementId) -> Vec<(ElementId, ElementId, String)> {
+        let mut repeats = Vec::new();
         let model = self.model();
         let mut by_name: HashMap<&str, Vec<(ElementId, ElementKind)>> = HashMap::new();
         for &owned in model.owned(namespace) {
@@ -958,15 +1019,20 @@ impl Workspace {
                 seen_here.push(name);
                 let alike = by_name.entry(name).or_default();
                 let member_kind = model.kind(member);
-                if alike.iter().any(|&(other, other_kind)| {
+                let first = alike.iter().find(|&&(other, other_kind)| {
                     other != owned && (member_kind.is_a(other_kind) || other_kind.is_a(member_kind))
-                }) {
-                    return false;
+                });
+                if let Some(&(first, _)) = first {
+                    // said once of each repeat, by the first name it repeats
+                    if !repeats.iter().any(|&(again, _, _)| again == owned) {
+                        repeats.push((owned, first, name.to_string()));
+                    }
+                    continue;
                 }
                 alike.push((owned, member_kind));
             }
         }
-        true
+        repeats
     }
 
     /// Every membership a type inherits: those of everything it specializes,
