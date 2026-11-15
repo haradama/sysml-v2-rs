@@ -217,7 +217,7 @@ impl Formatter {
             }
             // A block comment spanning lines keeps a line of its own, so
             // that its interior has a column of its own to be brought to.
-            if kind == COMMENT_BODY && token.text().contains('\n') {
+            if kind == COMMENT_BODY && token.text().contains(['\n', '\r']) {
                 self.pending_newlines = self.pending_newlines.max(1);
             }
             if self.pending_newlines > 0 {
@@ -235,7 +235,7 @@ impl Formatter {
                     self.out.push(' ');
                 }
             }
-            if kind == COMMENT_BODY && token.text().contains('\n') {
+            if kind == COMMENT_BODY && token.text().contains(['\n', '\r']) {
                 self.write_comment(token.text());
                 self.line_breakable = false;
             } else {
@@ -296,7 +296,7 @@ impl Formatter {
     /// with this margin taken off.
     fn write_comment(&mut self, text: &str) {
         let indent = INDENT.repeat(self.depth);
-        let mut lines = text.lines();
+        let mut lines = crate::lines_of(text).into_iter();
         self.out.push_str(lines.next().unwrap_or_default());
         let mut rest: Vec<&str> = lines.collect();
         // A line that only closes the comment is part of the drawing and
@@ -777,6 +777,24 @@ mod tests {
             assert_eq!(fmt(&input), expected, "{input:?}");
         }
         assert_eq!(line_breaks("\r\n\r\r\n\n"), 4);
+    }
+
+    /// A comment whose lines end in a lone `\r` is brought under its new
+    /// column as one ending in `\n` is. Read as one line, its interior
+    /// kept whatever indentation it had.
+    #[test]
+    fn a_comment_written_with_carriage_returns_is_reindented() {
+        let input =
+            "package P {\n        /* first\n           second\n        */\n    part x;\n}\n";
+        let expected = fmt(input);
+        for ending in ["\r", "\r\n"] {
+            let written = input.replace('\n', ending);
+            assert_eq!(fmt(&written), expected, "{written:?}");
+        }
+        assert_eq!(
+            crate::comment_text("/* first\r   second\r*/"),
+            crate::comment_text("/* first\n   second\n*/")
+        );
     }
 
     /// A note trailing a line is not what has to fit on it. Measured in,

@@ -3211,8 +3211,9 @@ mod tests {
     /// tests for one there asked for a name, so `@$::P::code { }` was
     /// turned away, `#$::P::code part y;` read as a stray `#` before an
     /// expression, and `metadata $::P::code { }` left the reference
-    /// standing as an expression rather than the usage's type -- which
-    /// is why the importer wrote `metadata code_ : $::P::code` instead.
+    /// standing as an expression rather than the usage's type. The
+    /// importer had to write `metadata code_ : $::P::code` to get round
+    /// it, and now writes `@$::P::code`.
     #[test]
     fn a_metadata_definition_may_be_named_from_the_global_root() {
         let annotation = check_ok("part x { @$::P::code { } }");

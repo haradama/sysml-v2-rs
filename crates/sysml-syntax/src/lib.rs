@@ -109,7 +109,7 @@ pub fn comment_text(raw: &str) -> String {
     // still what it says
     let text = raw.strip_prefix("/*").unwrap_or(raw);
     let text = text.strip_suffix("*/").unwrap_or(text);
-    let mut lines: Vec<&str> = text.lines().collect();
+    let mut lines: Vec<&str> = lines_of(text);
     // Only a line written after `/*` itself goes without a margin; once
     // a blank one has been dropped, the first line left is under it.
     let mut after_opening = 1;
@@ -164,6 +164,39 @@ pub fn comment_text(raw: &str) -> String {
 /// and the shortest indent measured in bytes cut a U+3000 or a NBSP in
 /// half. Being a prefix of every line is what lets each reader strip it
 /// the same way.
+/// The lines of `text`, broken at `\r\n`, a lone `\r` and `\n` alike.
+///
+/// `str::lines` breaks only at `\n`, so a comment written with old Mac
+/// line endings read as one long line, and its interior was neither
+/// re-indented nor taken off its margin.
+pub(crate) fn lines_of(text: &str) -> Vec<&str> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\n' => {
+                lines.push(&text[start..at]);
+                start = at + 1;
+            }
+            b'\r' => {
+                lines.push(&text[start..at]);
+                if bytes.get(at + 1) == Some(&b'\n') {
+                    at += 1;
+                }
+                start = at + 1;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines
+}
+
 pub(crate) fn shared_indent(lines: &[&str]) -> String {
     let mut lines = lines
         .iter()
