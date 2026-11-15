@@ -33,3 +33,17 @@ pub mod surface;
 pub use generate::{generate, Generated, Open, OpenKind, RustgenError};
 pub use import::{rustdoc_to_surface, rustdoc_to_sysml, ImportError};
 pub use surface::Imported;
+
+/// Whether `id`, owned by a connector -- a succession, a transition's
+/// succession -- is one of its ends. In SysML a connector end is a
+/// `ReferenceUsage` (`ConnectorEnd : ReferenceUsage` in the grammar) and
+/// in KerML a `Feature`, and the model builder has written both: a check
+/// for the one only found no ends at all in a model written the other
+/// way, and every transition and succession dropped out of what is
+/// generated and planned.
+pub(crate) fn connector_end(model: &sysml_model::Model, id: sysml_model::ElementId) -> bool {
+    matches!(
+        model.kind(id),
+        sysml_model::ElementKind::Feature | sysml_model::ElementKind::ReferenceUsage
+    )
+}

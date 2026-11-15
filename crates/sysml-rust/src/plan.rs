@@ -1090,10 +1090,32 @@ fn variant(ws: &mut Workspace, child: ElementId) -> Variant {
 /// Outside a state machine an unnamed transition is a guarded succession
 /// -- `if flag then logA;` out of a `decide` -- and is planned as one of
 /// the [`successions`](Definition::successions), not as a transition.
+///
+/// A transition written inside a state's body -- `state off { accept Go
+/// then on; }` -- names only where it goes, and leaves from the state it
+/// is written in. It was left out of the plan, as though the machine had
+/// no way out of `off`; it is planned with that state as its source.
 fn transitions(ws: &mut Workspace, owned: &[ElementId], machine: bool) -> Vec<Transition> {
-    let mut planned: Vec<Transition> = owned
-        .iter()
-        .filter_map(|&child| transition(ws, child))
+    let mut written: Vec<(ElementId, Option<ElementId>)> =
+        owned.iter().map(|&child| (child, None)).collect();
+    if machine {
+        let model = ws.model();
+        for &state in owned {
+            if model.kind(state) != ElementKind::StateUsage || model.name(state).is_none() {
+                continue;
+            }
+            written.extend(
+                model
+                    .owned(state)
+                    .iter()
+                    .filter(|&&child| model.kind(child) == ElementKind::TransitionUsage)
+                    .map(|&child| (child, Some(state))),
+            );
+        }
+    }
+    let mut planned: Vec<Transition> = written
+        .into_iter()
+        .filter_map(|(child, inside)| transition(ws, child, inside))
         .filter(|it| machine || !it.unnamed)
         .collect();
     let mut taken: std::collections::HashSet<String> = planned
@@ -1114,7 +1136,13 @@ fn transitions(ws: &mut Workspace, owned: &[ElementId], machine: bool) -> Vec<Tr
     planned
 }
 
-fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
+/// One transition; `inside` is the state whose body it is written in,
+/// which is where it leaves from when it names only where it goes.
+fn transition(
+    ws: &mut Workspace,
+    usage: ElementId,
+    inside: Option<ElementId>,
+) -> Option<Transition> {
     let model = ws.model();
     if model.kind(usage) != ElementKind::TransitionUsage {
         return None;
@@ -1132,10 +1160,14 @@ fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
     let ends: Vec<ElementId> = model
         .owned(relates)
         .iter()
-        .filter(|&&child| model.kind(child) == ElementKind::Feature)
+        .filter(|&&child| crate::connector_end(model, child))
         .filter_map(|&child| sysml_model::end_reaches(model, child).last().copied())
         .collect();
-    let [from, to] = ends[..] else { return None };
+    let (from, to) = match (&ends[..], inside) {
+        (&[from, to], _) => (from, to),
+        (&[to], Some(state)) => (state, to),
+        _ => return None,
+    };
     let accept = match model.get(usage, "triggerAction") {
         Some(Value::RefList(triggers)) => triggers.first().copied(),
         _ => None,
@@ -1341,7 +1373,7 @@ fn block(ws: &mut Workspace, container: ElementId, performs_are_steps: bool) -> 
         let ends: Vec<ElementId> = model
             .owned(relates)
             .iter()
-            .filter(|&&end| model.kind(end) == ElementKind::Feature)
+            .filter(|&&end| crate::connector_end(model, end))
             .filter_map(|&end| sysml_model::end_reaches(model, end).first().copied())
             .collect();
         let [from, to] = ends[..] else { continue };

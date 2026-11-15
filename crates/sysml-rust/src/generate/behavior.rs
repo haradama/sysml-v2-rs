@@ -31,8 +31,26 @@ impl<'a> Generator<'a> {
         let mut transitions: Vec<Transition> = model
             .owned(def)
             .iter()
-            .filter_map(|&child| self.transition(child, &states))
+            .filter_map(|&child| self.transition(child, &states, None))
             .collect();
+        // a transition written inside a state -- `state a { accept go
+        // then b; }` -- names only where it goes, and leaves from the
+        // state it is written in: a row of the table like any other
+        let mut unplaced: Vec<&str> = Vec::new();
+        for &(state, state_name) in &states {
+            for &child in model.owned(state) {
+                let kind = model.kind(child);
+                if kind == ElementKind::TransitionUsage {
+                    match self.transition(child, &states, Some(state_name)) {
+                        Some(transition) => transitions.push(transition),
+                        None => unplaced.push(state_name),
+                    }
+                } else if kind == ElementKind::SuccessionAsUsage {
+                    unplaced.push(state_name);
+                }
+            }
+        }
+        unplaced.dedup();
         // a transition the model left unnamed is still a row of the
         // table; it is called after its ends, clear of every name the
         // model did give one
@@ -57,30 +75,22 @@ impl<'a> Generator<'a> {
             doc_comment(&doc, "", out);
         }
         writeln!(out, "/// SysML: `state def {name}` -- the states").unwrap();
-        // a transition written inside a state -- `state a { accept go
-        // then b; }` -- names only where it goes, and the table is over
-        // transitions that say both ends, so it is said out loud rather
-        // than left out
-        for (state, state_name) in &states {
-            let nested = model.owned(*state).iter().any(|&child| {
-                let kind = model.kind(child);
-                kind == ElementKind::TransitionUsage || kind == ElementKind::SuccessionAsUsage
-            });
-            if nested {
-                self.open(
-                    OpenKind::Skipped,
-                    *state_name,
-                    None,
-                    "a transition inside it -- only a transition naming both its ends \
-                     joins the table",
-                );
-                writeln!(
-                    out,
-                    "// not generated: a transition inside state `{state_name}` -- \
-                     only a transition naming both its ends joins the table"
-                )
-                .unwrap();
-            }
+        // what is written inside a state and is no transition the table
+        // can hold -- a bare succession, one whose target is no state of
+        // this machine -- is said out loud rather than left out
+        for state_name in unplaced {
+            self.open(
+                OpenKind::Skipped,
+                state_name,
+                None,
+                "a transition inside it -- its target is no state of this machine",
+            );
+            writeln!(
+                out,
+                "// not generated: a transition inside state `{state_name}` -- \
+                 its target is no state of this machine"
+            )
+            .unwrap();
         }
         writeln!(out, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]").unwrap();
         // a state's name is written into an enum, so it goes through
@@ -282,7 +292,15 @@ impl<'a> Generator<'a> {
     }
     /// One transition of a state machine, when both its ends are states
     /// of the machine.
-    fn transition(&self, usage: ElementId, states: &[(ElementId, &str)]) -> Option<Transition> {
+    /// One row of the table; `inside` is the state whose body the
+    /// transition is written in, which it leaves from when it names only
+    /// where it goes.
+    fn transition(
+        &self,
+        usage: ElementId,
+        states: &[(ElementId, &str)],
+        inside: Option<&str>,
+    ) -> Option<Transition> {
         let model = self.model;
         if model.kind(usage) != ElementKind::TransitionUsage {
             return None;
@@ -300,7 +318,7 @@ impl<'a> Generator<'a> {
         let ends: Vec<ElementId> = model
             .owned(relates)
             .iter()
-            .filter(|&&child| model.kind(child) == ElementKind::Feature)
+            .filter(|&&child| crate::connector_end(model, child))
             .filter_map(|&child| sysml_model::end_reaches(model, child).last().copied())
             .collect();
         let state_name = |id: ElementId| {
@@ -309,11 +327,11 @@ impl<'a> Generator<'a> {
                 .find(|(state, _)| *state == id)
                 .map(|(_, n)| (*n).to_string())
         };
-        let (&source, &target) = match ends.as_slice() {
-            [source, target] => (source, target),
+        let (source, target) = match (ends.as_slice(), inside) {
+            (&[source, target], _) => (state_name(source)?, state_name(target)?),
+            (&[target], Some(inside)) => (inside.to_string(), state_name(target)?),
             _ => return None,
         };
-        let (source, target) = (state_name(source)?, state_name(target)?);
         let named = model.name(usage);
         let name = named.map_or_else(|| format!("{source}_to_{target}"), str::to_string);
 

@@ -434,7 +434,7 @@ pub(crate) fn initial_state(model: &Model, owned: &[ElementId]) -> Option<Elemen
         let ends: Vec<ElementId> = model
             .owned(other)
             .iter()
-            .filter(|&&end| model.kind(end) == ElementKind::Feature)
+            .filter(|&&end| crate::connector_end(model, end))
             .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
             .collect();
         let (from, to) = (*ends.first()?, *ends.get(1)?);

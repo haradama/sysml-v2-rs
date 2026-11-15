@@ -480,19 +480,25 @@ impl Parser<'_> {
     /// Precedence low to high, after KerML: implies, or, xor, and,
     /// equality, relational, additive, multiplicative, unary, primary.
     fn expression(&mut self) -> Option<Node> {
-        let lhs = self.or_expression()?;
-        if !self.eat(&Token::Implies) {
-            return Some(lhs);
+        let mut lhs = self.or_expression()?;
+        // Left-associative, as every binary operator but exponentiation
+        // is in KerML (the note under the operator productions, and the
+        // pilot grammar's `OrExpression (implies OrExpression)*`), and as
+        // this project's parser reads it: `a implies b implies c` is
+        // `(a implies b) implies c`. Read the other way it was
+        // `!a || (!b || c)`, which is true where the model's is false
+        // (a, b and c all false). Spelled out: `a implies b` is `!a || b`.
+        while self.eat(&Token::Implies) {
+            let rhs = self.or_expression()?;
+            lhs = Node {
+                rust: format!("!{} || {}", wrap(&lhs), wrap(&rhs)),
+                atomic: false,
+                boolean: true,
+                text: false,
+                number: Number::Unknown,
+            };
         }
-        // right-associative, spelled out: `a implies b` is `!a || b`
-        let rhs = self.expression()?;
-        Some(Node {
-            rust: format!("!{} || {}", wrap(&lhs), wrap(&rhs)),
-            atomic: false,
-            boolean: true,
-            text: false,
-            number: Number::Unknown,
-        })
+        Some(lhs)
     }
 
     fn or_expression(&mut self) -> Option<Node> {
@@ -874,7 +880,7 @@ mod tests {
         assert_eq!(plain("a implies b").as_deref(), Some("!a || b"));
         assert_eq!(
             plain("a implies b implies c").as_deref(),
-            Some("!a || (!b || c)")
+            Some("!(!a || b) || c")
         );
         let compared = translate(
             "a <= b != c >= d",

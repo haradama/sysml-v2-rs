@@ -1914,13 +1914,13 @@ fn a_state_machine_spells_its_states_and_reserves_the_names_it_derives() {
     )
     .unwrap();
     assert!(rust.contains("pub enum TrafficLightState"), "{rust}");
+    // a transition inside a state leaves from it, and is a row of the
+    // table like any other; it used to be left out with a note saying so
     assert!(
-        rust.contains(
-            "// not generated: a transition inside state `waiting` -- only a transition naming \
-             both its ends joins the table"
-        ),
+        rust.contains("(TrafficLightState::Waiting, TrafficLightEvent::WaitingToGreen) => {"),
         "{rust}"
     );
+    assert!(!rust.contains("transition inside state"), "{rust}");
     assert!(rust.contains("    RedLight,"), "{rust}");
     assert!(rust.contains("    GoGreen,"), "{rust}");
     assert!(rust.contains("pub s: TrafficLightState,"), "{rust}");
@@ -2648,4 +2648,59 @@ fn an_unnamed_perform_is_a_method_called_after_what_it_performs() {
         "{rust}"
     );
     compiles(&rust);
+}
+
+/// A type's own functions -- `impl Gauge { pub fn new() -> Self; pub fn
+/// total(&self) -> f64; pub fn grow(&mut self, amount: f64) }` -- are what
+/// `sysml import-rust` writes as action defs bound to `fake::Gauge::new`
+/// and the like. No trait declares them, so no port provides them, and
+/// performing one was refused as an API no port of the part provides. One
+/// that takes a receiver is called through the field holding a `Gauge`;
+/// one that takes none on the type itself; and a part that holds no
+/// `Gauge` -- or holds it as perhaps none -- says why it cannot.
+#[test]
+fn a_type_s_own_function_is_performed_through_what_holds_the_type() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tprivate import Api::*;\n\
+         \titem def Gauge { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge\"; } }\n\
+         \taction def GaugeNew { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge::new\"; :>> takesSelf = \"\"; :>> isAsync = false; :>> isFallible = false; } out result : Gauge; }\n\
+         \taction def Total { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge::total\"; :>> takesSelf = \"&self\"; :>> isAsync = false; :>> isFallible = false; } out result : Real; }\n\
+         \taction def Grow { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge::grow\"; :>> takesSelf = \"&mut self\"; :>> isAsync = false; :>> isFallible = false; } in amount : Real; }\n\
+         \tpart def Meter {\n\
+         \t\titem gauge : Gauge;\n\
+         \t\tperform action total : Total;\n\
+         \t\tperform action grow : Grow;\n\
+         \t\tperform action fresh : GaugeNew;\n\
+         \t}\n\
+         \tpart def Bare { perform action total : Total; perform action fresh : GaugeNew; }\n\
+         \tpart def Maybe { item gauge : Gauge[0..1]; perform action total : Total; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("self.gauge.total()"), "{rust}");
+    assert!(
+        rust.contains("pub fn grow(&mut self, amount: f64)")
+            && rust.contains("self.gauge.grow(amount)"),
+        "{rust}"
+    );
+    assert!(rust.contains("fake::Gauge::new()"), "{rust}");
+    assert!(
+        rust.contains("// not generated: perform `total` -- `fake::Gauge::total` is called on a `fake::Gauge`, and `Bare` holds none"),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("`Maybe` holds `gauge` as perhaps none"),
+        "{rust}"
+    );
+    compiles(&format!(
+        "{rust}\nmod fake {{\n\
+         #[derive(Clone, Debug, Default, PartialEq)] pub struct Gauge;\n\
+         impl Gauge {{\n\
+         pub fn new() -> Self {{ Gauge }}\n\
+         pub fn total(&self) -> f64 {{ 0.0 }}\n\
+         pub fn grow(&mut self, amount: f64) {{ let _ = amount; }}\n\
+         }}\n}}\n"
+    ));
 }

@@ -119,20 +119,72 @@ impl<'a> Generator<'a> {
         let provider = ports
             .iter()
             .find(|port| path.starts_with(&format!("{}::", port.trait_path)));
-        let Some(provider) = provider else {
-            return Err(RustgenError::NoPortForAction {
-                part: part_name.to_string(),
-                action: usage_name.to_string(),
-                path,
-            });
+        // What the call is made on: the port that provides the API, or --
+        // for a type's own function, `impl Part { fn total(&self) }`,
+        // which no trait and so no port provides -- a field holding that
+        // type, or the type itself for one that takes no receiver
+        // (`Part::new`). Those were refused as an API no port provides,
+        // though the importer writes them for exactly this.
+        let on = match provider {
+            Some(provider) => {
+                // said outright to take no receiver, it is called on the
+                // type and not on the port, which is a value of it
+                if bound.get(binding::TAKES_SELF).map(String::as_str) == Some("") {
+                    return declined(format!(
+                        "`{path}` takes no receiver, and a port is called through one"
+                    ));
+                }
+                format!("self.{}.", ident(&provider.name))
+            }
+            None => {
+                let owner = path
+                    .rsplit_once("::")
+                    .map(|(owner, _)| owner)
+                    .filter(|owner| self.declares_type(owner));
+                let Some(owner) = owner else {
+                    return Err(RustgenError::NoPortForAction {
+                        part: part_name.to_string(),
+                        action: usage_name.to_string(),
+                        path,
+                    });
+                };
+                if takes_self.is_empty() {
+                    format!("{owner}::")
+                } else {
+                    let held: Vec<&Field> = fields
+                        .iter()
+                        .filter(|field| matches!(&field.ty, FieldType::External(ty) if ty == owner))
+                        .collect();
+                    match held[..] {
+                        [] => {
+                            return declined(format!(
+                                "`{path}` is called on a `{owner}`, and `{part_name}` holds none"
+                            ))
+                        }
+                        [field] if field.container == Container::One => {
+                            format!("self.{}.", field.spelled)
+                        }
+                        [field] => {
+                            return declined(format!(
+                                "`{path}` is called on one `{owner}`, and `{part_name}` holds \
+                                 `{}` as {}",
+                                self.model.name(field.usage).unwrap_or("?"),
+                                match field.container {
+                                    Container::Optional => "perhaps none",
+                                    _ => "several of them",
+                                }
+                            ))
+                        }
+                        _ => {
+                            return declined(format!(
+                                "`{path}` is called on a `{owner}`, and `{part_name}` holds \
+                                 more than one, so which is not said"
+                            ))
+                        }
+                    }
+                }
+            }
         };
-        // said outright to take no receiver, it is called on the type and
-        // not on the port, which is a value of it
-        if bound.get(binding::TAKES_SELF).map(String::as_str) == Some("") {
-            return declined(format!(
-                "`{path}` takes no receiver, and a port is called through one"
-            ));
-        }
         let callee = path.rsplit("::").next().unwrap_or(&path);
 
         let mut inputs = Vec::new();
@@ -189,8 +241,7 @@ impl<'a> Generator<'a> {
         }
 
         let mut call = format!(
-            "self.{}.{callee}({})",
-            ident(&provider.name),
+            "{on}{callee}({})",
             inputs
                 .iter()
                 .map(|(name, _)| name.as_str())
@@ -213,6 +264,18 @@ impl<'a> Generator<'a> {
         writeln!(body, "        {call}").unwrap();
         writeln!(body, "    }}").unwrap();
         Ok(body)
+    }
+    /// Whether a definition in the model is bound to the Rust type at
+    /// `path` -- which is what makes `path::f` a function of that type
+    /// rather than of a module, or of a crate nothing here imported.
+    fn declares_type(&self, path: &str) -> bool {
+        let model = self.model;
+        model.ids().any(|id| {
+            model.kind(id).is_a(ElementKind::Definition)
+                && !model.kind(id).is_a(ElementKind::ActionDefinition)
+                && binding(model, id)
+                    .is_some_and(|bound| bound.get(binding::ITEM).map(String::as_str) == Some(path))
+        })
     }
     /// The Rust type of an action parameter.
     pub(crate) fn parameter_type(&self, usage: ElementId) -> Option<String> {

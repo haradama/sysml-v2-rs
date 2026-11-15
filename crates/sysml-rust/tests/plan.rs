@@ -191,6 +191,55 @@ fn every_transition_is_planned_with_what_triggers_it() {
     assert_eq!(old.kind, "signal");
 }
 
+/// A transition written inside a state's body -- `state off { accept Go
+/// then on; }` -- names only where it goes, and leaves from the state it
+/// is written in. It was left out of the plan, so a generator reading it
+/// wrote a machine with no way out of `off`.
+#[test]
+fn a_transition_inside_a_state_leaves_from_that_state() {
+    let plan = plan_of(
+        "package S {\n\
+         \tattribute def Go;\n\
+         \tstate def Lamp {\n\
+         \t\tentry; then off;\n\
+         \t\tstate off { accept Go then on; }\n\
+         \t\tstate on { transition dim first on accept Go then off; }\n\
+         \t}\n\
+         }\n",
+    );
+    assert!(plan.checked.ok, "{:?}", plan.checked);
+    let machine = plan
+        .definitions
+        .iter()
+        .find(|it| it.of == "S::Lamp")
+        .unwrap();
+    let json = serde_json::to_string(&machine.transitions).unwrap();
+    let said: Vec<(&str, bool, &str, &str, &str)> = machine
+        .transitions
+        .iter()
+        .map(|it| {
+            (
+                it.name.as_str(),
+                it.unnamed,
+                it.from.as_str(),
+                it.to.as_str(),
+                it.on
+                    .as_ref()
+                    .and_then(|on| on.typed_by.as_deref())
+                    .unwrap_or(""),
+            )
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("off_to_on", true, "off", "on", "S::Go"),
+            ("dim", false, "on", "off", "S::Go"),
+        ],
+        "{json}"
+    );
+}
+
 /// A behaviour's order is more than its subactions: the control nodes
 /// and the structured actions are steps too, a `decide`'s guards are on
 /// its successions, and every name an `after` or a succession carries is
