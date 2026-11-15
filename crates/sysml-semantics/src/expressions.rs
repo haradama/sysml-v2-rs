@@ -723,8 +723,13 @@ impl Workspace {
                 // kept as the last feature alone, which message it belonged
                 // to was nowhere in the model
                 let steps = crate::syntax::operand_chain_steps(&operand);
-                let reached = self.chained(id, &segments, &steps, target);
-                self.reify(id, false, SyntaxKind::REFERENCES, reached);
+                self.reify_through(
+                    id,
+                    false,
+                    SyntaxKind::REFERENCES,
+                    (&segments, &steps),
+                    target,
+                );
             }
             None => self.record_miss(file, range, &segments, stats),
         }

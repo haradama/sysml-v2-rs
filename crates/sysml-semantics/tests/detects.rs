@@ -281,6 +281,23 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
             "validateRequirementVerificationMembershipOwningType",
         ],
     ),
+    // `crossFeature.type->asSet() = type->asSet()`: what an end is
+    // reached across has the end's types. A `B` reached across where the
+    // end is an `A` is not that; the same two types listed the other way
+    // round are, because a set keeps no order -- compared as lists, the
+    // second was reported as well.
+    (
+        "an end reached across a feature of another type",
+        "package P {\n\tpart def A;\n\tpart def B;\n\tconnection def S {\n\
+         \t\tend part ea : A crosses eb.fb;\n\t\tend part eb : B { part fb : B; }\n\t}\n}\n",
+        &["validateFeatureCrossFeatureType"],
+    ),
+    (
+        "and one reached across its own types in another order",
+        "package P {\n\tpart def A;\n\tpart def B;\n\tpart def R {\n\
+         \t\tend part ea : A, B crosses eb.fa;\n\t\tend part eb : B { part fa : B, A; }\n\t}\n}\n",
+        &[],
+    ),
 ];
 
 #[test]

@@ -359,6 +359,16 @@ impl Workspace {
                 self.resolve_relation_ends(id, &node, &mut stats);
                 continue;
             }
+            // `connect [n] a to b;` -- the feature the builder stood up
+            // for the `[n]` counting an end has no declaration around
+            // it, and a bound naming something is a reference all the
+            // same
+            if node.kind() == SyntaxKind::MULTIPLICITY {
+                for (bound, written) in self.bounds_written_as_expressions(id) {
+                    self.resolve_expression(bound, &written, &mut stats);
+                }
+                continue;
+            }
             // a payload carries a typing of its own -- `flow f of Fuel`
             // -- and is an element the builder made, so it resolves like
             // any declaration
@@ -436,13 +446,22 @@ impl Workspace {
                             // feature comes to have one chaining
                             // feature, which the standard does not
                             // allow it.
+                            //
+                            // `chainingFeature` is derived from those, and
+                            // kept beside them because that is where
+                            // everything reading a chain looks: left
+                            // empty, `feature c chains f.x` was a chain
+                            // with no steps to everything but the rules.
                             if part_kind == SyntaxKind::CHAINS_KW {
+                                let mut chain = Vec::new();
                                 for depth in 1..=t.segments.len() {
                                     if let Some(step) = self.resolve_from(id, &t.segments[..depth])
                                     {
                                         self.reify(id, is_definition, part_kind, step);
+                                        chain.push(step);
                                     }
                                 }
+                                self.try_set(id, "chainingFeature", Value::RefList(chain));
                                 continue;
                             }
                             // A dotted operand names a chain, not the feature at the end of it. The
@@ -469,11 +488,16 @@ impl Workspace {
                                     | SyntaxKind::DISJOINT_KW
                             ) || part_kind == SyntaxKind::SUBSETTING
                                 && !is_definition;
-                            let reached = match names_a_chain {
-                                true => self.chained(id, &t.segments, &t.chain, target),
-                                false => target,
-                            };
-                            self.reify(id, is_definition, part_kind, reached);
+                            match names_a_chain {
+                                true => self.reify_through(
+                                    id,
+                                    is_definition,
+                                    part_kind,
+                                    (&t.segments, &t.chain),
+                                    target,
+                                ),
+                                false => self.reify(id, is_definition, part_kind, target),
+                            }
                         }
                         None => {
                             let file = self.file_of(id);

@@ -1498,12 +1498,15 @@ fn a_flow_relates_flow_ends_that_own_what_flows() {
         );
         // exactly one owned feature: the one that flows. The
         // multiplicity beside it is owned through an `OwningMembership`
-        // and is not one -- `validateFlowEndNestedFeature`
+        // and is not one -- `validateFlowEndNestedFeature`. In SysML it
+        // is a reference: `FlowFeature : ReferenceUsage =
+        // ownedRelationship += FlowFeatureRedefinition`, where KerML
+        // writes `FlowFeature : Feature`.
         let owned: Vec<sysml_model::ElementId> = model
             .owned(end)
             .iter()
             .copied()
-            .filter(|&it| model.kind(it) == sysml_model::ElementKind::Feature)
+            .filter(|&it| model.kind(it) == sysml_model::ElementKind::ReferenceUsage)
             .collect();
         assert_eq!(owned.len(), 1, "one feature flows: {owned:?}");
         let redefines = model
@@ -1548,10 +1551,41 @@ fn a_flow_relates_flow_ends_that_own_what_flows() {
             .owned(end)
             .iter()
             .copied()
-            .find(|&it| model.kind(it) == sysml_model::ElementKind::Feature)
+            .find(|&it| model.kind(it) == sysml_model::ElementKind::ReferenceUsage)
             .expect("one feature flows");
         assert_eq!(model.maybe(flows, "direction"), None);
         assert_eq!(sysml_model::end_reaches(model, end).len(), 1);
+    }
+
+    // and KerML's `FlowFeature : Feature` is a feature and no usage
+    let mut ws = sysml_semantics::Workspace::new();
+    ws.add_file(
+        "plain.kerml",
+        "classifier P {
+	feature a { feature x; }
+	feature b { feature y; }
+         	flow a.x to b.y;
+}
+",
+    );
+    let stats = ws.resolve_all();
+    assert_eq!(stats.unresolved, 0, "{stats:?}");
+    let model = ws.model();
+    let ends: Vec<sysml_model::ElementId> = model
+        .ids()
+        .filter(|&it| model.kind(it) == sysml_model::ElementKind::FlowEnd)
+        .collect();
+    assert_eq!(ends.len(), 2);
+    for end in ends {
+        let flows: Vec<sysml_model::ElementKind> = model
+            .owned(end)
+            .iter()
+            .map(|&it| model.kind(it))
+            .filter(|kind| !kind.is_a(sysml_model::ElementKind::Multiplicity))
+            .filter(|kind| kind.is_a(sysml_model::ElementKind::Feature))
+            .collect();
+        assert_eq!(flows, [sysml_model::ElementKind::Feature]);
+        assert_eq!(sysml_model::end_reaches(model, end).len(), 2);
     }
 }
 
@@ -4846,4 +4880,370 @@ fn a_disjoint_type_inherits_nothing_of_what_it_is_disjoint_from() {
     )]);
     let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
     assert_eq!(names, ["a"]);
+}
+
+/// `featured by` says whose feature a feature is and `inverse of` that it
+/// runs the other way along the same pairs; neither says it is one of the
+/// other. Read as specializations, as both once were, `fb` below had the
+/// `b` of a `B` and `h` the `a` of an `A`, and a name only the featuring
+/// type or the inverted feature's type declares resolved inside it.
+#[test]
+fn featuring_and_inverting_types_are_not_inherited_from() {
+    let ws = ws(&[(
+        "m.kerml",
+        "package K {\n\
+         \tclassifier A { feature a; }\n\
+         \tclassifier B { feature b; }\n\
+         \tfeature g : A;\n\
+         \tfeature fb : A featured by B { feature p subsets a; feature q subsets b; }\n\
+         \tfeature h : B inverse of g { feature r subsets b; feature s subsets a; }\n\
+         }\n",
+    )]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["b", "a"]);
+}
+
+/// What a connector relates it relates through ends, and the two
+/// languages stand a different element for one. SysML writes
+/// `ConnectorEnd : ReferenceUsage` -- an end refers to what it connects
+/// and is not part of the connection -- and KerML `ConnectorEnd :
+/// Feature`. Built as a plain `Feature` in either, a SysML end was an
+/// element its own grammar never writes, and exported as one.
+#[test]
+fn a_connector_end_is_the_element_its_language_writes() {
+    let ends_of = |name: &str, text: &str| {
+        let ws = ws(&[(name, text)]);
+        let model = ws.model();
+        let mut kinds: Vec<ElementKind> = model
+            .ids()
+            .filter(|&id| {
+                model.kind(id).is_a(ElementKind::Connector)
+                    && model
+                        .owner(id)
+                        .is_some_and(|it| model.name(it) == Some("s"))
+            })
+            .flat_map(|connector| model.owned(connector).to_vec())
+            .filter(|&it| model.maybe(it, "isEnd") == Some(&sysml_model::Value::Bool(true)))
+            .map(|it| model.kind(it))
+            .collect();
+        kinds.sort_by_key(|kind| kind.name());
+        kinds
+    };
+    // `connect`, `bind`, `first ... then` and a chain end alike
+    assert_eq!(
+        ends_of(
+            "m.sysml",
+            "part def P { part a { part x; } part b; }\n\
+             part s : P {\n\
+             \tconnect a.x to b;\n\
+             \tbind a = b;\n\
+             \tfirst a then b;\n\
+             }\n",
+        ),
+        [ElementKind::ReferenceUsage; 6]
+    );
+    assert_eq!(
+        ends_of(
+            "m.kerml",
+            "classifier P { feature a { feature x; } feature b; }\n\
+             feature s : P {\n\
+             \tconnector a.x to b;\n\
+             \tbinding a = b;\n\
+             \tsuccession a then b;\n\
+             }\n",
+        ),
+        [ElementKind::Feature; 6]
+    );
+}
+
+/// A connector whose end resolved to nothing is not judged by how many
+/// ends it has.
+///
+/// `succession step1 then camera.focusedState;` relates two features as
+/// written. Where `camera.focusedState` names nothing -- the official
+/// KerML and SysML corpora loaded into one workspace each declare a
+/// `Camera`, and the KerML one is shadowed -- the unresolved name is
+/// already reported, and counting what was found said the succession
+/// related one feature, a violation of `validateConnectorRelatedFeatures`
+/// no model ever wrote.
+#[test]
+fn a_connector_with_an_end_that_resolves_to_nothing_is_not_counted_short() {
+    let mut ws = ws(&[(
+        "s.kerml",
+        "behavior B {\n\tstep s1;\n\tsuccession s1 then nowhere.nothing;\n}\n",
+    )]);
+    assert_eq!(ws.unresolved().len(), 1, "{:?}", ws.unresolved());
+    let checked = ws.check_rules(&[0]);
+    let fired: Vec<&str> = checked.violations.iter().map(|it| it.rule).collect();
+    assert!(
+        !fired.contains(&"validateConnectorRelatedFeatures"),
+        "{fired:?}"
+    );
+}
+
+/// `port pt : ~PD;` types the port by the conjugate of `PD`, and the
+/// grammar gives that typing a metaclass of its own: `ConjugatedPortTyping
+/// : ConjugatedPortTyping = '~' originalPortDefinition = ~[QualifiedName]`.
+/// Built as a plain `FeatureTyping`, the model said nothing a reader of
+/// the abstract syntax could tell from `port pt : PD;` but the name of
+/// the type. It is still a typing, so whatever reads the type of one --
+/// [`sysml_model::Model::types_of`], and what `pt.x` resolves through --
+/// reads this one too.
+#[test]
+fn a_port_typed_by_a_conjugate_is_typed_by_a_conjugated_port_typing() {
+    let ws = ws(&[(
+        "p.sysml",
+        "package P {\n\
+         \tattribute def V;\n\
+         \tport def PD { out attribute x : V; }\n\
+         \tpart def A {\n\
+         \t\tport pt : ~PD;\n\
+         \t\tattribute y = pt.x;\n\
+         \t}\n\
+         }\n",
+    )]);
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let model = ws.model();
+    let pt = model
+        .ids()
+        .find(|&id| model.name(id) == Some("pt"))
+        .expect("`pt` is declared");
+    let conjugate = model
+        .ids()
+        .find(|&id| model.kind(id) == ElementKind::ConjugatedPortDefinition)
+        .expect("`PD` owns its conjugate");
+    let typings: Vec<sysml_model::ElementId> = model
+        .owned(pt)
+        .iter()
+        .copied()
+        .filter(|&it| model.kind(it).is_a(ElementKind::FeatureTyping))
+        .filter(|&it| model.maybe(it, "isImplied") != Some(&sysml_model::Value::Bool(true)))
+        .collect();
+    assert_eq!(typings.len(), 1, "one typing is written");
+    let typing = typings[0];
+    assert_eq!(model.kind(typing), ElementKind::ConjugatedPortTyping);
+    for (property, want) in [
+        ("typedFeature", pt),
+        ("type", conjugate),
+        ("conjugatedPortDefinition", conjugate),
+    ] {
+        assert_eq!(
+            model.maybe(typing, property).and_then(|v| v.as_id()),
+            Some(want),
+            "`{property}`"
+        );
+    }
+    // and it is a typing for whatever reads one
+    assert!(model.types_of(pt).any(|it| it == conjugate));
+    let x = model
+        .ids()
+        .find(|&id| model.name(id) == Some("x"))
+        .expect("`x` is declared");
+    assert!(
+        ws.references_to(x).count() >= 1,
+        "`pt.x` reaches the `x` of `PD`"
+    );
+}
+
+/// `feature sub subsets f.x;` names a chain, and the grammar has it as the
+/// relationship's own: `ownedRelatedElement += OwnedFeatureChain`, with
+/// each step a `FeatureChaining` under it, as `chains f.x` writes them.
+/// Stood up before the relationship, the chain was owned by `sub` through a
+/// `FeatureMembership` -- so `sub` had a feature named `x` among its
+/// `ownedFeature`s that nothing wrote -- and had no chainings at all.
+#[test]
+fn a_chain_written_in_a_declaration_is_owned_by_the_relationship() {
+    for (file, text, kind, target) in [
+        (
+            "c.kerml",
+            "package P {\n\
+             \tclassifier A { feature x; }\n\
+             \tfeature f : A;\n\
+             \tfeature sub subsets f.x;\n\
+             }\n",
+            ElementKind::Subsetting,
+            "subsettedFeature",
+        ),
+        (
+            "c.sysml",
+            "package P {\n\
+             \tpart def A { part x; }\n\
+             \tpart f : A;\n\
+             \tref sub ::> f.x;\n\
+             }\n",
+            ElementKind::ReferenceSubsetting,
+            "referencedFeature",
+        ),
+    ] {
+        let mut ws = ws(&[(file, text)]);
+        // and a second pass does the same work over without doubling it
+        ws.resolve_all();
+        assert!(ws.unresolved().is_empty(), "{file}: {:?}", ws.unresolved());
+        let model = ws.model();
+        let named = |want: &str| {
+            model
+                .ids()
+                .find(|&id| model.name(id) == Some(want))
+                .unwrap_or_else(|| panic!("`{want}` is declared"))
+        };
+        let (sub, f, x) = (named("sub"), named("f"), named("x"));
+        let features: Vec<sysml_model::ElementId> = model
+            .owned(sub)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it).is_a(ElementKind::Feature))
+            .collect();
+        assert!(
+            features.is_empty(),
+            "{file}: `sub` owns no feature: {features:?}"
+        );
+        let relationships: Vec<sysml_model::ElementId> = model
+            .owned(sub)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it) == kind)
+            .collect();
+        assert_eq!(relationships.len(), 1, "{file}: one {kind:?}");
+        let relationship = relationships[0];
+        let chain = model
+            .maybe(relationship, target)
+            .and_then(|v| v.as_id())
+            .expect("the relationship names the chain");
+        assert_eq!(model.kind(chain), ElementKind::Feature, "{file}");
+        assert_eq!(model.owner(chain), Some(relationship), "{file}");
+        assert_eq!(model.chaining_feature(chain), [f, x], "{file}");
+        let chainings: Vec<(
+            Option<sysml_model::ElementId>,
+            Option<sysml_model::ElementId>,
+        )> = model
+            .owned(chain)
+            .iter()
+            .copied()
+            .filter(|&it| model.kind(it) == ElementKind::FeatureChaining)
+            .map(|it| {
+                (
+                    model.maybe(it, "featureChained").and_then(|v| v.as_id()),
+                    model.maybe(it, "chainingFeature").and_then(|v| v.as_id()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            chainings,
+            [(Some(chain), Some(f)), (Some(chain), Some(x))],
+            "{file}: a chaining for each step"
+        );
+    }
+}
+
+/// `connect [1] p1 to [0..*] p2;` counts each end where it is written:
+/// `ConnectorEnd = ( ownedRelationship += OwnedCrossMultiplicityMember )?
+/// ...`, and `OwnedCrossMultiplicity : Feature = ownedRelationship +=
+/// OwnedMultiplicity` -- a feature of no name holding the range, owned by
+/// the end through a plain `OwningMembership`. The connection itself is
+/// counted by none of them, and `interface [3] p1 to [4] p2;`, which writes
+/// no keyword before its first end, counts that end as well.
+#[test]
+fn what_is_written_before_an_end_counts_that_end() {
+    let bounds = |model: &sysml_model::Model, holder: sysml_model::ElementId| {
+        let range = model
+            .maybe(holder, "multiplicity")
+            .and_then(|v| v.as_id())
+            .expect("a range");
+        ["bound", "lowerBound", "upperBound"]
+            .iter()
+            .filter_map(|it| model.maybe(range, it).and_then(|v| v.as_id()))
+            .map(|bound| match model.maybe(bound, "value") {
+                Some(sysml_model::Value::Int(n)) => n.to_string(),
+                _ => match model.kind(bound) {
+                    ElementKind::LiteralInfinity => "*".to_string(),
+                    other => format!("{other:?}"),
+                },
+            })
+            .collect::<Vec<String>>()
+            .join("..")
+    };
+    let mut ws = ws(&[(
+        "c.sysml",
+        "part def A {\n\
+         \tattribute n;\n\
+         \tpart p1;\n\
+         \tpart p2;\n\
+         \tconnection c connect [1] p1 to [0..*] p2;\n\
+         \tinterface i : I [2] connect [n] p1 to p2;\n\
+         \tinterface [3] p1 to [4] p2;\n\
+         }\n\
+         interface def I;\n",
+    )]);
+    // and a second pass does the same work over without doubling it
+    ws.resolve_all();
+    assert!(ws.unresolved().is_empty(), "{:?}", ws.unresolved());
+    let model = ws.model();
+    let connectors: Vec<sysml_model::ElementId> = model
+        .ids()
+        .filter(|&id| model.kind(id).is_a(ElementKind::ConnectionUsage))
+        .filter(|&id| ws.element_file(id) == Some(0))
+        .collect();
+    let mut seen = Vec::new();
+    for connector in connectors {
+        let own = model
+            .maybe(connector, "multiplicity")
+            .map(|_| bounds(model, connector));
+        let ends: Vec<Option<String>> = model
+            .owned(connector)
+            .iter()
+            .copied()
+            .filter(|&it| model.flag(it, "isEnd"))
+            .map(|end| {
+                let crossing: Vec<sysml_model::ElementId> = model
+                    .owned(end)
+                    .iter()
+                    .copied()
+                    .filter(|&it| model.kind(it) == ElementKind::Feature)
+                    .collect();
+                assert!(crossing.len() <= 1, "one cross multiplicity at most");
+                crossing.first().map(|&cross| {
+                    assert_eq!(
+                        sysml_model::membership_kind(model, cross),
+                        ElementKind::OwningMembership,
+                        "`OwnedCrossMultiplicityMember : OwningMembership`"
+                    );
+                    bounds(model, cross)
+                })
+            })
+            .collect();
+        // nothing counts the end that writes no `[n]`, and the builder
+        // leaves no cross multiplicity unclaimed beside the ends
+        assert!(model
+            .owned(connector)
+            .iter()
+            .all(|&it| model.kind(it) != ElementKind::Feature));
+        seen.push((model.name(connector).map(str::to_string), own, ends));
+    }
+    let expected = |name: Option<&str>, own: Option<&str>, ends: [Option<&str>; 2]| {
+        (
+            name.map(str::to_string),
+            own.map(str::to_string),
+            ends.iter()
+                .map(|it| it.map(str::to_string))
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        seen,
+        [
+            expected(Some("c"), None, [Some("1"), Some("0..*")]),
+            expected(
+                Some("i"),
+                Some("2"),
+                [Some("FeatureReferenceExpression"), None]
+            ),
+            expected(None, None, [Some("3"), Some("4")]),
+        ]
+    );
+    // and the name a bound writes is a reference like any other
+    let n = model
+        .ids()
+        .find(|&id| model.name(id) == Some("n"))
+        .expect("`n` is declared");
+    assert_eq!(ws.references_to(n).count(), 1, "`[n]` names `n`");
 }

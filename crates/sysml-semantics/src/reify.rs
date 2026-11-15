@@ -11,7 +11,7 @@
 //! what an end reached through a chain participates in.
 
 use sysml_model::{ElementId, ElementKind, Value};
-use sysml_syntax::{SyntaxKind, SyntaxNode, TextRange};
+use sysml_syntax::{Dialect, SyntaxKind, SyntaxNode, TextRange};
 
 use crate::syntax::*;
 use crate::{Reached, Reference, ResolveStats, Workspace};
@@ -89,88 +89,29 @@ impl Workspace {
         part: SyntaxKind,
         target: ElementId,
     ) {
-        let (kind, source_prop, target_prop) = match part {
-            SyntaxKind::SUBSETTING if is_definition => (
-                ElementKind::Subclassification,
-                "subclassifier",
-                "superclassifier",
-            ),
-            SyntaxKind::SUBSETTING => (
-                ElementKind::Subsetting,
-                "subsettingFeature",
-                "subsettedFeature",
-            ),
-            SyntaxKind::REDEFINITION => (
-                ElementKind::Redefinition,
-                "redefiningFeature",
-                "redefinedFeature",
-            ),
-            SyntaxKind::REFERENCES => (
-                ElementKind::ReferenceSubsetting,
-                "referencingFeature",
-                "referencedFeature",
-            ),
-            // `datatype N :> V, A intersects V, A;` -- a type written as
-            // the union, intersection or difference of others, and
-            // `feature chain chains source.target` a feature written as
-            // the chain through them
-            SyntaxKind::UNIONS_KW => (ElementKind::Unioning, "typeUnioned", "unioningType"),
-            SyntaxKind::INTERSECTS_KW => (
-                ElementKind::Intersecting,
-                "typeIntersected",
-                "intersectingType",
-            ),
-            SyntaxKind::DIFFERENCES_KW => (
-                ElementKind::Differencing,
-                "typeDifferenced",
-                "differencingType",
-            ),
-            SyntaxKind::CHAINS_KW => (
-                ElementKind::FeatureChaining,
-                "featureChained",
-                "chainingFeature",
-            ),
-            // `feature h2 ... disjoint from h1;` -- what a feature is
-            // declared not to overlap. Written this way there is no
-            // statement to hang it off, and until it was read the name
-            // after `from` was looked at by nothing: a typo in one was a
-            // model this toolchain called sound.
-            SyntaxKind::DISJOINT_KW => (ElementKind::Disjoining, "typeDisjoined", "disjoiningType"),
-            // `feature h inverse of g;` -- what `h` is the inverse of, which
-            // fell through to the typing below and was read as `h : g`
-            SyntaxKind::INVERSE_KW => (
-                ElementKind::FeatureInverting,
-                "featureInverted",
-                "invertingFeature",
-            ),
-            // A cross subsetting is a subsetting, so the end that
-            // declares it is its `subsettingFeature` like any other;
-            // what it crosses to is the narrower name. Its
-            // `crossingFeature` is derived from which feature owns it,
-            // so nothing is stored for that.
-            SyntaxKind::CROSSES_KW => (
-                ElementKind::CrossSubsetting,
-                "subsettingFeature",
-                "crossedFeature",
-            ),
-            // `class B conjugates A;` -- the conjugation is owned by the
-            // type that is conjugated, which is what tells it from
-            // `conjugation c conjugate B conjugates A;`, where the
-            // namespace owns it and B is not itself a conjugated type.
-            SyntaxKind::CONJUGATES_KW => {
-                (ElementKind::Conjugation, "conjugatedType", "originalType")
-            }
-            // `member feature inCart : ShoppingCart featured by
-            // Product_Account;` -- what features a feature, written
-            // beside the declaration rather than as a statement of its
-            // own. Without it the feature is featured by whatever owns
-            // it, which is what it says the feature is *not*.
-            SyntaxKind::FEATURED_KW => {
-                (ElementKind::TypeFeaturing, "featureOfType", "featuringType")
-            }
-            // relationship_parts only yields the kinds above plus TYPING
-            _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
-        };
+        // `port pt : ~PD;` types the port by the conjugate `PD`
+        // owns, and the grammar writes that typing as a metaclass of
+        // its own: `ConjugatedPortTyping : ConjugatedPortTyping = '~'
+        // originalPortDefinition = ~[QualifiedName]`. It is a typing
+        // still, and its `conjugatedPortDefinition` is its `type` by
+        // another name -- the metamodel redefines the one as the
+        // other -- so both are kept, and whatever reads the type of a
+        // typing reads this one too.
+        let (kind, source_prop, target_prop) = relationship_for(part, is_definition);
+        if kind == ElementKind::FeatureTyping
+            && self.model.kind(target) == ElementKind::ConjugatedPortDefinition
+        {
+            self.reified(
+                elem,
+                ElementKind::ConjugatedPortTyping,
+                &[
+                    ("typedFeature", Value::Ref(elem)),
+                    ("type", Value::Ref(target)),
+                    ("conjugatedPortDefinition", Value::Ref(target)),
+                ],
+            );
+            return;
+        }
         self.reified(
             elem,
             kind,
@@ -189,6 +130,9 @@ impl Workspace {
     /// makes the two ends of such a relationship differ at all.
     ///
     /// A single name is no chain: that is the feature the name reached.
+    /// `owner` is the relationship the operand is an end of, which owns the
+    /// chain as its `ownedRelatedElement` and is where the steps are looked
+    /// up from.
     pub(crate) fn chained(
         &mut self,
         owner: ElementId,
@@ -199,16 +143,100 @@ impl Workspace {
         if steps.len() < 2 {
             return target;
         }
+        let chain = self.chain_steps(owner, segments, steps);
+        self.chain_feature(owner, chain)
+    }
+    /// The relationship a declaration clause writes, where what it names is
+    /// written as a chain: `feature sub subsets f.x;`, `crosses b.c1`.
+    ///
+    /// The relationship comes first and the chain is its own. Made ahead of
+    /// it, as `chained` once made it, the chain `Feature` was owned
+    /// by the declaring feature through a `FeatureMembership` -- so `sub` came
+    /// to have a feature named `x` among its `ownedFeature`s, which nothing
+    /// wrote -- and the relationship held a feature it did not own. The
+    /// grammar has the operand as `ownedRelatedElement += FeatureChain`, and
+    /// each step under it a `FeatureChaining`, as `chains f.x` writes.
+    pub(crate) fn reify_through(
+        &mut self,
+        elem: ElementId,
+        is_definition: bool,
+        part: SyntaxKind,
+        written: (&[String], &[usize]),
+        target: ElementId,
+    ) {
+        let (segments, steps) = written;
+        if steps.len() < 2 {
+            return self.reify(elem, is_definition, part, target);
+        }
+        // the steps are named from where the declaration is, not from
+        // inside the relationship that will hold them
+        let chain = self.chain_steps(elem, segments, steps);
+        let (kind, source_prop, target_prop) = relationship_for(part, is_definition);
+        // the one an earlier pass made, as `reified` takes it:
+        // the same declaring end, and a chain of its own through the same
+        // steps
+        let already = self.model.owned(elem).iter().copied().find(|&child| {
+            self.model.kind(child) == kind
+                && !self.claimed.contains(&child)
+                && self.model.maybe(child, source_prop) == Some(&Value::Ref(elem))
+                && self
+                    .model
+                    .maybe(child, target_prop)
+                    .and_then(Value::as_id)
+                    .is_some_and(|feature| {
+                        self.model.owner(feature) == Some(child)
+                            && self.model.chaining_feature(feature) == chain.as_slice()
+                    })
+        });
+        let relationship = match already {
+            Some(child) => child,
+            None => {
+                let child = self.model.create(kind);
+                self.model.add_owned(elem, child);
+                self.try_set(child, source_prop, Value::Ref(elem));
+                child
+            }
+        };
+        self.claimed.insert(relationship);
+        let feature = self.chain_feature(relationship, chain);
+        self.try_set(relationship, target_prop, Value::Ref(feature));
+    }
+    /// What each step of a dotted operand resolved to, from `scope`.
+    fn chain_steps(
+        &mut self,
+        scope: ElementId,
+        segments: &[String],
+        steps: &[usize],
+    ) -> Vec<ElementId> {
         // the whole path already resolved, so every prefix of it does too
-        let chain: Vec<ElementId> = steps
+        steps
             .iter()
-            .filter_map(|&depth| self.resolve_from(owner, &segments[..depth]))
-            .collect();
-        self.reified(
-            owner,
+            .filter_map(|&depth| self.resolve_from(scope, &segments[..depth]))
+            .collect()
+    }
+    /// Stand the `Feature` a chain is under `holder`, with a
+    /// `FeatureChaining` for each step.
+    ///
+    /// `chainingFeature` is derived -- "the chainingFeatures of its
+    /// ownedFeatureChainings" -- and kept as well, since that is where
+    /// everything reading a chain looks.
+    fn chain_feature(&mut self, holder: ElementId, chain: Vec<ElementId>) -> ElementId {
+        let feature = self.reified(
+            holder,
             ElementKind::Feature,
-            &[("chainingFeature", Value::RefList(chain))],
-        )
+            &[("chainingFeature", Value::RefList(chain.clone()))],
+        );
+        for step in chain {
+            self.reified(
+                feature,
+                ElementKind::FeatureChaining,
+                &[
+                    ("featureChained", Value::Ref(feature)),
+                    ("chainingFeature", Value::Ref(step)),
+                ],
+            );
+        }
+        feature
     }
     /// The two types a relationship written as its own statement relates.
     ///
@@ -349,7 +377,12 @@ impl Workspace {
                         target,
                     );
                     related.push(target);
-                    reached.push(Reached::Written(segments, operand_chain_steps(&operand)));
+                    let cross = self.cross_multiplicity(id, &operand);
+                    reached.push(Reached::Written(
+                        segments,
+                        operand_chain_steps(&operand),
+                        cross,
+                    ));
                 }
                 None => {
                     self.record_miss(file, range, &segments, stats);
@@ -440,8 +473,10 @@ impl Workspace {
             .unwrap_or(id);
         for step in reached {
             match step {
-                Reached::Written(segments, steps) => self.reify_end(holder, &segments, &steps),
-                Reached::Beside(target) => self.end_reaching(holder, vec![target]),
+                Reached::Written(segments, steps, cross) => {
+                    self.reify_end(holder, &segments, &steps, cross)
+                }
+                Reached::Beside(target) => self.end_reaching(holder, vec![target], None),
             }
         }
         if !related.is_empty() {
@@ -849,7 +884,13 @@ impl Workspace {
     /// The final target alone cannot say which part an end belongs to --
     /// `w1.hub` and `w2.hub` resolve to the same port of the same type --
     /// so the chain is what an interconnection view needs.
-    fn reify_end(&mut self, connector: ElementId, segments: &[String], steps: &[usize]) {
+    fn reify_end(
+        &mut self,
+        connector: ElementId,
+        segments: &[String],
+        steps: &[usize],
+        cross: Option<ElementId>,
+    ) {
         let mut chain = Vec::new();
         // the full path already resolved, so every prefix normally does too
         for &depth in steps {
@@ -857,15 +898,42 @@ impl Workspace {
                 chain.push(step);
             }
         }
-        self.end_reaching(connector, chain);
+        self.end_reaching(connector, chain, cross);
     }
-    /// Stand a `Feature` for one connector end, reaching what it names.
+    /// The cross multiplicity written before an end: the `[1]` of `connect
+    /// [1] p1 to [0..*] p2`.
+    ///
+    /// The builder stands it up as the connector's, since the end it
+    /// counts is only made here; the clause it was built from says which
+    /// it is. Taken by its end on an earlier pass, it is under that end.
+    fn cross_multiplicity(&self, connector: ElementId, operand: &SyntaxNode) -> Option<ElementId> {
+        let clause = std::iter::successors(operand.prev_sibling_or_token(), |it| {
+            it.prev_sibling_or_token()
+        })
+        .find(|it| !it.kind().is_trivia())?
+        .into_node()
+        .filter(|it| it.kind() == SyntaxKind::MULTIPLICITY)?;
+        let owned = self.model.owned(connector);
+        owned
+            .iter()
+            .chain(owned.iter().flat_map(|&end| self.model.owned(end)))
+            .copied()
+            .find(|it| self.source.get(it) == Some(&clause))
+    }
+    /// Stand a feature for one connector end, reaching what it names: a
+    /// `ReferenceUsage` where SysML writes it and a `Feature` where KerML
+    /// does.
     ///
     /// One name is not a chain: `validateFeatureChainingFeatureNotOne`
     /// gives a feature either no chaining features or more than one, so
     /// an end naming a single feature refers to it through a subsetting
     /// instead. Read either way by [`sysml_model::end_reaches`].
-    fn end_reaching(&mut self, connector: ElementId, chain: Vec<ElementId>) {
+    fn end_reaching(
+        &mut self,
+        connector: ElementId,
+        chain: Vec<ElementId>,
+        cross: Option<ElementId>,
+    ) {
         // What a connector relates it relates through ends of its own:
         // `EndFeatureMembership` is how the standard owns one, which is also what
         // tells such a feature from a member the source wrote as a reference.
@@ -876,15 +944,30 @@ impl Workspace {
         // A flow relates its ends through `FlowEnd`s, where the last step of what
         // one names is not part of the path but the thing that flows.
         let flowing = self.model.kind(connector).is_a(ElementKind::Flow);
+        // And the two languages stand a different element for an end
+        // that is no flow's. KerML writes `ConnectorEnd : Feature`; SysML
+        // writes `ConnectorEnd : ReferenceUsage`, since what a usage owns
+        // is a usage, and an end refers to what it connects rather than
+        // being part of the connection. Which one is the file's to say,
+        // not the connector's: the grammar gives a SysML transition's
+        // `Succession` its target end through `ConnectorEndMember` too.
+        let sysml = Dialect::from_path(self.file_name(self.file_of(connector))) == Dialect::SysML;
         let end = self.reified(
             connector,
-            match flowing {
-                true => ElementKind::FlowEnd,
-                false => ElementKind::Feature,
+            match (flowing, sysml) {
+                (true, _) => ElementKind::FlowEnd,
+                (false, true) => ElementKind::ReferenceUsage,
+                (false, false) => ElementKind::Feature,
             },
             &[("isEnd", Value::Bool(true))],
         );
         self.counts_one(end);
+        // `ConnectorEnd = ( ownedRelationship +=
+        // OwnedCrossMultiplicityMember )? ...`: how many at the far end go
+        // with one here is the end's to say, through a feature of its own
+        if let Some(cross) = cross.filter(|&it| self.model.owner(it) != Some(end)) {
+            self.model.add_owned(end, cross);
+        }
         let chain = match flowing {
             // an end is reified only for an operand that resolved, so
             // there is always a last step to be the thing that flows
@@ -921,8 +1004,16 @@ impl Workspace {
     /// flows is `fuelOut`. The standard keeps them apart -- the path is what
     /// the end refers to, the feature is the one thing it owns -- and
     /// [`sysml_model::end_reaches`] puts the two back together.
+    ///
+    /// Which element it is is the file's to say, as for an end: `FlowFeature
+    /// : ReferenceUsage` in SysML, where what a usage owns is a usage, and
+    /// `FlowFeature : Feature` in KerML.
     fn flowing_feature(&mut self, end: ElementId, flows: ElementId) {
-        let feature = self.reified(end, ElementKind::Feature, &[]);
+        let kind = match Dialect::from_path(self.file_name(self.file_of(end))) {
+            Dialect::SysML => ElementKind::ReferenceUsage,
+            Dialect::KerML => ElementKind::Feature,
+        };
+        let feature = self.reified(end, kind, &[]);
         self.reified(
             feature,
             ElementKind::Redefinition,
@@ -1137,5 +1228,91 @@ impl Workspace {
         if self.model.kind(id).feature(prop).is_some() {
             self.model.set(id, prop, value);
         }
+    }
+}
+
+/// The relationship a declaration clause writes, and which of its ends is
+/// the declaring element and which the one it names.
+fn relationship_for(
+    part: SyntaxKind,
+    is_definition: bool,
+) -> (ElementKind, &'static str, &'static str) {
+    match part {
+        SyntaxKind::SUBSETTING if is_definition => (
+            ElementKind::Subclassification,
+            "subclassifier",
+            "superclassifier",
+        ),
+        SyntaxKind::SUBSETTING => (
+            ElementKind::Subsetting,
+            "subsettingFeature",
+            "subsettedFeature",
+        ),
+        SyntaxKind::REDEFINITION => (
+            ElementKind::Redefinition,
+            "redefiningFeature",
+            "redefinedFeature",
+        ),
+        SyntaxKind::REFERENCES => (
+            ElementKind::ReferenceSubsetting,
+            "referencingFeature",
+            "referencedFeature",
+        ),
+        // `datatype N :> V, A intersects V, A;` -- a type written as
+        // the union, intersection or difference of others, and
+        // `feature chain chains source.target` a feature written as
+        // the chain through them
+        SyntaxKind::UNIONS_KW => (ElementKind::Unioning, "typeUnioned", "unioningType"),
+        SyntaxKind::INTERSECTS_KW => (
+            ElementKind::Intersecting,
+            "typeIntersected",
+            "intersectingType",
+        ),
+        SyntaxKind::DIFFERENCES_KW => (
+            ElementKind::Differencing,
+            "typeDifferenced",
+            "differencingType",
+        ),
+        SyntaxKind::CHAINS_KW => (
+            ElementKind::FeatureChaining,
+            "featureChained",
+            "chainingFeature",
+        ),
+        // `feature h2 ... disjoint from h1;` -- what a feature is
+        // declared not to overlap. Written this way there is no
+        // statement to hang it off, and until it was read the name
+        // after `from` was looked at by nothing: a typo in one was a
+        // model this toolchain called sound.
+        SyntaxKind::DISJOINT_KW => (ElementKind::Disjoining, "typeDisjoined", "disjoiningType"),
+        // `feature h inverse of g;` -- what `h` is the inverse of, which
+        // fell through to the typing below and was read as `h : g`
+        SyntaxKind::INVERSE_KW => (
+            ElementKind::FeatureInverting,
+            "featureInverted",
+            "invertingFeature",
+        ),
+        // A cross subsetting is a subsetting, so the end that
+        // declares it is its `subsettingFeature` like any other;
+        // what it crosses to is the narrower name. Its
+        // `crossingFeature` is derived from which feature owns it,
+        // so nothing is stored for that.
+        SyntaxKind::CROSSES_KW => (
+            ElementKind::CrossSubsetting,
+            "subsettingFeature",
+            "crossedFeature",
+        ),
+        // `class B conjugates A;` -- the conjugation is owned by the
+        // type that is conjugated, which is what tells it from
+        // `conjugation c conjugate B conjugates A;`, where the
+        // namespace owns it and B is not itself a conjugated type.
+        SyntaxKind::CONJUGATES_KW => (ElementKind::Conjugation, "conjugatedType", "originalType"),
+        // `member feature inCart : ShoppingCart featured by
+        // Product_Account;` -- what features a feature, written
+        // beside the declaration rather than as a statement of its
+        // own. Without it the feature is featured by whatever owns
+        // it, which is what it says the feature is *not*.
+        SyntaxKind::FEATURED_KW => (ElementKind::TypeFeaturing, "featureOfType", "featuringType"),
+        // relationship_parts only yields the kinds above plus TYPING
+        _ => (ElementKind::FeatureTyping, "typedFeature", "type"),
     }
 }

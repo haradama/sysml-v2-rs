@@ -232,8 +232,9 @@ pub struct Suggestion {
 
 /// How a connector end reached what it relates.
 enum Reached {
-    /// the name the statement wrote
-    Written(Vec<String>, Vec<usize>),
+    /// the name the statement wrote, and the cross multiplicity the
+    /// builder stood up from the `[n]` written before it
+    Written(Vec<String>, Vec<usize>, Option<ElementId>),
     /// the neighbour standing in for an end the statement left unwritten
     Beside(ElementId),
 }
@@ -1654,8 +1655,9 @@ pub(crate) fn reaches(model: &Model, elem: ElementId, base: ElementId) -> bool {
                 ElementKind::Subclassification => "superclassifier",
                 ElementKind::Subsetting => "subsettedFeature",
                 ElementKind::Redefinition => "redefinedFeature",
-                ElementKind::FeatureTyping => "type",
                 ElementKind::ReferenceSubsetting => "referencedFeature",
+                // a `ConjugatedPortTyping` among them
+                kind if kind.is_a(ElementKind::FeatureTyping) => "type",
                 _ => continue,
             };
             if let Some(Value::Ref(target)) = model.maybe(child, target) {

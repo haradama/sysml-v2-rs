@@ -1109,13 +1109,20 @@ enum Val {
         member: ElementId,
     },
     Set(Vec<Val>),
+    /// A collection in no order -- a `Set` or a `Bag` -- whose elements
+    /// are still kept in the order they arrived, for whatever reads the
+    /// first of them. Two of these are equal holding the same, however
+    /// each came to be in the order it is: `crossFeature.type->asSet() =
+    /// type->asSet()` asks whether a cross feature has the types its end
+    /// has, not whether it lists them the same way round.
+    Bag(Vec<Val>),
 }
 
 impl Val {
     /// The elements of a value, whether it is one thing or many.
     fn many(&self) -> Vec<Val> {
         match self {
-            Val::Set(items) => items.clone(),
+            Val::Set(items) | Val::Bag(items) => items.clone(),
             Val::Null => Vec::new(),
             other => vec![other.clone()],
         }
@@ -1124,8 +1131,18 @@ impl Val {
     fn unknown(&self) -> Option<Val> {
         match self {
             Val::Unknown(_) => Some(self.clone()),
-            Val::Set(items) => items.iter().find_map(Val::unknown),
+            Val::Set(items) | Val::Bag(items) => items.iter().find_map(Val::unknown),
             _ => None,
+        }
+    }
+
+    /// `items`, as a collection kept in order or not as this one is.
+    /// What is selected from a set or collected over one has no order
+    /// either; anything else keeps the one it came in.
+    fn like(&self, items: Vec<Val>) -> Val {
+        match self {
+            Val::Bag(_) => Val::Bag(items),
+            _ => Val::Set(items),
         }
     }
 }
@@ -1162,12 +1179,16 @@ impl Scope<'_> {
             // `Sequence{2..n}` is the whole numbers from two to n, not
             // a collection holding one collection: what a range comes
             // to is already the elements.
-            Expr::Collection(items) => Val::Set(
-                items
+            Expr::Collection(items, ordered) => {
+                let items = items
                     .iter()
                     .flat_map(|item| self.eval(item).many())
-                    .collect(),
-            ),
+                    .collect();
+                match ordered {
+                    true => Val::Set(items),
+                    false => Val::Bag(items),
+                }
+            }
             Expr::Name(name) => self.name(name),
             Expr::Not(inner) => match self.eval(inner) {
                 Val::Bool(it) => Val::Bool(!it),
@@ -1265,18 +1286,18 @@ impl Scope<'_> {
             Val::Unknown(_) => target.clone(),
             Val::Null => Val::Null,
             // OCL collects a property over a collection
-            Val::Set(items) => {
+            Val::Set(items) | Val::Bag(items) => {
                 let mut out = Vec::new();
                 for item in items {
                     // a collection never holds nothing -- `Set{null}`
                     // is the empty collection -- so what comes back is
                     // either one thing or several
                     match self.navigate(&item.clone(), name) {
-                        Val::Set(more) => out.extend(more),
+                        Val::Set(more) | Val::Bag(more) => out.extend(more),
                         one => out.push(one),
                     }
                 }
-                Val::Set(out)
+                target.like(out)
             }
             Val::Elem(elem) => self.property(*elem, name),
             Val::Membership { owner, member } => self.membership_property(*owner, *member, name),
@@ -1461,6 +1482,21 @@ impl Scope<'_> {
         self.ws.named_globally(qualified)
     }
 
+    /// Whether a name written inside `connector`'s own statement resolved
+    /// to nothing -- which, among what a connector writes, is an end.
+    fn an_end_resolves_to_nothing(&self, connector: ElementId) -> bool {
+        let (Some(file), Some((written, _))) = (
+            self.ws.element_file(connector),
+            self.ws.element_ranges(connector),
+        ) else {
+            return false;
+        };
+        self.ws
+            .unresolved()
+            .iter()
+            .any(|it| it.file == file && written.contains_range(it.range))
+    }
+
     /// One property of one element, or [`Val::Unknown`] where this model
     /// does not carry it.
     fn property(&mut self, elem: ElementId, name: &str) -> Val {
@@ -1493,6 +1529,29 @@ impl Scope<'_> {
             {
                 return Val::Bool(evaluable);
             }
+        }
+        // A connector's ends are what its operands resolved to, and an
+        // operand that resolved to nothing is no end at all: counted, it
+        // says `succession step1 then camera.focusedState;` relates one
+        // feature, which is not what the model says but what the
+        // workspace failed to find. The name is reported as unresolved
+        // already; the count is not this model's to be judged by.
+        if matches!(
+            name,
+            "relatedFeature"
+                | "relatedElement"
+                | "connectorEnd"
+                | "sourceFeature"
+                | "targetFeature"
+                | "target"
+                | "source"
+        ) && self.ws.model().kind(elem).is_a(ElementKind::Connector)
+            && self.an_end_resolves_to_nothing(elem)
+        {
+            return Val::Unknown(format!(
+                "an end of `{}` resolves to nothing",
+                self.ws.qualified_name_of(elem)
+            ));
         }
         let model = self.ws.model();
         let name = written_as_meant(model.kind(elem), name);
@@ -1896,15 +1955,15 @@ impl Scope<'_> {
         // `supertypes(excludeImplied)->reject(...).nonPrivateMemberships(...)`
         // -- an operation written of many things is written of each of
         // them, the way a property read of many is read of each.
-        if let Val::Set(items) = &target {
+        if let Val::Set(items) | Val::Bag(items) = &target {
             let mut out = Vec::new();
             for item in items.clone() {
                 match self.operation(&item, name, args) {
-                    Val::Set(more) => out.extend(more),
+                    Val::Set(more) | Val::Bag(more) => out.extend(more),
                     one => out.push(one),
                 }
             }
-            return Val::Set(out);
+            return target.like(out);
         }
         self.operation(&target, name, args)
     }
@@ -1946,12 +2005,13 @@ impl Scope<'_> {
             "notEmpty" => Val::Bool(!items.is_empty()),
             // A `Set` and an `OrderedSet` hold each value once; a `Bag`
             // and a `Sequence` hold what they were given.
-            "asSet" | "asOrderedSet" => {
-                Val::Set(once_each(items.iter().flat_map(Val::many).collect()))
-            }
-            "asBag" | "asSequence" | "flatten" => {
-                Val::Set(items.iter().flat_map(Val::many).collect())
-            }
+            // and a `Set` and a `Bag` keep no order, which is what
+            // comparing two of them depends on
+            "asSet" => Val::Bag(once_each(items.iter().flat_map(Val::many).collect())),
+            "asOrderedSet" => Val::Set(once_each(items.iter().flat_map(Val::many).collect())),
+            "asBag" => Val::Bag(items.iter().flat_map(Val::many).collect()),
+            "asSequence" => Val::Set(items.iter().flat_map(Val::many).collect()),
+            "flatten" => target.like(items.iter().flat_map(Val::many).collect()),
             "first" => items.first().cloned().unwrap_or(Val::Null),
             "last" => items.last().cloned().unwrap_or(Val::Null),
             "at" => match taken {
@@ -1996,11 +2056,11 @@ impl Scope<'_> {
             "including" => {
                 let mut out = items;
                 out.push(taken);
-                Val::Set(out)
+                target.like(out)
             }
             "excluding" => {
                 let dropped = taken;
-                Val::Set(
+                target.like(
                     items
                         .into_iter()
                         .filter(|item| equal(item, &dropped) != Val::Bool(true))
@@ -2017,11 +2077,11 @@ impl Scope<'_> {
             "union" => {
                 let mut out = items;
                 out.extend(taken.many());
-                Val::Set(once_each(out))
+                target.like(once_each(out))
             }
             "intersection" => {
                 let other = taken.many();
-                Val::Set(
+                target.like(
                     items
                         .into_iter()
                         .filter(|item| other.iter().any(|it| equal(item, it) == Val::Bool(true)))
@@ -2074,7 +2134,7 @@ impl Scope<'_> {
                         kind.name()
                     ));
                 }
-                Val::Set(kept)
+                target.like(kept)
             }
             "closure" => {
                 // The transitive closure: the body read of each element, then of
@@ -2097,7 +2157,7 @@ impl Scope<'_> {
                         }
                     }
                 }
-                Val::Set(found)
+                target.like(found)
             }
             "forAll" | "exists" | "select" | "reject" | "collect" | "any" => {
                 let mut kept = Vec::new();
@@ -2110,7 +2170,7 @@ impl Scope<'_> {
                         // "the result is flattened": a `collect` whose
                         // body comes to many things adds each of them,
                         // not the collection they arrived in
-                        ("collect", Val::Set(more)) => kept.extend(more.clone()),
+                        ("collect", Val::Set(more) | Val::Bag(more)) => kept.extend(more.clone()),
                         ("collect", _) => kept.push(value),
                         ("forAll", Val::Bool(false)) => return Val::Bool(false),
                         ("exists", Val::Bool(true)) => return Val::Bool(true),
@@ -2124,7 +2184,9 @@ impl Scope<'_> {
                     "forAll" => Val::Bool(true),
                     "exists" => Val::Bool(false),
                     "any" => kept.first().cloned().unwrap_or(Val::Null),
-                    _ => Val::Set(kept),
+                    // what is collected over a set has no order, as what
+                    // is selected from one has none
+                    _ => target.like(kept),
                 }
             }
             _ => Val::Unknown(format!("`->{name}` is not implemented")),
@@ -2483,7 +2545,36 @@ fn equal(left: &Val, right: &Val) -> Val {
         // a property with nothing in it is the empty collection or null
         // depending on how the metamodel declared it, and a rule asking
         // whether it is null means the same by both
-        (Val::Null, Val::Set(items)) | (Val::Set(items), Val::Null) => Val::Bool(items.is_empty()),
+        (Val::Null, Val::Set(items) | Val::Bag(items))
+        | (Val::Set(items) | Val::Bag(items), Val::Null) => Val::Bool(items.is_empty()),
+        // A set or a bag is the same as another holding the same, each
+        // as many times, in whatever order: `Set{1, 2} = Set{2, 1}`.
+        // Only where both keep an order does the order count.
+        (Val::Bag(one), Val::Bag(other) | Val::Set(other)) | (Val::Set(one), Val::Bag(other)) => {
+            if one.len() != other.len() {
+                return Val::Bool(false);
+            }
+            let mut unmatched: Vec<&Val> = other.iter().collect();
+            for item in one {
+                match unmatched
+                    .iter()
+                    .position(|it| equal(item, it) == Val::Bool(true))
+                {
+                    Some(at) => {
+                        unmatched.swap_remove(at);
+                    }
+                    None => return Val::Bool(false),
+                }
+            }
+            Val::Bool(true)
+        }
+        (Val::Set(one), Val::Set(other)) => Val::Bool(
+            one.len() == other.len()
+                && one
+                    .iter()
+                    .zip(other)
+                    .all(|(a, b)| equal(a, b) == Val::Bool(true)),
+        ),
         _ => Val::Bool(left == right),
     }
 }
@@ -3360,6 +3451,37 @@ mod tests {
             Some(false)
         );
         assert_eq!(ws.judge("self.specializes(self)", car), Some(true));
+    }
+
+    /// A `Set` and a `Bag` keep no order, so two of them holding the same
+    /// are equal however each lists it; an `OrderedSet` and a `Sequence`
+    /// keep one, and are equal only in the same order. Compared as lists,
+    /// `validateFeatureCrossFeatureType` -- `crossFeature.type->asSet() =
+    /// type->asSet()` -- failed an end whose cross feature named the
+    /// same two types the other way round.
+    #[test]
+    fn a_set_is_equal_to_another_holding_the_same_in_any_order() {
+        let (mut ws, car) = about("part def Car;\n", "Car");
+        for (ocl, holds) in [
+            ("Set{1, 2} = Set{2, 1}", true),
+            ("Bag{1, 2, 2} = Bag{2, 1, 2}", true),
+            ("Bag{1, 2, 2} = Bag{1, 1, 2}", false),
+            ("Set{1, 2} = Set{1, 3}", false),
+            ("Sequence{1, 2}->asSet() = Sequence{2, 1}->asSet()", true),
+            ("Set{1, 2}->select(n | n > 0) = Set{2, 1}", true),
+            ("Set{1, 2}->including(3) = Set{3, 2, 1}", true),
+            ("Set{1, 2}->collect(n | n) = Bag{2, 1}", true),
+            ("Set{Set{1, 2}} = Set{Set{2, 1}}", true),
+            ("Sequence{1, 2} = Sequence{2, 1}", false),
+            ("OrderedSet{1, 2} = OrderedSet{2, 1}", false),
+            (
+                "Sequence{1, 2}->asOrderedSet() = Sequence{2, 1}->asOrderedSet()",
+                false,
+            ),
+            ("Sequence{1, 2} = Sequence{1, 2}", true),
+        ] {
+            assert_eq!(ws.judge(ocl, car), Some(holds), "{ocl}");
+        }
     }
 
     /// A number the model stores, of the two kinds it stores.

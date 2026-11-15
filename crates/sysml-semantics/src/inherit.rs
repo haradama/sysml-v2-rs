@@ -110,12 +110,24 @@ impl Workspace {
                 // `class Occurrence specializes Anything disjoint from
                 // DataValue` is no `DataValue`, and read as one every
                 // part had the `self` of a data value beside its own.
+                //
+                // Nor do `featured by` and `inverse of` specialize. The
+                // first says whose feature this one is -- a
+                // `TypeFeaturing`, which the standard counts among a
+                // feature's featuring types and never among its
+                // supertypes -- and the second that it runs the other way
+                // along the same pairs, a `FeatureInverting`. Read as
+                // specializations, `feature fb : A featured by B` had the
+                // features of a `B` as though it were one, and a name that
+                // `B` alone declares resolved inside it.
                 if matches!(
                     part,
                     SyntaxKind::UNIONS_KW
                         | SyntaxKind::INTERSECTS_KW
                         | SyntaxKind::DIFFERENCES_KW
                         | SyntaxKind::DISJOINT_KW
+                        | SyntaxKind::FEATURED_KW
+                        | SyntaxKind::INVERSE_KW
                 ) {
                     continue;
                 }
@@ -245,7 +257,8 @@ impl Workspace {
                     // its trigger accepts, which is how `accept s : Sig if
                     // s.ok` reaches the `ok` of a `Sig`
                     let named = match self.model.kind(owned) {
-                        ElementKind::FeatureTyping => "type",
+                        // a `ConjugatedPortTyping` among them
+                        kind if kind.is_a(ElementKind::FeatureTyping) => "type",
                         ElementKind::Subsetting => "subsettedFeature",
                         _ => return None,
                     };

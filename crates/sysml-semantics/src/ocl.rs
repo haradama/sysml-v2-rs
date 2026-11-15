@@ -25,8 +25,10 @@ pub(crate) enum Expr {
     Name(String),
     /// `TransitionFeatureKind::guard`.
     Enum(String, String),
-    /// `Set{...}`, `Sequence{...}`.
-    Collection(Vec<Expr>),
+    /// `Set{...}`, `Sequence{...}`, and whether what is in it is in an
+    /// order: an `OrderedSet` and a `Sequence` are, a `Set` and a `Bag`
+    /// are not, and two of those are equal holding the same in any order.
+    Collection(Vec<Expr>, bool),
     Not(Box<Expr>),
     Binary(Op, Box<Expr>, Box<Expr>),
     /// `if c then a else b endif`.
@@ -466,12 +468,14 @@ impl Parser {
                     "true" => Ok(Expr::Bool(true)),
                     "false" => Ok(Expr::Bool(false)),
                     // `Set{a, b}` and its kin: what is in it is what
-                    // matters, and which kind of collection it is does
-                    // not, since nothing here counts duplicates. The
-                    // metamodel writes one of them as `Set(Element){}`,
-                    // naming the type its emptiness is empty of, which
-                    // says nothing the values do not.
+                    // matters, and of which kind of collection it is only
+                    // whether it keeps an order, since that is what
+                    // comparing two of them asks. The metamodel writes
+                    // one of them as `Set(Element){}`, naming the type
+                    // its emptiness is empty of, which says nothing the
+                    // values do not.
                     "Set" | "OrderedSet" | "Sequence" | "Bag" if self.opens_collection() => {
+                        let ordered = matches!(token.text.as_str(), "OrderedSet" | "Sequence");
                         let mut items = Vec::new();
                         if !self.eat("}") {
                             items.push(self.expression()?);
@@ -480,7 +484,7 @@ impl Parser {
                             }
                             self.expect("}")?;
                         }
-                        Ok(Expr::Collection(items))
+                        Ok(Expr::Collection(items, ordered))
                     }
                     // `FeatureDirectionKind::_'in'`: a literal whose
                     // name is a keyword is escaped the way the notation
