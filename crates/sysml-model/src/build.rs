@@ -263,6 +263,13 @@ fn build_node(
     if scope_has(node, NOT_KW) && kind.feature("isNegated").is_some() {
         model.set(id, "isNegated", Value::Bool(true));
     }
+    // `inv false { ... }` says the invariant never holds: `Invariant =
+    // ... 'inv' ( 'true' | isNegated ?= 'false' )? ...`. Only the word
+    // straight under the declaration says so; a `false` in its result is
+    // an expression of its own.
+    if has_token(node, FALSE_KW) && has_token(node, INV_KW) && kind.feature("isNegated").is_some() {
+        model.set(id, "isNegated", Value::Bool(true));
+    }
     // `end #original r1 : Req1;` -- what a connector relates, as opposed to
     // an ordinary feature it happens to own. A cross feature is written
     // after the same keyword and is not itself an end: what the `end`
@@ -339,12 +346,25 @@ fn build_node(
         // would leave the rest out of the drawing.
         let everything = has_token(node, ALL_KW) || kind.is_a(ElementKind::Expose);
         model.set(id, "isImportAll", Value::Bool(everything));
+        // `import Lib::*[@Meta];` is not an import of `Lib`: "a filtered
+        // import is equivalent to importing an implicit package that then
+        // both imports the given imported membership or namespace and has
+        // all the given filter conditions" (KerML 7.2.5.4). `FilterPackage
+        // : Package = ownedRelationship += FilterPackageImport (
+        // ownedRelationship += FilterPackageMember )+`, and the import
+        // written is a `NamespaceImport` of that package, which it owns.
+        // Written as the plain import of `Lib`, the export said every
+        // member of `Lib` arrives, whatever the brackets kept out.
+        let imports = match is_filtered(node) {
+            true => filter_package(model, node, id, everything, built),
+            false => id,
+        };
         if node
             .descendants_with_tokens()
             .filter_map(|part| part.into_token())
             .any(|token| token.kind() == STAR_STAR)
         {
-            model.set(id, "isRecursive", Value::Bool(true));
+            model.set(imports, "isRecursive", Value::Bool(true));
         }
     }
     if kind == ElementKind::TextualRepresentation {
@@ -505,6 +525,16 @@ fn build_node(
             }
             PAYLOAD | PREFIX_METADATA => {
                 build_node(model, &child, Some(id), built);
+            }
+            // `if c { ... } else if d { ... }` hands the second `if` to the
+            // first as its else branch: `IfNodeParameterMember :
+            // ParameterMembership = ownedRelatedElement += IfNode`. It is the
+            // only statement the parser nests in another.
+            CONTROL_STMT if kind == ElementKind::IfActionUsage => {
+                if let Some(branch) = build_node(model, &child, Some(id), built) {
+                    model.set(branch, "direction", Value::EnumLit("in"));
+                    model.set(branch, "isComposite", Value::Bool(false));
+                }
             }
             // `then action b;` writes the declaration inside the
             // succession it starts, but what it declares belongs to the
@@ -1275,6 +1305,56 @@ fn represent_textually(model: &mut Model, element: ElementId, text: &str) {
     model.set(written, "language", Value::String("sysml".to_string()));
     model.set(written, "body", Value::String(text.to_string()));
     model.set(written, "representedElement", Value::Ref(element));
+}
+
+/// The package a filtered import imports, built under `import`: the import
+/// of what the source named, and one `ElementFilterMembership` for each
+/// condition in brackets. Answers with the import the package owns, which
+/// is the one that names what the source wrote -- so it is the one the
+/// written text stands for, and the one a resolver reads it off.
+fn filter_package(
+    model: &mut Model,
+    node: &SyntaxNode,
+    import: ElementId,
+    everything: bool,
+    built: &mut Built,
+) -> ElementId {
+    let package = model.create(ElementKind::Package);
+    model.add_owned(import, package);
+    let named = model.create(filter_package_import_kind(node));
+    model.add_owned(package, named);
+    // `FilterPackageImport : Import = ImportDeclaration { visibility =
+    // 'public' }` -- what the package imports is what it shows -- and
+    // `import all A::*[@X]` still brings in what `A` keeps to itself
+    model.set_member_visibility(named, Vis::Public);
+    model.set(named, "isImportAll", Value::Bool(everything));
+    // the text names what the package imports, and the import written
+    // around it is reached through the package it owns
+    if let Some(entry) = built.source.iter_mut().find(|(id, _)| *id == import) {
+        entry.0 = named;
+    }
+    for filter in node
+        .children()
+        .filter(|child| child.kind() == SyntaxKind::FILTER)
+    {
+        // `FilterPackageMember : ElementFilterMembership = '['
+        // ownedRelatedElement += OwnedExpression ']'`, private as the
+        // pilot implementation has it: a condition is what the package
+        // filters by, not a member it shows
+        let membership = model.create(ElementKind::ElementFilterMembership);
+        model.add_owned(package, membership);
+        model.set_member_visibility(membership, Vis::Private);
+        let Some(written) = filter.children().next() else {
+            continue;
+        };
+        // kept as the text it was written as: what a bracketed condition
+        // names is resolved off the syntax, beside the import
+        let condition = model.create(ElementKind::Expression);
+        model.add_owned(membership, condition);
+        represent_textually(model, condition, written.text().to_string().trim());
+        model.set(membership, "condition", Value::Ref(condition));
+    }
+    named
 }
 
 /// Reify what an `accept x : T via p` clause waits for.
@@ -2085,6 +2165,30 @@ fn package_kind(node: &SyntaxNode) -> ElementKind {
     }
 }
 
+/// Does an import or an expose write filter conditions in brackets?
+fn is_filtered(node: &SyntaxNode) -> bool {
+    matches!(node.kind(), SyntaxKind::IMPORT | SyntaxKind::EXPOSE)
+        && node
+            .children()
+            .any(|child| child.kind() == SyntaxKind::FILTER)
+}
+
+/// What a filtered import is written as, once its brackets are taken
+/// off: the import its filter package owns.
+fn filter_package_import_kind(node: &SyntaxNode) -> ElementKind {
+    use SyntaxKind::*;
+    let wildcard = node
+        .children()
+        .filter(|child| child.kind() == QUALIFIED_NAME)
+        .flat_map(|qname| qname.descendants_with_tokens())
+        .filter_map(|e| e.into_token())
+        .any(|t| matches!(t.kind(), STAR | STAR_STAR));
+    match wildcard {
+        true => ElementKind::NamespaceImport,
+        false => ElementKind::MembershipImport,
+    }
+}
+
 fn import_kind(node: &SyntaxNode) -> ElementKind {
     use SyntaxKind::*;
     let wildcard = node
@@ -2094,6 +2198,10 @@ fn import_kind(node: &SyntaxNode) -> ElementKind {
     // `expose` is not an import: a view exposes what it shows, and the
     // standard has metaclasses of its own for it
     // (`exposes-compartment-element = MembershipExpose | NamespaceExpose`).
+    // `import A::Q[@Safety];` names one member and imports a namespace
+    // all the same: `NamespaceImport = ... | importedNamespace =
+    // FilterPackage`, the package that imports `A::Q` and filters it.
+    let wildcard = wildcard || is_filtered(node);
     match (node.kind() == EXPOSE, wildcard) {
         (true, true) => ElementKind::NamespaceExpose,
         (true, false) => ElementKind::MembershipExpose,
@@ -4197,6 +4305,63 @@ mod tests {
         );
     }
 
+    /// `else if q { ... }` is a branch that asks a question of its own:
+    /// `IfNodeParameterMember` hands the first `if` a second one as what it
+    /// does otherwise. Read as one statement, `q` was a loose expression and
+    /// the `else` after it the first branch's, so whatever `q` said the
+    /// action did `y` -- and never `z`.
+    #[test]
+    fn an_else_if_is_a_branch_that_asks_its_own_question() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tif p { action x; } else if q { action y; } else { action z; }\n\
+             }\n",
+        ));
+        let kinds = |id: ElementId| {
+            model
+                .owned(id)
+                .iter()
+                .map(|&c| model.kind(c))
+                .collect::<Vec<_>>()
+        };
+        let asks = |id: ElementId| {
+            let asked = model
+                .owned(id)
+                .iter()
+                .copied()
+                .find(|&c| model.kind(c) == ElementKind::Expression)
+                .expect("the branch says what it asks");
+            model
+                .maybe(model.owned(asked)[0], "body")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        let first = model.owned(roots[0])[0];
+        assert_eq!(
+            kinds(first),
+            [
+                ElementKind::Expression,
+                ElementKind::ActionUsage,
+                ElementKind::IfActionUsage
+            ]
+        );
+        assert_eq!(asks(first).as_deref(), Some("p"));
+        let otherwise = model.owned(first)[2];
+        assert_eq!(
+            model.maybe(otherwise, "direction"),
+            Some(&Value::EnumLit("in"))
+        );
+        assert_eq!(
+            kinds(otherwise),
+            [
+                ElementKind::Expression,
+                ElementKind::ActionUsage,
+                ElementKind::ActionUsage
+            ]
+        );
+        assert_eq!(asks(otherwise).as_deref(), Some("q"));
+    }
+
     /// `WhileLoopNode : WhileLoopActionUsage = ... ( 'until'
     /// ExpressionParameterMember ';' )?` -- the parser writes the `until`
     /// as a statement of its own, and a second loop standing for it says
@@ -4244,6 +4409,52 @@ mod tests {
             model.get(imports[1], "isRecursive"),
             Some(&Value::Bool(true))
         );
+    }
+
+    /// `import Lib::**[@Meta];` imports a package that imports `Lib::**`
+    /// and filters by `@Meta` -- `NamespaceImport = ... | importedNamespace
+    /// = FilterPackage { ownedRelatedElement += importedNamespace }` -- and
+    /// was built as the plain import of `Lib`, its brackets lost.
+    #[test]
+    fn a_filtered_import_imports_the_package_that_filters() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "package P {\n\timport all Lib::**[@Meta][@Other];\n\timport Lib::Q[@Meta];\n}\n",
+        ));
+        let imports = model.owned(roots[0]).to_vec();
+        for (import, named) in imports
+            .iter()
+            .zip([ElementKind::NamespaceImport, ElementKind::MembershipImport])
+        {
+            assert_eq!(model.kind(*import), ElementKind::NamespaceImport);
+            let [package] = model.owned(*import) else {
+                panic!("one filter package, not {:?}", model.owned(*import));
+            };
+            assert_eq!(model.kind(*package), ElementKind::Package);
+            let owned = model.owned(*package);
+            assert_eq!(model.kind(owned[0]), named);
+            assert_eq!(model.member_visibility(owned[0]), Some(Vis::Public));
+            for &filter in &owned[1..] {
+                assert_eq!(model.kind(filter), ElementKind::ElementFilterMembership);
+            }
+        }
+        let filtered = model.owned(model.owned(imports[0])[0]).to_vec();
+        let conditions: Vec<String> = filtered[1..]
+            .iter()
+            .map(|&filter| {
+                let condition = reference(&model, filter, "condition").unwrap();
+                crate::expression_text(&model, condition).unwrap()
+            })
+            .collect();
+        assert_eq!(conditions, ["@Meta", "@Other"]);
+        assert_eq!(
+            model.get(filtered[0], "isRecursive"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            model.get(filtered[0], "isImportAll"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(model.get(imports[0], "isRecursive"), None);
     }
 
     /// A string literal is what stands between its quotes with the
@@ -4422,6 +4633,78 @@ mod tests {
                 ElementKind::AssociationStructure,
                 ElementKind::Feature,
             ]
+        );
+    }
+
+    /// A body handed to an `if` or a `while` as a declaration, and an
+    /// invariant that says it never holds.
+    ///
+    /// `if c action t { } else action e { }` hands the node two named
+    /// bodies, as `if c { } else { }` hands it two nameless ones, and
+    /// `inv false` is `isNegated ?= 'false'`.
+    #[test]
+    fn a_body_handed_by_name_and_a_negated_invariant_are_what_they_say() {
+        let (model, roots) = build_model(&sysml_syntax::parse(
+            "action def A {\n\
+             \tif c action t { } else action e { }\n\
+             \twhile c action b { } until d;\n\
+             \taction z;\n\
+             }\n",
+        ));
+        let owned = |id: ElementId| {
+            model
+                .owned(id)
+                .iter()
+                .map(|&c| (model.kind(c), model.name(c).map(str::to_owned)))
+                .collect::<Vec<_>>()
+        };
+        let members = model.owned(roots[0]).to_vec();
+        assert_eq!(
+            members.iter().map(|&it| model.kind(it)).collect::<Vec<_>>(),
+            [
+                ElementKind::IfActionUsage,
+                ElementKind::WhileLoopActionUsage,
+                ElementKind::ActionUsage,
+            ]
+        );
+        assert_eq!(
+            owned(members[0]),
+            [
+                (ElementKind::Expression, None),
+                (ElementKind::ActionUsage, Some("t".to_owned())),
+                (ElementKind::ActionUsage, Some("e".to_owned())),
+            ]
+        );
+        assert_eq!(
+            owned(members[1]),
+            [
+                (ElementKind::Expression, None),
+                (ElementKind::ActionUsage, Some("b".to_owned())),
+                (ElementKind::Expression, None),
+            ]
+        );
+
+        let kerml = sysml_syntax::parse_dialect(
+            "class C {\n\
+             \tinv true held { true }\n\
+             \tinv false never { true }\n\
+             \tinv { false }\n\
+             }\n",
+            sysml_syntax::Dialect::KerML,
+        );
+        let (model, roots) = build_model(&kerml);
+        let negated: Vec<(Option<&str>, bool)> = model
+            .owned(roots[0])
+            .iter()
+            .filter(|&&it| model.kind(it) == ElementKind::Invariant)
+            .map(|&it| {
+                let said = model.get(it, "isNegated") == Some(&Value::Bool(true));
+                (model.name(it), said)
+            })
+            .collect();
+        assert_eq!(
+            negated,
+            [(Some("held"), false), (Some("never"), true), (None, false)]
         );
     }
 }
