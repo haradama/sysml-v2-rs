@@ -242,7 +242,7 @@ impl<'a> Generator<'a> {
 
         // the struct's own API ports come first
         let mut at = 0;
-        for &child in self.model.owned(def) {
+        for child in self.members(def) {
             if self.model.kind(child) != ElementKind::PortUsage {
                 continue;
             }
@@ -462,8 +462,7 @@ impl<'a> Generator<'a> {
                     continue;
                 }
                 let ports = self
-                    .model
-                    .owned(def)
+                    .members(def)
                     .iter()
                     .any(|&child| self.model.kind(child) == ElementKind::PortUsage);
                 let fields_fine = self.fields(def).is_some_and(|fields| {
@@ -488,7 +487,14 @@ impl<'a> Generator<'a> {
         }
     }
     fn field_defaultable(&self, field: &Field) -> bool {
-        if field.default.is_some() {
+        // a declared value starts the field only where its container
+        // holds one value; `[3]` holds three, and starts as its element
+        if field.default.is_some()
+            && matches!(
+                field.container,
+                Container::One | Container::Optional | Container::Many | Container::Array(1)
+            )
+        {
             return true;
         }
         match field.container {

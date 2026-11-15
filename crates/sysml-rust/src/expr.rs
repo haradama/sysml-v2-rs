@@ -37,6 +37,54 @@ pub(crate) struct Translated {
     pub references: Vec<String>,
 }
 
+/// What a reference chain is in Rust, as the caller's resolver spells it.
+pub(crate) struct Reference {
+    pub rust: String,
+    /// It holds a `String`, which `+` joins only to a borrowed one.
+    pub text: bool,
+    /// What kind of number it holds, where the resolver knows.
+    pub number: Number,
+}
+
+impl From<String> for Reference {
+    fn from(rust: String) -> Reference {
+        Reference {
+            rust,
+            text: false,
+            number: Number::Unknown,
+        }
+    }
+}
+
+impl Reference {
+    /// A reference that holds a value of the Rust type `ty`, as a
+    /// field or a parameter is declared with.
+    pub(crate) fn typed(rust: String, ty: &str) -> Reference {
+        Reference {
+            rust,
+            text: ty == "String",
+            number: match ty {
+                "f64" => Number::Real,
+                "i64" | "u64" => Number::Whole,
+                _ => Number::Unknown,
+            },
+        }
+    }
+}
+
+/// A chain spelled from its leading name alone: `lead` says what the
+/// first name is in Rust, and every name after it is a field of the same
+/// spelling. The resolvers that know nothing of the types behind a name
+/// -- a guard's payload, a behaviour's parameters -- spell it this way.
+pub(crate) fn led_by(chain: &str, lead: impl Fn(&str) -> Option<String>) -> Option<Reference> {
+    let mut names = chain.split('.');
+    let mut rust = lead(names.next()?)?;
+    for name in names {
+        rust = format!("{rust}.{}", crate::generate::ident(name));
+    }
+    Some(rust.into())
+}
+
 impl Translated {
     /// Rust the caller worked out for itself, with nothing to say about
     /// it: no references gathered, no claim that it is a boolean.
@@ -66,11 +114,13 @@ pub(crate) enum Numbers {
 }
 
 /// `text` as a Rust expression, or `None` where any part of it falls
-/// outside the simple subset. `resolve` says how Rust spells the leading
-/// name of a reference chain (`self.price`, a parameter).
+/// outside the simple subset. `resolve` says how Rust spells a reference
+/// chain, handed it whole and dotted (`price`, `line.amount`): the chain
+/// goes through whatever its names are, and only the resolver knows
+/// whether `line` is one value or an `Option` with no `amount` on it.
 pub(crate) fn translate(
     text: &str,
-    resolve: &dyn Fn(&str) -> Option<String>,
+    resolve: &dyn Fn(&str) -> Option<Reference>,
     resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
     translate_as(
@@ -89,7 +139,7 @@ pub(crate) fn translate_as(
     text: &str,
     numbers: Numbers,
     units: &HashMap<String, f64>,
-    resolve: &dyn Fn(&str) -> Option<String>,
+    resolve: &dyn Fn(&str) -> Option<Reference>,
     resolve_call: &dyn Fn(&str) -> Option<Callee>,
 ) -> Option<Translated> {
     let tokens = lex(text)?;
@@ -103,8 +153,16 @@ pub(crate) fn translate_as(
         resolve_call,
     };
     let top = parser.expression()?;
+    // what a `Real` is asked for and an integer gives is that real
+    // number, and a real number is never an integer without saying how
+    // it is rounded
+    let rust = match (numbers, top.number) {
+        (Numbers::Reals, Number::Whole) => format!("{} as f64", wrap(&top)),
+        (Numbers::Integers, Number::Real) => return None,
+        _ => top.rust,
+    };
     (parser.at == tokens.len()).then_some(Translated {
-        rust: top.rust,
+        rust,
         boolean: top.boolean,
         references: parser.references,
     })
@@ -288,6 +346,62 @@ struct Node {
     /// A `String`: `"x".to_string() + "y".to_string()` does not compile,
     /// since Rust adds a `&str` to a `String` and not another `String`.
     text: bool,
+    /// What kind of number it is, where that is known.
+    number: Number,
+}
+
+/// The kind of number an operand is, so that the two sides of an
+/// operator agree: Rust neither compares nor adds an `f64` and an `i64`,
+/// and `r > 1` with `r` a `Real` compiles only as `r > 1.0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Number {
+    /// Not a number, or one whose kind nobody said.
+    Unknown,
+    /// An `f64`.
+    Real,
+    /// A whole number held in a Rust integer type.
+    Whole,
+    /// A whole number written out, `1`, which is either until its
+    /// neighbour settles it.
+    Written,
+}
+
+/// `lhs` and `rhs` made to agree as numbers, and what they then are.
+///
+/// A whole number written next to a real is that real number; a whole
+/// number held in an integer is converted where it meets a real, since
+/// `Integer` specializes `Real` and every integer is one.
+fn agreed(lhs: &mut Node, rhs: &mut Node) -> Number {
+    let real = |node: &mut Node| match node.number {
+        Number::Written => {
+            node.rust = format!("{}.0", node.rust);
+            node.number = Number::Real;
+        }
+        Number::Whole => {
+            // parenthesised by whatever it is an operand of, where that
+            // needs it, and not inside a call's argument list
+            node.rust = format!("{} as f64", wrap(node));
+            node.atomic = false;
+            node.number = Number::Real;
+        }
+        _ => {}
+    };
+    match (lhs.number, rhs.number) {
+        (Number::Real, Number::Whole | Number::Written) => {
+            real(rhs);
+            Number::Real
+        }
+        (Number::Whole | Number::Written, Number::Real) => {
+            real(lhs);
+            Number::Real
+        }
+        (Number::Real, _) | (_, Number::Real) => Number::Real,
+        (Number::Whole, Number::Whole | Number::Written) | (Number::Written, Number::Whole) => {
+            Number::Whole
+        }
+        (Number::Written, Number::Written) => Number::Written,
+        _ => Number::Unknown,
+    }
 }
 
 /// Embedded as an operand: composites keep their own parentheses.
@@ -305,7 +419,7 @@ struct Parser<'a> {
     numbers: Numbers,
     units: &'a HashMap<String, f64>,
     references: Vec<String>,
-    resolve: &'a dyn Fn(&str) -> Option<String>,
+    resolve: &'a dyn Fn(&str) -> Option<Reference>,
     resolve_call: &'a dyn Fn(&str) -> Option<Callee>,
 }
 
@@ -377,6 +491,7 @@ impl Parser<'_> {
             atomic: false,
             boolean: true,
             text: false,
+            number: Number::Unknown,
         })
     }
 
@@ -442,7 +557,7 @@ impl Parser<'_> {
     /// base has no settled type yet, and Rust will not pick one of its float
     /// types to look a method up on.
     fn power(&mut self) -> Option<Node> {
-        let lhs = self.unary()?;
+        let mut lhs = self.unary()?;
         if !self.eat(&Token::StarStar) {
             return Some(lhs);
         }
@@ -455,13 +570,24 @@ impl Parser<'_> {
         }
         let exponent = match rhs.rust.parse::<i64>() {
             Ok(whole) => format!("{whole}.0"),
+            Err(_) if rhs.number == Number::Whole => format!("{} as f64", wrap(&rhs)),
             Err(_) => rhs.rust,
         };
+        // and the base is a real number too, whatever holds it
+        let mut real = Node {
+            rust: String::new(),
+            atomic: true,
+            boolean: false,
+            text: false,
+            number: Number::Real,
+        };
+        agreed(&mut real, &mut lhs);
         Some(Node {
             rust: format!("f64::powf({}, {exponent})", lhs.rust),
             atomic: true,
             boolean: false,
             text: false,
+            number: Number::Real,
         })
     }
 
@@ -475,18 +601,25 @@ impl Parser<'_> {
         'joining: loop {
             for (token, spelled) in operators {
                 if self.eat(token) {
-                    let rhs = next(self)?;
+                    let mut rhs = next(self)?;
+                    // text and a number have no sum: `"a" + 1` is no
+                    // Rust, whatever the model meant by it
+                    if spelled.trim() == "+" && lhs.text != rhs.text {
+                        return None;
+                    }
                     // `String + &str` is how Rust joins text
                     let borrowed = if lhs.text && rhs.text && spelled.trim() == "+" {
                         "&"
                     } else {
                         ""
                     };
+                    let number = agreed(&mut lhs, &mut rhs);
                     lhs = Node {
                         rust: format!("{}{spelled}{borrowed}{}", wrap(&lhs), wrap(&rhs)),
                         atomic: false,
                         boolean,
                         text: lhs.text && rhs.text,
+                        number: if boolean { Number::Unknown } else { number },
                     };
                     continue 'joining;
                 }
@@ -503,6 +636,7 @@ impl Parser<'_> {
                 atomic: false,
                 boolean: false,
                 text: false,
+                number: operand.number,
             });
         }
         if self.eat(&Token::Not) {
@@ -512,6 +646,7 @@ impl Parser<'_> {
                 atomic: false,
                 boolean: true,
                 text: false,
+                number: Number::Unknown,
             });
         }
         let operand = self.primary()?;
@@ -548,6 +683,7 @@ impl Parser<'_> {
                 atomic: true,
                 boolean: false,
                 text: false,
+                number: Number::Real,
             });
         }
         if factor == 1.0 {
@@ -562,6 +698,7 @@ impl Parser<'_> {
             atomic: false,
             boolean: false,
             text: false,
+            number: Number::Unknown,
         })
     }
 
@@ -574,8 +711,14 @@ impl Parser<'_> {
                 atomic: true,
                 boolean: false,
                 text: false,
+                number: Number::Whole,
             }),
             Token::Num(text) => Some(Node {
+                number: if self.numbers == Numbers::Reals || text.contains(['.', 'e', 'E']) {
+                    Number::Real
+                } else {
+                    Number::Written
+                },
                 rust: match self.numbers == Numbers::Reals && !text.contains(['.', 'e', 'E']) {
                     true => format!("{text}.0"),
                     false => text,
@@ -589,18 +732,21 @@ impl Parser<'_> {
                 atomic: true,
                 boolean: false,
                 text: true,
+                number: Number::Unknown,
             }),
             Token::True => Some(Node {
                 rust: "true".to_string(),
                 atomic: true,
                 boolean: true,
                 text: false,
+                number: Number::Unknown,
             }),
             Token::False => Some(Node {
                 rust: "false".to_string(),
                 atomic: true,
                 boolean: true,
                 text: false,
+                number: Number::Unknown,
             }),
             // a call, where the name is one the caller can spell as a
             // function -- an abstract definition became a trait, and a
@@ -614,25 +760,35 @@ impl Parser<'_> {
                     atomic: true,
                     boolean: false,
                     text: false,
+                    number: Number::Unknown,
                 })
             }
             Token::Name(leading) => {
-                let mut rust = (self.resolve)(&leading)?;
-                if !self.references.contains(&leading) {
-                    self.references.push(leading);
-                }
+                let mut chain = leading.clone();
                 while self.eat(&Token::Dot) {
                     let Some(Token::Name(segment)) = self.tokens.get(self.at).cloned() else {
                         return None;
                     };
                     self.at += 1;
-                    rust = format!("{rust}.{}", crate::generate::ident(&segment));
+                    chain = format!("{chain}.{segment}");
                 }
+                let reached = (self.resolve)(&chain)?;
+                if !self.references.contains(&leading) {
+                    self.references.push(leading);
+                }
+                // a `String` read out of a field is moved by `+` and
+                // compared by `==` only as a value of its own
+                let rust = if reached.text {
+                    format!("{}.clone()", reached.rust)
+                } else {
+                    reached.rust
+                };
                 Some(Node {
                     rust,
                     atomic: true,
                     boolean: false,
-                    text: false,
+                    text: reached.text,
+                    number: reached.number,
                 })
             }
             Token::LParen => {
@@ -642,6 +798,7 @@ impl Parser<'_> {
                     atomic: true,
                     boolean: inner.boolean,
                     text: false,
+                    number: inner.number,
                 })
             }
             // `if c ? a else b` -- braces keep it one Rust expression
@@ -650,11 +807,13 @@ impl Parser<'_> {
                 if !self.eat(&Token::Question) {
                     return None;
                 }
-                let then = self.expression()?;
+                let mut then = self.expression()?;
                 if !self.eat(&Token::Else) {
                     return None;
                 }
-                let otherwise = self.expression()?;
+                let mut otherwise = self.expression()?;
+                // one value either way, so one kind of number
+                let number = agreed(&mut then, &mut otherwise);
                 Some(Node {
                     rust: format!(
                         "if {} {{ {} }} else {{ {} }}",
@@ -663,6 +822,7 @@ impl Parser<'_> {
                     atomic: false,
                     boolean: then.boolean,
                     text: false,
+                    number,
                 })
             }
             _ => None,
@@ -672,17 +832,21 @@ impl Parser<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{translate, translate_as, Callee, Numbers};
+    use super::{led_by, translate, translate_as, Callee, Numbers};
 
     /// Every name resolves to itself, and every call to a lowercase
     /// function of two parameters -- enough to exercise the shapes.
     fn plain(text: &str) -> Option<String> {
-        translate(text, &|name| Some(name.to_string()), &|name| {
-            Some(Callee {
-                function: name.to_lowercase(),
-                parameters: vec!["a".to_string(), "b".to_string()],
-            })
-        })
+        translate(
+            text,
+            &|chain| led_by(chain, |name| Some(name.to_string())),
+            &|name| {
+                Some(Callee {
+                    function: name.to_lowercase(),
+                    parameters: vec!["a".to_string(), "b".to_string()],
+                })
+            },
+        )
         .map(|t| t.rust)
     }
 
@@ -712,7 +876,12 @@ mod tests {
             plain("a implies b implies c").as_deref(),
             Some("!a || (!b || c)")
         );
-        let compared = translate("a <= b != c >= d", &|n| Some(n.to_string()), &|_| None).unwrap();
+        let compared = translate(
+            "a <= b != c >= d",
+            &|chain| led_by(chain, |n| Some(n.to_string())),
+            &|_| None,
+        )
+        .unwrap();
         assert_eq!(compared.rust, "(a <= b) != (c >= d)");
         assert!(compared.boolean);
         assert_eq!(plain("x < y").as_deref(), Some("x < y"));
@@ -723,7 +892,7 @@ mod tests {
     fn primaries_and_chains() {
         let translated = translate(
             "line.amount > 0 or empty",
-            &|n| (n != "missing").then(|| n.to_string()),
+            &|chain| led_by(chain, |n| (n != "missing").then(|| n.to_string())),
             &|_| None,
         )
         .unwrap();
@@ -783,7 +952,7 @@ mod tests {
         // an unresolved leading name refuses the whole expression
         assert!(translate(
             "known + missing",
-            &|n| (n == "known").then(|| n.to_string()),
+            &|chain| led_by(chain, |n| (n == "known").then(|| n.to_string())),
             &|_| None
         )
         .is_none());
@@ -805,7 +974,12 @@ mod tests {
         // named arguments go back into the order the callee declares
         assert_eq!(plain("F(b = 1, a = 2)").as_deref(), Some("f(2, 1)"));
         assert_eq!(plain("F(1, 2)").as_deref(), Some("f(1, 2)"));
-        assert!(translate("Widen(1) > 0", &|n| Some(n.to_string()), &|_| None).is_none());
+        assert!(translate(
+            "Widen(1) > 0",
+            &|chain| led_by(chain, |n| Some(n.to_string())),
+            &|_| None
+        )
+        .is_none());
     }
     /// A unit in brackets is what the caller says it is worth, looked up
     /// by its text with the spaces taken out.
@@ -823,7 +997,7 @@ mod tests {
                 text,
                 Numbers::Written,
                 &units,
-                &|name| Some(name.to_string()),
+                &|chain| led_by(chain, |name| Some(name.to_string())),
                 &|_| None,
             )
             .map(|t| t.rust)

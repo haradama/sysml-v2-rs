@@ -383,6 +383,10 @@ enum ValueClause {
 
 /// One transition, ready to be written into the table.
 struct Transition {
+    usage: ElementId,
+    /// Whether the model named it; an unnamed one is called after its
+    /// two ends.
+    named: bool,
     name: String,
     source: String,
     target: String,
@@ -394,11 +398,48 @@ struct Transition {
     effect: bool,
 }
 
+impl Transition {
+    /// How the transition is referred to in what is written about it.
+    fn shown(&self) -> String {
+        if self.named {
+            format!("`{}`", self.name)
+        } else {
+            format!(
+                "the transition `first {} then {}`",
+                self.source, self.target
+            )
+        }
+    }
+}
+
 /// A compiled action body: the traits its parts demand of whoever
 /// implements it, and the statements that perform them in order.
 struct Body {
     supertraits: Vec<String>,
     lines: Vec<String>,
+}
+
+/// The state a machine starts in. Written `entry; then dark;` -- an
+/// entry action with a succession out of it -- so it is neither the
+/// first state declared nor anything a state says of itself.
+pub(crate) fn initial_state(model: &Model, owned: &[ElementId]) -> Option<ElementId> {
+    let entry = owned
+        .iter()
+        .copied()
+        .find(|&child| model.member_role(child) == Some(Role::Entry))?;
+    owned.iter().copied().find_map(|other| {
+        if !model.kind(other).is_a(ElementKind::SuccessionAsUsage) {
+            return None;
+        }
+        let ends: Vec<ElementId> = model
+            .owned(other)
+            .iter()
+            .filter(|&&end| model.kind(end) == ElementKind::Feature)
+            .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
+            .collect();
+        let (from, to) = (*ends.first()?, *ends.get(1)?);
+        (from == entry).then_some(to)
+    })
 }
 
 /// The subactions in an order the successions allow, or nothing where
@@ -474,6 +515,21 @@ fn contained(base: String, container: Container) -> String {
     }
 }
 
+/// The least number of values a usage's multiplicity admits, where it is
+/// a number: `[*]` is `0`, `[2..*]` is `2`, `[n..*]` is no number.
+fn lower_bound(model: &Model, usage: ElementId) -> Option<i64> {
+    use sysml_model::Bound;
+    let Some(declared) = sysml_model::declared_multiplicity(model, usage) else {
+        return Some(1);
+    };
+    match declared.bound.or(declared.lower) {
+        Some(Bound::Exactly(n)) if n >= 0 => Some(n),
+        // `[*]` alone is `0..*`
+        Some(Bound::Many) if declared.bound.is_some() => Some(0),
+        _ => None,
+    }
+}
+
 /// The declared multiplicity of a usage, as the container it implies.
 fn multiplicity(model: &Model, usage: ElementId) -> Container {
     use sysml_model::Bound;
@@ -509,7 +565,13 @@ fn multiplicity(model: &Model, usage: ElementId) -> Container {
 /// any other expression over other features has no place in
 /// `Default::default()`.
 fn default_of(model: &Model, usage: ElementId) -> Option<String> {
+    // A number, a truth value or a text is a value of a scalar, and a
+    // field the generator gives a type of its own -- a struct, an
+    // enumeration -- holds none of them: `attribute x : String = "a";`
+    // where the package declares a `part def 'String'` of its own.
+    let scalar = held_type(model, usage).is_none_or(|ty| scalar_type(model, ty).is_some());
     match value_clause(model, usage)? {
+        ValueClause::Literal(_) if !scalar => None,
         ValueClause::Literal(rust) => Some(rust),
         ValueClause::Text(text) => match translate_as(
             &text,
@@ -518,16 +580,33 @@ fn default_of(model: &Model, usage: ElementId) -> Option<String> {
             &|_| None,
             &|_| None,
         ) {
+            // A `Natural` is a `u64`, and `3 - 5` is a constant Rust
+            // refuses to compile rather than wrap: what a difference
+            // comes to is left to whoever knows what the model meant
+            Some(translated)
+                if translated.rust.contains('-')
+                    && held_type(model, usage).and_then(|ty| scalar_type(model, ty))
+                        == Some("u64") =>
+            {
+                None
+            }
             Some(translated) => Some(translated.rust),
             // A value that is only a name refers to a feature, and name
             // resolution wrote down which one, so the value to start
-            // from is that feature's own. One step: what the feature it
-            // names starts from has to be a value in itself, or there
-            // is nothing here to write.
-            None => match value_clause(model, referent_of(model, usage)?)? {
-                ValueClause::Literal(rust) => Some(rust),
-                ValueClause::Text(_) => None,
-            },
+            // from is that feature's own -- written for this field, not
+            // for that one. One step: what the feature it names starts
+            // from has to be a value in itself, or there is nothing here
+            // to write.
+            None => {
+                let referent = referent_of(model, usage)?;
+                if let Some(variant) = enum_variant(model, referent, usage) {
+                    return Some(variant);
+                }
+                match value_clause_as(model, referent, usage)? {
+                    ValueClause::Literal(rust) => Some(rust),
+                    ValueClause::Text(_) => None,
+                }
+            }
         },
     }
 }
@@ -546,6 +625,33 @@ fn declared_values(model: &Model, requirement: ElementId) -> Vec<String> {
         .filter(|&&child| model.kind(child) == ElementKind::AttributeUsage)
         .filter_map(|&child| default_of(model, child))
         .collect()
+}
+
+/// `Level::low` as the variant it is, where `usage` holds a value of the
+/// enumeration `value` is one of: what the value is worth -- `low =
+/// 0.25` -- is no `Level`, and a field that started from it did not
+/// compile.
+///
+/// Spelled as the enumeration spells its variants, in the same order.
+fn enum_variant(model: &Model, value: ElementId, usage: ElementId) -> Option<String> {
+    if model.kind(value) != ElementKind::EnumerationUsage {
+        return None;
+    }
+    let def = model.owner(value)?;
+    if model.kind(def) != ElementKind::EnumerationDefinition || held_type(model, usage) != Some(def)
+    {
+        return None;
+    }
+    let mut spelling = Namespace::default();
+    let variant = model
+        .owned(def)
+        .iter()
+        .filter(|&&child| model.kind(child) == ElementKind::EnumerationUsage)
+        .filter_map(|&child| Some((child, model.name(child)?)))
+        .map(|(child, name)| (child, spelling.take(type_ident(&camel(name)))))
+        .find(|(child, _)| *child == value)?
+        .1;
+    Some(format!("{}::{variant}", type_ident(model.name(def)?)))
 }
 
 /// The feature a usage's value refers to, where the whole value is a
@@ -663,8 +769,15 @@ fn numbers_for(model: &Model, usage: ElementId) -> Numbers {
 
 /// The `= value` clause of a usage, ready for translation.
 fn value_clause(model: &Model, usage: ElementId) -> Option<ValueClause> {
+    value_clause_as(model, usage, usage)
+}
+
+/// The `= value` clause of `from`, written for a field like `usage`:
+/// `attribute y : Real = c;` starts from what `c` declares, and that is
+/// `2.0` for `y` though it is `2` for `c`.
+fn value_clause_as(model: &Model, from: ElementId, usage: ElementId) -> Option<ValueClause> {
     use sysml_model::{Declared, Literal};
-    let rust = match sysml_model::declared_value(model, usage)? {
+    let rust = match sysml_model::declared_value(model, from)? {
         Declared::Text(text) => return Some(ValueClause::Text(text)),
         // an `Integer` holds no `1.5`, and written as it is the field
         // does not compile; what is left over goes where a value Rust
@@ -771,6 +884,16 @@ fn documentation(model: &Model, element: ElementId) -> Option<String> {
         let end = lines.iter().rposition(|line| !line.is_empty())? + 1;
         Some(lines[..end].join("\n"))
     })
+}
+
+/// SysML text as it reads on the one line of a comment.
+///
+/// A guard or a value may be written over several lines -- `if s.level >
+/// 3` and `and s.hot` below it -- and a `//` comment ends at the first of
+/// them, leaving the rest to be read as code. Every run of white space,
+/// line breaks included, is one space here.
+pub(crate) fn on_one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Documentation as Rust doc comments, one line of `///` per line of the

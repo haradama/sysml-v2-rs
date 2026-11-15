@@ -7,7 +7,7 @@
 //! `action def` whose dataflow the model wired end to end becomes the body
 //! that performs it; one it did not becomes a trait for a person to write.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sysml_model::{ElementId, ElementKind, Value};
 
@@ -28,11 +28,29 @@ impl<'a> Generator<'a> {
                     .flatten()
             })
             .collect();
-        let transitions: Vec<Transition> = model
+        let mut transitions: Vec<Transition> = model
             .owned(def)
             .iter()
             .filter_map(|&child| self.transition(child, &states))
             .collect();
+        // a transition the model left unnamed is still a row of the
+        // table; it is called after its ends, clear of every name the
+        // model did give one
+        let mut taken: HashSet<String> = transitions
+            .iter()
+            .filter(|transition| transition.named)
+            .map(|transition| transition.name.clone())
+            .collect();
+        for transition in transitions.iter_mut().filter(|t| !t.named) {
+            let mut name = transition.name.clone();
+            let mut count = 1;
+            while !taken.insert(name.clone()) {
+                count += 1;
+                name = format!("{}_{count}", transition.name);
+            }
+            transition.event = type_ident(&camel(&name));
+            transition.name = name;
+        }
 
         writeln!(out).unwrap();
         if let Some(doc) = documentation(model, def) {
@@ -79,13 +97,19 @@ impl<'a> Generator<'a> {
             writeln!(out, "    {},", variant(state)).unwrap();
         }
         writeln!(out, "}}").unwrap();
-        if let Some((_, first)) = states.first() {
+        // where the machine starts is what the model says it enters --
+        // `entry; then b;` -- and only where it says nothing is it the
+        // first state declared
+        let entered = initial_state(model, model.owned(def))
+            .and_then(|state| states.iter().find(|(id, _)| *id == state));
+        if let Some((_, first)) = entered.or(states.first()) {
             writeln!(out, "\nimpl {name}State {{").unwrap();
-            writeln!(
-                out,
-                "    /// The first state the definition declares.\n    #[must_use]"
-            )
-            .unwrap();
+            let said = if entered.is_some() {
+                format!("The state the definition enters first: `entry; then {first};`.")
+            } else {
+                "The first state the definition declares.".to_string()
+            };
+            writeln!(out, "    /// {said}\n    #[must_use]").unwrap();
             writeln!(out, "    pub fn initial() -> Self {{").unwrap();
             writeln!(out, "        {name}State::{}", variant(first)).unwrap();
             writeln!(out, "    }}").unwrap();
@@ -122,9 +146,25 @@ impl<'a> Generator<'a> {
             Some(format!("{name}Hooks")),
             "the guards, effects and entry/exit notifications of a state machine",
         );
+        // A hook is named after its state or transition behind a prefix,
+        // so it is never a keyword -- `on_entry_r#move` is no name at
+        // all -- and two that spell alike take a number, as their
+        // variants do: `'a b'` and `a_b` are two states.
+        let bare = |name: &str| ident(name).trim_start_matches("r#").to_string();
+        let mut hooked = Namespace::default();
+        let state_hooks: HashMap<&str, String> = states
+            .iter()
+            .map(|(_, state)| (*state, hooked.take(bare(state))))
+            .collect();
+        let state_hook = |state: &str| state_hooks.get(state).cloned().unwrap_or_default();
+        let mut hooked = Namespace::default();
+        let transition_hooks: Vec<String> = transitions
+            .iter()
+            .map(|transition| hooked.take(bare(&transition.name)))
+            .collect();
         writeln!(out, "#[allow(unused_variables)]").unwrap();
         writeln!(out, "pub trait {name}Hooks {{").unwrap();
-        for transition in &transitions {
+        for (transition, hook) in transitions.iter().zip(&transition_hooks) {
             let payload = transition
                 .payload
                 .as_ref()
@@ -133,38 +173,37 @@ impl<'a> Generator<'a> {
             if let Some(guard) = &transition.guard {
                 // a guard over the event's payload translates into the
                 // default body; anything else stays an open decision
-                let resolve = |leading: &str| {
-                    transition
-                        .payload
-                        .as_ref()
-                        .filter(|(param, _)| param == leading)
-                        .map(|(param, _)| ident(param))
+                let resolve = |chain: &str| {
+                    expr::led_by(chain, |leading: &str| {
+                        transition
+                            .payload
+                            .as_ref()
+                            .filter(|(param, _)| param == leading)
+                            .map(|(param, _)| ident(param))
+                    })
                 };
-                let body = translate(guard, &resolve, &|name| self.callable(name))
-                    .filter(|translated| translated.boolean)
-                    .map(|translated| translated.rust)
-                    .unwrap_or_else(|| "true".to_string());
-                writeln!(out, "    /// SysML guard: `[{guard}]`").unwrap();
+                let body = translate(guard, &resolve, &|name| {
+                    self.callable(transition.usage, name)
+                })
+                .filter(|translated| translated.boolean)
+                .map(|translated| translated.rust)
+                .unwrap_or_else(|| "true".to_string());
+                writeln!(out, "    /// SysML guard: `[{}]`", on_one_line(guard)).unwrap();
                 writeln!(
                     out,
-                    "    fn guard_{}(&self{payload}) -> bool {{\n        {body}\n    }}",
-                    ident(&transition.name)
+                    "    fn guard_{hook}(&self{payload}) -> bool {{\n        {body}\n    }}"
                 )
                 .unwrap();
             }
             if transition.effect {
-                writeln!(out, "    /// SysML effect of `{}`.", transition.name).unwrap();
-                writeln!(
-                    out,
-                    "    fn effect_{}(&mut self{payload}) {{}}",
-                    ident(&transition.name)
-                )
-                .unwrap();
+                writeln!(out, "    /// SysML effect of {}.", transition.shown()).unwrap();
+                writeln!(out, "    fn effect_{hook}(&mut self{payload}) {{}}").unwrap();
             }
         }
         for (_, state) in &states {
-            writeln!(out, "    fn on_entry_{}(&mut self) {{}}", ident(state)).unwrap();
-            writeln!(out, "    fn on_exit_{}(&mut self) {{}}", ident(state)).unwrap();
+            let hook = state_hook(state);
+            writeln!(out, "    fn on_entry_{hook}(&mut self) {{}}").unwrap();
+            writeln!(out, "    fn on_exit_{hook}(&mut self) {{}}").unwrap();
         }
         writeln!(out, "}}").unwrap();
 
@@ -182,7 +221,7 @@ impl<'a> Generator<'a> {
         )
         .unwrap();
         writeln!(out, "        match (self, event) {{").unwrap();
-        for (transition, event) in transitions.iter().zip(&events) {
+        for ((transition, event), hook) in transitions.iter().zip(&events).zip(&transition_hooks) {
             let pattern = match &transition.payload {
                 // only a guard or an effect reads the payload; binding it
                 // for an arm that does neither is an unused variable
@@ -202,20 +241,16 @@ impl<'a> Generator<'a> {
             };
             let guard = match (&transition.guard, &transition.payload) {
                 (Some(_), Some((param, _))) => {
-                    format!(
-                        " if hooks.guard_{}({})",
-                        ident(&transition.name),
-                        ident(param)
-                    )
+                    format!(" if hooks.guard_{hook}({})", ident(param))
                 }
-                (Some(_), None) => format!(" if hooks.guard_{}()", ident(&transition.name)),
+                (Some(_), None) => format!(" if hooks.guard_{hook}()"),
                 (None, _) => String::new(),
             };
             writeln!(out, "            {pattern}{guard} => {{").unwrap();
             writeln!(
                 out,
                 "                hooks.on_exit_{}();",
-                ident(&transition.source)
+                state_hook(&transition.source)
             )
             .unwrap();
             if transition.effect {
@@ -224,17 +259,12 @@ impl<'a> Generator<'a> {
                     .as_ref()
                     .map(|(param, _)| ident(param))
                     .unwrap_or_default();
-                writeln!(
-                    out,
-                    "                hooks.effect_{}({argument});",
-                    ident(&transition.name)
-                )
-                .unwrap();
+                writeln!(out, "                hooks.effect_{hook}({argument});").unwrap();
             }
             writeln!(
                 out,
                 "                hooks.on_entry_{}();",
-                ident(&transition.target)
+                state_hook(&transition.target)
             )
             .unwrap();
             writeln!(
@@ -257,7 +287,6 @@ impl<'a> Generator<'a> {
         if model.kind(usage) != ElementKind::TransitionUsage {
             return None;
         }
-        let name = model.name(usage)?;
         // A transition is not a connector: what it relates it relates
         // through the `Succession` it owns, and that is where its two
         // ends are.
@@ -285,6 +314,8 @@ impl<'a> Generator<'a> {
             _ => return None,
         };
         let (source, target) = (state_name(source)?, state_name(target)?);
+        let named = model.name(usage);
+        let name = named.map_or_else(|| format!("{source}_to_{target}"), str::to_string);
 
         // what the transition waits for, and what that carries
         let payload = match model.get(usage, "triggerAction") {
@@ -307,7 +338,7 @@ impl<'a> Generator<'a> {
             }),
             _ => None,
         };
-        let event = type_ident(&camel(name));
+        let event = type_ident(&camel(&name));
         let guard = match model.get(usage, "guardExpression") {
             Some(Value::RefList(guards)) => guards
                 .first()
@@ -316,7 +347,9 @@ impl<'a> Generator<'a> {
         };
         let effect = matches!(model.get(usage, "effectAction"), Some(Value::RefList(list)) if !list.is_empty());
         Some(Transition {
-            name: name.to_string(),
+            usage,
+            named: named.is_some(),
+            name,
             source,
             target,
             event,
@@ -391,11 +424,16 @@ impl<'a> Generator<'a> {
             clause = Some(trailing);
         }
 
-        let resolve = |leading: &str| {
-            params
-                .iter()
-                .find(|(param, _)| param == leading)
-                .map(|(param, _)| ident(param))
+        // a parameter on its own is a value of the type it is declared
+        // with, which is what lets `a * b + 1` over two `Real`s be `+ 1.0`
+        let resolve = |chain: &str| match params.iter().find(|(param, _)| param == chain) {
+            Some((param, ty)) => Some(expr::Reference::typed(ident(param), ty)),
+            None => expr::led_by(chain, |leading: &str| {
+                params
+                    .iter()
+                    .find(|(param, _)| param == leading)
+                    .map(|(param, _)| ident(param))
+            }),
         };
         let translated = match &clause {
             Some(ValueClause::Text(text)) => {
@@ -405,7 +443,7 @@ impl<'a> Generator<'a> {
                     numbers_of(declared.as_deref()),
                     &units,
                     &resolve,
-                    &|name| self.callable(name),
+                    &|name| self.callable(def, name),
                 )
             }
             _ => None,
@@ -519,7 +557,7 @@ impl<'a> Generator<'a> {
     /// as arguments, the struct's fields reachable as `self.field`.
     pub(crate) fn calc_method(&self, usage: ElementId, fields: &[Field]) -> Result<String, String> {
         let model = self.model;
-        let name = model.name(usage).expect("named, or it was skipped");
+        let name = &self.member_name(usage).expect("named, or it was skipped");
 
         // typed by a calculation definition and carrying no formula of
         // its own, the usage performs that definition rather than being
@@ -552,14 +590,15 @@ impl<'a> Generator<'a> {
             params.push((param.to_string(), ty));
         }
 
-        let resolve = |leading: &str| {
-            if let Some((param, _)) = params.iter().find(|(param, _)| param == leading) {
-                return Some(ident(param));
+        let resolve = |chain: &str| {
+            if let Some((param, ty)) = params.iter().find(|(param, _)| param == chain) {
+                return Some(expr::Reference::typed(ident(param), ty));
             }
-            fields
-                .iter()
-                .find(|field| field.name == leading)
-                .map(|field| format!("self.{}", field.spelled))
+            let leading = chain.split('.').next().unwrap_or(chain);
+            if params.iter().any(|(param, _)| param == leading) {
+                return expr::led_by(chain, |leading| Some(ident(leading)));
+            }
+            self.through_fields(fields, chain)
         };
         let clause = result_clause(model, usage).or_else(|| value_clause(model, usage));
         let translated = match &clause {
@@ -570,7 +609,7 @@ impl<'a> Generator<'a> {
                     numbers_of(Some(&returns)),
                     &units,
                     &resolve,
-                    &|name| self.callable(name),
+                    &|name| self.callable(usage, name),
                 )
             }
             _ => None,
@@ -579,6 +618,7 @@ impl<'a> Generator<'a> {
 
         let mut method = String::new();
         writeln!(method, "    /// SysML: `calc {name}`").unwrap();
+        method.push_str(&self.unnamed_note(usage));
         if unfit {
             writeln!(
                 method,
@@ -626,118 +666,51 @@ impl<'a> Generator<'a> {
     }
     /// An action definition's body, compiled out of what the model says its
     /// parts are and how they are wired: the subactions in the order the
-    /// successions put them in, each called with what the flows and bindings
-    /// feed it, and the result read off the flows into the definition's own
-    /// `out` parameters.
+    /// successions and flows put them in, each called with what the flows
+    /// and bindings feed it, and the result read off the flows into the
+    /// definition's own `out` parameters.
     ///
-    /// It is all-or-nothing. A dataflow with a gap in it is not written
-    /// half-way; the trait method stays open and what stopped it is named,
-    /// because a modeller who is one flow short should not have to guess
-    /// which.
+    /// The control flow is the model's too. A `decide` becomes an `if` over
+    /// the guards of the ways out of it, so that one branch runs and not
+    /// every one; an `if` action an `if`, a `while` or `loop` action a loop;
+    /// a `fork`, `join` or `merge` only orders what is around it, since one
+    /// order its branches may run in is to run them one after another.
+    ///
+    /// It is all-or-nothing. A dataflow with a gap in it, or a construct
+    /// past what this writes, is not written half-way; the trait method
+    /// stays open and what stopped it is named, because a modeller who is
+    /// one flow short should not have to guess which.
     fn action_body(&self, def: ElementId) -> Result<Body, String> {
         let model = self.model;
-        let mut steps: Vec<(ElementId, ElementId)> = Vec::new();
-        for &child in model.owned(def) {
-            if !matches!(
-                model.kind(child),
-                ElementKind::ActionUsage | ElementKind::PerformActionUsage
-            ) {
-                continue;
-            }
-            let named = model.name(child).ok_or("a subaction with no name")?;
-            let performed = model
-                .type_of(child)
-                .ok_or_else(|| format!("`{named}` performs nothing"))?;
-            if self.shapes.get(&performed) != Some(&Shape::Action) {
-                return Err(format!("`{named}` performs no generated action"));
-            }
-            steps.push((child, performed));
-        }
-        if steps.is_empty() {
+        let mut wiring = Wiring {
+            def,
+            steps: Vec::new(),
+            into: HashMap::new(),
+            fanout: HashMap::new(),
+            remaining: HashMap::new(),
+            scope_of: HashMap::new(),
+            blocks: 0,
+        };
+        self.gather(def, &mut wiring)?;
+        if wiring.steps.is_empty() {
             // a leaf behaviour is not a dataflow with a gap in it; there
             // was never anything here to perform, and saying so on every
             // one of them is noise
             return Err(String::new());
         }
-
-        // `first a then b` is an edge, and the order they make is the
-        // order the calls go in
-        let mut after: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
-        for &child in model.owned(def) {
-            if !model.kind(child).is_a(ElementKind::SuccessionAsUsage) {
-                continue;
-            }
-            let (from, to) = self
-                .end_chains(child)
-                .ok_or("a succession whose ends did not resolve")?;
-            // `end_chains` answers only for two ends that resolved, so
-            // each has at least the one segment it resolved from
-            after
-                .entry(*from.first().expect("a resolved end has a segment"))
-                .or_default()
-                .push(*to.first().expect("a resolved end has a segment"));
+        for &source in wiring.into.values() {
+            *wiring.fanout.entry(source).or_default() += 1;
         }
-        let order = ordered(&steps.iter().map(|&(u, _)| u).collect::<Vec<_>>(), &after)
-            .ok_or("its subactions follow one another in a circle")?;
-
-        // every flow, by the (subaction, parameter) it arrives at
-        let mut into: HashMap<(Option<ElementId>, ElementId), (ElementId, ElementId)> =
-            HashMap::new();
-        for &child in model.owned(def) {
-            if !model.kind(child).is_a(ElementKind::FlowUsage) {
-                continue;
-            }
-            let (from, to) = self
-                .end_chains(child)
-                .ok_or("a flow whose ends did not resolve")?;
-            let [source, out] = from.as_slice() else {
-                return Err("a flow that does not come out of a subaction".to_string());
-            };
-            // `subaction.parameter` arrives at that subaction; anything
-            // else names the definition's own parameter, which is where
-            // a result comes from
-            let target = if let [usage, parameter] = to.as_slice() {
-                (Some(*usage), *parameter)
-            } else {
-                (None, *to.last().expect("a resolved end has a segment"))
-            };
-            into.insert(target, (*source, *out));
-        }
-        let mut fanout: HashMap<(ElementId, ElementId), usize> = HashMap::new();
-        for &source in into.values() {
-            *fanout.entry(source).or_default() += 1;
-        }
-
         // how many subactions each enclosing parameter is fed to
-        let mut remaining: HashMap<String, usize> = HashMap::new();
+        let usages: Vec<ElementId> = wiring.steps.iter().map(|&(usage, _)| usage).collect();
         for parameter in self.in_parameters(def) {
             if let Some(name) = model.name(parameter) {
-                remaining.insert(ident(name), self.bindings_naming(def, name));
+                let count = self.bindings_naming(&usages, name);
+                wiring.remaining.insert(ident(name), count);
             }
         }
 
-        let mut lines = Vec::new();
-        for &usage in &order {
-            let (_, performed) = *steps
-                .iter()
-                .find(|&&(u, _)| u == usage)
-                .expect("ordered from the steps");
-            let mine = model.name(usage).unwrap_or("?");
-            let mut arguments = Vec::new();
-            for parameter in self.in_parameters(performed) {
-                let named = model.name(parameter).unwrap_or("?");
-                arguments.push(
-                    self.fed_by(def, usage, parameter, &into, &mut fanout, &mut remaining)
-                        .ok_or_else(|| format!("nothing feeds `{mine}.{named}`"))?,
-                );
-            }
-            lines.push(format!(
-                "let {} = self.{}({});",
-                ident(mine),
-                ident(model.name(performed).unwrap_or("?")),
-                arguments.join(", ")
-            ));
-        }
+        let mut lines = self.sequence(def, &[], &mut wiring)?;
 
         // the result is whatever flows into the definition's own outs
         let mut results = Vec::new();
@@ -746,11 +719,22 @@ impl<'a> Generator<'a> {
                 continue;
             }
             let named = model.name(out).unwrap_or("?");
-            let &(source, parameter) = into
+            let &(source, parameter) = wiring
+                .into
                 .get(&(None, out))
                 .ok_or_else(|| format!("nothing produces `{named}`"))?;
+            if wiring
+                .scope_of
+                .get(&source)
+                .is_some_and(|at| !at.is_empty())
+            {
+                return Err(format!(
+                    "`{named}` is produced only inside a branch or a loop, which leaves it \
+                     unproduced on the way that does not run it"
+                ));
+            }
             results.push(
-                self.read_out(source, parameter, &mut fanout)
+                self.read_out(source, parameter, &mut wiring.fanout, false)
                     .ok_or_else(|| format!("what flows into `{named}` is no result of its own"))?,
             );
         }
@@ -761,11 +745,19 @@ impl<'a> Generator<'a> {
         }
 
         let mut supertraits: Vec<String> = Vec::new();
-        for &(_, performed) in &steps {
+        for &(_, performed) in &wiring.steps {
             if performed == def {
                 // a behaviour made of itself is not a supertrait of
                 // itself, and Rust reads that as a circle
                 return Err("it is made of itself".to_string());
+            }
+            // and nor is one made of something made of it, however far
+            // round: `A1: B1` with `B1: A1` is the same circle
+            if self.performs_in_the_end(performed, def) {
+                return Err(format!(
+                    "it is made of itself, by way of `{}`",
+                    model.name(performed).unwrap_or("?")
+                ));
             }
             let name = type_ident(
                 model
@@ -778,6 +770,504 @@ impl<'a> Generator<'a> {
         }
         Ok(Body { supertraits, lines })
     }
+    /// Whether `from` performs `target`, itself or through what it is
+    /// made of: every action usage it owns, at any depth, and the
+    /// actions those perform in turn.
+    fn performs_in_the_end(&self, from: ElementId, target: ElementId) -> bool {
+        let model = self.model;
+        let mut seen = HashSet::new();
+        let mut waiting = vec![from];
+        while let Some(def) = waiting.pop() {
+            if !seen.insert(def) {
+                continue;
+            }
+            let mut under = model.owned(def).to_vec();
+            while let Some(child) = under.pop() {
+                under.extend_from_slice(model.owned(child));
+                if !model.kind(child).is_a(ElementKind::ActionUsage) {
+                    continue;
+                }
+                if let Some(performed) = model.type_of(child) {
+                    if performed == target {
+                        return true;
+                    }
+                    waiting.push(performed);
+                }
+            }
+        }
+        false
+    }
+    /// Every subaction and flow of a behaviour, into the bodies of its
+    /// `if` and loop actions too -- or what stops it from being written,
+    /// named, where it holds something no generated body performs.
+    fn gather(&self, container: ElementId, wiring: &mut Wiring) -> Result<(), String> {
+        let model = self.model;
+        for &child in model.owned(container) {
+            if model.direction(child).is_some() {
+                continue;
+            }
+            let kind = model.kind(child);
+            match kind {
+                ElementKind::ActionUsage | ElementKind::PerformActionUsage => {
+                    let named = model.name(child).ok_or("a subaction with no name")?;
+                    let performed = model
+                        .type_of(child)
+                        .ok_or_else(|| format!("`{named}` performs nothing"))?;
+                    if self.shapes.get(&performed) != Some(&Shape::Action) {
+                        return Err(format!("`{named}` performs no generated action"));
+                    }
+                    wiring.steps.push((child, performed));
+                }
+                ElementKind::IfActionUsage | ElementKind::WhileLoopActionUsage => {
+                    self.gather_clauses(child, wiring)?;
+                }
+                ElementKind::ForkNode
+                | ElementKind::JoinNode
+                | ElementKind::MergeNode
+                | ElementKind::DecisionNode
+                | ElementKind::TransitionUsage => {}
+                _ if kind.is_a(ElementKind::FlowUsage) => {
+                    let (from, to) = self
+                        .end_chains(child)
+                        .ok_or("a flow whose ends did not resolve")?;
+                    let [source, out] = from.as_slice() else {
+                        return Err("a flow that does not come out of a subaction".to_string());
+                    };
+                    // `subaction.parameter` arrives at that subaction;
+                    // anything else names the definition's own parameter,
+                    // which is where a result comes from
+                    let target = if let [usage, parameter] = to.as_slice() {
+                        (Some(*usage), *parameter)
+                    } else {
+                        (None, *to.last().expect("a resolved end has a segment"))
+                    };
+                    wiring.into.insert(target, (*source, *out));
+                }
+                _ if kind.is_a(ElementKind::SuccessionAsUsage) => {}
+                _ if kind.is_a(ElementKind::ActionUsage) => {
+                    return Err(format!(
+                        "{} is {} -- no generated body performs one",
+                        model
+                            .name(child)
+                            .map_or_else(|| "a step of it".to_string(), |n| format!("`{n}`")),
+                        construct(kind)
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    /// [`Self::gather`] over the bodies of one `if` or loop action.
+    fn gather_clauses(&self, structured: ElementId, wiring: &mut Wiring) -> Result<(), String> {
+        for clause in clauses(self.model, structured) {
+            if self.model.kind(clause) == ElementKind::IfActionUsage {
+                // `else if`: the clause is an `if` of its own
+                self.gather_clauses(clause, wiring)?;
+            } else if self.model.kind(clause).is_a(ElementKind::ActionUsage) {
+                self.gather(clause, wiring)?;
+            }
+        }
+        Ok(())
+    }
+    /// The statements one behaviour, or one body inside it, comes to: its
+    /// steps and control nodes in the order its successions and flows
+    /// allow. `scope` is the blocks the statements are written in,
+    /// outermost first, each with whether it repeats.
+    fn sequence(
+        &self,
+        container: ElementId,
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+    ) -> Result<Vec<String>, String> {
+        let model = self.model;
+        let nodes: Vec<ElementId> = model
+            .owned(container)
+            .iter()
+            .copied()
+            .filter(|&child| model.direction(child).is_none() && is_node(model.kind(child)))
+            .collect();
+        let edges = self.edges(container, &nodes, wiring)?;
+        self.region(&nodes, &edges, scope, wiring)
+    }
+    /// The ways from one node of a behaviour to the next: its successions,
+    /// guarded or not, and the flows, since what reads a result can only
+    /// come after what produces it. Only those between two of `nodes`
+    /// order anything here.
+    fn edges(
+        &self,
+        container: ElementId,
+        nodes: &[ElementId],
+        wiring: &Wiring,
+    ) -> Result<Vec<Edge>, String> {
+        let model = self.model;
+        let mut edges = Vec::new();
+        for &child in model.owned(container) {
+            let kind = model.kind(child);
+            let (relates, guard) = if kind == ElementKind::TransitionUsage {
+                // what a guarded succession relates it relates through the
+                // succession it owns
+                let relates = model
+                    .owned(child)
+                    .iter()
+                    .copied()
+                    .find(|&inner| model.kind(inner).is_a(ElementKind::SuccessionAsUsage))
+                    .ok_or("a guarded succession whose ends did not resolve")?;
+                let guard = match model.get(child, "guardExpression") {
+                    Some(Value::RefList(guards)) => guards.first().copied(),
+                    _ => None,
+                };
+                (relates, guard)
+            } else if kind.is_a(ElementKind::SuccessionAsUsage) {
+                (child, None)
+            } else {
+                continue;
+            };
+            let (from, to) = self
+                .end_chains(relates)
+                .ok_or("a succession whose ends did not resolve")?;
+            // `end_chains` answers only for two ends that resolved, so
+            // each has at least the one segment it resolved from
+            let from = *from.first().expect("a resolved end has a segment");
+            let to = *to.first().expect("a resolved end has a segment");
+            if !nodes.contains(&from) || !nodes.contains(&to) {
+                continue;
+            }
+            if guard.is_some() && model.kind(from) != ElementKind::DecisionNode {
+                return Err(format!(
+                    "the succession out of `{}` is guarded, and a guard is honoured here \
+                     only on the way out of a `decide`",
+                    model.name(from).unwrap_or("?")
+                ));
+            }
+            edges.push(Edge {
+                from,
+                to,
+                guard,
+                flows: false,
+            });
+        }
+        for (&(consumer, _), &(source, _)) in &wiring.into {
+            if let Some(consumer) = consumer {
+                if nodes.contains(&source) && nodes.contains(&consumer) {
+                    edges.push(Edge {
+                        from: source,
+                        to: consumer,
+                        guard: None,
+                        flows: true,
+                    });
+                }
+            }
+        }
+        // the flows came out of a map; what is written must not depend
+        // on the order it hands them back in
+        edges.sort_by_key(|edge| (edge.from, edge.to, edge.flows));
+        edges.dedup_by_key(|edge| (edge.from, edge.to, edge.flows));
+        Ok(edges)
+    }
+    /// The statements a set of nodes comes to, in an order the edges
+    /// between them allow.
+    fn region(
+        &self,
+        nodes: &[ElementId],
+        edges: &[Edge],
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+    ) -> Result<Vec<String>, String> {
+        let model = self.model;
+        let mut after: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
+        for edge in edges {
+            if nodes.contains(&edge.from) && nodes.contains(&edge.to) {
+                after.entry(edge.from).or_default().push(edge.to);
+            }
+        }
+        let order =
+            ordered(nodes, &after).ok_or("its subactions follow one another in a circle")?;
+        let mut done: HashSet<ElementId> = HashSet::new();
+        let mut lines = Vec::new();
+        for node in order {
+            if !done.insert(node) {
+                continue;
+            }
+            match model.kind(node) {
+                ElementKind::ActionUsage | ElementKind::PerformActionUsage => {
+                    lines.push(self.call(node, scope, wiring)?);
+                }
+                ElementKind::DecisionNode => {
+                    lines.extend(self.decision(node, nodes, edges, scope, wiring, &mut done)?);
+                }
+                ElementKind::IfActionUsage => {
+                    lines.extend(self.if_action(node, scope, wiring)?);
+                }
+                ElementKind::WhileLoopActionUsage => {
+                    lines.extend(self.loop_action(node, scope, wiring)?);
+                }
+                // a fork, a join or a merge orders what is around it and
+                // does nothing of its own
+                _ => {}
+            }
+        }
+        Ok(lines)
+    }
+    /// One subaction, called with what feeds it.
+    fn call(
+        &self,
+        usage: ElementId,
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+    ) -> Result<String, String> {
+        let model = self.model;
+        let performed = wiring
+            .steps
+            .iter()
+            .find(|&&(u, _)| u == usage)
+            .map(|&(_, performed)| performed)
+            .expect("gathered before it is called");
+        let mine = model.name(usage).unwrap_or("?");
+        wiring.scope_of.insert(usage, scope.to_vec());
+        let mut arguments = Vec::new();
+        for parameter in self.in_parameters(performed) {
+            let named = model.name(parameter).unwrap_or("?");
+            // what a step inside a loop reads from outside it is read
+            // again on every pass, so it cannot be taken on the first
+            let repeats = match wiring.into.get(&(Some(usage), parameter)) {
+                Some(&(source, _)) => {
+                    let source_name = model.name(source).unwrap_or("?");
+                    let Some(at) = wiring.scope_of.get(&source) else {
+                        return Err(format!(
+                            "`{mine}.{named}` reads what `{source_name}` produces, which \
+                             nothing runs before it"
+                        ));
+                    };
+                    if !scope.starts_with(at) {
+                        return Err(format!(
+                            "`{mine}.{named}` reads what `{source_name}` produces only inside \
+                             a branch or a loop `{mine}` is not in"
+                        ));
+                    }
+                    scope[at.len()..].iter().any(|&(_, repeats)| repeats)
+                }
+                None => scope.iter().any(|&(_, repeats)| repeats),
+            };
+            arguments.push(
+                self.fed_by(usage, parameter, wiring, repeats)
+                    .ok_or_else(|| format!("nothing feeds `{mine}.{named}`"))?,
+            );
+        }
+        Ok(format!(
+            "let {} = self.{}({});",
+            ident(mine),
+            ident(model.name(performed).unwrap_or("?")),
+            arguments.join(", ")
+        ))
+    }
+    /// A `decide` as an `if` over the guards of the ways out of it, each
+    /// way running what only it leads to, up to a `merge`.
+    fn decision(
+        &self,
+        node: ElementId,
+        nodes: &[ElementId],
+        every: &[Edge],
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+        done: &mut HashSet<ElementId>,
+    ) -> Result<Vec<String>, String> {
+        let model = self.model;
+        let named = model.name(node).unwrap_or("?");
+        // a flow orders what reads after what it reads, and says nothing
+        // of which way a decision goes
+        let edges: Vec<&Edge> = every.iter().filter(|edge| !edge.flows).collect();
+        let ways: Vec<&Edge> = edges
+            .iter()
+            .copied()
+            .filter(|edge| edge.from == node)
+            .collect();
+        // the guarded ways first, in the order the model wrote them, and
+        // the one with no guard -- the `else` -- last
+        let mut guarded: Vec<&Edge> = ways.iter().copied().filter(|w| w.guard.is_some()).collect();
+        guarded.sort_by_key(|way| way.guard);
+        let otherwise: Vec<&Edge> = ways.iter().copied().filter(|w| w.guard.is_none()).collect();
+        if otherwise.len() > 1 {
+            return Err(format!(
+                "`{named}` has more than one way out with no guard, and a decision takes one"
+            ));
+        }
+        let mut claimed: HashSet<ElementId> = HashSet::new();
+        let mut branches: Vec<(Option<String>, Vec<ElementId>)> = Vec::new();
+        for way in guarded.iter().chain(&otherwise) {
+            // what only this way leads to, up to where the ways merge
+            let mut reached: Vec<ElementId> = Vec::new();
+            let mut stack = vec![way.to];
+            while let Some(at) = stack.pop() {
+                if reached.contains(&at) || model.kind(at) == ElementKind::MergeNode {
+                    continue;
+                }
+                reached.push(at);
+                stack.extend(edges.iter().filter(|e| e.from == at).map(|e| e.to));
+            }
+            for &at in &reached {
+                let joins = edges
+                    .iter()
+                    .filter(|e| e.to == at)
+                    .any(|e| e.from != node && !reached.contains(&e.from));
+                if joins || !claimed.insert(at) || done.contains(&at) {
+                    return Err(format!(
+                        "the ways out of `{named}` meet again other than at a `merge`, \
+                         at `{}`",
+                        model.name(at).unwrap_or("?")
+                    ));
+                }
+            }
+            let condition = match way.guard {
+                Some(guard) => Some(self.condition(guard, wiring.def)?),
+                None => None,
+            };
+            let mut ordered_region: Vec<ElementId> = nodes
+                .iter()
+                .copied()
+                .filter(|n| reached.contains(n))
+                .collect();
+            ordered_region.dedup();
+            branches.push((condition, ordered_region));
+        }
+        let mut lines = Vec::new();
+        for (at, (condition, region)) in branches.iter().enumerate() {
+            done.extend(region.iter().copied());
+            let mut inner = scope.to_vec();
+            wiring.blocks += 1;
+            inner.push((wiring.blocks, false));
+            let body = self.region(region, every, &inner, wiring)?;
+            let opening = match (at, condition) {
+                (0, Some(condition)) => format!("if {condition} {{"),
+                (_, Some(condition)) => format!("}} else if {condition} {{"),
+                // nothing but an `else`: the one way there is, always
+                (0, None) => "{".to_string(),
+                (_, None) => "} else {".to_string(),
+            };
+            lines.push(opening);
+            lines.extend(body.into_iter().map(|line| format!("    {line}")));
+        }
+        if !branches.is_empty() {
+            lines.push("}".to_string());
+        }
+        Ok(lines)
+    }
+    /// An `if` action as an `if`, its `else` -- a body or another `if` --
+    /// as an `else`.
+    fn if_action(
+        &self,
+        node: ElementId,
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+    ) -> Result<Vec<String>, String> {
+        let model = self.model;
+        let clauses = clauses(model, node);
+        let [condition, then, rest @ ..] = clauses.as_slice() else {
+            return Err("an `if` with no condition or no body".to_string());
+        };
+        if !model.kind(*condition).is_a(ElementKind::Expression) {
+            return Err("an `if` with no condition".to_string());
+        }
+        let condition = self.condition(*condition, wiring.def)?;
+        let mut lines = vec![format!("if {condition} {{")];
+        lines.extend(self.block(*then, scope, false, wiring)?);
+        match rest {
+            [] => {}
+            [otherwise] if model.kind(*otherwise) == ElementKind::IfActionUsage => {
+                let nested = self.if_action(*otherwise, scope, wiring)?;
+                lines.push(format!("}} else {}", nested[0]));
+                lines.extend(nested[1..nested.len() - 1].iter().cloned());
+            }
+            [otherwise] => {
+                lines.push("} else {".to_string());
+                lines.extend(self.block(*otherwise, scope, false, wiring)?);
+            }
+            _ => return Err("an `if` with more than one `else`".to_string()),
+        }
+        lines.push("}".to_string());
+        Ok(lines)
+    }
+    /// A `while` action as a `while`, a `loop` as a `loop`, and an `until`
+    /// as the `break` at the end of the body.
+    fn loop_action(
+        &self,
+        node: ElementId,
+        scope: &[(usize, bool)],
+        wiring: &mut Wiring,
+    ) -> Result<Vec<String>, String> {
+        let model = self.model;
+        let clauses = clauses(model, node);
+        let [condition, body, rest @ ..] = clauses.as_slice() else {
+            return Err("a loop with no body".to_string());
+        };
+        // `loop` writes no condition, and the model holds an empty
+        // parameter where `while` holds one
+        let mut lines = vec![if model.kind(*condition).is_a(ElementKind::Expression) {
+            format!("while {} {{", self.condition(*condition, wiring.def)?)
+        } else {
+            "loop {".to_string()
+        }];
+        lines.extend(self.block(*body, scope, true, wiring)?);
+        match rest {
+            [] => {}
+            [until] if model.kind(*until).is_a(ElementKind::Expression) => {
+                lines.push(format!("    if {} {{", self.condition(*until, wiring.def)?));
+                lines.push("        break;".to_string());
+                lines.push("    }".to_string());
+            }
+            _ => return Err("a loop whose `until` is no expression".to_string()),
+        }
+        lines.push("}".to_string());
+        Ok(lines)
+    }
+    /// The statements of one body of an `if` or a loop, indented into it.
+    fn block(
+        &self,
+        body: ElementId,
+        scope: &[(usize, bool)],
+        repeats: bool,
+        wiring: &mut Wiring,
+    ) -> Result<Vec<String>, String> {
+        let mut inner = scope.to_vec();
+        wiring.blocks += 1;
+        inner.push((wiring.blocks, repeats));
+        Ok(self
+            .sequence(body, &inner, wiring)?
+            .into_iter()
+            .map(|line| format!("    {line}"))
+            .collect())
+    }
+    /// A guard or a condition of a behaviour as the Rust `bool` it is,
+    /// over the behaviour's own `in` parameters -- or why it is not one.
+    fn condition(&self, expression: ElementId, def: ElementId) -> Result<String, String> {
+        let model = self.model;
+        let Some(text) = expression_text(model, expression) else {
+            return Err("a condition the model holds no text for".to_string());
+        };
+        let parameters = self.in_parameters(def);
+        let resolve = |chain: &str| {
+            expr::led_by(chain, |leading: &str| {
+                parameters
+                    .iter()
+                    .find(|&&p| model.name(p) == Some(leading))
+                    .map(|_| ident(leading))
+            })
+        };
+        let translated = translate(&text, &resolve, &|name| self.callable(expression, name));
+        let flag = |rust: &str| {
+            parameters.iter().any(|&p| {
+                model.name(p).map(ident).as_deref() == Some(rust)
+                    && self.parameter_type(p).as_deref() == Some("bool")
+            })
+        };
+        match translated {
+            Some(translated) if translated.boolean || flag(&translated.rust) => Ok(translated.rust),
+            _ => Err(format!(
+                "the condition `{}` is past what this generator translates into a `bool`",
+                text.trim()
+            )),
+        }
+    }
     /// The `in` parameters of an action definition, in declaration order.
     fn in_parameters(&self, def: ElementId) -> Vec<ElementId> {
         self.model
@@ -789,18 +1279,18 @@ impl<'a> Generator<'a> {
             .collect()
     }
     /// What feeds one parameter of one subaction: a flow out of another,
-    /// or a value the usage bound it to.
+    /// or a value the usage bound it to. `repeats` says the call is read
+    /// again on every pass of a loop the value comes from outside of, so
+    /// whatever is not a copy is cloned rather than taken.
     fn fed_by(
         &self,
-        def: ElementId,
         usage: ElementId,
         parameter: ElementId,
-        into: &HashMap<(Option<ElementId>, ElementId), (ElementId, ElementId)>,
-        fanout: &mut HashMap<(ElementId, ElementId), usize>,
-        remaining: &mut HashMap<String, usize>,
+        wiring: &mut Wiring,
+        repeats: bool,
     ) -> Option<String> {
-        if let Some(&(source, out)) = into.get(&(Some(usage), parameter)) {
-            return self.read_out(source, out, fanout);
+        if let Some(&(source, out)) = wiring.into.get(&(Some(usage), parameter)) {
+            return self.read_out(source, out, &mut wiring.fanout, repeats);
         }
         // `action wash : Washout { in stream = TrainingRun::stream; }`
         let name = self.model.name(parameter)?;
@@ -811,47 +1301,42 @@ impl<'a> Generator<'a> {
             .copied()
             .find(|&child| self.model.name(child) == Some(name))
             .and_then(|child| value_clause(self.model, child))?;
-        let parameters = self.in_parameters(def);
-        let resolve = |leading: &str| {
-            parameters
-                .iter()
-                .find(|&&p| self.model.name(p) == Some(leading))
-                .map(|_| ident(leading))
+        let parameters = self.in_parameters(wiring.def);
+        let resolve = |chain: &str| {
+            expr::led_by(chain, |leading: &str| {
+                parameters
+                    .iter()
+                    .find(|&&p| self.model.name(p) == Some(leading))
+                    .map(|_| ident(leading))
+            })
         };
         let read = match bound {
             // `TrainingRun::stream` names the enclosing action's own
             // parameter, and the argument is what Rust calls it
             ValueClause::Text(text) => {
                 let tail = text.rsplit("::").next()?.trim().to_string();
-                translate(&tail, &resolve, &|name| self.callable(name))?.rust
+                translate(&tail, &resolve, &|name| self.callable(usage, name))?.rust
             }
             ValueClause::Literal(rust) => rust,
         };
         // a parameter fed to more than one subaction is cloned until the
         // last of them, which may take it -- unless it is a scalar, which
         // every call copies anyway
-        let left = remaining.entry(read.clone()).or_insert(0);
+        let left = wiring.remaining.entry(read.clone()).or_insert(0);
         *left = left.saturating_sub(1);
         let copyable = self
             .parameter_shape(parameter)
             .is_some_and(|(base, _)| copyable(&base));
-        Some(if *left > 0 && !copyable {
+        Some(if (*left > 0 || repeats) && !copyable {
             format!("{read}.clone()")
         } else {
             read
         })
     }
     /// How many of the subactions bind one of the enclosing parameters.
-    fn bindings_naming(&self, def: ElementId, name: &str) -> usize {
-        self.model
-            .owned(def)
+    fn bindings_naming(&self, usages: &[ElementId], name: &str) -> usize {
+        usages
             .iter()
-            .filter(|&&child| {
-                matches!(
-                    self.model.kind(child),
-                    ElementKind::ActionUsage | ElementKind::PerformActionUsage
-                )
-            })
             .flat_map(|&child| self.model.owned(child).iter().copied())
             .filter(|&bound| match value_clause(self.model, bound) {
                 Some(ValueClause::Text(text)) => {
@@ -868,6 +1353,7 @@ impl<'a> Generator<'a> {
         source: ElementId,
         parameter: ElementId,
         fanout: &mut HashMap<(ElementId, ElementId), usize>,
+        repeats: bool,
     ) -> Option<String> {
         let performed = self.model.type_of(source)?;
         let outs: Vec<ElementId> = self
@@ -898,7 +1384,7 @@ impl<'a> Generator<'a> {
             .is_some_and(|(base, _)| copyable(&base));
         let left = fanout.entry((source, parameter)).or_insert(0);
         *left = left.saturating_sub(1);
-        Some(if !copyable && *left > 0 {
+        Some(if !copyable && (*left > 0 || repeats) {
             format!("{read}.clone()")
         } else {
             read
@@ -1083,7 +1569,7 @@ impl<'a> Generator<'a> {
         fields: &[Field],
     ) -> Result<String, String> {
         let model = self.model;
-        let name = model.name(usage).expect("named, or it was skipped");
+        let name = &self.member_name(usage).expect("named, or it was skipped");
         let def_name = type_ident(model.name(def).expect("collected named"));
         let returns = model
             .owned(def)
@@ -1116,15 +1602,10 @@ impl<'a> Generator<'a> {
         provider_ref: &str,
     ) -> Result<String, String> {
         let model = self.model;
-        let name = model.name(usage).expect("named, or it was skipped");
+        let name = &self.member_name(usage).expect("named, or it was skipped");
         let spelled = model.name(def).expect("collected named");
         let def_name = type_ident(spelled);
-        let resolve = |leading: &str| {
-            fields
-                .iter()
-                .find(|field| field.name == leading)
-                .map(|field| format!("self.{}", field.spelled))
-        };
+        let resolve = |chain: &str| self.through_fields(fields, chain);
 
         let mut params: Vec<(String, String)> = Vec::new();
         let mut arguments: Vec<String> = Vec::new();
@@ -1162,8 +1643,8 @@ impl<'a> Generator<'a> {
                 ValueClause::Text(text) => {
                     let tail = text.rsplit("::").next().unwrap_or(&text).trim();
                     let read = resolve(tail)
-                        .map(Translated::plain)
-                        .or_else(|| translate(&text, &resolve, &|name| self.callable(name)));
+                        .map(|reached| Translated::plain(reached.rust))
+                        .or_else(|| translate(&text, &resolve, &|name| self.callable(usage, name)));
                     match read {
                         Some(translated) => translated.rust,
                         None => {
@@ -1205,6 +1686,7 @@ impl<'a> Generator<'a> {
 
         let mut method = String::new();
         writeln!(method, "    /// SysML: `{label} {name} : {def_name}`").unwrap();
+        method.push_str(&self.unnamed_note(usage));
         writeln!(
             method,
             "    pub fn {}({signature}){} {{",
@@ -1233,5 +1715,76 @@ impl<'a> Generator<'a> {
                 .type_of(param)
                 .is_some_and(|target| self.derivable.contains(&target));
         clonable.then(|| format!("{read}.clone()"))
+    }
+}
+
+/// What an action body is being compiled from, and what has been written
+/// of it so far.
+struct Wiring {
+    /// The definition whose body this is.
+    def: ElementId,
+    /// Every subaction, nested ones too, and what it performs.
+    steps: Vec<(ElementId, ElementId)>,
+    /// Every flow, by the (subaction, parameter) it arrives at.
+    into: HashMap<(Option<ElementId>, ElementId), (ElementId, ElementId)>,
+    /// How many reads each output has left.
+    fanout: HashMap<(ElementId, ElementId), usize>,
+    /// How many subactions each enclosing parameter is still fed to.
+    remaining: HashMap<String, usize>,
+    /// The blocks each written subaction sits in, outermost first, each
+    /// with whether it repeats: what it produces is in Rust's scope only
+    /// inside them.
+    scope_of: HashMap<ElementId, Vec<(usize, bool)>>,
+    /// Blocks opened so far, to tell them apart.
+    blocks: usize,
+}
+
+/// One way from a node of a behaviour to the next.
+struct Edge {
+    from: ElementId,
+    to: ElementId,
+    /// The guard on it, where it is a guarded succession.
+    guard: Option<ElementId>,
+    /// Whether it is a flow, which orders but does not branch.
+    flows: bool,
+}
+
+/// What can stand in a behaviour's order: a subaction, a control node, or
+/// an `if` or loop action.
+fn is_node(kind: ElementKind) -> bool {
+    matches!(
+        kind,
+        ElementKind::ActionUsage
+            | ElementKind::PerformActionUsage
+            | ElementKind::ForkNode
+            | ElementKind::JoinNode
+            | ElementKind::MergeNode
+            | ElementKind::DecisionNode
+            | ElementKind::IfActionUsage
+            | ElementKind::WhileLoopActionUsage
+    )
+}
+
+/// The clauses of an `if` or loop action, in the order the model holds
+/// them: the condition, the body, and the `else` or the `until`.
+fn clauses(model: &Model, structured: ElementId) -> Vec<ElementId> {
+    model
+        .owned(structured)
+        .iter()
+        .copied()
+        .filter(|&child| model.direction(child) == Some("in"))
+        .collect()
+}
+
+/// A step of a behaviour no generated body performs, as a reader would
+/// call it.
+fn construct(kind: ElementKind) -> String {
+    match kind {
+        ElementKind::SendActionUsage => "a `send`".to_string(),
+        ElementKind::AcceptActionUsage => "an `accept`".to_string(),
+        ElementKind::AssignmentActionUsage => "an assignment".to_string(),
+        ElementKind::ForLoopActionUsage => "a `for` loop".to_string(),
+        ElementKind::TerminateActionUsage => "a `terminate`".to_string(),
+        other => format!("a {other:?}"),
     }
 }

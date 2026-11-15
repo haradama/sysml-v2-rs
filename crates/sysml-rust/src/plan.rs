@@ -170,6 +170,11 @@ pub struct Definition {
     /// The steps of an action, in the order the model puts them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
+    /// What follows what among them, the guards of a `decide`'s ways out
+    /// included: the order and the branching the steps' own
+    /// [`after`](Step::after) lists cannot say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub successions: Vec<Succession>,
     /// What passes between them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Flow>,
@@ -326,8 +331,14 @@ pub struct Variant {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
-    /// What the model calls it.
+    /// What the model calls it -- or, for one it leaves unnamed,
+    /// `{from}_to_{to}`, the name `sysml rustgen` gives it too, numbered
+    /// `_2`, `_3` where another transition already answers to that.
     pub name: String,
+    /// Whether [`name`](Self::name) is that derived one rather than the
+    /// model's: nothing in the model refers to it by it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unnamed: bool,
     /// The state it leaves.
     pub from: String,
     /// The state it arrives in.
@@ -345,14 +356,34 @@ pub struct Transition {
 }
 
 /// The event a transition waits for, and what it carries.
+///
+/// `accept s : Sig` waits for a `Sig` and binds it to `s`; `accept Go`
+/// waits for a `Go` and binds it to nothing; `accept when level > 3`
+/// waits for a condition to become true, and `accept after 5 [s]` /
+/// `accept at t` for a time -- neither of those carries anything.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Trigger {
-    /// The name the payload is bound to.
+    /// What kind of event: `signal` (something arrives), `when` (a
+    /// change: the condition becomes true), `after` (a relative time
+    /// passes) or `at` (an absolute time is reached).
+    #[serde(default = "signal")]
+    pub kind: String,
+    /// The name the payload is bound to, where the model binds it to
+    /// one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     /// What the payload is.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
+    /// The condition or the time of a `when`, `after` or `at`, as the
+    /// model wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+}
+
+fn signal() -> String {
+    "signal".to_string()
 }
 
 /// One behaviour a definition carries out. What it performs is named
@@ -371,18 +402,90 @@ pub struct Performed {
     pub documentation: Option<String>,
 }
 
-/// One step of an action.
+/// One step of an action: a subaction, or one of the control nodes and
+/// structured actions that decide which subaction runs when.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Step {
-    /// What the model calls it.
+    /// What the model calls it -- or, for one it leaves unnamed, its
+    /// [`kind`](Self::kind), numbered `_2`, `_3` clear of the other
+    /// steps beside it.
     pub name: String,
+    /// Whether [`name`](Self::name) is that derived one rather than the
+    /// model's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unnamed: bool,
+    /// What kind of step: `action` (a subaction), `perform`, `accept`,
+    /// `send`, `assign`, `terminate`; the control nodes `decide` (one way
+    /// out is taken, chosen by the guards of its
+    /// [`successions`](Definition::successions)), `merge` (any one way
+    /// in is enough), `fork` (every way out is taken) and `join` (every
+    /// way in must arrive); and the structured `if`, `while`, `loop` and
+    /// `for`, whose [`body`](Self::body) is a block of steps of its own.
+    #[serde(default = "action")]
+    pub kind: String,
     /// What it performs.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub typed_by: Option<String>,
-    /// The steps that must finish before it starts.
+    /// The steps a succession leads from into this one, guarded or not:
+    /// every one of them a step of the same block. Which of them must
+    /// finish -- all, for an action or a `join`; the one that arrives,
+    /// for a `merge` -- is the step's kind's to say, and which guard
+    /// opens which way the [`successions`](Definition::successions)'.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after: Vec<String>,
+    /// The condition of an `if` or a `while`, as the model wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub condition: Option<String>,
+    /// The `until` a loop stops at, checked after each pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// What an `if` does when its condition holds, or a loop does each
+    /// pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<Block>,
+    /// What an `if` does otherwise. An `else if` is a block holding the
+    /// one `if` step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otherwise: Option<Block>,
+}
+
+fn action() -> String {
+    "action".to_string()
+}
+
+/// The steps of the body of an `if` or a loop, and how they follow one
+/// another: the same as a definition says of its own.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Block {
+    /// What the body is called, where the model names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Its steps, in the order the model puts them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<Step>,
+    /// What follows what among them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub successions: Vec<Succession>,
+    /// What passes between them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<Flow>,
+}
+
+/// One step following another: `first a then b`, or -- out of a
+/// `decide` -- `if guard then b`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Succession {
+    /// The step it leads from, by its [`name`](Step::name).
+    pub from: String,
+    /// The step it leads to.
+    pub to: String,
+    /// What must hold for it to be taken, as the model wrote it. A way
+    /// out of a `decide` with none is its `else`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<String>,
 }
 
 /// Two of a definition's parts, joined.
@@ -552,6 +655,13 @@ fn shape_of(ws: &mut Workspace, id: ElementId) -> Option<&'static str> {
 fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definition {
     let specializes = declared_parents(ws, id);
     let owned = ws.model().owned(id).to_vec();
+    // a part's `perform` is what it does, said in `performs`; an
+    // action's is one of its steps
+    let block = block(
+        ws,
+        id,
+        ws.model().kind(id).is_a(ElementKind::ActionDefinition),
+    );
     let says_nothing_by_being_abstract = matches!(shape, "enumeration" | "variation");
     Definition {
         of: ws.qualified_name_of(id),
@@ -617,10 +727,7 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
         on_entry: acting(ws, &owned, Role::Entry),
         during: acting(ws, &owned, Role::Do),
         on_exit: acting(ws, &owned, Role::Exit),
-        transitions: owned
-            .iter()
-            .filter_map(|&child| transition(ws, child))
-            .collect(),
+        transitions: transitions(ws, &owned, shape == "state machine"),
         returns: {
             let result = owned
                 .iter()
@@ -641,25 +748,8 @@ fn definition(ws: &mut Workspace, id: ElementId, shape: &'static str) -> Definit
                 .collect();
             mine.into_iter().map(|child| performed(ws, child)).collect()
         },
-        steps: {
-            // an entry, do or exit action is the machinery of a state
-            // machine rather than a step of a behaviour, and is said
-            // where it belongs
-            let mine: Vec<ElementId> = owned
-                .iter()
-                .copied()
-                .filter(|&child| {
-                    ws.model().kind(child) == ElementKind::ActionUsage
-                        && !matches!(
-                            ws.model().member_role(child),
-                            Some(Role::Entry | Role::Do | Role::Exit)
-                        )
-                })
-                .collect();
-            mine.into_iter()
-                .filter_map(|child| step(ws, child, &owned))
-                .collect()
-        },
+        steps: block.steps,
+        successions: block.successions,
         flows: owned.iter().filter_map(|&child| flow(ws, child)).collect(),
         connections: {
             let mine: Vec<ElementId> = owned
@@ -834,9 +924,25 @@ fn given(ws: &Workspace, usage: ElementId) -> Option<Given> {
 }
 
 /// What an inherited feature this one redefines is called.
+///
+/// What it redefines may be a redefinition itself, declaring no name and
+/// answering to the one it borrows -- `attribute :>> c = 2;` in `Sub` is
+/// `Sub::c` -- which the qualified name reads off the model as `?`.
 fn redefines(ws: &mut Workspace, usage: ElementId) -> Option<String> {
-    let redefined = sysml_model::redefined(ws.model(), usage)?;
-    Some(ws.qualified_name_of(redefined))
+    let model = ws.model();
+    let redefined = sysml_model::redefined(model, usage)?;
+    if model.name(redefined).is_some() {
+        return Some(ws.qualified_name_of(redefined));
+    }
+    let name = model.effective_name(redefined)?.to_string();
+    let owner = model
+        .owner(redefined)
+        .map(|owner| ws.qualified_name_of(owner))
+        .unwrap_or_default();
+    Some(match owner.is_empty() {
+        true => name,
+        false => format!("{owner}::{name}"),
+    })
 }
 
 /// What the model itself declares a definition specializes.
@@ -911,31 +1017,14 @@ fn constraints(ws: &Workspace, owned: &[ElementId], role: Role) -> Vec<String> {
         .collect()
 }
 
-/// The state a machine starts in. Written `entry; then dark;` -- an
-/// entry action with a succession out of it -- so it is neither the
-/// first state declared nor anything a state says of itself.
+/// The state a machine starts in, by name. See
+/// [`crate::generate::initial_state`], which the generated `initial()`
+/// answers from too, so the plan and the Rust cannot disagree.
 fn initial_state(ws: &Workspace, owned: &[ElementId]) -> Option<String> {
     let model = ws.model();
-    let entry = owned
-        .iter()
-        .copied()
-        .find(|&child| model.member_role(child) == Some(Role::Entry))?;
-    owned.iter().copied().find_map(|other| {
-        if !model.kind(other).is_a(ElementKind::SuccessionAsUsage) {
-            return None;
-        }
-        let ends: Vec<ElementId> = model
-            .owned(other)
-            .iter()
-            .filter(|&&end| model.kind(end) == ElementKind::Feature)
-            .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
-            .collect();
-        let (from, to) = (*ends.first()?, *ends.get(1)?);
-        (from == entry)
-            .then(|| model.name(to))
-            .flatten()
-            .map(str::to_string)
-    })
+    crate::generate::initial_state(model, owned)
+        .and_then(|state| model.name(state))
+        .map(str::to_string)
 }
 
 /// The action a state machine performs in one of the three places it can
@@ -994,12 +1083,44 @@ fn variant(ws: &mut Workspace, child: ElementId) -> Variant {
     }
 }
 
+/// The transitions of a state definition, each with a name: the model's,
+/// or `{from}_to_{to}` for one it leaves unnamed -- numbered clear of the
+/// names the model gave, which keep theirs -- as `sysml rustgen` calls it.
+///
+/// Outside a state machine an unnamed transition is a guarded succession
+/// -- `if flag then logA;` out of a `decide` -- and is planned as one of
+/// the [`successions`](Definition::successions), not as a transition.
+fn transitions(ws: &mut Workspace, owned: &[ElementId], machine: bool) -> Vec<Transition> {
+    let mut planned: Vec<Transition> = owned
+        .iter()
+        .filter_map(|&child| transition(ws, child))
+        .filter(|it| machine || !it.unnamed)
+        .collect();
+    let mut taken: std::collections::HashSet<String> = planned
+        .iter()
+        .filter(|it| !it.unnamed)
+        .map(|it| it.name.clone())
+        .collect();
+    for it in planned.iter_mut().filter(|it| it.unnamed) {
+        let base = format!("{}_to_{}", it.from, it.to);
+        let mut name = base.clone();
+        let mut at = 1;
+        while !taken.insert(name.clone()) {
+            at += 1;
+            name = format!("{base}_{at}");
+        }
+        it.name = name;
+    }
+    planned
+}
+
 fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
     let model = ws.model();
     if model.kind(usage) != ElementKind::TransitionUsage {
         return None;
     }
-    let name = model.name(usage)?.to_string();
+    // named, where it is unnamed, once its ends are known
+    let named = model.name(usage).map(str::to_string);
     // A transition is not a connector: what it relates it relates
     // through the `Succession` it owns, and that is where its ends are.
     let relates = model
@@ -1015,17 +1136,11 @@ fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
         .filter_map(|&child| sysml_model::end_reaches(model, child).last().copied())
         .collect();
     let [from, to] = ends[..] else { return None };
-    let on = match model.get(usage, "triggerAction") {
-        Some(Value::RefList(triggers)) => triggers.first().and_then(|&accept| {
-            let waits = sysml_model::payload_parameter(model, accept)?;
-            let typed = model.type_of(waits);
-            Some(Trigger {
-                name: model.name(waits)?.to_string(),
-                typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
-            })
-        }),
+    let accept = match model.get(usage, "triggerAction") {
+        Some(Value::RefList(triggers)) => triggers.first().copied(),
         _ => None,
     };
+    let on = accept.and_then(|accept| trigger(ws, accept));
     let model = ws.model();
     let guard = match model.get(usage, "guardExpression") {
         Some(Value::RefList(guards)) => guards
@@ -1036,7 +1151,8 @@ fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
     let effect =
         matches!(model.get(usage, "effectAction"), Some(Value::RefList(list)) if !list.is_empty());
     Some(Transition {
-        name,
+        unnamed: named.is_none(),
+        name: named.unwrap_or_default(),
         from: model.name(from)?.to_string(),
         to: model.name(to)?.to_string(),
         on,
@@ -1045,38 +1161,289 @@ fn transition(ws: &mut Workspace, usage: ElementId) -> Option<Transition> {
     })
 }
 
-fn step(ws: &mut Workspace, child: ElementId, beside: &[ElementId]) -> Option<Step> {
-    let typed = ws.model().type_of(child);
-    let name = ws.model().name(child)?.to_string();
-    // `first a then b` is a succession the definition owns, so what a
-    // step waits for is read off its neighbours rather than off itself
-    let successions: Vec<ElementId> = beside
-        .iter()
-        .copied()
-        .filter(|&other| ws.model().kind(other).is_a(ElementKind::SuccessionAsUsage))
-        .collect();
+/// What an `accept` waits for: what its payload parameter is typed by
+/// and bound to, and -- for `when`, `after` and `at` -- the kind of event
+/// and the expression the model wrote, which is the payload's value.
+fn trigger(ws: &mut Workspace, accept: ElementId) -> Option<Trigger> {
     let model = ws.model();
-    let after: Vec<String> = successions
-        .into_iter()
-        .filter_map(|other| {
-            let ends: Vec<ElementId> = model
-                .owned(other)
-                .iter()
-                .filter(|&&end| model.kind(end) == ElementKind::Feature)
-                .filter_map(|&end| sysml_model::end_reaches(model, end).last().copied())
-                .collect();
-            let (before, next) = (*ends.first()?, *ends.get(1)?);
-            (next == child)
-                .then(|| model.name(before))
-                .flatten()
-                .map(str::to_string)
-        })
-        .collect();
-    Some(Step {
+    let waits = sysml_model::payload_parameter(model, accept)?;
+    let typed = model.type_of(waits);
+    let name = model.name(waits).unwrap_or_default().to_string();
+    let invoked = model
+        .owned(waits)
+        .iter()
+        .filter(|&&child| model.kind(child) == ElementKind::FeatureValue)
+        .filter_map(|&value| model.maybe(value, "value").and_then(Value::as_id))
+        .find(|&value| model.kind(value) == ElementKind::TriggerInvocationExpression);
+    let (kind, expression) = match invoked {
+        Some(invocation) => {
+            let kind = match model.maybe(invocation, "kind") {
+                Some(Value::EnumLit(kind)) => kind.to_string(),
+                _ => return None,
+            };
+            // the text is the argument's, which a `when` holds behind a
+            // reference to it: the outermost thing below that was written
+            let written = sysml_model::expression_text(model, invocation).or_else(|| {
+                model.descendants(invocation).into_iter().find_map(|below| {
+                    sysml_model::expression_text(model, below).or_else(|| {
+                        // a literal is held as its value, not its text
+                        if !model.kind(below).name().starts_with("Literal") {
+                            return None;
+                        }
+                        match model.maybe(below, "value")? {
+                            Value::Real(real) => Some(real.to_string()),
+                            Value::Int(int) => Some(int.to_string()),
+                            Value::Bool(flag) => Some(flag.to_string()),
+                            Value::String(text) => Some(format!("{text:?}")),
+                            _ => None,
+                        }
+                    })
+                })
+            });
+            (kind, written)
+        }
+        None => (signal(), None),
+    };
+    Some(Trigger {
+        kind,
         name,
         typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
-        after,
+        expression,
     })
+}
+
+/// What kind of step a member of a behaviour is, where it is one at all.
+fn step_kind(model: &sysml_model::Model, child: ElementId) -> Option<&'static str> {
+    // a parameter is what the behaviour is handed, and an entry, do or
+    // exit action the machinery of a state, said where it belongs
+    if model.direction(child).is_some()
+        || matches!(
+            model.member_role(child),
+            Some(Role::Entry | Role::Do | Role::Exit)
+        )
+    {
+        return None;
+    }
+    Some(match model.kind(child) {
+        ElementKind::ActionUsage => "action",
+        ElementKind::PerformActionUsage => "perform",
+        ElementKind::AcceptActionUsage => "accept",
+        ElementKind::SendActionUsage => "send",
+        ElementKind::AssignmentActionUsage => "assign",
+        ElementKind::TerminateActionUsage => "terminate",
+        ElementKind::DecisionNode => "decide",
+        ElementKind::MergeNode => "merge",
+        ElementKind::ForkNode => "fork",
+        ElementKind::JoinNode => "join",
+        ElementKind::IfActionUsage => "if",
+        ElementKind::ForLoopActionUsage => "for",
+        // `loop` holds an empty parameter where `while` holds its
+        // condition
+        ElementKind::WhileLoopActionUsage => match loop_clauses(model, child).first() {
+            Some(&condition) if model.kind(condition).is_a(ElementKind::Expression) => "while",
+            _ => "loop",
+        },
+        _ => return None,
+    })
+}
+
+/// The clauses of an `if` or loop action, in the order the model holds
+/// them: the condition, the body, and the `else` or the `until`.
+fn loop_clauses(model: &sysml_model::Model, structured: ElementId) -> Vec<ElementId> {
+    model
+        .owned(structured)
+        .iter()
+        .copied()
+        .filter(|&child| model.direction(child) == Some("in"))
+        .collect()
+}
+
+/// The text of a condition clause.
+fn clause_text(model: &sysml_model::Model, clause: ElementId) -> Option<String> {
+    if !model.kind(clause).is_a(ElementKind::Expression) {
+        return None;
+    }
+    sysml_model::expression_text(model, clause).or_else(|| match model.maybe(clause, "value")? {
+        Value::Real(real) => Some(real.to_string()),
+        Value::Int(int) => Some(int.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::String(text) => Some(format!("{text:?}")),
+        _ => None,
+    })
+}
+
+/// The steps a behaviour, or one body inside it, is made of, and the
+/// successions between them. Every name a succession or an `after`
+/// carries is the name of a step listed beside it: one reaching outside
+/// the block -- `first start then a`, or into another body -- orders
+/// nothing listed here, and is left out rather than named as a step
+/// that is not one.
+fn block(ws: &mut Workspace, container: ElementId, performs_are_steps: bool) -> Block {
+    let model = ws.model();
+    let owned = model.owned(container).to_vec();
+    let nodes: Vec<(ElementId, &'static str)> = owned
+        .iter()
+        .filter_map(|&child| Some((child, step_kind(model, child)?)))
+        .filter(|&(_, kind)| performs_are_steps || kind != "perform")
+        .collect();
+    // the model's names first, so that a derived one steps round them
+    let mut taken: std::collections::HashSet<String> = nodes
+        .iter()
+        .filter_map(|&(node, _)| model.effective_name(node).map(str::to_string))
+        .collect();
+    let names: Vec<(String, bool)> = nodes
+        .iter()
+        .map(|&(node, kind)| match model.effective_name(node) {
+            Some(name) => (name.to_string(), false),
+            None => {
+                let mut name = kind.to_string();
+                let mut at = 1;
+                while !taken.insert(name.clone()) {
+                    at += 1;
+                    name = format!("{kind}_{at}");
+                }
+                (name, true)
+            }
+        })
+        .collect();
+    let named = |id: ElementId| {
+        nodes
+            .iter()
+            .position(|&(node, _)| node == id)
+            .map(|at| names[at].0.clone())
+    };
+    let mut successions = Vec::new();
+    for &child in &owned {
+        let kind = model.kind(child);
+        // a guarded succession is a transition owning the succession it
+        // guards
+        let (relates, guard) = if kind == ElementKind::TransitionUsage {
+            let Some(relates) = model
+                .owned(child)
+                .iter()
+                .copied()
+                .find(|&inner| model.kind(inner).is_a(ElementKind::SuccessionAsUsage))
+            else {
+                continue;
+            };
+            let guard = match model.get(child, "guardExpression") {
+                Some(Value::RefList(guards)) => guards
+                    .first()
+                    .and_then(|&it| sysml_model::expression_text(model, it)),
+                _ => None,
+            };
+            (relates, guard)
+        } else if kind.is_a(ElementKind::SuccessionAsUsage) {
+            (child, None)
+        } else {
+            continue;
+        };
+        let ends: Vec<ElementId> = model
+            .owned(relates)
+            .iter()
+            .filter(|&&end| model.kind(end) == ElementKind::Feature)
+            .filter_map(|&end| sysml_model::end_reaches(model, end).first().copied())
+            .collect();
+        let [from, to] = ends[..] else { continue };
+        if let (Some(from), Some(to)) = (named(from), named(to)) {
+            successions.push(Succession { from, to, guard });
+        }
+    }
+    let mut steps = Vec::new();
+    for (&(node, kind), (name, unnamed)) in nodes.iter().zip(names) {
+        let mut after: Vec<String> = Vec::new();
+        for succession in successions.iter().filter(|it| it.to == name) {
+            if !after.contains(&succession.from) {
+                after.push(succession.from.clone());
+            }
+        }
+        steps.push(step(ws, node, kind, name, unnamed, after));
+    }
+    Block {
+        name: None,
+        flows: owned.iter().filter_map(|&child| flow(ws, child)).collect(),
+        steps,
+        successions,
+    }
+}
+
+/// One step, the blocks of an `if` or a loop worked out with it.
+fn step(
+    ws: &mut Workspace,
+    node: ElementId,
+    kind: &'static str,
+    name: String,
+    unnamed: bool,
+    after: Vec<String>,
+) -> Step {
+    let typed = ws.model().type_of(node);
+    let mut step = Step {
+        name,
+        unnamed,
+        kind: kind.to_string(),
+        typed_by: typed.map(|ty| ws.qualified_name_of(ty)),
+        after,
+        condition: None,
+        until: None,
+        body: None,
+        otherwise: None,
+    };
+    let model = ws.model();
+    let clauses = loop_clauses(model, node);
+    match kind {
+        "if" | "while" | "loop" => {
+            let [condition, body, rest @ ..] = clauses.as_slice() else {
+                return step;
+            };
+            step.condition = clause_text(model, *condition);
+            let rest = rest.first().copied();
+            if kind == "if" {
+                step.body = Some(clause_block(ws, *body));
+                step.otherwise = rest.map(|it| clause_block(ws, it));
+            } else {
+                step.until = rest.and_then(|it| clause_text(model, it));
+                step.body = Some(clause_block(ws, *body));
+            }
+        }
+        // `for x in seq { ... }`: the sequence is the clause that is an
+        // expression, the body the one that is an action
+        "for" => {
+            step.condition = clauses.iter().find_map(|&it| clause_text(model, it));
+            let body = clauses
+                .iter()
+                .copied()
+                .find(|&it| model.kind(it).is_a(ElementKind::ActionUsage));
+            step.body = body.map(|it| clause_block(ws, it));
+        }
+        _ => {}
+    }
+    step
+}
+
+/// One body of an `if` or a loop as a block. An `else if` is an `if` of
+/// its own, so its block is that one step.
+fn clause_block(ws: &mut Workspace, clause: ElementId) -> Block {
+    let model = ws.model();
+    if model.kind(clause) == ElementKind::IfActionUsage {
+        let name = model.name(clause).map(str::to_string);
+        let unnamed = name.is_none();
+        let only = step(
+            ws,
+            clause,
+            "if",
+            name.unwrap_or_else(|| "if".to_string()),
+            unnamed,
+            Vec::new(),
+        );
+        return Block {
+            steps: vec![only],
+            ..Block::default()
+        };
+    }
+    let name = model.name(clause).map(str::to_string);
+    let mut block = block(ws, clause, true);
+    block.name = name;
+    block
 }
 
 /// The two sides a connection joins, and what it is called.

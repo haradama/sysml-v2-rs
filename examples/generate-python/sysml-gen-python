@@ -286,7 +286,10 @@ class Generator:
         self.emit(f"        self.state = {name}State.{ident(initial)}" if initial else "        self.state = None")
         for t in d.get("transitions", []):
             on = t.get("on")
-            params = "self" + (f", {ident(on['name'])}: {self.typed(on, f'{name}.{t['name']}')}" if on else "")
+            # `accept Go` and `accept after 5 [s]` wait for something that
+            # carries no name, so there is nothing to hand the method
+            payload = on.get("name") if on else None
+            params = "self" + (f", {ident(payload)}: {self.typed(on, f'{name}.{t['name']}')}" if payload else "")
             self.emit("", f"    def {snake(t['name'])}({params}) -> None:")
             if t.get("guard"):
                 self.emit(f"        # if {t['guard']}")

@@ -16,7 +16,7 @@ impl<'a> Generator<'a> {
     /// that, so what is generated is the means of asking.
     pub(crate) fn assertion(&self, usage: ElementId, fields: &[Field]) -> Result<String, String> {
         let model = self.model;
-        let name = model.name(usage).expect("named, or it was skipped");
+        let name = &self.member_name(usage).expect("named, or it was skipped");
         let Some(def) = model.type_of(usage) else {
             return Err(format!("assert `{name}` -- its constraint did not resolve"));
         };

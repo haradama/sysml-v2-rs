@@ -80,7 +80,7 @@ package Thermostat {
         doc /* One pass of the loop. */
         action measure : Measure;
         action choose : Decide;
-        first measure then decide;
+        first measure then choose;
         flow measure.reading to choose.reading;
     }
 

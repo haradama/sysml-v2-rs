@@ -72,7 +72,7 @@ pub enum BlinkingState {
 }
 
 impl BlinkingState {
-    /// The first state the definition declares.
+    /// The state the definition enters first: `entry; then dark;`.
     #[must_use]
     pub fn initial() -> Self {
         BlinkingState::Dark
