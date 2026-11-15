@@ -769,9 +769,12 @@ const LIBRARY_BROKEN: &[(&str, Break, &[&str])] = &[
         &["validateFeatureCrossFeatureType"],
     ),
     (
+        // a second `else arr.elements#(...);` is a succession on its own,
+        // to an expression that is no feature to run to -- its index is
+        // no multiplicity, which it was once read as
         "CollectionFunctions.kerml",
         Repeat(66),
-        &["validateMultiplicityRangeBounds"],
+        &["validateConnectorRelatedFeatures"],
     ),
     (
         "FeatureReferencingPerformances.kerml",
