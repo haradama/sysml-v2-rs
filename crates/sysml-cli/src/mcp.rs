@@ -21,10 +21,16 @@
 //!   where else is that named?
 //! - `rename` -- what edits rename it everywhere, and does the model still
 //!   resolve once they are made?
+//! - `diagram` -- what does it look like, drawn as `sysml diagram` draws it?
+//! - `impact` -- what does a change to this reach, link after link, or
+//!   what does it rest on?
+//! - `trace` -- which requirements are satisfied and verified, by what,
+//!   and which are not?
 //!
 //! Every tool reads and none writes, and each says so in its annotations,
 //! so a client may run them without asking each time. `rename` too: it
-//! answers the edits and the client makes them. An answer comes as
+//! answers the edits and the client makes them, and `diagram` answers
+//! the SVG for the client to save. An answer comes as
 //! structured content and as the same JSON in text, for clients of either
 //! revision.
 //!
@@ -80,7 +86,12 @@ everything one element is linked to in both directions, and `outline` \
 the resolved shape under a name. `definition` says what a name at a \
 point resolves to and where that is declared, and `references` every \
 place an element is named, inheritance included -- ask it before \
-changing or deleting a declaration.
+changing or deleting a declaration. `impact` follows the links on from \
+there, transitively: everything a change to an element reaches, each \
+with the chain of links that reached it. `trace` is the requirement \
+traceability matrix -- every requirement, what satisfies and verifies \
+it, and which nothing does -- and `diagram` draws the model as SVG for \
+someone to look at.
 
 Rename with `rename`, not by search and replace: it answers every edit \
 the rename takes, across files and through redefinitions, with the new \
@@ -372,6 +383,8 @@ impl Server {
             .and_then(Value::as_str)
             .ok_or_else(|| "a call needs the name of a tool".to_string())?;
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+        // content beyond the answer's own text: only `diagram` adds any
+        let mut pictured: Vec<Value> = Vec::new();
         let answered = match name {
             "check" => self.check(&arguments),
             "visible_names" => self.visible_names(&arguments),
@@ -388,6 +401,12 @@ impl Server {
             "definition" => self.definition(&arguments),
             "references" => self.references(&arguments),
             "rename" => self.rename(&arguments),
+            "diagram" => self.diagram(&arguments).map(|(said, image)| {
+                pictured.extend(image);
+                said
+            }),
+            "impact" => self.impact(&arguments),
+            "trace" => self.trace(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
         // The answer twice: as structured content, which a client of the
@@ -397,8 +416,12 @@ impl Server {
             Ok(value) => (value, false),
             Err(why) => (json!({ "error": why }), true),
         };
+        // The text first, so a client that reads only the first content
+        // reads the answer; a picture, where one was asked for, after it.
+        let mut content = vec![text(&said.0)];
+        content.extend(pictured);
         Ok(json!({
-            "content": [text(&said.0)],
+            "content": content,
             "structuredContent": said.0,
             "isError": said.1,
         }))
@@ -648,7 +671,34 @@ impl Server {
         // requires of it. The order and the stop are `diagnose`'s: putting every
         // constraint to whatever it was handed turned one dangling reference into
         // a list of complaints about the hole.
-        let diagnosed = ws.diagnose(&open);
+        //
+        // Focused, the constraints are put to the file the call named and
+        // to nothing else. They were put to every file opened and all but
+        // the named one's answers thrown away, and over a project of a
+        // hundred files that was most of what an edit took to check. What
+        // the constraints say of an element is decided by the model it is
+        // in, which is resolved whole either way; which elements are
+        // asked decides only which are answered for -- and those are the
+        // ones in the named file, the only ones a focused answer reports.
+        // Whether they are asked at all is still decided by every file:
+        // a name dangling anywhere leaves the model in no state to ask.
+        let diagnosed = match focused {
+            true => {
+                let found = ws.findings(&open);
+                let asked =
+                    found.syntax.is_empty() && found.names.is_empty() && ws.has_standard_library();
+                let rules = match asked {
+                    true => ws.check_rules(&reported),
+                    false => Default::default(),
+                };
+                sysml_semantics::Diagnosis {
+                    found,
+                    rules,
+                    asked,
+                }
+            }
+            false => ws.diagnose(&open),
+        };
         // A name that found nothing is reported with what it might have meant.
         // Resolution says only that both of these missed:
         //
@@ -1460,6 +1510,527 @@ impl Server {
     }
 }
 
+impl Server {
+    /// The drawing `sysml diagram` makes of the model, answered as SVG.
+    ///
+    /// Answered rather than written, like everything here: the client
+    /// has the SVG in hand and puts it where its user wants it. What the
+    /// drawing holds -- which boxes, how many of each line -- comes with
+    /// it, since a model reading the answer cannot look at the picture
+    /// and should not have to read the SVG to know what is in it.
+    fn diagram(&mut self, arguments: &Value) -> Result<(Value, Option<Value>), String> {
+        self.refresh();
+        let view = optional_str(arguments, "view")?.unwrap_or("definitions");
+        let skin = match arguments.get("skin") {
+            None | Some(Value::Null) => sysml_diagram::Skin::default(),
+            Some(Value::String(asked)) => match sysml_diagram::Skin::named(asked) {
+                Some(skin) => skin,
+                // a name that is none of the skins that ship is a file
+                // saying what to paint it in, read as `--skin` reads one
+                None => {
+                    let text = self.read(asked).map_err(|why| {
+                        format!(
+                            "no skin `{asked}`, and {why}; the skins that ship are {}",
+                            sysml_diagram::Skin::NAMES.join(", ")
+                        )
+                    })?;
+                    let said: Value = serde_json::from_str(&text)
+                        .map_err(|why| format!("`{asked}` is not JSON: {why}"))?;
+                    sysml_diagram::skin::read(&said).map_err(|why| format!("{asked}: {why}"))?
+                }
+            },
+            Some(said @ Value::Object(_)) => {
+                sysml_diagram::skin::read(said).map_err(|why| format!("`skin`: {why}"))?
+            }
+            Some(_) => {
+                return Err(
+                    "`skin` is the name of one that ships, a path to a JSON skin, or the \
+                     skin itself as an object"
+                        .to_string(),
+                )
+            }
+        };
+        let image = match arguments.get("image") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(it)) => *it,
+            Some(_) => return Err("`image` must be true or false".to_string()),
+        };
+        let Opened {
+            mut ws,
+            open,
+            focus,
+            stats,
+        } = self.opened(arguments)?.about_something()?;
+
+        // Drawn all the same, as `sysml diagram` draws it, since the
+        // person writing the model is entitled to see it so far -- but a
+        // drawing of a model that does not parse or resolve leaves out
+        // what the parser guessed past and what a dangling name typed,
+        // and nothing on the page says so. The answer does.
+        let mut warnings: Vec<String> = open
+            .iter()
+            .filter(|&&file| !ws.file_parse(file).ok())
+            .map(|&file| {
+                format!(
+                    "{} does not parse, so what is drawn of it is a guess; `check` says where",
+                    ws.file_name(file)
+                )
+            })
+            .collect();
+        if stats.unresolved > 0 {
+            warnings.push(format!(
+                "{} name(s) resolve to nothing, so what they type or relate is missing from \
+                 the drawing; `check` says where they are",
+                stats.unresolved
+            ));
+        }
+
+        // What a view of the whole of something is of: one element, or
+        // what the call named, or everything opened.
+        let roots: Vec<ElementId> = match optional_str(arguments, "within")? {
+            Some(within) => vec![element_asked(&mut ws, &open, within)?],
+            None => focus
+                .map_or(open.clone(), |file| vec![file])
+                .iter()
+                .flat_map(|&file| ws.file_roots(file).to_vec())
+                .collect(),
+        };
+        // the one element a view of one element is of
+        let target = |ws: &mut Workspace, of: &str| -> Result<ElementId, String> {
+            let wanted = optional_str(arguments, "element")?.ok_or_else(|| {
+                format!("the {of} view is of one definition: name it as `element`")
+            })?;
+            element_asked(ws, &open, wanted)
+        };
+        let style = sysml_diagram::Style {
+            skin,
+            ..Default::default()
+        };
+        let (svg, drawn) = match view {
+            "definitions" | "internal" => {
+                let diagram = match view {
+                    "internal" => {
+                        let of = target(&mut ws, "internal")?;
+                        sysml_diagram::interconnection_diagram(ws.model(), of)
+                    }
+                    _ => sysml_diagram::definition_diagram(ws.model(), &roots),
+                };
+                if diagram.nodes.is_empty() {
+                    return Err(match view {
+                        "internal" => "it has no parts or connections to draw".to_string(),
+                        _ => "nothing to draw: there are no definitions here".to_string(),
+                    });
+                }
+                // by the name each line is drawn with, so that a count
+                // can be read against the picture
+                let mut lines: std::collections::BTreeMap<&str, usize> = Default::default();
+                for edge in &diagram.edges {
+                    *lines.entry(edge.relation.name()).or_default() += 1;
+                }
+                let boxes: Vec<Value> = diagram
+                    .nodes
+                    .iter()
+                    .map(|node| json!(qualified(&ws, node.id)))
+                    .collect();
+                (
+                    sysml_diagram::render(&diagram, &style),
+                    json!({ "boxes": boxes, "lines": lines }),
+                )
+            }
+            "browser" => {
+                let browser = sysml_diagram::browser_view(ws.model(), &roots);
+                if browser.rows.is_empty() {
+                    return Err("nothing to draw".to_string());
+                }
+                (
+                    sysml_diagram::render_browser(&browser, &style),
+                    json!({ "rows": browser.rows.len() }),
+                )
+            }
+            "sequence" => {
+                let of = target(&mut ws, "sequence")?;
+                let sequence = sysml_diagram::sequence_view(ws.model(), of);
+                if sequence.lifelines.is_empty() {
+                    return Err(format!(
+                        "`{}` declares no interaction to draw: a sequence view is of the \
+                         events and messages one definition declares",
+                        qualified(&ws, of)
+                    ));
+                }
+                let lifelines: Vec<Value> = sequence
+                    .lifelines
+                    .iter()
+                    .map(|it| json!(qualified(&ws, it.id)))
+                    .collect();
+                (
+                    sysml_diagram::render_sequence(&sequence, &style),
+                    json!({ "lifelines": lifelines, "messages": sequence.moments.len() }),
+                )
+            }
+            other => {
+                return Err(format!(
+                    "no view `{other}`: `view` is one of `definitions`, `internal`, `browser`, \
+                     `sequence`"
+                ))
+            }
+        };
+        // The SVG as an image as well, only where it is asked for. A
+        // client hands an image content on to its model, and a model that
+        // takes pictures takes PNG, JPEG, GIF or WebP: an SVG among them
+        // is refused there, and the turn with it. The text is what every
+        // client can use -- written to a file, or shown -- so it is the
+        // answer, and the image is for a client known to draw SVG.
+        let picture = image.then(|| {
+            json!({
+                "type": "image",
+                "data": base64(svg.as_bytes()),
+                "mimeType": "image/svg+xml",
+            })
+        });
+        Ok((
+            json!({
+                "view": view,
+                "drawn": drawn,
+                "warnings": warnings,
+                "svg": svg,
+            }),
+            picture,
+        ))
+    }
+
+    /// What an element's change reaches: everything linked to it, and
+    /// everything linked to those, as far as `depth` -- or, the other
+    /// way, everything it rests on.
+    ///
+    /// `relations` answers one step of this, and a review asks the whole
+    /// of it: a part definition changed is every usage typed by it, every
+    /// whole those belong to, every requirement one of them was said to
+    /// satisfy and every test that verifies one of those.
+    fn impact(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let wanted = optional_str(arguments, "element")?
+            .ok_or_else(|| "`element` names what would change".to_string())?;
+        let direction = optional_str(arguments, "direction")?.unwrap_or("affected");
+        if !["affected", "depends_on"].contains(&direction) {
+            return Err(format!(
+                "no direction `{direction}`: `direction` is `affected` (what a change to it \
+                 reaches) or `depends_on` (what it rests on)"
+            ));
+        }
+        let depth = match arguments.get("depth") {
+            None | Some(Value::Null) => 6,
+            Some(given) => given
+                .as_u64()
+                .filter(|&it| it > 0)
+                .ok_or_else(|| "`depth` must be a whole number, 1 or more".to_string())?
+                .min(32) as usize,
+        };
+        let only: Option<Vec<String>> = match arguments.get("relations") {
+            None | Some(Value::Null) => None,
+            Some(Value::Array(given)) => Some(
+                given
+                    .iter()
+                    .map(|it| match it.as_str() {
+                        Some(relation) if RELATIONS.contains(&relation) || relation == "owns" => {
+                            Ok(relation.to_string())
+                        }
+                        _ => Err(format!(
+                            "`relations` takes relations `relations` names, and `owns`: {it} is \
+                             none of them"
+                        )),
+                    })
+                    .collect::<Result<_, _>>()?,
+            ),
+            Some(_) => return Err("`relations` must be an array of relation names".to_string()),
+        };
+        let followed = |relation: &str| {
+            only.as_ref()
+                .is_none_or(|it| it.iter().any(|r| r == relation))
+        };
+
+        let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+        let start = element_asked(&mut ws, &open, wanted)?;
+        let edges = edges(&ws, &open);
+        let model = ws.model();
+        let ours = |elem: ElementId| ws.element_file(elem).is_some_and(|f| open.contains(&f));
+        let mut by_target: std::collections::HashMap<ElementId, Vec<&Edge>> = Default::default();
+        let mut by_source: std::collections::HashMap<ElementId, Vec<&Edge>> = Default::default();
+        for edge in &edges {
+            by_target.entry(edge.target).or_default().push(edge);
+            by_source.entry(edge.source).or_default().push(edge);
+        }
+
+        // One step from `at`: the element reached, and the link that
+        // reached it as the model says it -- `source relation target`,
+        // and where that is written.
+        let mut files = Texts::default();
+        let step = |files: &mut Texts, edge: &Edge| -> Value {
+            json!({
+                "from": qualified(&ws, edge.source),
+                "relation": edge.relation,
+                "to": qualified(&ws, edge.target),
+                "at": files.place(&ws, edge.file, edge.offset),
+            })
+        };
+        // A change to an element is a change to everything inside it,
+        // so the element asked about answers for its members too; what
+        // is reached later answers for itself alone, or the whole of
+        // every definition anything touches would be swept in.
+        let inside = |elem: ElementId, first: bool| -> Vec<ElementId> {
+            match first {
+                true => model.descendants(elem),
+                false => vec![elem],
+            }
+        };
+        let mut reached: Vec<(ElementId, usize, Vec<Value>)> = Vec::new();
+        let mut seen: HashSet<ElementId> = HashSet::from([start]);
+        let mut frontier: Vec<(ElementId, Vec<Value>)> = vec![(start, Vec::new())];
+        let mut truncated = false;
+        for level in 1..=depth {
+            let mut next = Vec::new();
+            for (at, path) in &frontier {
+                let mut onward: Vec<(ElementId, Value)> = Vec::new();
+                for elem in inside(*at, level == 1) {
+                    match direction {
+                        // Whoever names it rests on it -- and what it
+                        // claims of something else has to be claimed
+                        // again: the requirement it satisfies, the one
+                        // it verifies, the component it is allocated to,
+                        // what it is connected to.
+                        "affected" => {
+                            for edge in by_target.get(&elem).into_iter().flatten() {
+                                if followed(edge.relation) {
+                                    onward.push((edge.source, step(&mut files, edge)));
+                                }
+                            }
+                            for edge in by_source.get(&elem).into_iter().flatten() {
+                                if CLAIMS.contains(&edge.relation) && followed(edge.relation) {
+                                    onward.push((edge.target, step(&mut files, edge)));
+                                }
+                            }
+                        }
+                        _ => {
+                            for edge in by_source.get(&elem).into_iter().flatten() {
+                                if followed(edge.relation) {
+                                    onward.push((edge.target, step(&mut files, edge)));
+                                }
+                            }
+                        }
+                    }
+                }
+                // A feature changed changes the whole it belongs to, and
+                // so whoever uses that whole -- but not the package it is
+                // in, which would be every element beside it.
+                if direction == "affected" && followed("owns") {
+                    let up = model.owner(*at).map(|it| named_owner(model, it));
+                    if let Some(owner) =
+                        up.filter(|&it| model.kind(it).is_a(sysml_model::ElementKind::Type))
+                    {
+                        let at_owner = ws
+                            .element_place(*at)
+                            .map(|(file, range)| files.place(&ws, file, range.start().into()));
+                        onward.push((
+                            owner,
+                            json!({
+                                "from": qualified(&ws, owner),
+                                "relation": "owns",
+                                "to": qualified(&ws, *at),
+                                "at": at_owner,
+                            }),
+                        ));
+                    }
+                }
+                for (elem, link) in onward {
+                    if !seen.insert(elem) {
+                        continue;
+                    }
+                    if reached.len() >= REACHED {
+                        truncated = true;
+                        break;
+                    }
+                    let mut path = path.clone();
+                    path.push(link);
+                    reached.push((elem, level, path.clone()));
+                    // the standard library is where a model's links end:
+                    // what it declares is not the model's to change, and
+                    // what rests on it there is not the model's either
+                    if ours(elem) {
+                        next.push((elem, path));
+                    }
+                }
+            }
+            frontier = next;
+            if frontier.is_empty() {
+                break;
+            }
+        }
+        // whether the walk stopped at `depth` with elements still to
+        // follow from -- which may or may not have led anywhere
+        let cut = !frontier.is_empty();
+        let listed: Vec<Value> = reached
+            .into_iter()
+            .map(|(elem, steps, path)| {
+                let mut entry = summary(&ws, &mut files, elem);
+                entry["depth"] = json!(steps);
+                if !ours(elem) {
+                    entry["library"] = json!(true);
+                }
+                entry["via"] = json!(path);
+                entry
+            })
+            .collect();
+        Ok(json!({
+            "element": summary(&ws, &mut files, start),
+            "direction": direction,
+            "total": listed.len(),
+            "reached": listed,
+            "stopped_at_depth": cut,
+            "truncated": truncated,
+        }))
+    }
+
+    /// The requirement traceability matrix: every requirement, what
+    /// satisfies it and what verifies it, and which have neither.
+    ///
+    /// `find` with `without` answers one column of this and `relations`
+    /// one row; a review asks for the table.
+    fn trace(&mut self, arguments: &Value) -> Result<Value, String> {
+        use sysml_model::ElementKind as K;
+        self.refresh();
+        let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+        let candidates: Vec<ElementId> = match optional_str(arguments, "within")? {
+            Some(within) => {
+                let root = element_named(&mut ws, &open, within)?;
+                ws.model().descendants(root)
+            }
+            None => open
+                .iter()
+                .flat_map(|&file| ws.file_elements(file).to_vec())
+                .collect(),
+        };
+        let model = ws.model();
+        let requirement = |elem: ElementId| {
+            let kind = model.kind(elem);
+            (kind.is_a(K::RequirementDefinition) || kind.is_a(K::RequirementUsage))
+                // a satisfaction is a requirement usage by metaclass, and
+                // a viewpoint one by specialization, and neither is a
+                // requirement anybody has to meet
+                && !kind.is_a(K::SatisfyRequirementUsage)
+                && !kind.is_a(K::ViewpointDefinition)
+                && !kind.is_a(K::ViewpointUsage)
+                // a case's objective, and the `verify` inside it, are
+                // what the case is for, not requirements of their own
+                && !matches!(
+                    sysml_model::membership_kind(model, elem),
+                    K::ObjectiveMembership | K::RequirementVerificationMembership
+                )
+                && model.effective_name(elem).or(model.effective_short_name(elem)).is_some()
+        };
+        let mut seen = HashSet::new();
+        let requirements: Vec<ElementId> = candidates
+            .into_iter()
+            .filter(|&elem| requirement(elem) && seen.insert(elem))
+            .collect();
+        let edges = edges(&ws, &open);
+        let mut files = Texts::default();
+        let by = |files: &mut Texts, elem: ElementId, relation: &str| -> Vec<Value> {
+            let mut once = HashSet::new();
+            edges
+                .iter()
+                .filter(|edge| edge.target == elem && edge.relation == relation)
+                .filter(|edge| once.insert(edge.source))
+                .map(|edge| {
+                    let mut entry = json!({ "name": qualified(&ws, edge.source) });
+                    if let Some(short) = model.effective_short_name(edge.source) {
+                        entry["shortName"] = json!(short);
+                    }
+                    entry["at"] = files.place(&ws, edge.file, edge.offset);
+                    entry
+                })
+                .collect()
+        };
+        let mut rows = Vec::new();
+        let mut unsatisfied = Vec::new();
+        let mut unverified = Vec::new();
+        for &elem in &requirements {
+            let satisfied_by = by(&mut files, elem, "satisfies");
+            let not_satisfied_by = by(&mut files, elem, "does_not_satisfy");
+            let verified_by = by(&mut files, elem, "verifies");
+            let name = qualified(&ws, elem);
+            if satisfied_by.is_empty() {
+                unsatisfied.push(json!(name));
+            }
+            if verified_by.is_empty() {
+                unverified.push(json!(name));
+            }
+            let mut row = json!({ "name": name, "kind": model.kind(elem).name() });
+            if let Some(short) = model.effective_short_name(elem) {
+                row["shortName"] = json!(short);
+            }
+            if let Some(doc) = ws.documentation_of(elem) {
+                row["documentation"] = json!(doc);
+            }
+            // a usage's definition is where what it demands is said
+            if let Some(ty) = model.type_of(elem) {
+                row["definition"] = json!(ws.qualified_name_written(ty));
+            }
+            if let Some((file, range)) = ws.element_place(elem) {
+                row["at"] = files.place(&ws, file, range.start().into());
+            }
+            row["satisfied_by"] = json!(satisfied_by);
+            if !not_satisfied_by.is_empty() {
+                row["not_satisfied_by"] = json!(not_satisfied_by);
+            }
+            row["verified_by"] = json!(verified_by);
+            rows.push(row);
+        }
+        Ok(json!({
+            "requirements": rows,
+            "total": requirements.len(),
+            "satisfied": requirements.len() - unsatisfied.len(),
+            "verified": requirements.len() - unverified.len(),
+            "unsatisfied": unsatisfied,
+            "unverified": unverified,
+        }))
+    }
+}
+
+/// The relations whose source says something of its target that holds
+/// only while the source is as it was: what a change to the source makes
+/// someone check again of the target. A change to a part is a change to
+/// whether the requirement it satisfies is satisfied.
+const CLAIMS: [&str; 5] = [
+    "satisfies",
+    "does_not_satisfy",
+    "verifies",
+    "allocated_to",
+    "connected_to",
+];
+
+/// How many elements `impact` lists at most. A link to something every
+/// part uses reaches most of a large model, and an answer that size is
+/// one nobody reads; `truncated` says it was cut.
+const REACHED: usize = 1000;
+
+/// Bytes as base64, the way an MCP image content carries them.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+        for i in 0..4 {
+            out.push(match i <= chunk.len() {
+                true => ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char,
+                false => '=',
+            });
+        }
+    }
+    out
+}
+
 /// A range in a file, placed the way `check` places a finding, with the
 /// text of the line it starts on -- which is what a reader of a list of
 /// places looks at to tell them apart.
@@ -2088,7 +2659,7 @@ fn tools() -> Value {
                     "path": source_properties["path"],
                     "name": source_properties["name"],
                     "alongside": source_properties["alongside"],
-                    "focus": { "type": "boolean", "description": "Report only what is found in the file `text` or `path` names, while still resolving it against everything else (default false: every file opened). Use it to ask about one edit in a large project." },
+                    "focus": { "type": "boolean", "description": "Report only what is found in the file `text` or `path` names, while still resolving it against everything else (default false: every file opened). The constraints are then put to that file's elements alone, so `rules.held`, `rules.partly` and `rules.unevaluated` count what was asked of it -- and a large project answers in a fraction of the time. Use it to ask about one edit in a large project." },
                 },
             },
         },
@@ -2293,6 +2864,56 @@ fn tools() -> Value {
                     "alongside": source_properties["alongside"],
                 },
                 "required": ["new_name"],
+            },
+        },
+        {
+            "name": "diagram",
+            "description": "Draw the model as `sysml diagram` draws it, and answer the drawing as SVG text under `svg` -- written nowhere: save it or show it yourself. `view` picks the drawing: `definitions` (the default) boxes every definition with its features and draws the lines between them -- specialization, composition, reference, connection, flow, allocation, satisfaction and the rest; `internal` is the inside of one definition named by `element`, its parts and the connections between them; `browser` the membership tree, indented; `sequence` the lifelines and messages of the interaction one definition (`element`) declares. `within` narrows `definitions` and `browser` to what is under one element. `drawn` says what the picture holds -- each box by qualified name and how many of each kind of line, or the lifelines and the number of messages -- so you can describe it without reading the SVG. `warnings` says where the model does not parse or a name resolves to nothing, since such a drawing quietly leaves those parts out; it is drawn all the same. `skin` paints it: `default`, `mono`, `contrast`, a path to a JSON skin, or the skin itself as an object. Use this when someone wants to see a model, or to check that what was written has the shape that was meant.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "view": { "type": "string", "enum": ["definitions", "internal", "browser", "sequence"], "description": "Which drawing (default `definitions`)" },
+                    "element": { "type": "string", "description": "The definition an `internal` or `sequence` view is of: a qualified name or a short name" },
+                    "within": { "type": "string", "description": "Draw only what is under this element, for `definitions` and `browser`" },
+                    "skin": { "description": "`default`, `mono` or `contrast`, a path to a JSON skin, or the skin as an object" },
+                    "image": { "type": "boolean", "description": "Also attach the SVG as an image content (image/svg+xml), for a client that draws SVG. Off by default: a client that passes images on to a model that takes only PNG, JPEG, GIF or WebP refuses it." },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+            },
+        },
+        {
+            "name": "impact",
+            "description": "What a change to one element reaches, transitively: with `direction: affected` (the default), everything that rests on it -- whoever specializes it, is typed by it, subsets, redefines or references it, performs, connects to or mentions it -- and everything that rests on those, as far as `depth` links (default 6); and what it claims of others has to be claimed again, so the requirement a changed part satisfies, the requirement a changed test verifies and the component a changed function is allocated to are reached too, as is the whole a changed feature belongs to (`owns`). A change to the element asked about is a change to everything inside it, so what rests on its members is reached as well. With `direction: depends_on`, the other way: everything it, or anything inside it, rests on. Each element reached comes with its `path:line`, how many links away it is, and `via` -- the chain of links that reached it first, each as `from relation to` and where that link is written -- so the answer can be checked rather than trusted. An element of the standard library is listed where it is reached but not followed further. `stopped_at_depth` says the walk stopped at `depth` with elements still to follow from, and `truncated` that it stopped at 1000 elements. `relations` limits which links are followed (as `relations` names them, plus `owns`). Ask this before changing or deleting an element, or when reviewing a change, to know what else has to be looked at again; `references` lists only the direct uses.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "element": { "type": "string", "description": "A qualified name or a short name" },
+                    "direction": { "type": "string", "enum": ["affected", "depends_on"], "description": "`affected` (default): what a change to it reaches. `depends_on`: what it rests on." },
+                    "depth": { "type": "integer", "description": "How many links to follow at most (default 6, at most 32)" },
+                    "relations": { "type": "array", "items": { "type": "string" }, "description": "Follow only these relations, as `relations` names them, plus `owns`" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
+                "required": ["element"],
+            },
+        },
+        {
+            "name": "trace",
+            "description": "The requirement traceability matrix in one answer: every requirement of the model -- definitions and usages, concerns among them, but not a case's objective, a satisfaction or a viewpoint -- with its qualified name, short name, documentation (the requirement's text), its definition where it is a usage, its `path:line`, `satisfied_by` (what the model says satisfies it, each with where that is written), `not_satisfied_by` where an `assert not satisfy` says otherwise, and `verified_by` (the verification cases whose objective verifies it). Then `total`, how many are `satisfied` and `verified`, and `unsatisfied` and `unverified` -- the requirements nothing satisfies and nothing verifies, which is what a review looks for. Only what the model states directly counts: satisfying a requirement definition is not read as satisfying each usage of it, nor a group as satisfying the requirements inside it. `within` keeps the requirements under one package or element. Use this for a coverage review or before reporting that requirements are met; `find` with `without` answers one column of it.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "within": { "type": "string", "description": "A qualified or short name; only the requirements under it" },
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                },
             },
         },
     ]);

@@ -9,14 +9,14 @@
 //!
 //! So each is put through the same `check` an agent would.
 
-use sysml_cli::notation::{notation, NOTATION};
+use sysml_cli::notation::{notation, ASKED_AS, NOTATION};
 use sysml_semantics::Workspace;
 
 /// The standard library, loaded and resolved once.
 ///
 /// Each example is checked against a copy of this rather than against a
 /// library of its own: cloning a resolved workspace costs a tenth of
-/// what loading one does, and there are twenty examples.
+/// what loading one does, and there are thirty-odd examples.
 fn library() -> Workspace {
     let mut ws = Workspace::new();
     for (name, text) in sysml_stdlib::FILES {
@@ -126,4 +126,20 @@ fn every_one_says_when_it_is_wanted() {
         assert!(it.when.len() > 40, "`{}` says too little", it.of);
         assert!(!it.sysml.is_empty(), "`{}` shows nothing", it.of);
     }
+}
+
+/// A construct shown with another answers to its own name too, and each
+/// such name leads to the example it is filed under -- not to nothing,
+/// and not past a construct that is filed under that name itself.
+#[test]
+fn every_other_word_for_one_leads_to_it() {
+    for (word, filed) in ASKED_AS {
+        assert!(notation(word).is_some_and(|it| it.of == *filed), "`{word}`");
+        assert!(
+            NOTATION.iter().all(|it| !it.of.eq_ignore_ascii_case(word)),
+            "`{word}` is a construct of its own and is shadowed"
+        );
+    }
+    assert_eq!(notation("use_case").map(|it| it.of), Some("use case"));
+    assert_eq!(notation("Viewpoint").map(|it| it.of), Some("view"));
 }

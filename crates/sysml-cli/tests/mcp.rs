@@ -139,7 +139,10 @@ fn a_client_handshakes_lists_and_calls() {
             "format",
             "definition",
             "references",
-            "rename"
+            "rename",
+            "diagram",
+            "impact",
+            "trace"
         ]
     );
     // a client builds its call from the schema, so it has to be there
@@ -2737,4 +2740,561 @@ fn a_file_added_or_removed_on_disk_is_seen() {
             .any(|it| it["name"] == "Wheel"),
         "{removed}"
     );
+}
+
+/// The bytes base64 says, for reading back what an image content carries.
+fn unbase64(said: &str) -> Vec<u8> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => panic!("not base64: {c}"),
+    };
+    let mut out = Vec::new();
+    for chunk in said.as_bytes().chunks(4) {
+        let given: Vec<u8> = chunk
+            .iter()
+            .copied()
+            .filter(|&c| c != b'=')
+            .map(value)
+            .collect();
+        let n = given
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, &v)| n | u32::from(v) << (18 - 6 * i));
+        for i in 0..given.len().saturating_sub(1) {
+            out.push((n >> (16 - 8 * i)) as u8);
+        }
+    }
+    out
+}
+
+/// A model that draws as each of the views: definitions related every
+/// way, one with an inside, and one with an interaction.
+const DRAWN: &str = "\
+package Drawn {
+    part def Wheel { port hub; }
+    part def Axle { port mount; }
+    part def Car {
+        part w : Wheel;
+        part a : Axle;
+        connect w.hub to a.mount;
+    }
+    part def SportsCar :> Car;
+    item def Ask;
+    part def A { event occurrence sent; }
+    part def B { event occurrence got; }
+    occurrence def Talk {
+        ref part a : A;
+        ref part b : B;
+        message ask of Ask from a.sent to b.got;
+    }
+}
+";
+
+/// `diagram` answers the drawing `sysml diagram` makes, with what is in
+/// it said in words, and writes nothing.
+#[test]
+fn diagram_answers_each_view_and_says_what_it_drew() {
+    let answers = session(&[
+        call("diagram", json!({ "text": DRAWN })),
+        call(
+            "diagram",
+            json!({ "text": DRAWN, "view": "internal", "element": "Drawn::Car" }),
+        ),
+        call(
+            "diagram",
+            json!({ "text": DRAWN, "view": "sequence", "element": "Drawn::Talk" }),
+        ),
+        call("diagram", json!({ "text": DRAWN, "view": "browser" })),
+        call(
+            "diagram",
+            json!({ "text": DRAWN, "skin": "mono", "image": true }),
+        ),
+    ]);
+    let definitions = answered(&answers[0]);
+    assert_eq!(definitions["view"], "definitions");
+    let svg = definitions["svg"].as_str().unwrap();
+    assert!(svg.starts_with("<svg xmlns="), "{svg}");
+    let boxes = definitions["drawn"]["boxes"].as_array().unwrap();
+    for named in ["Drawn::Car", "Drawn::SportsCar", "Drawn::Wheel"] {
+        assert!(
+            boxes.contains(&json!(named)),
+            "{named} missing from {boxes:?}"
+        );
+    }
+    assert_eq!(
+        definitions["drawn"]["lines"]["specialization"], 1,
+        "{definitions}"
+    );
+    assert_eq!(definitions["warnings"], json!([]));
+    // the answer is the text alone unless a picture is asked for
+    assert_eq!(answers[0]["result"]["content"].as_array().unwrap().len(), 1);
+
+    // the parts of Car and the one connection between them, not the
+    // definitions themselves -- as `--internal` draws it
+    let internal = answered(&answers[1]);
+    let svg = internal["svg"].as_str().unwrap();
+    assert_eq!(svg.matches("<rect class=\"box\"").count(), 2, "{svg}");
+    assert!(svg.contains(">w : Wheel</text>"), "{svg}");
+    assert_eq!(internal["drawn"]["lines"]["connection"], 1, "{internal}");
+
+    let sequence = answered(&answers[2]);
+    assert_eq!(
+        sequence["drawn"]["lifelines"],
+        json!(["Drawn::Talk::a", "Drawn::Talk::b"]),
+        "{sequence}"
+    );
+    assert_eq!(sequence["drawn"]["messages"], 1);
+    assert!(sequence["svg"]
+        .as_str()
+        .unwrap()
+        .contains(">ask of Ask</text>"));
+
+    let browser = answered(&answers[3]);
+    assert!(browser["drawn"]["rows"].as_u64().unwrap() > 10, "{browser}");
+
+    // asked for, the same SVG comes as an image too, after the text
+    let content = answers[4]["result"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/svg+xml");
+    let pictured = unbase64(content[1]["data"].as_str().unwrap());
+    let svg = answered(&answers[4])["svg"].as_str().unwrap().to_string();
+    assert_eq!(String::from_utf8(pictured).unwrap(), svg);
+    // and the skin asked for is the one it is painted in
+    assert_ne!(svg, definitions["svg"].as_str().unwrap());
+}
+
+/// A drawing of a model that does not resolve is drawn, as the command
+/// line draws it, and the answer says what it leaves out; a view that
+/// cannot be drawn says why.
+#[test]
+fn diagram_says_what_it_could_not_draw() {
+    let answers = session(&[
+        call(
+            "diagram",
+            json!({ "text": "package P { part def A { part b : Nope; } }" }),
+        ),
+        call("diagram", json!({ "text": DRAWN, "view": "internal" })),
+        call(
+            "diagram",
+            json!({ "text": DRAWN, "view": "sequence", "element": "Drawn::A" }),
+        ),
+        call("diagram", json!({ "text": DRAWN, "view": "pie" })),
+        call("diagram", json!({ "text": DRAWN, "skin": "paisley" })),
+        call(
+            "diagram",
+            json!({ "text": DRAWN, "view": "internal", "element": "Drawn::Nope" }),
+        ),
+    ]);
+    let drawn = answered(&answers[0]);
+    assert_eq!(drawn["drawn"]["boxes"], json!(["P::A"]), "{drawn}");
+    assert!(
+        drawn["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("resolve to nothing"),
+        "{drawn}"
+    );
+    for (refused, says) in answers[1..].iter().zip([
+        "name it as `element`",
+        "declares no interaction",
+        "no view `pie`",
+        "no skin `paisley`",
+        "nothing is named `Drawn::Nope`",
+    ]) {
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let why = answered(refused)["error"].as_str().unwrap().to_string();
+        assert!(why.contains(says), "{why}");
+    }
+}
+
+/// The elements an `impact` answer reached, as `name@depth`.
+fn reached(answer: &Value) -> Vec<String> {
+    answer["reached"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{answer}"))
+        .iter()
+        .map(|it| format!("{}@{}", it["name"].as_str().unwrap(), it["depth"]))
+        .collect()
+}
+
+/// `impact` follows links transitively, both ways, and says which chain
+/// of them reached each element.
+#[test]
+fn impact_follows_what_a_change_reaches_and_says_how() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut ask = |arguments: Value| {
+        let mut arguments = arguments;
+        arguments["text"] = json!(LINKED);
+        answered(&server.handle(&call("impact", arguments)).expect("answered"))
+    };
+
+    let engine = ask(json!({ "element": "Linked::Engine" }));
+    let found = reached(&engine);
+    for expected in [
+        // what names it
+        "Linked::BigEngine@1",
+        "Linked::Car::engine@1",
+        "User::spare@1",
+        // what names those, and the whole a changed feature belongs to
+        "Linked::car::engine@2",
+        "Linked::Car@2",
+        // what the changed engine claims has to be claimed again: the
+        // requirement it satisfies, and the test that verifies that
+        "Linked::fast@3",
+        "Linked::drive::go@3",
+        "Linked::fastTest@4",
+    ] {
+        assert!(
+            found.contains(&expected.to_string()),
+            "{expected} missing from {found:?}"
+        );
+    }
+    // each with the chain of links that reached it, each where it is written
+    let fast = &engine["reached"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["name"] == "Linked::fast")
+        .unwrap()["via"];
+    let chain: Vec<String> = fast
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| format!("{} {} {}", it["from"], it["relation"], it["to"]).replace('"', ""))
+        .collect();
+    assert_eq!(
+        chain,
+        [
+            "Linked::BigEngine specializes Linked::Engine",
+            "Linked::car::engine typed_by Linked::BigEngine",
+            "Linked::car::engine satisfies Linked::fast",
+        ]
+    );
+    assert_eq!(fast[2]["at"], "model.sysml:14");
+    assert_eq!(engine["stopped_at_depth"], false);
+
+    // one step is what `relations` answers, and the walk says it stopped
+    let near = ask(json!({ "element": "Linked::Engine", "depth": 1 }));
+    assert_eq!(
+        reached(&near),
+        [
+            "Linked::BigEngine@1",
+            "Linked::Car::engine@1",
+            "User::spare@1"
+        ]
+    );
+    assert_eq!(near["stopped_at_depth"], true);
+
+    // only the links asked for
+    let typed = ask(json!({ "element": "Linked::Engine", "relations": ["typed_by"] }));
+    assert_eq!(reached(&typed), ["Linked::Car::engine@1", "User::spare@1"]);
+
+    // the other way: what the car rests on, its members' links included
+    let car = ask(json!({ "element": "Linked::car", "direction": "depends_on" }));
+    let found = reached(&car);
+    for expected in [
+        "Linked::Car@1",
+        "Linked::BigEngine@1",
+        "Linked::fast@1",
+        "Linked::Engine@2",
+    ] {
+        assert!(
+            found.contains(&expected.to_string()),
+            "{expected} missing from {found:?}"
+        );
+    }
+    // nothing that rests on the car is among what it rests on
+    assert!(
+        !found.iter().any(|it| it.starts_with("Linked::drive")),
+        "{found:?}"
+    );
+}
+
+/// A cycle is walked once, and the standard library is where a walk
+/// ends: listed where it is reached, not followed.
+#[test]
+fn impact_walks_a_cycle_once_and_stops_at_the_library() {
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let text = "\
+package Loop {
+    private import ISQ::*;
+    part def A { attribute m : MassValue; part b : B; }
+    part def B { part a : A; }
+}
+";
+    let mut ask = |arguments: Value| {
+        let mut arguments = arguments;
+        arguments["text"] = json!(text);
+        answered(&server.handle(&call("impact", arguments)).expect("answered"))
+    };
+    let affected = ask(json!({ "element": "Loop::A", "depth": 32 }));
+    let found = reached(&affected);
+    let mut once = found.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), found.len(), "{found:?}");
+    assert!(found.contains(&"Loop::B::a@1".to_string()), "{found:?}");
+    assert!(found.contains(&"Loop::B@2".to_string()), "{found:?}");
+    assert!(
+        !found.iter().any(|it| it.starts_with("Loop::A@")),
+        "{found:?}"
+    );
+
+    let rests = ask(json!({ "element": "Loop::A", "direction": "depends_on" }));
+    let mass = rests["reached"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["name"].as_str().unwrap().ends_with("MassValue"))
+        .unwrap_or_else(|| panic!("{rests}"));
+    assert_eq!(mass["library"], true, "{mass}");
+    assert_eq!(mass["depth"], 1, "{mass}");
+    // and what the library's mass value rests on is not walked into
+    assert!(
+        !rests["reached"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["library"] == true && it["depth"] != 1),
+        "{rests}"
+    );
+
+    let answers = session(&[
+        call("impact", json!({ "text": LINKED })),
+        call(
+            "impact",
+            json!({ "text": LINKED, "element": "Linked::Engine", "direction": "sideways" }),
+        ),
+        call(
+            "impact",
+            json!({ "text": LINKED, "element": "Linked::Engine", "relations": ["likes"] }),
+        ),
+        call(
+            "impact",
+            json!({ "text": LINKED, "element": "Linked::Engine", "depth": 0 }),
+        ),
+    ]);
+    for refused in &answers {
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+    }
+}
+
+/// A trace: requirements of every shape, satisfied and verified every
+/// way, and the objective a case is for, which is not one of them.
+const TRACED: &str = "\
+package Safety {
+    part def Boiler;
+    requirement def <'R.1'> SafePressure {
+        doc /* The boiler shall stay below its rated pressure. */
+        subject boiler : Boiler;
+    }
+    requirement <'R.2'> quiet { doc /* Quiet enough to sleep beside. */ subject b : Boiler; }
+    requirement <'R.3'> cheap : SafePressure;
+    requirement <'R.4'> safe : SafePressure;
+    part def Plant {
+        part boiler : Boiler;
+        satisfy requirement <'V.1'> pressure : SafePressure by boiler;
+        satisfy quiet by boiler;
+        assert not satisfy safe by boiler;
+    }
+    verification def <'T.1'> PressureTest {
+        subject boiler : Boiler;
+        objective {
+            verify SafePressure;
+            verify quiet;
+        }
+    }
+}
+package Other { requirement <'O.1'> tidy; }
+";
+
+#[test]
+fn trace_answers_the_matrix_and_what_it_is_missing() {
+    let answers = session(&[
+        call("trace", json!({ "text": TRACED })),
+        call("trace", json!({ "text": TRACED, "within": "Other" })),
+    ]);
+    let matrix = answered(&answers[0]);
+    let rows = matrix["requirements"].as_array().unwrap();
+    let names: Vec<&str> = rows.iter().map(|it| it["name"].as_str().unwrap()).collect();
+    // every requirement, and neither the satisfactions nor the objective
+    assert_eq!(
+        names,
+        [
+            "Safety::SafePressure",
+            "Safety::quiet",
+            "Safety::cheap",
+            "Safety::safe",
+            "Other::tidy"
+        ],
+        "{matrix}"
+    );
+    let row = |name: &str| rows.iter().find(|it| it["name"] == name).unwrap();
+    let pressure = row("Safety::SafePressure");
+    assert_eq!(pressure["shortName"], "R.1");
+    assert_eq!(
+        pressure["documentation"],
+        "The boiler shall stay below its rated pressure."
+    );
+    assert_eq!(pressure["satisfied_by"][0]["name"], "Safety::Plant::boiler");
+    assert_eq!(pressure["satisfied_by"][0]["at"], "model.sysml:12");
+    assert_eq!(pressure["verified_by"][0]["name"], "Safety::PressureTest");
+    assert_eq!(pressure["verified_by"][0]["shortName"], "T.1");
+    assert_eq!(row("Safety::cheap")["definition"], "Safety::SafePressure");
+    // an assertion that it is not satisfied is said, and does not count
+    let safe = row("Safety::safe");
+    assert_eq!(safe["satisfied_by"], json!([]));
+    assert_eq!(safe["not_satisfied_by"][0]["name"], "Safety::Plant::boiler");
+
+    assert_eq!(matrix["total"], 5);
+    assert_eq!(matrix["satisfied"], 2);
+    assert_eq!(matrix["verified"], 2);
+    assert_eq!(
+        matrix["unsatisfied"],
+        json!(["Safety::cheap", "Safety::safe", "Other::tidy"])
+    );
+    assert_eq!(
+        matrix["unverified"],
+        json!(["Safety::cheap", "Safety::safe", "Other::tidy"])
+    );
+
+    let other = answered(&answers[1]);
+    assert_eq!(other["total"], 1, "{other}");
+    assert_eq!(other["requirements"][0]["shortName"], "O.1");
+}
+
+/// A focused check puts the constraints to the file it names alone, and
+/// answers as a check of the whole project does of that file: the same
+/// violations in the same places, among them one that is only a
+/// violation because of what another file declares, and none of the
+/// other file's.
+#[test]
+fn a_focused_check_answers_as_the_whole_project_does_of_its_file() {
+    let dir = scratch("sysml-mcp-focus-rules");
+    std::fs::write(
+        dir.join("base.sysml"),
+        "package Base {\n    part def Vehicle { in attribute fuel; }\n    join j;\n}\n",
+    )
+    .unwrap();
+    let car = dir.join("car.sysml");
+    let edited = "package Car {\n    private import Base::*;\n    \
+                  part def Truck :> Vehicle { out attribute :>> fuel; }\n    \
+                  part t : Truck { objective o2; }\n    join k;\n}\n";
+    std::fs::write(&car, "package Car;\n").unwrap();
+    let path = car.to_str().unwrap();
+    let library = library();
+    let ask = |arguments: Value| {
+        // a server of its own each time, so nothing is answered from a cache
+        let mut server = sysml_cli::mcp::Server::with_project(Some(&library), Some(&dir));
+        answered(&server.handle(&call("check", arguments)).expect("answered"))
+    };
+    let placed = |answer: &Value, file: &str| -> Vec<String> {
+        answer["rules"]["violations"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{answer}"))
+            .iter()
+            .filter(|it| it["path"].as_str().unwrap().ends_with(file))
+            .map(|it| {
+                format!(
+                    "{} {} {}:{}",
+                    it["rule"], it["element"], it["line"], it["column"]
+                )
+            })
+            .collect()
+    };
+    // the edit, as an agent asks about it before writing it
+    let whole = ask(json!({ "name": path, "text": edited }));
+    let focused = ask(json!({ "name": path, "text": edited, "focus": true }));
+    assert_eq!(whole["rules"]["asked"], true, "{whole}");
+    assert_eq!(focused["rules"]["asked"], true, "{focused}");
+    let expected = placed(&whole, "car.sysml");
+    assert_eq!(placed(&focused, "car.sysml"), expected);
+    assert_eq!(
+        focused["rules"]["violations"].as_array().unwrap().len(),
+        expected.len(),
+        "{focused}"
+    );
+    let rules: Vec<&str> = focused["rules"]["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["rule"].as_str().unwrap())
+        .collect();
+    // `fuel` comes in from the other file, and it is that file that says
+    // which way it goes
+    assert!(
+        rules.contains(&"validateRedefinitionDirectionConformance"),
+        "{rules:?}"
+    );
+    assert!(
+        rules.contains(&"validateObjectiveMembershipOwningType"),
+        "{rules:?}"
+    );
+    // and the other file's own are left to a check of it
+    assert!(!placed(&whole, "base.sysml").is_empty(), "{whole}");
+
+    // a name dangling in the other file still stops the constraints, as
+    // it does for the whole project
+    std::fs::write(
+        dir.join("base.sysml"),
+        "package Base {\n    part def Vehicle { in attribute fuel : Nope; }\n}\n",
+    )
+    .unwrap();
+    let stopped = ask(json!({ "name": path, "text": edited, "focus": true }));
+    assert_eq!(stopped["rules"]["asked"], false, "{stopped}");
+    assert_eq!(stopped["rules"]["violations"], json!([]), "{stopped}");
+}
+
+/// What a systems engineer reaches for beyond parts and requirements --
+/// use cases, analyses, views, concerns, messages, individuals,
+/// quantities, dependencies, filters, aliases -- is there to ask for, by
+/// its own name or by the name of what it is shown with.
+#[test]
+fn notation_answers_for_the_constructs_a_review_asks_about() {
+    let answers = session(&[
+        call("notation", json!({})),
+        call("notation", json!({ "of": "use_case" })),
+        call("notation", json!({ "of": "viewpoint" })),
+        call("notation", json!({ "of": "snapshot" })),
+        call("notation", json!({ "of": "quantity" })),
+    ]);
+    let listed = answered(&answers[0]);
+    let named: Vec<&str> = listed["constructs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it["of"].as_str().unwrap())
+        .collect();
+    for construct in [
+        "use case",
+        "analysis",
+        "view",
+        "concern",
+        "message",
+        "individual",
+        "quantity",
+        "dependency",
+        "filter",
+        "alias",
+    ] {
+        assert!(
+            named.contains(&construct),
+            "{construct} missing from {named:?}"
+        );
+    }
+    let shown = |at: usize| {
+        answered(&answers[at])["sysml"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(shown(1).contains("include use case"), "{}", shown(1));
+    assert!(shown(2).contains("viewpoint"), "{}", shown(2));
+    assert!(shown(3).contains("snapshot part"), "{}", shown(3));
+    assert!(shown(4).contains("= 1200 [kg];"), "{}", shown(4));
 }
