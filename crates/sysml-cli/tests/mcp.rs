@@ -175,8 +175,8 @@ fn check_answers_for_the_syntax_first_and_the_names_after() {
     )]);
     let found = answered(&answers[0]);
     assert_eq!(found["ok"], false);
-    assert_eq!(found["parseErrors"][0]["line"], 3);
-    assert!(found["parseErrors"][0]["message"].is_string());
+    assert_eq!(found["parse_errors"][0]["line"], 3);
+    assert!(found["parse_errors"][0]["message"].is_string());
     assert!(found["unresolved"].is_null());
 
     // and what parses is answered for by name
@@ -621,7 +621,7 @@ fn a_finding_in_a_companion_file_is_reported_under_its_own_path() {
         )])[0],
     );
     assert_eq!(found["ok"], false, "{found}");
-    assert_eq!(found["parseErrors"][0]["path"], other.to_str().unwrap());
+    assert_eq!(found["parse_errors"][0]["path"], other.to_str().unwrap());
 }
 
 /// A directory of model files, emptied first so a run does not read what
@@ -2031,7 +2031,7 @@ fn a_column_is_counted_in_characters_both_ways() {
         .clone();
     assert_eq!(missing["line"], 3, "{found}");
     assert_eq!(missing["column"], 27, "{found}");
-    assert_eq!(missing["endColumn"], 34, "{found}");
+    assert_eq!(missing["end_column"], 34, "{found}");
 
     // and the place a finding gives is a place `visible_names` takes
     let visible = answered(
@@ -2458,7 +2458,7 @@ fn definition_says_where_a_name_is_declared_and_what_it_is() {
         (
             &declared["line"],
             &declared["column"],
-            &declared["endColumn"]
+            &declared["end_column"]
         ),
         (&json!(2), &json!(11), &json!(16)),
         "{wheel}"
@@ -2551,8 +2551,8 @@ fn applied(text: &str, edits: &Value) -> String {
     edits.sort_by_key(|edit| edit["offset"].as_u64().unwrap());
     for edit in edits.into_iter().rev() {
         let from = edit["offset"].as_u64().unwrap() as usize;
-        let to = edit["endOffset"].as_u64().unwrap() as usize;
-        out.replace_range(from..to, edit["newText"].as_str().unwrap());
+        let to = edit["end_offset"].as_u64().unwrap() as usize;
+        out.replace_range(from..to, edit["new_text"].as_str().unwrap());
     }
     out
 }
@@ -2601,7 +2601,7 @@ fn rename_answers_every_edit_and_writes_none_of_them() {
     assert_eq!(files.len(), 2, "{road}");
     for file in files {
         for edit in file["edits"].as_array().unwrap() {
-            assert_eq!(edit["newText"], "'Road Wheel'", "{road}");
+            assert_eq!(edit["new_text"], "'Road Wheel'", "{road}");
         }
     }
 
@@ -2659,7 +2659,7 @@ fn rename_quotes_the_name_in_each_file_as_that_file_needs() {
         .map(|file| {
             (
                 file["path"].as_str().unwrap().ends_with(".kerml"),
-                file["edits"][0]["newText"].as_str().unwrap().to_string(),
+                file["edits"][0]["new_text"].as_str().unwrap().to_string(),
             )
         })
         .collect();
@@ -3162,7 +3162,7 @@ fn trace_answers_the_matrix_and_what_it_is_missing() {
     );
     let row = |name: &str| rows.iter().find(|it| it["name"] == name).unwrap();
     let pressure = row("Safety::SafePressure");
-    assert_eq!(pressure["shortName"], "R.1");
+    assert_eq!(pressure["short_name"], "R.1");
     assert_eq!(
         pressure["documentation"],
         "The boiler shall stay below its rated pressure."
@@ -3170,7 +3170,7 @@ fn trace_answers_the_matrix_and_what_it_is_missing() {
     assert_eq!(pressure["satisfied_by"][0]["name"], "Safety::Plant::boiler");
     assert_eq!(pressure["satisfied_by"][0]["at"], "model.sysml:12");
     assert_eq!(pressure["verified_by"][0]["name"], "Safety::PressureTest");
-    assert_eq!(pressure["verified_by"][0]["shortName"], "T.1");
+    assert_eq!(pressure["verified_by"][0]["short_name"], "T.1");
     assert_eq!(row("Safety::cheap")["definition"], "Safety::SafePressure");
     // an assertion that it is not satisfied is said, and does not count
     let safe = row("Safety::safe");
@@ -3191,7 +3191,7 @@ fn trace_answers_the_matrix_and_what_it_is_missing() {
 
     let other = answered(&answers[1]);
     assert_eq!(other["total"], 1, "{other}");
-    assert_eq!(other["requirements"][0]["shortName"], "O.1");
+    assert_eq!(other["requirements"][0]["short_name"], "O.1");
 }
 
 /// A focused check puts the constraints to the file it names alone, and

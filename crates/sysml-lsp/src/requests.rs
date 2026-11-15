@@ -362,7 +362,12 @@ impl Server {
         let (file, offset) = self.locate(uri, position)?;
         let analysis = self.analysis();
         let (target, active) = analysis.ws.callable_at(file, offset)?;
-        let name = analysis.ws.model().name(target).unwrap_or("?").to_string();
+        let name = analysis
+            .ws
+            .model()
+            .effective_name(target)
+            .unwrap_or("?")
+            .to_string();
         let params = analysis.ws.parameters_of(target);
         let label = format!("{name}({})", params.join(", "));
         Some(SignatureHelp {

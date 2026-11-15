@@ -1170,8 +1170,8 @@ fn json_reports_what_a_program_works_from() {
     let v = json(&out);
     assert_eq!(v["command"], "check");
     assert_eq!(v["ok"], false);
-    assert_eq!(v["parseErrors"][0]["line"], 4);
-    assert!(v["parseErrors"][0]["message"].is_string());
+    assert_eq!(v["parse_errors"][0]["line"], 4);
+    assert!(v["parse_errors"][0]["message"].is_string());
     assert!(v["unresolved"].is_null(), "syntax first, names after");
 
     // an unresolved reference, by name and place
@@ -1179,7 +1179,7 @@ fn json_reports_what_a_program_works_from() {
     assert!(!out.status.success());
     let v = json(&out);
     assert_eq!(v["command"], "check");
-    assert_eq!(v["parseErrors"].as_array().unwrap().len(), 0);
+    assert_eq!(v["parse_errors"].as_array().unwrap().len(), 0);
     assert_eq!(v["unresolved"][0]["name"], "Missing");
     assert_eq!(v["unresolved"][0]["line"], 3);
     assert_eq!(v["unresolved"][0]["column"], 11);
@@ -1195,7 +1195,7 @@ fn json_reports_what_a_program_works_from() {
     assert!(out.status.success());
     let v = json(&out);
     assert_eq!(v["counts"]["PartDefinition"], 1);
-    assert_eq!(v["parseErrors"], 0);
+    assert_eq!(v["parse_errors"], 0);
 
     // a file that cannot be read is a finding, not a stray line, and
     // every command says so in the same place -- `plan` among them, which
@@ -1832,7 +1832,7 @@ fn json_and_text_place_a_finding_in_the_same_column() {
             .clone();
         assert_eq!(missing["line"], line, "{v}");
         assert_eq!(missing["column"], column, "{v}");
-        assert_eq!(missing["endColumn"], column + 7, "{v}");
+        assert_eq!(missing["end_column"], column + 7, "{v}");
     }
 }
 
@@ -1853,6 +1853,26 @@ fn a_violation_names_its_element_as_it_would_be_written() {
     let out = sysml(&["--format", "json", "check", model.to_str().unwrap()]);
     let v = json_of(&out);
     assert_eq!(v["violations"][0]["element"], "P::'é😀'::o2", "{v}");
+}
+
+/// A violation inside a redefinition names the redefinition by the name it
+/// borrows: `part :>> engine` declares none, and was `P::Truck::'?'::o2`.
+#[test]
+fn a_violation_inside_a_redefinition_is_named_by_the_borrowed_name() {
+    let dir = temp_dir("violation-borrowed");
+    let model = write(
+        &dir,
+        "v.sysml",
+        "package P {\n\tpart def Car { part engine; }\n\tpart def Truck :> Car {\n\t\tpart :>> engine { objective o2; }\n\t}\n}\n",
+    );
+    let out = sysml(&["check", model.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("`P::Truck::engine::o2`"), "{stderr}");
+    assert!(!stderr.contains("'?'"), "{stderr}");
+    let out = sysml(&["--format", "json", "check", model.to_str().unwrap()]);
+    let v = json_of(&out);
+    assert_eq!(v["violations"][0]["element"], "P::Truck::engine::o2", "{v}");
 }
 
 /// A library from `SYSML_LIBRARY_PATH` with a name missing in it is not the
@@ -1883,7 +1903,7 @@ fn a_gap_in_the_library_is_not_the_models_to_answer_for() {
     assert_eq!(v["resolved"], 1);
     assert_eq!(v["references"], 1);
     assert_eq!(v["unresolved"].as_array().unwrap().len(), 0);
-    assert_eq!(v["libraryUnresolved"], 1);
+    assert_eq!(v["library_unresolved"], 1);
 
     let out = run(&["check", ok.to_str().unwrap()]);
     assert!(out.status.success());

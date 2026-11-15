@@ -1512,7 +1512,9 @@ impl Workspace {
             .map(|token| token.text_range())
     }
 
-    /// Owner-path qualified name of an element (for hovers).
+    /// Owner-path qualified name of an element (for hovers), by effective
+    /// names: `part :>> engine;` declares none of its own and is `engine`,
+    /// not `?`. Only an element with no name to borrow either is `?`.
     pub fn qualified_name_of(&self, elem: ElementId) -> String {
         let mut segments = Vec::new();
         let mut current = Some(elem);
@@ -1520,7 +1522,7 @@ impl Workspace {
             if e == self.root {
                 break;
             }
-            segments.push(self.model.name(e).unwrap_or("?").to_string());
+            segments.push(self.model.effective_name(e).unwrap_or("?").to_string());
             current = self.model.owner(e);
         }
         segments.reverse();
@@ -1540,7 +1542,7 @@ impl Workspace {
             if e == self.root {
                 break;
             }
-            segments.push(self.model.name(e).unwrap_or("?"));
+            segments.push(self.model.effective_name(e).unwrap_or("?"));
             current = self.model.owner(e);
         }
         segments.reverse();
@@ -2080,6 +2082,26 @@ mod tests {
             .alias_target(alias)
             .expect("the alias says what it names");
         assert_eq!(ws.qualified_name_of(engine), "P::Engine");
+    }
+
+    #[test]
+    fn a_redefinition_is_named_by_the_name_it_borrows() {
+        let (ws, stats) = resolved_workspace(&[(
+            "m.sysml",
+            "package P {\n  part def Car { part engine; }\n  part def Truck :> Car {\n    part :>> engine { attribute 'peak power'; }\n  }\n}",
+        )]);
+        assert_eq!(stats.unresolved, 0, "unresolved: {:?}", ws.unresolved());
+        let power = ws
+            .named_elements()
+            .find(|&(_, name)| name == "peak power")
+            .map(|(id, _)| id)
+            .expect("the attribute is declared");
+        // `part :>> engine` declares no name, and is the `engine` it redefines
+        assert_eq!(ws.qualified_name_of(power), "P::Truck::engine::peak power");
+        assert_eq!(
+            ws.qualified_name_written(power),
+            "P::Truck::engine::'peak power'"
+        );
     }
 
     #[test]

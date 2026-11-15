@@ -627,11 +627,9 @@ impl Server {
     ///
     /// Each finding is placed the way `sysml check --format json` places
     /// one -- `path`, then offsets, lines and columns from [`crate::at`]
-    /// -- but the answer around them is this server's own: the hints are
-    /// `declared_as` and `did_you_mean` where the command line says
-    /// `declaredAs` and `didYouMean`, and the violations are under
-    /// `rules`. Agents already read these names, so they stay; what used
-    /// to be said here -- that the two shapes were one -- was not so.
+    /// -- and each unresolved name carries the same `declared_as` and
+    /// `did_you_mean`, but the answer around them is this server's own:
+    /// the violations are under `rules`.
     fn check(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
         let focused = match arguments.get("focus") {
@@ -725,7 +723,7 @@ impl Server {
                 "ok": false,
                 "library": self.library,
                 "project": self.project.as_ref().map(|it| it.root.clone()),
-                "parseErrors": errors,
+                "parse_errors": errors,
             }));
         }
 
@@ -840,7 +838,7 @@ impl Server {
             "ok": unresolved.is_empty() && violations.is_empty(),
             "library": self.library,
             "project": self.project.as_ref().map(|it| it.root.clone()),
-            "parseErrors": [],
+            "parse_errors": [],
             "resolved": stats.resolved,
             "references": stats.resolved + stats.unresolved,
             "unresolved": unresolved,
@@ -1446,7 +1444,7 @@ impl Server {
             "kind": model.kind(elem).name(),
         });
         if let Some(short) = model.effective_short_name(elem) {
-            said["shortName"] = json!(short);
+            said["short_name"] = json!(short);
         }
         if let Some(ty) = model.type_of(elem) {
             said["type"] = json!(qualified(&ws, ty));
@@ -1586,7 +1584,7 @@ impl Server {
             let text = ws.file_parse(file).syntax().text().to_string();
             let listed: Vec<Value> = written
                 .iter()
-                .map(|edit| crate::at(&text, edit.range, json!({ "newText": edit.new_text })))
+                .map(|edit| crate::at(&text, edit.range, json!({ "new_text": edit.new_text })))
                 .collect();
             if let Some(at) = at {
                 for edit in written.iter().rev() {
@@ -1655,7 +1653,7 @@ impl Server {
             "written": false,
             "checked": {
                 "ok": parse_errors.is_empty() && introduced.is_empty(),
-                "parseErrors": parse_errors,
+                "parse_errors": parse_errors,
                 "introduced": introduced,
                 "unresolved": found.names.len(),
                 "unresolved_before": before.len(),
@@ -2096,7 +2094,7 @@ impl Server {
                 .map(|edge| {
                     let mut entry = json!({ "name": qualified(&ws, edge.source) });
                     if let Some(short) = model.effective_short_name(edge.source) {
-                        entry["shortName"] = json!(short);
+                        entry["short_name"] = json!(short);
                     }
                     entry["at"] = files.place(&ws, edge.file, edge.offset);
                     entry
@@ -2119,7 +2117,7 @@ impl Server {
             }
             let mut row = json!({ "name": name, "kind": model.kind(elem).name() });
             if let Some(short) = model.effective_short_name(elem) {
-                row["shortName"] = json!(short);
+                row["short_name"] = json!(short);
             }
             if let Some(doc) = ws.documentation_of(elem) {
                 row["documentation"] = json!(doc);
@@ -2396,7 +2394,7 @@ impl Server {
             "unwritten": unwritten,
             "checked": {
                 "ok": parse_errors.is_empty() && unresolved.is_empty(),
-                "parseErrors": parse_errors,
+                "parse_errors": parse_errors,
                 "unresolved": unresolved,
             },
         }))
@@ -3518,7 +3516,7 @@ fn summary(ws: &Workspace, files: &mut Texts, elem: ElementId) -> Value {
         "kind": model.kind(elem).name(),
     });
     if let Some(short) = model.effective_short_name(elem) {
-        entry["shortName"] = json!(short);
+        entry["short_name"] = json!(short);
     }
     if let Some((file, range)) = ws.element_place(elem) {
         entry["at"] = files.place(ws, file, range.start().into());
@@ -3527,25 +3525,9 @@ fn summary(ws: &Workspace, files: &mut Texts, elem: ElementId) -> Value {
 }
 
 /// The owner path by effective names, so `part :>> engine;` reads as the
-/// `engine` it is rather than `?`.
-///
-/// Every element an answer names is named by this. Some were named by
-/// `Workspace::qualified_name_written`, which reads declared names only,
-/// and a violation on a redefinition -- or the outline of anything inside
-/// one -- came back as `Car::Truck::'?'::'?'`: a name that cannot be
-/// handed back to any tool, for an element that has a perfectly good one.
+/// `engine` it is rather than `?`, written so that it can be handed back.
 fn qualified(ws: &Workspace, elem: ElementId) -> String {
-    let model = ws.model();
-    let mut segments = Vec::new();
-    let mut at = Some(elem);
-    while let Some(e) = at.filter(|&e| e != ws.root()) {
-        segments.push(model.effective_name(e).unwrap_or("?"));
-        at = model.owner(e);
-    }
-    segments.reverse();
-    // written the way it would have to be, so that what a call hands
-    // back can be handed back in: `P q::x` is no name at all
-    sysml_syntax::quote_qualified(segments)
+    ws.qualified_name_written(elem)
 }
 
 /// The text of each file a call places something in, read once per call.
@@ -4073,7 +4055,7 @@ fn tools() -> Value {
         },
         {
             "name": "rename",
-            "description": "The complete set of text edits that renames an element of the model everywhere it is named -- its declaration, every reference, every step of a qualified name or feature chain through it, and every redefinition that borrows its name -- the same edits the language server makes, with the new name quoted in each file where that file's notation needs it (`'two words'`, or a word that is a keyword in SysML but not in KerML). Nothing is written: this answers the edits, under `files` (each a `path` and its `edits`, each a range in that file as it is now and the `newText` to put there, in the order they appear -- apply them last first, or all at once, so the earlier ranges hold), and you write them yourself. `checked` is the rename already tried: the edits made in memory and the model resolved again, `ok` when nothing parses wrong and no name dangles that did not before (`introduced` lists any that do). Asked at a short name (`<W>`), it renames the short name. A new name that is not one legal name, one already visible where the declaration or a use of it stands (which the rename would capture), an alias, an element declared in the standard library, and one reached some way no rename can follow are each refused with why. Rename with this rather than by search and replace, which renames whatever shares the spelling and misses what reaches the element through inheritance.",
+            "description": "The complete set of text edits that renames an element of the model everywhere it is named -- its declaration, every reference, every step of a qualified name or feature chain through it, and every redefinition that borrows its name -- the same edits the language server makes, with the new name quoted in each file where that file's notation needs it (`'two words'`, or a word that is a keyword in SysML but not in KerML). Nothing is written: this answers the edits, under `files` (each a `path` and its `edits`, each a range in that file as it is now and the `new_text` to put there, in the order they appear -- apply them last first, or all at once, so the earlier ranges hold), and you write them yourself. `checked` is the rename already tried: the edits made in memory and the model resolved again, `ok` when nothing parses wrong and no name dangles that did not before (`introduced` lists any that do). Asked at a short name (`<W>`), it renames the short name. A new name that is not one legal name, one already visible where the declaration or a use of it stands (which the rename would capture), an alias, an element declared in the standard library, and one reached some way no rename can follow are each refused with why. Rename with this rather than by search and replace, which renames whatever shares the spelling and misses what reaches the element through inheritance.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

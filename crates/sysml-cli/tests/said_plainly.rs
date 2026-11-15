@@ -133,14 +133,14 @@ fn a_program_is_given_the_span_and_not_only_the_point() {
     let found = &said["unresolved"][0];
     assert_eq!(found["name"], "Wheel", "{said}");
     assert_eq!(found["line"], 2, "{said}");
-    assert_eq!(found["endLine"], 2, "{said}");
+    assert_eq!(found["end_line"], 2, "{said}");
     assert_eq!(
-        found["endOffset"].as_u64().unwrap() - found["offset"].as_u64().unwrap(),
+        found["end_offset"].as_u64().unwrap() - found["offset"].as_u64().unwrap(),
         "Wheel".len() as u64,
         "{said}"
     );
     assert_eq!(
-        found["endColumn"].as_u64().unwrap() - found["column"].as_u64().unwrap(),
+        found["end_column"].as_u64().unwrap() - found["column"].as_u64().unwrap(),
         "Wheel".len() as u64,
         "{said}"
     );
@@ -164,7 +164,10 @@ fn a_program_is_told_what_the_name_might_have_meant() {
         declared.to_str().unwrap(),
     ]);
     let said: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(said["unresolved"][0]["declaredAs"][0], "Q::Wheel", "{said}");
+    assert_eq!(
+        said["unresolved"][0]["declared_as"][0], "Q::Wheel",
+        "{said}"
+    );
 
     let misspelt = written(
         "misspelt.sysml",
@@ -178,8 +181,11 @@ fn a_program_is_told_what_the_name_might_have_meant() {
         misspelt.to_str().unwrap(),
     ]);
     let said: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(said["unresolved"][0]["didYouMean"][0], "P::Wheel", "{said}");
-    assert!(said["unresolved"][0]["declaredAs"].is_null(), "{said}");
+    assert_eq!(
+        said["unresolved"][0]["did_you_mean"][0], "P::Wheel",
+        "{said}"
+    );
+    assert!(said["unresolved"][0]["declared_as"].is_null(), "{said}");
 }
 
 /// A name that is declared somewhere is answered with the import it

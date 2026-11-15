@@ -44,7 +44,10 @@ help: did you mean `Cars::Wheel`?
 To a program, under `--format json`, which every subcommand takes: each
 finding placed by `offset`, `line` and `column` and by where it *ends*,
 so the span can be underlined again without lexing the line, and each
-unresolved name carrying `declaredAs` and `didYouMean`. `check` also
+unresolved name carrying `declared_as` and `did_you_mean`. Every key this
+tool names is in `snake_case`, here and in what `sysml mcp` answers; only
+the standard JSON of `export` keeps the metamodel's own names
+(`declaredName`, `@id`). `check` also
 says which standard library answered it, since without one every
 reference into the library reads as unresolved.
 

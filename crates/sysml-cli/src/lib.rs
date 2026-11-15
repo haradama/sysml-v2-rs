@@ -36,8 +36,8 @@ pub fn at(
     map.insert("offset".into(), offset.into());
     map.insert("line".into(), line.into());
     map.insert("column".into(), column.into());
-    map.insert("endOffset".into(), end.into());
-    map.insert("endLine".into(), end_line.into());
-    map.insert("endColumn".into(), end_column.into());
+    map.insert("end_offset".into(), end.into());
+    map.insert("end_line".into(), end_line.into());
+    map.insert("end_column".into(), end_column.into());
     value
 }

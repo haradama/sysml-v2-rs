@@ -10,6 +10,25 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 
 ## Unreleased
 
+### One spelling for every key, and a name for every element
+
+`sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`
+
+- **Breaking:** every key `sysml --format json` and `sysml mcp` name
+  themselves is `snake_case`, as the arguments already were:
+  `parseErrors`, `libraryUnresolved`, `declaredAs`, `didYouMean`,
+  `endOffset`, `endLine`, `endColumn`, `shortName` and `newText` are now
+  `parse_errors`, `library_unresolved`, `declared_as`, `did_you_mean`,
+  `end_offset`, `end_line`, `end_column`, `short_name` and `new_text`.
+  The check that `sysml mcp` answered and the one the command line
+  printed had spelt the same hint two ways. What the protocols define
+  (MCP's `inputSchema`, LSP's `newText`) and the standard JSON's
+  metamodel names (`declaredName`, `@id`) are left as they are.
+- An element that declares no name of its own but borrows one, such as
+  `part :>> engine;`, is named by that name in `sysml check`, in the
+  language server's hover and signature help, and in suggestions,
+  rather than as `'?'`.
+
 ### Any language, both ways
 
 `sysmlv2-rust` **0.1.2**, `sysmlv2-cli` **0.1.5**

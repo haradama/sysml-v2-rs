@@ -636,7 +636,7 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
             "ok": errors == 0,
             "unreadable": [],
             "elements": total,
-            "parseErrors": errors,
+            "parse_errors": errors,
             "counts": counts,
         }));
     } else {
@@ -1998,7 +1998,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
                 "ok": false,
                 "unreadable": [],
                 "elements": ws.model().len(),
-                "parseErrors": broken,
+                "parse_errors": broken,
             }));
         }
         return ExitCode::FAILURE;
@@ -2080,10 +2080,10 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
                     serde_json::json!({ "path": file, "name": u.what.clone() }),
                 );
                 if !meant.elsewhere.is_empty() {
-                    entry["declaredAs"] = serde_json::json!(meant.elsewhere);
+                    entry["declared_as"] = serde_json::json!(meant.elsewhere);
                 }
                 if !meant.near.is_empty() {
-                    entry["didYouMean"] = serde_json::json!(meant.near);
+                    entry["did_you_mean"] = serde_json::json!(meant.near);
                 }
                 unresolved.push(entry);
             }
@@ -2187,11 +2187,11 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
             "library": library.json(),
             "unreadable": [],
             "elements": ws.model().len(),
-            "parseErrors": [],
+            "parse_errors": [],
             "resolved": stats.resolved,
             "references": total,
             "unresolved": unresolved,
-            "libraryUnresolved": underneath.unresolved,
+            "library_unresolved": underneath.unresolved,
             "collisions": collisions,
             "violations": violations,
             "rules": {
