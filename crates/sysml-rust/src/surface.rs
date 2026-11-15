@@ -36,7 +36,7 @@
 //! assert!(imported.sysml.contains(":>> writtenIn = \"python\";"));
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
@@ -168,7 +168,9 @@ pub struct Scalar {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Item {
     /// A type with named fields: a struct, a class, a dataclass. Written
-    /// as an `item def`, each field an attribute.
+    /// as an `item def`, each field an `attribute` -- or an `item` where
+    /// it holds a record, and a `port` where it holds an interface, since
+    /// an attribute is a value and may not own an occurrence.
     Record(Record),
     /// A type that is one of a fixed set of names. Written as an
     /// `enum def`.
@@ -182,6 +184,15 @@ pub enum Item {
 }
 
 impl Item {
+    /// The usage a field holding one of this is written as.
+    fn held_as(&self) -> &'static str {
+        match self {
+            Item::Record(_) => "item",
+            Item::Interface(_) => "port",
+            Item::Enumeration(_) | Item::Function(_) => "attribute",
+        }
+    }
+
     /// The name a signature may refer to this by, where it declares a
     /// type. A function declares none.
     fn type_name(&self) -> Option<&str> {
@@ -215,6 +226,11 @@ pub struct Record {
     /// Its fields, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<Field>,
+    /// The operations the type itself declares -- in Rust, an inherent
+    /// `impl` block's functions -- in declaration order. Written like an
+    /// [`Interface`]'s, an `action def` each beside the definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<Callable>,
 }
 
 /// A type that is one of a fixed set of names.
@@ -236,6 +252,9 @@ pub struct Enumeration {
     /// The names it may be, in declaration order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<String>,
+    /// The operations the type itself declares, as a [`Record`]'s are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub methods: Vec<Callable>,
 }
 
 /// A set of operations something provides.
@@ -262,12 +281,17 @@ pub struct Interface {
 }
 
 /// Something that can be called: a function, or a method of an
-/// [`Interface`].
+/// [`Interface`], a [`Record`] or an [`Enumeration`].
 ///
 /// Written as an `action def` named after it in CamelCase --
 /// `get_stock` becomes `GetStock` -- with an `in` parameter for each
 /// parameter, an `out result` for what it returns and an `out error`
-/// for what it fails with.
+/// for what it fails with. A parameter that is itself called `result`
+/// or `error` has a `_` put after its name, and its doc says so: two
+/// members of one definition under one name are one name too many, and
+/// a generator reads the outputs by those two names. The parameters are
+/// passed in order, so what one is called in the model is the model's
+/// business.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -476,30 +500,34 @@ pub fn to_sysml(surface: &Surface, package: Option<&str>) -> Imported {
 
     // Which names a signature may use, settled before anything is
     // written: a callable written above a type that is then refused
-    // would name something nothing answers to.
+    // would name something nothing answers to. Each with the usage a
+    // field holding one of it is written as.
     let mut skipped = surface.skipped.clone();
-    let mut known: HashSet<String> = Primitive::ALL
+    let mut known: HashMap<String, &'static str> = Primitive::ALL
         .iter()
-        .map(|it| it.name().to_string())
+        .map(|it| (it.name().to_string(), "attribute"))
         .collect();
     let scalars: Vec<&Scalar> = surface
         .scalars
         .iter()
-        .filter(|scalar| claim(&mut known, &scalar.name, &mut skipped))
+        .filter(|scalar| claim(&mut known, &scalar.name, "attribute", &mut skipped))
         .collect();
     let accepted: Vec<bool> = surface
         .items
         .iter()
         .map(|item| match item.type_name() {
-            Some(name) => claim(&mut known, name, &mut skipped),
+            Some(name) => claim(&mut known, name, item.held_as(), &mut skipped),
             None => true,
         })
         .collect();
 
+    let mut taken: HashSet<String> = known.keys().cloned().collect();
+    taken.insert(binding::DEF.to_string());
     let mut writer = Writer {
         language: &surface.language,
         module: &surface.module,
-        taken: known.clone(),
+        package: package_name,
+        taken,
         known,
         out,
         skipped,
@@ -540,17 +568,31 @@ pub fn to_sysml(surface: &Surface, package: Option<&str>) -> Imported {
 }
 
 /// Take a name for the package to declare, or say why it cannot be.
-fn claim(known: &mut HashSet<String>, name: &str, skipped: &mut Vec<String>) -> bool {
+fn claim(
+    known: &mut HashMap<String, &'static str>,
+    name: &str,
+    held_as: &'static str,
+    skipped: &mut Vec<String>,
+) -> bool {
     if Primitive::named(name).is_some() {
         skipped.push(format!(
             "{name} -- the name of a scalar the package imports"
         ));
         return false;
     }
-    if !known.insert(name.to_string()) {
+    // the binding's own metadata definition is declared under it, and
+    // every `@code` in the package would mean the second
+    if name == binding::DEF {
+        skipped.push(format!(
+            "{name} -- the name of the metadata definition every binding is a usage of"
+        ));
+        return false;
+    }
+    if known.contains_key(name) {
         skipped.push(format!("{name} -- declared twice; the first is kept"));
         return false;
     }
+    known.insert(name.to_string(), held_as);
     true
 }
 
@@ -558,8 +600,11 @@ fn claim(known: &mut HashSet<String>, name: &str, skipped: &mut Vec<String>) -> 
 struct Writer<'a> {
     language: &'a str,
     module: &'a str,
-    /// The names a signature may be typed with.
-    known: HashSet<String>,
+    /// The package's name, as the code wrote it.
+    package: String,
+    /// The names a signature may be typed with, each with the usage a
+    /// field holding one of it is written as.
+    known: HashMap<String, &'static str>,
     /// Every name the package declares, so that the second member to
     /// want one is renamed rather than left to shadow the first.
     taken: HashSet<String>,
@@ -594,16 +639,26 @@ impl Writer<'_> {
         writeln!(self.out, " }} }}").unwrap();
     }
 
-    /// A record -> `item def`, each field an attribute.
+    /// A record -> `item def`, each field an attribute -- or an item,
+    /// or a port, by what it holds -- and each method an `action def`
+    /// beside it.
     fn record(&mut self, record: &Record) {
-        docs(&mut self.out, record.doc.as_deref(), 1, None);
-        writeln!(self.out, "\titem def {} {{", quoted(&record.name)).unwrap();
-        self.binding(&record.path, &record.capabilities, None, 2);
+        let mut lines = Vec::new();
         for field in &record.fields {
             match self.typed(&field.of, field.multiplicity) {
                 Some(ty) => {
-                    docs(&mut self.out, field.doc.as_deref(), 2, None);
-                    writeln!(self.out, "\t\tattribute {} : {ty};", quoted(&field.name)).unwrap();
+                    // an attribute is a value, and may not own an
+                    // occurrence: a field holding a record is an item of
+                    // it, one holding an interface a port
+                    let usage = self.known.get(&field.of).copied().unwrap_or("attribute");
+                    lines.push((
+                        field.name.as_str(),
+                        format!(
+                            "{usage} {} : {ty}{}",
+                            quoted(&field.name),
+                            owned_doc(field.doc.as_deref(), None)
+                        ),
+                    ));
                 }
                 None => self.skipped.push(format!(
                     "{}.{} -- names `{}`, which the surface does not declare",
@@ -611,25 +666,40 @@ impl Writer<'_> {
                 )),
             }
         }
+        writeln!(self.out, "\titem def {} {{", quoted(&record.name)).unwrap();
+        self.body_doc(record.doc.as_deref(), None);
+        let members: Vec<&str> = lines.iter().map(|(name, _)| *name).collect();
+        self.binding(&record.path, &record.capabilities, None, &members);
+        for (_, line) in lines {
+            writeln!(self.out, "\t\t{line}").unwrap();
+        }
         writeln!(self.out, "\t}}").unwrap();
+        for method in &record.methods {
+            self.callable(method, Some(&record.name));
+        }
     }
 
-    /// An enumeration -> `enum def`.
+    /// An enumeration -> `enum def`, each method an `action def` beside
+    /// it.
     fn enumeration(&mut self, enumeration: &Enumeration) {
-        docs(&mut self.out, enumeration.doc.as_deref(), 1, None);
         writeln!(self.out, "\tenum def {} {{", quoted(&enumeration.name)).unwrap();
-        self.binding(&enumeration.path, &enumeration.capabilities, None, 2);
+        self.body_doc(enumeration.doc.as_deref(), None);
+        let members: Vec<&str> = enumeration.values.iter().map(String::as_str).collect();
+        self.binding(&enumeration.path, &enumeration.capabilities, None, &members);
         for value in &enumeration.values {
             writeln!(self.out, "\t\tenum {};", quoted(value)).unwrap();
         }
         writeln!(self.out, "\t}}").unwrap();
+        for method in &enumeration.methods {
+            self.callable(method, Some(&enumeration.name));
+        }
     }
 
     /// An interface -> `port def`, each method an `action def` beside it.
     fn interface(&mut self, interface: &Interface) {
-        docs(&mut self.out, interface.doc.as_deref(), 1, None);
         writeln!(self.out, "\tport def {} {{", quoted(&interface.name)).unwrap();
-        self.binding(&interface.path, &interface.capabilities, None, 2);
+        self.body_doc(interface.doc.as_deref(), None);
+        self.binding(&interface.path, &interface.capabilities, None, &[]);
         writeln!(self.out, "\t}}").unwrap();
         for method in &interface.methods {
             self.callable(method, Some(&interface.name));
@@ -640,16 +710,46 @@ impl Writer<'_> {
     /// at all where its signature names what the surface does not
     /// declare.
     fn callable(&mut self, callable: &Callable, owner: Option<&str>) {
+        // The outputs are read by name -- `error` is the failure, any
+        // other `out` the result -- so a parameter that wants one of
+        // those names gives it up, and says what it was called.
+        let mut outputs = Vec::new();
+        if callable.result.is_some() {
+            outputs.push(("result", "what the call hands back"));
+        }
+        if callable.error.is_some() {
+            outputs.push(("error", "what the call fails with"));
+        }
+        let mut names: HashSet<String> = callable
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .chain(outputs.iter().map(|(it, _)| (*it).to_string()))
+            .collect();
+        let mut members = Vec::new();
         let mut lines = Vec::new();
         for parameter in &callable.parameters {
             let Some(ty) = self.typed(&parameter.of, parameter.multiplicity) else {
                 self.refuse(callable, &parameter.of);
                 return;
             };
-            if let Some(doc) = &parameter.doc {
-                lines.push(format!("doc /* {} */", doc_text(doc)));
+            let mut name = parameter.name.clone();
+            let mut note = None;
+            if let Some((_, what)) = outputs.iter().find(|(it, _)| *it == name) {
+                while !names.insert(name.clone()) {
+                    name.push('_');
+                }
+                note = Some(format!(
+                    "Called `{}` in the code; `{}` here is {what}.",
+                    parameter.name, parameter.name
+                ));
             }
-            lines.push(format!("in {} : {ty};", quoted(&parameter.name)));
+            lines.push(format!(
+                "in {} : {ty}{}",
+                quoted(&name),
+                owned_doc(parameter.doc.as_deref(), note.as_deref())
+            ));
+            members.push(name);
         }
         if let Some(result) = &callable.result {
             let Some(ty) = self.typed(&result.of, result.multiplicity) else {
@@ -657,6 +757,7 @@ impl Writer<'_> {
                 return;
             };
             lines.push(format!("out result : {ty};"));
+            members.push("result".to_string());
         }
         if let Some(error) = &callable.error {
             let Some(ty) = self.typed(error, Multiplicity::Optional) else {
@@ -664,6 +765,7 @@ impl Writer<'_> {
                 return;
             };
             lines.push(format!("out error : {ty};"));
+            members.push("error".to_string());
         }
 
         let wanted = camel(&callable.name);
@@ -674,14 +776,10 @@ impl Writer<'_> {
                 callable.path
             )
         });
-        docs(
-            &mut self.out,
-            callable.doc.as_deref(),
-            1,
-            renamed.as_deref(),
-        );
         writeln!(self.out, "\taction def {} {{", quoted(&called)).unwrap();
-        self.binding(&callable.path, &[], Some(callable), 2);
+        self.body_doc(callable.doc.as_deref(), renamed.as_deref());
+        let members: Vec<&str> = members.iter().map(String::as_str).collect();
+        self.binding(&callable.path, &[], Some(callable), &members);
         for line in lines {
             writeln!(self.out, "\t\t{line}").unwrap();
         }
@@ -696,20 +794,50 @@ impl Writer<'_> {
         ));
     }
 
+    /// A definition's own doc, first in its body, which is where a
+    /// `doc` documents the element it is in. Written above the
+    /// definition, it documented the package instead.
+    fn body_doc(&mut self, doc: Option<&str>, note: Option<&str>) {
+        if let Some(said) = doc_said(doc, note) {
+            writeln!(self.out, "\t\tdoc /* {said} */").unwrap();
+        }
+    }
+
     /// The `@code { ... }` usage binding one definition to what it
     /// stands for.
+    ///
+    /// `members` are the names the definition declares. One of them
+    /// called `code` -- a field, a parameter -- hides the metadata
+    /// definition from everything inside it, `@code` among them, so
+    /// there the binding names it through the package; and through the
+    /// global namespace where a member hides the package too. The
+    /// parser reads `$::` only after a `:`, so that last binding is a
+    /// usage with a name of its own, one no member has.
     fn binding(
         &mut self,
         path: &str,
         capabilities: &[String],
         callable: Option<&Callable>,
-        indent: usize,
+        members: &[&str],
     ) {
-        let tabs = "\t".repeat(indent);
+        let usage = if !members.contains(&binding::DEF) {
+            format!("@{}", binding::DEF)
+        } else if !members.contains(&self.package.as_str()) {
+            format!("@{}::{}", quoted(&self.package), binding::DEF)
+        } else {
+            let mut name = format!("{}_", binding::DEF);
+            while members.contains(&name.as_str()) {
+                name.push('_');
+            }
+            format!(
+                "metadata {name} : $::{}::{}",
+                quoted(&self.package),
+                binding::DEF
+            )
+        };
         write!(
             self.out,
-            "{tabs}@{} {{ :>> {} = {}; :>> {} = {};",
-            binding::DEF,
+            "\t\t{usage} {{ :>> {} = {}; :>> {} = {};",
             binding::LANGUAGE,
             literal(self.language),
             binding::ITEM,
@@ -754,7 +882,7 @@ impl Writer<'_> {
     /// nothing, where the surface never declared the type.
     fn typed(&self, of: &str, multiplicity: Multiplicity) -> Option<String> {
         self.known
-            .contains(of)
+            .contains_key(of)
             .then(|| format!("{}{}", quoted(of), multiplicity.written()))
     }
 }
@@ -777,9 +905,10 @@ fn unclaimed(taken: &mut HashSet<String>, wanted: &str, owner: Option<&str>) -> 
     name
 }
 
-/// A doc comment as a SysML `doc` block, with whatever the writer had to
-/// say about the item after it.
-fn docs(out: &mut String, doc: Option<&str>, indent: usize, note: Option<&str>) {
+/// What a doc block says: the code's doc, and whatever the writer had to
+/// say about the item after it -- or nothing, where neither says
+/// anything.
+fn doc_said(doc: Option<&str>, note: Option<&str>) -> Option<String> {
     let said = [
         doc_text(doc.unwrap_or_default()),
         note.unwrap_or_default().to_string(),
@@ -787,10 +916,17 @@ fn docs(out: &mut String, doc: Option<&str>, indent: usize, note: Option<&str>) 
     .join(" ")
     .trim()
     .to_string();
-    if said.is_empty() {
-        return;
+    (!said.is_empty()).then_some(said)
+}
+
+/// The end of a usage's declaration: `;`, or a body holding its doc --
+/// inside it, since a `doc` beside a usage documents what the usage is
+/// in.
+fn owned_doc(doc: Option<&str>, note: Option<&str>) -> String {
+    match doc_said(doc, note) {
+        Some(said) => format!(" {{ doc /* {said} */ }}"),
+        None => ";".to_string(),
     }
-    writeln!(out, "{}doc /* {said} */", "\t".repeat(indent)).unwrap();
 }
 
 /// Text as it can sit inside `/* ... */`: on one line, and with no `*/`

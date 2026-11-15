@@ -15,15 +15,15 @@ package InventoryApi {
 
 	// the language's own scalars, each a kind of the SysML one it is nearest
 	attribute def PyBytes :> String { @code { :>> writtenIn = "python"; :>> path = "bytes"; :>> capabilities = "Hashable"; } }
-	doc /* Where a warehouse is. */
 	enum def Region {
+		doc /* Where a warehouse is. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.Region"; :>> module = "inventory"; }
 		enum TOKYO;
 		enum OSAKA;
 		enum FUKUOKA;
 	}
-	doc /* What to look up. */
 	item def StockQuery {
+		doc /* What to look up. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.StockQuery"; :>> module = "inventory"; }
 		attribute sku : String;
 		attribute warehouses : Integer[*];
@@ -31,8 +31,8 @@ package InventoryApi {
 		attribute 'filter' : Boolean;
 		attribute raw : PyBytes;
 	}
-	doc /* What a lookup answers. */
 	item def StockLevel {
+		doc /* What a lookup answers. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.StockLevel"; :>> module = "inventory"; }
 		attribute sku : String;
 		attribute quantity : Integer;
@@ -41,28 +41,28 @@ package InventoryApi {
 		attribute pinned : Boolean;
 		attribute region : Region[0..1];
 	}
-	doc /* The inventory service every deployment provides. */
 	port def InventoryStore {
+		doc /* The inventory service every deployment provides. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.InventoryStore"; :>> module = "inventory"; }
 	}
-	doc /* Look one article up. */
 	action def GetStock {
+		doc /* Look one article up. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.InventoryStore.get_stock"; :>> module = "inventory"; :>> takesSelf = "self"; :>> isAsync = false; :>> isFallible = true; }
 		in query : StockQuery;
 		out result : StockLevel;
 	}
-	doc /* Wait for the level of one article to change. */
 	action def Watch {
+		doc /* Wait for the level of one article to change. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.InventoryStore.watch"; :>> module = "inventory"; :>> takesSelf = "self"; :>> isAsync = true; :>> isFallible = false; }
 		in sku : String;
 		out result : StockLevel;
 	}
-	doc /* Drop caches. */
 	action def Refresh {
+		doc /* Drop caches. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.InventoryStore.refresh"; :>> module = "inventory"; :>> takesSelf = "self"; :>> isAsync = false; :>> isFallible = false; }
 	}
-	doc /* The region a query defaults to. */
 	action def DefaultRegion {
+		doc /* The region a query defaults to. */
 		@code { :>> writtenIn = "python"; :>> path = "inventory.default_region"; :>> module = "inventory"; :>> takesSelf = ""; :>> isAsync = false; :>> isFallible = false; }
 		out result : Region;
 	}

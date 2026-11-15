@@ -38,7 +38,7 @@ fn the_generated_package_is_deterministic_and_names_the_api() {
     assert!(first.contains("attribute note : String[0..1];"));
     assert!(first.contains("attribute fill_ratio : Real;"));
     // keyword collisions are quoted
-    assert!(first.contains("attribute 'filter' : Boolean;"));
+    assert!(first.contains("attribute 'filter' : Boolean"));
     assert!(first.contains("attribute 'message' : String;"));
     // enums
     assert!(first.contains("enum def Region {"));
@@ -62,7 +62,9 @@ fn the_generated_package_is_deterministic_and_names_the_api() {
     assert!(first.contains(":>> takesSelf = \"self\";"));
     assert!(first.contains("attribute delta : Integer;"));
     assert!(first.contains("attribute grade : RustChar;"));
-    assert!(first.contains("attribute cause : Adjustment[0..1];"));
+    // a field holding a struct is an item of it: an attribute is a value,
+    // and may not own an occurrence
+    assert!(first.contains("\t\titem cause : Adjustment[0..1];"));
     assert!(first.contains("//   Adjustment.bounds -- unmappable type"));
     assert!(first.contains("//   Session::dump -- unsupported signature"));
     assert!(first.contains("//   Session::fetch -- unsupported signature"));
@@ -262,6 +264,54 @@ fn odd_shapes_are_skipped_not_dropped() {
     assert!(sysml.contains("port def Hollow {"));
 }
 
+/// What a model cannot perform is not imported as though it could be:
+/// an `unsafe fn`, and a trait's function with no receiver. Imported as
+/// ordinary actions, both generated calls -- `self.api.danger()`,
+/// `self.api.stat()` -- that did not compile.
+#[test]
+fn what_cannot_be_called_from_a_model_is_said_and_not_imported() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "careful", "inner": { "module": { "items": ["t", "loose"] } } },
+            "t": { "name": "Api", "inner": { "trait": { "items": ["stat", "danger", "fine"] } } },
+            "stat": { "name": "stat", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "primitive": "u32" } },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "danger": { "name": "danger", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": false } } ] ], "output": { "primitive": "u32" } },
+                "header": { "is_async": false, "is_unsafe": true } } } },
+            "fine": { "name": "fine", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": false } } ] ], "output": { "primitive": "u32" } },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "loose": { "name": "loose", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "primitive": "u32" } },
+                "header": { "is_async": false, "is_unsafe": true } } } }
+        }
+    }"#;
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
+    assert!(
+        sysml.contains("action def ApiFine {") || sysml.contains("action def Fine {"),
+        "{sysml}"
+    );
+    assert!(
+        !sysml.contains("action def ApiStat") && !sysml.contains("action def Stat "),
+        "{sysml}"
+    );
+    assert!(!sysml.contains("Danger {"), "{sysml}");
+    assert!(!sysml.contains("action def Loose"), "{sysml}");
+    assert!(
+        sysml.contains("//   Api::stat -- takes no receiver"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("//   Api::danger -- unsafe"), "{sysml}");
+    assert!(sysml.contains("//   loose -- unsafe"), "{sysml}");
+}
+
 /// A crate that keeps its types in modules and re-exports them is the
 /// normal shape of a Rust library, and it used to import as almost
 /// nothing: only what `lib.rs` spelled out was seen, while the
@@ -425,7 +475,7 @@ fn two_rust_items_that_want_one_sysml_name_are_told_apart() {
             "u": { "name": "second_store", "inner": { "trait": { "items": ["m2"] } } },
             "m2": { "name": "store", "inner": { "function": {
                 "generics": { "params": [] },
-                "sig": { "inputs": [], "output": null },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": false } } ] ], "output": null },
                 "header": { "is_async": false } } } }
         }
     }"#;
@@ -647,4 +697,217 @@ fn what_the_importer_writes_calls_the_crate_it_was_read_from() {
         "generated Rust does not compile against the crate it calls:\n{}\n---\n{rust}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// What `sysml check` asks of a package, against the standard library:
+/// every name resolved, and every constraint the specification states
+/// held.
+fn checked(sysml: &str) -> sysml_semantics::Workspace {
+    let mut ws = sysml_semantics::Workspace::new();
+    for (name, text) in sysml_stdlib::FILES {
+        ws.add_file(*name, text);
+    }
+    let file = ws.add_file("api.sysml", sysml);
+    ws.resolve_all();
+    let diagnosis = ws.diagnose(&[file]);
+    assert!(
+        diagnosis.found.syntax.is_empty() && diagnosis.found.names.is_empty(),
+        "{:?}\n{sysml}",
+        diagnosis.found
+    );
+    assert!(diagnosis.asked, "the constraints were asked\n{sysml}");
+    let broken: Vec<&str> = diagnosis.rules.violations.iter().map(|v| v.rule).collect();
+    assert!(broken.is_empty(), "{broken:?}\n{sysml}");
+    ws
+}
+
+/// `pub use b::Dup as Renamed;` makes `b::Dup` public as `Renamed`, and
+/// only as that: the binding said `crate::Dup`, a path nothing answers
+/// to. The definition takes the name the crate exports, and a signature
+/// naming the struct names it by that name too.
+#[test]
+fn a_renamed_re_export_is_bound_by_the_name_it_is_exported_under() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "renaming", "inner": { "module": { "items": ["use_dup", "fun"] } } },
+            "use_dup": { "name": null, "visibility": "public", "inner": { "use": { "source": "b::Dup", "name": "Renamed", "id": "dup", "is_glob": false } } },
+            "dup": { "name": "Dup", "visibility": "public", "inner": { "struct": { "kind": { "plain": { "fields": ["y"] } } } } },
+            "y": { "name": "y", "inner": { "struct_field": { "primitive": "f64" } } },
+            "fun": { "name": "make", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "resolved_path": { "path": "b::Dup", "id": "dup" } } },
+                "header": { "is_async": false } } } }
+        }
+    }"#;
+    let sysml = sysml_rust::rustdoc_to_sysml(json, None).unwrap().sysml;
+    assert!(sysml.contains("item def Renamed {"), "{sysml}");
+    assert!(
+        sysml.contains(":>> path = \"renaming::Renamed\";"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("out result : Renamed;"), "{sysml}");
+    assert!(!sysml.contains("Dup"), "{sysml}");
+    checked(&sysml);
+}
+
+/// `pub use private::*;` is how a crate makes a private module's items
+/// its own, and they were neither imported nor listed as not imported.
+/// The glob is followed into the module -- and into a glob inside it --
+/// for what is public there; a name the root spells out itself wins, as
+/// it does in Rust; and a glob over an enum's variants is listed.
+#[test]
+fn a_glob_re_export_brings_the_module_s_public_items() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "globby", "inner": { "module": { "items": ["glob", "glob_again", "own", "enum_glob", "mode"] } } },
+            "glob": { "name": null, "visibility": "public", "inner": { "use": { "source": "private", "name": "private", "id": "private", "is_glob": true } } },
+            "glob_again": { "name": null, "visibility": "public", "inner": { "use": { "source": "private", "name": "private", "id": "private", "is_glob": true } } },
+            "enum_glob": { "name": null, "visibility": "public", "inner": { "use": { "source": "Mode", "name": "Mode", "id": "mode", "is_glob": true } } },
+            "private": { "name": "private", "visibility": "crate", "inner": { "module": { "items": ["globbed", "fun", "hidden", "shadowed", "inner_glob"] } } },
+            "inner_glob": { "name": null, "visibility": "public", "inner": { "use": { "source": "self::deeper", "name": "deeper", "id": "deeper", "is_glob": true } } },
+            "deeper": { "name": "deeper", "visibility": "public", "inner": { "module": { "items": ["deep"] } } },
+            "deep": { "name": "Deep", "visibility": "public", "inner": { "struct": { "kind": { "plain": { "fields": ["x"] } } } } },
+            "globbed": { "name": "Globbed", "visibility": "public", "inner": { "struct": { "kind": { "plain": { "fields": ["x"] } } } } },
+            "x": { "name": "x", "inner": { "struct_field": { "primitive": "i64" } } },
+            "hidden": { "name": "Hidden", "visibility": "crate", "inner": { "struct": { "kind": { "plain": { "fields": ["x"] } } } } },
+            "shadowed": { "name": "Own", "visibility": "public", "inner": { "struct": { "kind": { "plain": { "fields": ["x"] } } } } },
+            "own": { "name": "Own", "visibility": "public", "inner": { "struct": { "kind": { "plain": { "fields": [] } } } } },
+            "mode": { "name": "Mode", "visibility": "public", "inner": { "enum": { "variants": ["on"] } } },
+            "on": { "name": "On", "inner": { "variant": { "kind": "plain" } } },
+            "fun": { "name": "globbed_fn", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "resolved_path": { "path": "Globbed", "id": "globbed" } } },
+                "header": { "is_async": false } } } }
+        }
+    }"#;
+    let imported = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = &imported.sysml;
+    assert!(sysml.contains("item def Globbed {"), "{sysml}");
+    assert!(sysml.contains(":>> path = \"globby::Globbed\";"), "{sysml}");
+    assert!(sysml.contains("action def GlobbedFn {"), "{sysml}");
+    assert!(sysml.contains("item def Deep {"), "{sysml}");
+    // read once, however many globs reach it
+    assert_eq!(sysml.matches("item def Globbed {").count(), 1, "{sysml}");
+    // what the module keeps to the crate stays there
+    assert!(!sysml.contains("Hidden"), "{sysml}");
+    // the root's own `Own` is the one bound, not the glob's
+    assert_eq!(sysml.matches("item def Own {").count(), 1, "{sysml}");
+    assert!(!sysml.contains("declared twice"), "{sysml}");
+    assert!(
+        sysml.contains("//   Mode::* -- re-exports an enum's variants"),
+        "{sysml}"
+    );
+    checked(sysml);
+}
+
+/// A type's own functions -- `impl Part { pub fn new() -> Self; pub fn
+/// total(&self) -> f64 }` -- were neither imported nor listed: rustdoc
+/// lists an `impl` under the type and not under the module. They are
+/// imported as a trait's methods are, `Self` read as the type, and what
+/// cannot be is listed under the type's name.
+#[test]
+fn a_type_s_own_functions_are_imported_or_listed() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "inherent", "inner": { "module": { "items": ["part", "mode"] } } },
+            "part": { "name": "Part", "visibility": "public", "inner": { "struct": {
+                "kind": { "plain": { "fields": ["w", "c"] } },
+                "generics": { "params": [] },
+                "impls": ["own", "debug", "auto", "blanket"] } } },
+            "w": { "name": "weight", "inner": { "struct_field": { "primitive": "f64" } } },
+            "c": { "name": "code", "inner": { "struct_field": { "primitive": "i64" } } },
+            "own": { "inner": { "impl": { "trait": null, "is_synthetic": false, "blanket_impl": null,
+                "generics": { "params": [] },
+                "items": ["new", "total", "grow", "pick", "danger", "secret", "LIMIT"] } } },
+            "debug": { "inner": { "impl": { "trait": { "path": "Debug", "id": "dbg" }, "is_synthetic": false, "blanket_impl": null,
+                "generics": { "params": [] }, "items": ["fmt"] } } },
+            "auto": { "inner": { "impl": { "trait": { "path": "Send", "id": "send" }, "is_synthetic": true, "blanket_impl": null,
+                "generics": { "params": [] }, "items": [] } } },
+            "blanket": { "inner": { "impl": { "trait": { "path": "From", "id": "from" }, "is_synthetic": false, "blanket_impl": { "generic": "T" },
+                "generics": { "params": [] }, "items": ["from_fn"] } } },
+            "new": { "name": "new", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "generic": "Self" } },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "total": { "name": "total", "visibility": "public", "docs": "The whole of it.", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": false, "type": { "generic": "Self" } } } ] ], "output": { "primitive": "f64" } },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "grow": { "name": "grow", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": true, "type": { "generic": "Self" } } } ], [ "amount", { "primitive": "f64" } ] ], "output": null },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "pick": { "name": "pick", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [ { "name": "T" } ] },
+                "sig": { "inputs": [], "output": null },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "danger": { "name": "danger", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": null },
+                "header": { "is_async": false, "is_unsafe": true } } } },
+            "secret": { "name": "secret", "visibility": "crate", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": null },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "LIMIT": { "name": "LIMIT", "visibility": "public", "inner": { "assoc_const": { "type": { "primitive": "u32" } } } },
+            "fmt": { "name": "fmt", "inner": { "function": { "generics": { "params": [] }, "sig": { "inputs": [], "output": null }, "header": {} } } },
+            "from_fn": { "name": "from", "inner": { "function": { "generics": { "params": [] }, "sig": { "inputs": [], "output": null }, "header": {} } } },
+            "mode": { "name": "Mode", "visibility": "public", "inner": { "enum": {
+                "variants": ["on"], "generics": { "params": [] }, "impls": ["mode_own"] } } },
+            "on": { "name": "On", "inner": { "variant": { "kind": "plain" } } },
+            "mode_own": { "inner": { "impl": { "trait": null, "is_synthetic": false, "blanket_impl": null,
+                "generics": { "params": [] }, "items": ["flip", "mode_new"] } } },
+            "flip": { "name": "flip", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "generic": "Self" } ] ], "output": { "generic": "Self" } },
+                "header": { "is_async": false, "is_unsafe": false } } } },
+            "mode_new": { "name": "new", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [], "output": { "generic": "Self" } },
+                "header": { "is_async": false, "is_unsafe": false } } } }
+        }
+    }"#;
+    let imported = sysml_rust::rustdoc_to_sysml(json, None).unwrap();
+    let sysml = &imported.sysml;
+    assert!(
+        sysml.contains(
+            "\taction def New {\n\t\t@code { :>> writtenIn = \"rust\"; :>> path = \"inherent::Part::new\"; \
+             :>> module = \"inherent\"; :>> takesSelf = \"\"; :>> isAsync = false; :>> isFallible = false; }\n\
+             \t\tout result : Part;\n"
+        ),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains(
+            "\taction def Total {\n\t\tdoc /* The whole of it. */\n\t\t@code { :>> writtenIn = \"rust\"; \
+             :>> path = \"inherent::Part::total\"; :>> module = \"inherent\"; :>> takesSelf = \"&self\";"
+        ),
+        "{sysml}"
+    );
+    assert!(sysml.contains(":>> path = \"inherent::Part::grow\"; :>> module = \"inherent\"; :>> takesSelf = \"&mut self\";"), "{sysml}");
+    assert!(sysml.contains("\t\tin amount : Real;\n"), "{sysml}");
+    // an enum's own, `Self` its own type; a second `new` under its type's name
+    assert!(sysml.contains(":>> path = \"inherent::Mode::flip\"; :>> module = \"inherent\"; :>> takesSelf = \"self\";"), "{sysml}");
+    assert!(sysml.contains("\taction def ModeNew {\n"), "{sysml}");
+    // what is not imported is listed under the type's name
+    for line in [
+        "Part::pick -- unsupported signature",
+        "Part::danger -- unsafe",
+        "Part::LIMIT -- not a method",
+    ] {
+        assert!(
+            imported.skipped.iter().any(|it| it.starts_with(line)),
+            "{line}: {:?}",
+            imported.skipped
+        );
+    }
+    // a trait's impl, an auto trait's and a blanket one bring nothing
+    assert!(!sysml.contains("fmt") && !sysml.contains("From"), "{sysml}");
+    // what is not public is not the crate's API
+    assert!(!sysml.contains("secret"), "{sysml}");
+    // and the package checks clean, its field called `code` included
+    checked(sysml);
 }

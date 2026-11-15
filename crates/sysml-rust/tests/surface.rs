@@ -141,12 +141,16 @@ fn a_surface_of_everything_is_written_as_a_package_that_resolves() {
         ),
         "{sysml}"
     );
+    // a doc is inside what it documents, where it is that element's own:
+    // beside it, it was the package's
     assert!(
-        sysml.contains("doc /* What to look up. On two lines, with *\\/ inside. */"),
+        sysml.contains(
+            "item def StockQuery {\n\t\tdoc /* What to look up. On two lines, with *\\/ inside. */\n"
+        ),
         "{sysml}"
     );
     assert!(
-        sysml.contains("\t\tdoc /* The article. */\n\t\tattribute sku : String;"),
+        sysml.contains("\t\tattribute sku : String { doc /* The article. */ }\n"),
         "{sysml}"
     );
     assert!(
@@ -170,7 +174,7 @@ fn a_surface_of_everything_is_written_as_a_package_that_resolves() {
         "{sysml}"
     );
     assert!(
-        sysml.contains("\t\tdoc /* What to look up. */\n\t\tin query : StockQuery;"),
+        sysml.contains("\t\tin query : StockQuery { doc /* What to look up. */ }\n"),
         "{sysml}"
     );
     assert!(sysml.contains("out result : Region[0..1];"), "{sysml}");
@@ -616,5 +620,262 @@ fn the_schema_says_what_a_surface_is() {
         "Natural",
     ] {
         assert!(text.contains(word), "{word} is in the schema");
+    }
+}
+
+/// A package checked as `sysml check` checks it: against the standard
+/// library, every name resolved and then every constraint the
+/// specification states asked -- the bar an imported package has to
+/// clear, since it is the first thing a model is built on.
+fn checked(sysml: &str) -> sysml_semantics::Workspace {
+    let mut ws = sysml_semantics::Workspace::new();
+    for (name, text) in sysml_stdlib::FILES {
+        ws.add_file(*name, text);
+    }
+    let file = ws.add_file("api.sysml", sysml);
+    ws.resolve_all();
+    let diagnosis = ws.diagnose(&[file]);
+    assert!(
+        diagnosis.found.syntax.is_empty() && diagnosis.found.names.is_empty(),
+        "{:?}\n{sysml}",
+        diagnosis.found
+    );
+    assert!(diagnosis.asked, "the constraints were asked\n{sysml}");
+    let broken: Vec<&str> = diagnosis.rules.violations.iter().map(|v| v.rule).collect();
+    assert!(broken.is_empty(), "{broken:?}\n{sysml}");
+    ws
+}
+
+/// The one element of a kind under a name.
+fn named(
+    ws: &sysml_semantics::Workspace,
+    kind: sysml_model::ElementKind,
+    name: &str,
+) -> sysml_model::ElementId {
+    let model = ws.model();
+    model
+        .ids()
+        .find(|&id| model.kind(id) == kind && model.name(id) == Some(name))
+        .unwrap_or_else(|| panic!("no {kind:?} named {name}"))
+}
+
+/// A `doc` documents the element it is inside. Written as a sibling in
+/// front of a definition, every definition's doc was the package's --
+/// and a field's was the definition's, so a plan of the package read
+/// the record as documented by its first field.
+#[test]
+fn a_doc_documents_what_it_was_written_for() {
+    let surface = sysml_rust::surface::read(INVENTORY).unwrap();
+    let sysml = sysml_rust::surface::to_sysml(&surface, None).sysml;
+    let ws = checked(&sysml);
+    use sysml_model::ElementKind as K;
+    let doc = |kind, name| ws.documentation_of(named(&ws, kind, name));
+    assert_eq!(doc(K::Package, "InventoryApi"), None, "{sysml}");
+    assert_eq!(
+        doc(K::ItemDefinition, "StockQuery").as_deref(),
+        Some("What to look up. On two lines, with *\\/ inside."),
+        "{sysml}"
+    );
+    assert_eq!(
+        doc(K::AttributeUsage, "sku").as_deref(),
+        Some("The article.")
+    );
+    assert_eq!(
+        doc(K::EnumerationDefinition, "Region").as_deref(),
+        Some("Where a warehouse is.")
+    );
+    assert_eq!(
+        doc(K::PortDefinition, "InventoryStore").as_deref(),
+        Some("The inventory service.")
+    );
+    assert_eq!(
+        doc(K::ActionDefinition, "GetStock").as_deref(),
+        Some("Look one article up.")
+    );
+    assert_eq!(
+        doc(K::ReferenceUsage, "query").as_deref(),
+        Some("What to look up.")
+    );
+}
+
+/// A field holding a record is an item of it, and one holding an
+/// interface a port: an attribute is a value, and the specification
+/// does not let one own an occurrence. Written as attributes, a struct
+/// holding another struct imported cleanly and failed `sysml check`.
+#[test]
+fn a_field_holding_a_record_is_an_item_and_checks_clean() {
+    let surface = sysml_rust::surface::read(
+        r#"{
+        "language": "python",
+        "module": "nest",
+        "items": [
+            { "kind": "record", "name": "Inner", "path": "nest.Inner",
+              "fields": [ { "name": "v", "type": "Integer" } ] },
+            { "kind": "interface", "name": "Store", "path": "nest.Store" },
+            { "kind": "enumeration", "name": "Mode", "path": "nest.Mode", "values": ["on"] },
+            { "kind": "record", "name": "Outer", "path": "nest.Outer",
+              "fields": [
+                  { "name": "inner", "type": "Inner" },
+                  { "name": "many", "type": "Inner", "multiplicity": "many", "doc": "Several." },
+                  { "name": "store", "type": "Store" },
+                  { "name": "mode", "type": "Mode" },
+                  { "name": "count", "type": "Integer" }
+              ] }
+        ]
+    }"#,
+    )
+    .unwrap();
+    let sysml = sysml_rust::surface::to_sysml(&surface, None).sysml;
+    assert!(sysml.contains("\t\titem inner : Inner;\n"), "{sysml}");
+    assert!(
+        sysml.contains("\t\titem many : Inner[*] { doc /* Several. */ }\n"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("\t\tport store : Store;\n"), "{sysml}");
+    assert!(sysml.contains("\t\tattribute mode : Mode;\n"), "{sysml}");
+    assert!(
+        sysml.contains("\t\tattribute count : Integer;\n"),
+        "{sysml}"
+    );
+    checked(&sysml);
+}
+
+/// A member called `code` hides the binding's metadata definition from
+/// everything inside the definition that declares it, `@code` among
+/// them: its `:>> writtenIn` then resolved to nothing, and `import-code`
+/// refused what it had written. There the binding names the definition
+/// through the package -- and through the global namespace, where a
+/// member hides the package as well.
+#[test]
+fn a_member_called_code_does_not_hide_the_binding() {
+    let surface = sysml_rust::surface::read(
+        r#"{
+        "language": "rust",
+        "module": "shadow",
+        "items": [
+            { "kind": "record", "name": "Err", "path": "shadow::Err",
+              "fields": [ { "name": "code", "type": "Integer" } ] },
+            { "kind": "record", "name": "Both", "path": "shadow::Both",
+              "fields": [ { "name": "code", "type": "Integer" },
+                          { "name": "ShadowApi", "type": "Integer" } ] },
+            { "kind": "enumeration", "name": "Kind", "path": "shadow::Kind",
+              "values": ["code", "other"] },
+            { "kind": "function", "name": "send", "path": "shadow::send",
+              "parameters": [ { "name": "code", "type": "Integer" } ] },
+            { "kind": "record", "name": "Plain", "path": "shadow::Plain",
+              "fields": [ { "name": "v", "type": "Integer" } ] },
+            { "kind": "record", "name": "code", "path": "shadow::code" }
+        ]
+    }"#,
+    )
+    .unwrap();
+    let imported = sysml_rust::surface::to_sysml(&surface, None);
+    let sysml = &imported.sysml;
+    assert!(
+        sysml.contains("item def Err {\n\t\t@ShadowApi::code { :>> writtenIn"),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains("item def Both {\n\t\tmetadata code_ : $::ShadowApi::code {"),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains("enum def Kind {\n\t\t@ShadowApi::code {"),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains("action def Send {\n\t\t@ShadowApi::code {"),
+        "{sysml}"
+    );
+    // where nothing hides it, the binding is written as it always was
+    assert!(sysml.contains("item def Plain {\n\t\t@code {"), "{sysml}");
+    // and a type under the metadata definition's own name is refused,
+    // since every `@code` in the package would mean it
+    assert!(!sysml.contains("item def code"), "{sysml}");
+    assert!(
+        imported
+            .skipped
+            .iter()
+            .any(|line| line.starts_with("code -- the name of the metadata definition")),
+        "{:?}",
+        imported.skipped
+    );
+    let ws = checked(sysml);
+    // and each binding is the package's own metadata definition
+    let model = ws.model();
+    let code = named(&ws, sysml_model::ElementKind::MetadataDefinition, "code");
+    for def in ["Err", "Both", "Kind", "Send"] {
+        let def = model
+            .ids()
+            .find(|&id| {
+                model.name(id) == Some(def)
+                    && model.kind(id).is_a(sysml_model::ElementKind::Definition)
+            })
+            .unwrap();
+        let bound = model
+            .owned(def)
+            .iter()
+            .filter(|&&child| model.kind(child) == sysml_model::ElementKind::MetadataUsage)
+            .filter_map(|&child| model.type_of(child))
+            .collect::<Vec<_>>();
+        assert_eq!(bound, [code], "{sysml}");
+    }
+}
+
+/// A parameter called `result` or `error` used to be written beside
+/// the `out result` or `out error` the call's outputs are, two members
+/// of one definition under one name. A generator reads the outputs by
+/// those names and passes the inputs in order, so the parameter is the
+/// one to give its name up -- and its doc says what it was called.
+#[test]
+fn a_parameter_does_not_take_an_output_s_name() {
+    let surface = sysml_rust::surface::read(
+        r#"{
+        "language": "rust",
+        "module": "outs",
+        "items": [
+            { "kind": "function", "name": "free", "path": "outs::free",
+              "parameters": [ { "name": "result", "type": "Integer" },
+                              { "name": "error", "type": "Integer" },
+                              { "name": "result_", "type": "Integer" } ],
+              "result": { "type": "Integer" } },
+            { "kind": "function", "name": "fallible", "path": "outs::fallible",
+              "fallible": true,
+              "parameters": [ { "name": "error", "type": "Integer", "doc": "The code." } ],
+              "result": { "type": "Integer" }, "error": "String" }
+        ]
+    }"#,
+    )
+    .unwrap();
+    let sysml = sysml_rust::surface::to_sysml(&surface, None).sysml;
+    // `error` is no output of `free`, and keeps its name
+    assert!(
+        sysml.contains(
+            "\t\tin result__ : Integer { doc /* Called `result` in the code; `result` here is \
+             what the call hands back. */ }\n\t\tin error : Integer;\n\t\tin result_ : Integer;\n\
+             \t\tout result : Integer;\n"
+        ),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains(
+            "\t\tin error_ : Integer { doc /* The code. Called `error` in the code; `error` here \
+             is what the call fails with. */ }\n\t\tout result : Integer;\n\t\tout error : String[0..1];\n"
+        ),
+        "{sysml}"
+    );
+    let ws = checked(&sysml);
+    let model = ws.model();
+    for def in ["Free", "Fallible"] {
+        let def = named(&ws, sysml_model::ElementKind::ActionDefinition, def);
+        let mut names: Vec<&str> = model
+            .owned(def)
+            .iter()
+            .filter_map(|&child| model.name(child))
+            .collect();
+        let all = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), all, "{sysml}");
     }
 }

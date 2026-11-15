@@ -20,6 +20,8 @@
 //! - `trait` -> interface, each method a callable with its parameters,
 //!   its result and -- for `Result` returns -- its error
 //! - free `fn` -> function
+//! - a type's own `impl` -> its functions, each a callable on the type,
+//!   `Self` read as the type
 //! - generic items, and anything else, are skipped and listed rather
 //!   than dropped silently
 //!
@@ -34,9 +36,12 @@
 //! SysML says how many of a type there are once, and folding the two
 //! levels into one would say something the crate does not.
 //!
-//! A `pub use` re-export is followed to the item it names. Nothing skipped
-//! is ever named by a signature: a definition whose parameters or result
-//! have no shape is skipped in turn, so every name resolves.
+//! A `pub use` re-export is followed to the item it names, which is bound
+//! by the name it is exported under -- `pub use b::Dup as Renamed;` as
+//! `Renamed` -- and a glob `pub use m::*;` into what `m` makes public.
+//! Nothing skipped is ever named by a signature: a definition whose
+//! parameters or result have no shape is skipped in turn, so every name
+//! resolves.
 //!
 //! rustdoc's JSON is versioned, and this reads the format that spells a
 //! function's parameters as `sig`; an older document is refused rather
@@ -48,7 +53,7 @@
 //! cargo +nightly rustdoc -- -Zunstable-options --output-format json
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::surface::{
     Callable, Enumeration, Field, Imported, Interface, Item, Multiplicity, Primitive, Record,
@@ -132,26 +137,13 @@ pub fn rustdoc_to_surface(json: &str) -> Result<Surface, ImportError> {
         .as_array()
         .ok_or_else(|| ImportError::Malformed("the root module's members".to_string()))?;
     // A crate that keeps its types in private modules and re-exports them
-    // -- `pub use graph::Diagram;` -- lists a `use` here, not the struct.
-    // Following it is what makes such a crate importable at all: without
-    // it only the items spelled out in `lib.rs` are seen, while the
-    // signatures that mention the rest are written regardless.
-    let mut members: Vec<Json> = Vec::new();
-    for id in listed {
-        match item(id).map(|entry| &entry["inner"]) {
-            Some(inner) if inner.get("use").is_some() => {
-                let reexport = &inner["use"];
-                if reexport["is_glob"].as_bool() != Some(true) {
-                    if let Some(target) = reexport.get("id") {
-                        if index.contains_key(&id_key(target)) {
-                            members.push(target.clone());
-                        }
-                    }
-                }
-            }
-            _ => members.push(id.clone()),
-        }
-    }
+    // -- `pub use graph::Diagram;`, `pub use graph::*;` -- lists a `use`
+    // here, not the struct. Following it is what makes such a crate
+    // importable at all: without it only the items spelled out in
+    // `lib.rs` are seen, while the signatures that mention the rest are
+    // written regardless.
+    let mut skipped = Vec::new();
+    let members = members(index, listed, &mut skipped);
 
     // Which types will end up in the surface. A signature may name one
     // that has no SysML shape -- an error enum carrying a payload, a
@@ -163,15 +155,14 @@ pub fn rustdoc_to_surface(json: &str) -> Result<Surface, ImportError> {
         index,
         crate_name: &crate_name,
         written: &settled,
+        self_type: None,
         exact: HashSet::new(),
-        skipped: Vec::new(),
+        skipped,
     };
     let mut items = Vec::new();
-    for id in &members {
+    for Member { id, name } in &members {
+        let name = name.as_str();
         let Some(entry) = item(id) else {
-            continue;
-        };
-        let Some(name) = entry.get("name").and_then(Json::as_str) else {
             continue;
         };
         let Some(inner) = entry.get("inner").and_then(Json::as_object) else {
@@ -182,8 +173,14 @@ pub fn rustdoc_to_surface(json: &str) -> Result<Surface, ImportError> {
             "enum" => ctx.enumeration(name, entry).map(Item::Enumeration),
             "trait" => ctx.interface(name, entry).map(Item::Interface),
             "function" => {
-                let made = ctx.callable(name, entry, None).map(Item::Function);
-                if made.is_none() {
+                let made = match uncallable(entry, false) {
+                    Some(why) => {
+                        ctx.skipped.push(format!("{name} -- {why}"));
+                        None
+                    }
+                    None => ctx.callable(name, entry, None).map(Item::Function),
+                };
+                if made.is_none() && uncallable(entry, false).is_none() {
                     ctx.skipped.push(format!("{name} -- unsupported signature"));
                 }
                 made
@@ -247,19 +244,152 @@ const EXACT: &[(&str, &str, Primitive)] = &[
 /// capable of, and a primitive is capable of all of it.
 const DERIVES: [&str; 4] = ["Debug", "Clone", "PartialEq", "Default"];
 
-/// The names of the crate's types that become definitions: the
-/// non-generic plain structs, plain enums and traits. Decided by the same
-/// tests the emitters apply, so that the two answers are the same.
-fn settled(index: &serde_json::Map<String, Json>, members: &[Json]) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for id in members {
+/// One item the crate's root makes public: by its id, and by the name it
+/// is public under -- `pub use b::Dup as Renamed;` makes `b::Dup` public
+/// as `Renamed`, and only that name is a path to it from the root.
+struct Member {
+    id: Json,
+    name: String,
+}
+
+/// What the root module makes public, in the order it says so: its own
+/// items, what each `pub use` names, and the public items of a module
+/// it glob re-exports.
+///
+/// A name the root spells out wins over one a glob brings, as it does in
+/// Rust; and an item reached twice is imported once.
+fn members(
+    index: &serde_json::Map<String, Json>,
+    listed: &[Json],
+    skipped: &mut Vec<String>,
+) -> Vec<Member> {
+    let spelled: HashSet<String> = listed
+        .iter()
+        .filter_map(|id| index.get(&id_key(id)))
+        .filter(|entry| entry["inner"]["use"]["is_glob"].as_bool() != Some(true))
+        .filter_map(public_name)
+        .collect();
+    let mut walk = Walk {
+        index,
+        spelled: &spelled,
+        seen: HashSet::new(),
+        globbed: HashSet::new(),
+        out: Vec::new(),
+        skipped,
+    };
+    walk.module(listed, false);
+    walk.out
+}
+
+/// The name an item is public under where it is listed: its own, or the
+/// one a `use` gives it.
+fn public_name(entry: &Json) -> Option<String> {
+    match entry["inner"].get("use") {
+        Some(reexport) => reexport["name"].as_str().map(str::to_string),
+        None => entry.get("name").and_then(Json::as_str).map(str::to_string),
+    }
+}
+
+/// [`members`], under way.
+struct Walk<'a, 's> {
+    index: &'a serde_json::Map<String, Json>,
+    /// The names the root spells out, which no glob may bring.
+    spelled: &'a HashSet<String>,
+    /// The items met so far, by id.
+    seen: HashSet<String>,
+    /// The modules a glob has been followed into, by id.
+    globbed: HashSet<String>,
+    out: Vec<Member>,
+    skipped: &'s mut Vec<String>,
+}
+
+impl Walk<'_, '_> {
+    /// One item public under `name`, unless it is in already -- or the
+    /// root spells the name out and a glob is what brought it.
+    fn take(&mut self, id: &Json, name: &str, through_glob: bool) {
+        if through_glob && self.spelled.contains(name) {
+            return;
+        }
+        if self.seen.insert(id_key(id)) {
+            self.out.push(Member {
+                id: id.clone(),
+                name: name.to_string(),
+            });
+        }
+    }
+
+    /// One module's list. `through_glob` says it is the list of a
+    /// module a glob re-exports, from which only what is public comes.
+    fn module(&mut self, listed: &[Json], through_glob: bool) {
+        let index = self.index;
+        for id in listed {
+            let Some(entry) = index.get(&id_key(id)) else {
+                continue;
+            };
+            if through_glob && entry["visibility"].as_str() != Some("public") {
+                continue;
+            }
+            let Some(reexport) = entry["inner"].get("use") else {
+                if let Some(name) = public_name(entry) {
+                    self.take(id, &name, through_glob);
+                }
+                continue;
+            };
+            // a re-export of what is not in this crate names no item here
+            let Some(target_id) = reexport.get("id").filter(|it| !it.is_null()) else {
+                continue;
+            };
+            let Some(target) = index.get(&id_key(target_id)) else {
+                continue;
+            };
+            if reexport["is_glob"].as_bool() != Some(true) {
+                if let Some(name) = reexport["name"].as_str() {
+                    self.take(target_id, name, through_glob);
+                }
+                continue;
+            }
+            let source = reexport["source"].as_str().unwrap_or("?");
+            match target["inner"]
+                .as_object()
+                .and_then(|it| it.keys().next())
+                .map(String::as_str)
+            {
+                // a module reached twice -- by two globs, or through
+                // itself -- is read once
+                Some("module") => {
+                    if self.globbed.insert(id_key(target_id)) {
+                        let items = target["inner"]["module"]["items"]
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default();
+                        self.module(&items, true);
+                    }
+                }
+                Some("enum") => self.skipped.push(format!(
+                    "{source}::* -- re-exports an enum's variants, which are not items of their own"
+                )),
+                // what a glob names that is not a module is the item
+                _ => {
+                    if let Some(name) = target.get("name").and_then(Json::as_str) {
+                        self.take(target_id, name, through_glob);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The ids of the crate's types that become definitions, each with the
+/// name it is public under: the non-generic plain structs, plain enums
+/// and traits. Decided by the same tests the emitters apply, so that the
+/// two answers are the same.
+fn settled(index: &serde_json::Map<String, Json>, members: &[Member]) -> HashMap<String, String> {
+    let mut names = HashMap::new();
+    for Member { id, name } in members {
         let Some(entry) = index.get(&id_key(id)) else {
             continue;
         };
-        let (Some(name), Some(inner)) = (
-            entry.get("name").and_then(Json::as_str),
-            entry.get("inner").and_then(Json::as_object),
-        ) else {
+        let Some(inner) = entry.get("inner").and_then(Json::as_object) else {
             continue;
         };
         let made = match inner.keys().next().map(String::as_str) {
@@ -272,7 +402,7 @@ fn settled(index: &serde_json::Map<String, Json>, members: &[Json]) -> HashSet<S
             _ => false,
         };
         if made {
-            names.insert(name.to_string());
+            names.insert(id_key(id), name.clone());
         }
     }
     names
@@ -297,8 +427,12 @@ fn plain_variants(index: &serde_json::Map<String, Json>, entry: &Json) -> Option
 struct Context<'a> {
     index: &'a serde_json::Map<String, Json>,
     crate_name: &'a str,
-    /// The type names that will be in the surface.
-    written: &'a HashSet<String>,
+    /// The types that will be in the surface, by id, each with the name
+    /// it is public under.
+    written: &'a HashMap<String, String>,
+    /// The type an inherent `impl` is of, while its functions are read:
+    /// what `Self` means there.
+    self_type: Option<String>,
     /// Which of [`EXACT`] the signatures read so far have named.
     exact: HashSet<&'static str>,
     /// What had no shape, and why, in the order it was met.
@@ -343,7 +477,69 @@ impl<'a> Context<'a> {
                     .push(format!("{name}.{field_name} -- unmappable type")),
             }
         }
+        record.methods = self.inherent(name, &entry["inner"]["struct"]);
         Some(record)
+    }
+
+    /// The public functions of a type's own `impl` blocks, each a
+    /// callable called on a value of the type -- or, with no receiver,
+    /// on the type itself, as `Part::new()` is.
+    ///
+    /// Read off the type rather than off the module: rustdoc lists an
+    /// `impl` under the type it is of and nowhere else, which is how
+    /// these went missing from the package and from the list of what
+    /// was not imported alike.
+    fn inherent(&mut self, name: &str, of: &Json) -> Vec<Callable> {
+        let mut methods = Vec::new();
+        for id in of["impls"].as_array().into_iter().flatten() {
+            let Some(block) = self.item(id).map(|it| &it["inner"]["impl"]) else {
+                continue;
+            };
+            // a trait's impl is the trait's business, and the trait is
+            // imported where the crate declares it
+            if !block["trait"].is_null()
+                || block["is_synthetic"].as_bool() == Some(true)
+                || !block["blanket_impl"].is_null()
+            {
+                continue;
+            }
+            for id in block["items"].as_array().into_iter().flatten() {
+                let Some(method) = self.item(id) else {
+                    continue;
+                };
+                let Some(method_name) = method.get("name").and_then(Json::as_str) else {
+                    continue;
+                };
+                // what is not public is not the crate's API
+                if method["visibility"].as_str() != Some("public") {
+                    continue;
+                }
+                if method["inner"].get("function").is_none() {
+                    self.skipped
+                        .push(format!("{name}::{method_name} -- not a method"));
+                    continue;
+                }
+                if is_generic(block) {
+                    self.skipped
+                        .push(format!("{name}::{method_name} -- in a generic impl"));
+                    continue;
+                }
+                if let Some(why) = uncallable(method, false) {
+                    self.skipped.push(format!("{name}::{method_name} -- {why}"));
+                    continue;
+                }
+                self.self_type = Some(name.to_string());
+                let made = self.callable(method_name, method, Some(name));
+                self.self_type = None;
+                match made {
+                    Some(callable) => methods.push(callable),
+                    None => self
+                        .skipped
+                        .push(format!("{name}::{method_name} -- unsupported signature")),
+                }
+            }
+        }
+        methods
     }
 
     /// A plain `enum` -> enumeration.
@@ -362,6 +558,7 @@ impl<'a> Context<'a> {
             doc: docs(entry),
             capabilities: Vec::new(),
             values,
+            methods: self.inherent(name, &entry["inner"]["enum"]),
         })
     }
 
@@ -395,6 +592,10 @@ impl<'a> Context<'a> {
                     .push(format!("{name}::{method_name} -- not a method"));
                 continue;
             }
+            if let Some(why) = uncallable(method, true) {
+                self.skipped.push(format!("{name}::{method_name} -- {why}"));
+                continue;
+            }
             match self.callable(method_name, method, Some(name)) {
                 Some(callable) => interface.methods.push(callable),
                 None => self
@@ -412,6 +613,7 @@ impl<'a> Context<'a> {
         if is_generic(function) {
             return None;
         }
+
         let mut callable = Callable {
             name: name.to_string(),
             path: match owner {
@@ -464,6 +666,11 @@ impl<'a> Context<'a> {
         if let Some(primitive) = ty.get("primitive").and_then(Json::as_str) {
             return Some((self.scalar(primitive)?, Multiplicity::One));
         }
+        // `Self` in an inherent `impl` is the type it is of; in a trait it
+        // is whatever implements it, which has no name to write
+        if ty.get("generic").and_then(Json::as_str) == Some("Self") {
+            return self.self_type.clone().map(|name| (name, Multiplicity::One));
+        }
         // A `&str` is a type in its own right -- how Rust passes a
         // string -- and reads as one. Any other borrow is refused: what
         // the model has to say is a value, and a signature taking the
@@ -495,14 +702,11 @@ impl<'a> Context<'a> {
                 "Option" => self.element(argument?, Multiplicity::Optional),
                 "Box" | "Arc" | "Rc" => self.attribute_type(argument?),
                 "Result" => None,
-                _ => {
-                    // a type of this crate, by the name its item declares
-                    let local = self.item(&path["id"])?;
-                    let declared = local.get("name")?.as_str()?;
-                    self.written
-                        .contains(declared)
-                        .then(|| (declared.to_string(), Multiplicity::One))
-                }
+                // a type of this crate, by the name it is public under
+                _ => self
+                    .written
+                    .get(&id_key(&path["id"]))
+                    .map(|name| (name.clone(), Multiplicity::One)),
             };
         }
         None
@@ -560,6 +764,29 @@ fn split_result(ty: &Json) -> Option<(&Json, &Json)> {
         [value, error] => Some((&value["type"], &error["type"])),
         _ => None,
     }
+}
+
+/// Why a function cannot be performed from a model, where it cannot.
+///
+/// An `unsafe fn` is called inside `unsafe { }`, under promises the model
+/// has no way to say were kept. A trait's function with no receiver --
+/// `fn stat() -> u32` -- is called on the type and not on a value of it,
+/// and what a part holds is a value. Imported as ordinary actions, both
+/// generated calls that did not compile.
+fn uncallable(entry: &Json, in_trait: bool) -> Option<&'static str> {
+    let function = &entry["inner"]["function"];
+    if function["header"]["is_unsafe"].as_bool() == Some(true) {
+        return Some("unsafe, and a model cannot say its promises were kept");
+    }
+    let takes_self = function["sig"]["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|input| input.get(0).and_then(Json::as_str) == Some("self"));
+    if in_trait && !takes_self {
+        return Some("takes no receiver, so it is called on the type and not on a value of it");
+    }
+    None
 }
 
 /// `&self`, `&mut self` or `self`, the way the signature spells it.
