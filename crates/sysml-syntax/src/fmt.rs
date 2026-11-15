@@ -136,6 +136,7 @@ pub fn format_parsed_with(parse: &crate::Parse, layout: Layout) -> String {
         line_start: 0,
         line_indent: 0,
         joints: Vec::new(),
+        note_at: None,
         line_breakable: true,
     }
     .run(&all_tokens);
@@ -165,6 +166,11 @@ struct Formatter {
     line_indent: usize,
     /// where that line could be broken, in the order the spaces appear
     joints: Vec<Joint>,
+    /// Where a note trailing the line starts, if one does. What the
+    /// line says ends there, and only that has to fit: a long `// note`
+    /// after `attribute x = 1;` used to break the code before it, which
+    /// left the note no shorter and the code split for nothing.
+    note_at: Option<usize>,
     /// A line holding a comment that spans lines is already more than
     /// one line, and the offsets a break is spliced in at do not survive
     /// that, so it is left alone.
@@ -190,6 +196,7 @@ impl Formatter {
             if is_note(kind) {
                 if gap == 0 && !self.line_empty && self.prev.is_some() {
                     // trailing note stays on its line: `part def A; // note`
+                    self.note_at = Some(self.out.len());
                     self.out.push(' ');
                     self.out.push_str(token.text());
                 } else {
@@ -365,6 +372,7 @@ impl Formatter {
         self.line_start = self.out.len();
         self.line_indent = self.depth * INDENT.len();
         self.joints.clear();
+        self.note_at = None;
         self.line_breakable = true;
     }
 
@@ -445,7 +453,7 @@ impl Formatter {
             stretches.push((from, at));
             from = at + 1;
         }
-        stretches.push((from, self.out.len()));
+        stretches.push((from, self.note_at.unwrap_or(self.out.len())));
         stretches
             .into_iter()
             .enumerate()
@@ -471,12 +479,23 @@ impl Formatter {
                 break;
             }
             if t.kind() == WHITESPACE {
-                lines += t.text().matches('\n').count();
+                lines += line_breaks(t.text());
             }
             cursor = t.next_token();
         }
         lines
     }
+}
+
+/// How many lines `text` breaks, a break being a `\n`, a `\r\n` or a
+/// `\r` on its own.
+///
+/// The lexer ends a line note at either character, so a file written
+/// with lone carriage returns is one of lines to it. Counted by `\n`
+/// alone, the same file had no breaks at all: a note on a line of its
+/// own was taken for one trailing the line above, and blank lines went.
+fn line_breaks(text: &str) -> usize {
+    text.replace("\r\n", "\n").matches(['\r', '\n']).count()
 }
 
 fn is_note(kind: SyntaxKind) -> bool {
@@ -494,11 +513,16 @@ fn space_between(prev: &SyntaxToken, next: &SyntaxToken) -> bool {
 /// The rules in [`wants_space`] are about tokens that belong together,
 /// and on text that parses they never put two together that lex apart.
 /// Text that does not parse can hold anything: `x : ::` came out as
-/// `x :::`, which reads as `::` then `:`. Only a pair of punctuation can
-/// run together that way, so only that is lexed again.
+/// `x :::`, which reads as `::` then `:`.
+///
+/// Punctuation is not the only thing that runs together. A `.` before a
+/// number is the start of one, so `1 . 5` came out as `1.5`, a real
+/// where there had been an error, and `a. 5` as `a.5`, which lexes as
+/// `a` and `.5` and was spaced the other way on the next pass. So every
+/// pair written tight is lexed again, whatever it is made of; the pairs
+/// are short, and this is the one thing formatting must never do.
 fn would_fuse(prev: &str, next: &str) -> bool {
-    let punctuation = |c: Option<char>| c.is_some_and(|c| c.is_ascii_punctuation());
-    if !(punctuation(prev.chars().last()) && punctuation(next.chars().next())) {
+    if prev.is_empty() || next.is_empty() {
         return false;
     }
     let joined = format!("{prev}{next}");
@@ -585,9 +609,21 @@ mod tests {
                 .map(|t| text[t.range.clone()].to_string())
                 .collect()
         };
-        for text in ["part x : ::A;", "part x = a. .b;", "part x : ::"] {
+        // A `.` before a number starts one, and a number before a `.`
+        // may run on into it: `1 . 5` came out as the real `1.5`, and
+        // `a. 5` as `a.5`, which is `a` and `.5` and was spaced the other
+        // way on the next pass.
+        for text in [
+            "part x : ::A;",
+            "part x = a. .b;",
+            "part x : ::",
+            "part x = 1 . 5;",
+            "part x = a. 5;",
+            "part x = a . 5e3;",
+        ] {
             let formatted = fmt(text);
             assert_eq!(lexed(&formatted), lexed(text), "{formatted}");
+            assert_eq!(fmt(&formatted), formatted, "{text}");
         }
         // and what is tight on text that parses stays tight
         assert_eq!(fmt("import P::*;"), "import P::*;\n");
@@ -725,6 +761,39 @@ mod tests {
             "feature g ~ B::f;\n"
         );
         assert_eq!(fmt("port p : ~ P;"), "port p : ~P;\n");
+    }
+
+    /// A file written with lone carriage returns has lines like any
+    /// other: the note on a line of its own stays there, and the blank
+    /// line before it stays too. Counted by `\n` alone, the file had no
+    /// line breaks, so the note was hung on the end of `part x;` and the
+    /// blank line went.
+    #[test]
+    fn a_lone_carriage_return_breaks_a_line() {
+        let expected = "package P {\n    part x;\n\n    // own line\n    part y;\n}\n";
+        for ending in ["\r", "\n", "\r\n"] {
+            let input = "package P {\n    part x;\n\n    // own line\n    part y;\n}\n"
+                .replace('\n', ending);
+            assert_eq!(fmt(&input), expected, "{input:?}");
+        }
+        assert_eq!(line_breaks("\r\n\r\r\n\n"), 4);
+    }
+
+    /// A note trailing a line is not what has to fit on it. Measured in,
+    /// a long one broke `attribute x = 1;` after its `=`, which left the
+    /// note just as long and the code split for nothing.
+    #[test]
+    fn a_trailing_note_does_not_break_the_code_before_it() {
+        let note = format!("// a long note{}", ", a long note".repeat(9));
+        let input = format!("package P {{\n    attribute x = 1; {note}\n}}\n");
+        assert_eq!(fmt(&input), input);
+        // code too wide on its own still gives way, and the note stays
+        // at the end of what was its line
+        let wide = format!("attribute x = {} + 1; {note}", "a".repeat(90));
+        let out = fmt(&wide);
+        assert_eq!(out.lines().count(), 2, "{out}");
+        assert!(out.lines().last().unwrap().ends_with(&note), "{out}");
+        assert_eq!(fmt(&out), out);
     }
 
     #[test]

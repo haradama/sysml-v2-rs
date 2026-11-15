@@ -313,6 +313,15 @@ impl Parser<'_> {
         matches!(self.nth(n), IDENT | UNRESTRICTED_NAME)
     }
 
+    /// Whether a qualified name starts `n` tokens on: a name, or the
+    /// `$::` of `QualifiedName = ( '$' '::' )? ( Name '::' )* Name` that
+    /// roots it at the global namespace. Where only a reference can stand
+    /// -- after `@`, `#`, or `metadata` with no name of its own -- a test
+    /// for a name alone turned `@$::P::code` away.
+    fn nth_starts_qualified(&self, n: usize) -> bool {
+        self.nth_is_name(n) || (self.nth(n) == DOLLAR && self.nth(n + 1) == COLON_COLON)
+    }
+
     /// A bare name that the next token confirms to be a declaration
     /// (`level = 3;`, `x : T;`, enum values `red;`).
     fn at_anonymous_usage(&self) -> bool {
@@ -443,7 +452,7 @@ impl Parser<'_> {
         let mut seen_visibility = false;
         // visibility and `#name` user-defined-keyword prefixes, in any order
         loop {
-            if self.at(HASH) && self.nth_is_name(1) {
+            if self.at(HASH) && self.nth_starts_qualified(1) {
                 self.opt_prefix_metadata();
             } else if self.current().is_visibility_kw() {
                 if seen_visibility {
@@ -693,9 +702,18 @@ impl Parser<'_> {
     fn metadata_annotation(&mut self, cp: Checkpoint) {
         self.start_node_at(cp, METADATA_ANNOTATION);
         self.bump();
-        if self.at_name() {
+        if self.nth_starts_qualified(0) {
             self.qualified_name_chain();
             self.named = true;
+            // `@m typed by M`: the same `MetadataUsageDeclaration` as
+            // after `metadata`, whose `typed` SysML does not reserve
+            if self.nth_is_word(0, "typed") && self.nth(1) == BY_KW {
+                self.start_node(TYPING);
+                self.bump(); // `typed`
+                self.bump(); // `by`
+                self.type_ref();
+                self.finish_node();
+            }
         } else {
             self.error("expected the metadata definition the annotation is of");
         }
@@ -870,7 +888,7 @@ impl Parser<'_> {
     /// Definitions and usages share modifiers and kind keywords; `def` (or a
     /// KerML classifier kind) decides definition vs usage.
     fn opt_prefix_metadata(&mut self) {
-        while self.at(HASH) && self.nth_is_name(1) {
+        while self.at(HASH) && self.nth_starts_qualified(1) {
             self.start_node(PREFIX_METADATA);
             self.bump();
             self.qualified_name_chain();
@@ -911,7 +929,7 @@ impl Parser<'_> {
                 }
                 written.push(here);
                 self.bump();
-            } else if self.at(HASH) && self.nth_is_name(1) {
+            } else if self.at(HASH) && self.nth_starts_qualified(1) {
                 self.opt_prefix_metadata();
             } else {
                 break;
@@ -1426,7 +1444,7 @@ impl Parser<'_> {
                 // annotates is the feature the declaration goes on to
                 // name, so it opens the nested declaration rather than
                 // being read as part of the one already open.
-                HASH if self.nth_is_name(1) && may_declare => {
+                HASH if self.nth_starts_qualified(1) && may_declare => {
                     let nested = self.checkpoint();
                     self.definition_or_usage(nested);
                     return;
@@ -1880,16 +1898,29 @@ impl Parser<'_> {
 
     /// A name is only consumed when the following token confirms this is a
     /// declaration (used for `return x;` vs `return x * 2;`).
-    /// The name of a metadata usage, which only a `:` or a `typed by`
-    /// after it makes one. Without one the name is the metadata
-    /// definition the usage is typed by, and the typing that says so is
-    /// built around it here -- `metadata Classified { ... }` reads as
-    /// `metadata : Classified { ... }`.
+    /// The name of a metadata usage, which only a `:`, a `typed by` or a
+    /// `defined by` after it makes one. Without one the name is the
+    /// metadata definition the usage is typed by, and the typing that
+    /// says so is built around it here -- `metadata Classified { ... }`
+    /// reads as `metadata : Classified { ... }`, and so does `metadata
+    /// $::P::Classified { ... }`, whose `$::` no name can begin.
+    ///
+    /// `defined by` is SysML's `DEFINED_BY = ':' | 'defined' 'by'`, the
+    /// spelling of the `:` everywhere else a usage is typed; read as
+    /// typings, `metadata m defined by M;` had two and no name.
     fn opt_typing_name(&mut self) {
+        if self.at(DOLLAR) && self.nth(1) == COLON_COLON {
+            self.start_node(TYPING);
+            self.type_ref();
+            self.finish_node();
+            return;
+        }
         if !self.at_name() {
             return;
         }
-        if matches!(self.nth(1), COLON | TYPED_KW) {
+        if matches!(self.nth(1), COLON | TYPED_KW)
+            || (self.nth(1) == DEFINED_KW && self.nth(2) == BY_KW)
+        {
             self.opt_name();
             return;
         }
@@ -3162,5 +3193,94 @@ mod tests {
         check_ok_kerml("class C { inv false x { false } }");
         // `Conjugation = ( 'conjugation' Identification )? 'conjugate' ...`
         check_ok_kerml("class A; class B; conjugate A ~ B;");
+    }
+
+    /// The last usage in `text`, by the kinds of its children.
+    fn last_usage_shape(parse: &Parse) -> Vec<SyntaxKind> {
+        let usage = parse
+            .syntax()
+            .descendants()
+            .filter(|it| it.kind() == USAGE)
+            .last()
+            .unwrap();
+        usage.children().map(|it| it.kind()).collect()
+    }
+
+    /// `QualifiedName = ( '$' '::' )? ( Name '::' )* Name`, and every
+    /// place a metadata definition is named takes a `QualifiedName`. The
+    /// tests for one there asked for a name, so `@$::P::code { }` was
+    /// turned away, `#$::P::code part y;` read as a stray `#` before an
+    /// expression, and `metadata $::P::code { }` left the reference
+    /// standing as an expression rather than the usage's type -- which
+    /// is why the importer wrote `metadata code_ : $::P::code` instead.
+    #[test]
+    fn a_metadata_definition_may_be_named_from_the_global_root() {
+        let annotation = check_ok("part x { @$::P::code { } }");
+        let reference = annotation
+            .syntax()
+            .descendants()
+            .find(|it| it.kind() == METADATA_ANNOTATION)
+            .and_then(|it| it.children().find(|it| it.kind() == QUALIFIED_NAME))
+            .map(|it| it.text().to_string());
+        assert_eq!(reference.as_deref(), Some("$::P::code"));
+        check_ok("part x { @@$::P::code; }");
+
+        let usage = check_ok("part x { metadata $::P::code { } }");
+        assert_eq!(last_usage_shape(&usage), [TYPING, BODY]);
+        let named = check_ok("part x { metadata c : $::P::code; }");
+        assert_eq!(last_usage_shape(&named), [NAME, TYPING, BODY]);
+
+        let prefixed = check_ok("part x { #$::P::code part y; }");
+        assert!(prefixed
+            .syntax()
+            .descendants()
+            .any(|it| it.kind() == PREFIX_METADATA && it.text() == "#$::P::code"));
+        check_ok("#$::P::code part def D;");
+        check_ok_kerml("#$::P::code class C;");
+        check_ok_kerml("class C { @$::P::code; }");
+        // a `$` that roots nothing is still no metadata definition
+        assert!(!parse("part x { @$ { } }").errors().is_empty());
+    }
+
+    /// `metadata m defined by M;` names `m`: `DEFINED_BY = ':' | 'defined'
+    /// 'by'` is how SysML spells the `:` of a typing, and a metadata usage
+    /// is typed like any other. Only `:` and `typed by` were taken to
+    /// mark the name, so this read as two typings, by `m` and by `M`, of
+    /// a usage with no name at all.
+    #[test]
+    fn a_metadata_usage_defined_by_its_definition_is_named() {
+        for text in [
+            "part def P { metadata m defined by M; }",
+            "part def P { metadata m typed by M; }",
+            "part def P { metadata m : M; }",
+        ] {
+            assert_eq!(
+                last_usage_shape(&check_ok(text)),
+                [NAME, TYPING, BODY],
+                "{text}"
+            );
+        }
+        // `@` opens the same declaration; its name stands where the
+        // definition does when there is no typing, and every spelling of
+        // the typing follows it alike
+        for text in [
+            "part def P { @m defined by M; }",
+            "part def P { @m typed by M; }",
+            "part def P { @m : M; }",
+        ] {
+            let parse = check_ok(text);
+            let annotation = parse
+                .syntax()
+                .descendants()
+                .find(|it| it.kind() == METADATA_ANNOTATION)
+                .unwrap();
+            let kinds: Vec<SyntaxKind> = annotation.children().map(|it| it.kind()).collect();
+            assert_eq!(kinds, [QUALIFIED_NAME, TYPING, BODY], "{text}");
+        }
+        // and with nothing after it the name is still the definition
+        assert_eq!(
+            last_usage_shape(&check_ok("part def P { metadata M; }")),
+            [TYPING, BODY]
+        );
     }
 }
