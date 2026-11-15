@@ -10,7 +10,7 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
 
 ## Unreleased
 
-### One spelling for every key, and a name for every element
+### One spelling for every key, a name for every element, and the whole model written back
 
 `sysmlv2-cli`, `sysmlv2-semantics`, `sysmlv2-lsp`
 
@@ -24,6 +24,29 @@ Dates are the day the tag was cut. Anything under **Unreleased** is on
   printed had spelt the same hint two ways. What the protocols define
   (MCP's `inputSchema`, LSP's `newText`) and the standard JSON's
   metamodel names (`declaredName`, `@id`) are left as they are.
+- `import_json` writes back the whole of a model rather than its
+  declarations: connections, bindings, flows, messages, interfaces and
+  allocations by the ends they connect; successions, with `then b;` and
+  `then action b;` where one follows the step before it; decisions'
+  `if g then b;` and `else c;`; transitions with their triggers, guards
+  and effects; `accept`, `send`, `assign`, `if`, `while`, `loop`, `for`
+  and `terminate`; `perform`, `exhibit`, `include`, `satisfy`, `assert`,
+  `render` and events; metadata, dependencies, filtered imports,
+  exposures, named comments and what they are `about`; KerML's
+  connectors, `unions`, `intersects`, `differences`, `disjoint from`,
+  `featured by` and `inverse of`; and every expression -- as the text
+  the document kept of it, which `sysml export` keeps of each, and
+  otherwise from its structure. Exported again, what it writes of each
+  official example whose names all resolve is the document it was read
+  from in 31 of 32 training directories, 35 of 38 example and validation
+  directories, and 8 of 13 KerML ones.
+- Each name it writes is the one that finds the element from where it
+  stands -- through an import, from the nearest namespace that holds it,
+  or from `$::` past a nearer declaration of the same name -- rather than
+  its whole qualified name, which does not reach a private member and
+  which a package of the model's own can hide.
+- Writing `[*]` asked `LiteralInfinity` for a value it has no property
+  for, which a debug build stops on.
 - An element that declares no name of its own but borrows one, such as
   `part :>> engine;`, is named by that name in `sysml check`, in the
   language server's hover and signature help, and in suggestions,

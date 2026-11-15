@@ -3488,25 +3488,19 @@ fn import_json_reads_a_document_back_as_the_notation() {
     let document = answered(&answers[0])["document"].clone();
     let read = answered(&built_in(&[call("import_json", json!({ "json": document }))])[0]);
     let sysml = read["sysml"].as_str().unwrap();
-    // what was declared, with every name it refers to qualified -- the
-    // library's by the library's own names
+    // what was declared, each name it refers to written as it is found
+    // from where it stands -- the library's by the library's own names
     assert!(sysml.contains("abstract part def Vehicle {"), "{sysml}");
     assert!(
         sysml.contains("attribute mass : ISQBase::MassValue;"),
         "{sysml}"
     );
-    assert!(sysml.contains("part wheels : Car::Wheel [4];"), "{sysml}");
-    assert!(sysml.contains("in port fuel : Car::FuelPort;"), "{sysml}");
+    assert!(sysml.contains("part wheels : Wheel [4];"), "{sysml}");
+    assert!(sysml.contains("in port fuel : FuelPort;"), "{sysml}");
+    assert!(sysml.contains("part def Truck :> Vehicle {"), "{sysml}");
+    assert!(sysml.contains("part :>> Vehicle::wheels [6];"), "{sysml}");
     assert!(
-        sysml.contains("part def Truck :> Car::Vehicle {"),
-        "{sysml}"
-    );
-    assert!(
-        sysml.contains("part :>> Car::Vehicle::wheels [6];"),
-        "{sysml}"
-    );
-    assert!(
-        sysml.contains("attribute :>> Car::Vehicle::mass = 3;"),
+        sysml.contains("attribute :>> Vehicle::mass = 3;"),
         "{sysml}"
     );
     assert!(sysml.contains("private import ISQ::*;"), "{sysml}");
@@ -3556,34 +3550,152 @@ fn import_json_reads_a_document_back_as_the_notation() {
     );
 }
 
-/// What the notation is not written for is marked where it would be and
-/// listed, so the text reads as the declarations rather than the whole.
+/// What could not be written is marked where it would be and listed, so
+/// the text reads as the declarations rather than the whole: an expression
+/// standing in a package, which no declaration of the notation is.
 #[test]
 fn import_json_says_what_it_did_not_write() {
-    let model = "package Reqs {\n\
-                 \trequirement def R;\n\
-                 \tpart def Car;\n\
-                 \trequirement r : R;\n\
-                 \tpart car : Car {\n\t\tsatisfy r;\n\t}\n\
-                 }\n";
-    let answers = built_in(&[call("export_json", json!({ "text": model }))]);
-    let document = answered(&answers[0])["document"].clone();
+    let document = r#"[
+        {"@type":"Package","@id":"p","declaredName":"Reqs",
+         "ownedRelationship":[{"@id":"m1"},{"@id":"m2"}]},
+        {"@type":"OwningMembership","@id":"m1","ownedRelatedElement":[{"@id":"d"}]},
+        {"@type":"PartDefinition","@id":"d","declaredName":"Car"},
+        {"@type":"OwningMembership","@id":"m2","ownedRelatedElement":[{"@id":"n"}]},
+        {"@type":"NullExpression","@id":"n"}
+    ]"#;
     let read = answered(&built_in(&[call("import_json", json!({ "json": document }))])[0]);
     let unwritten = read["unwritten"].as_array().unwrap();
     assert!(
         unwritten
             .iter()
-            .any(|it| it["kind"] == "SatisfyRequirementUsage" && it["in"] == "Reqs::car"),
+            .any(|it| it["kind"] == "NullExpression" && it["in"] == "Reqs"),
         "{read}"
     );
     let sysml = read["sysml"].as_str().unwrap();
-    assert!(
-        sysml.contains("// not written: SatisfyRequirementUsage"),
-        "{sysml}"
-    );
-    assert!(sysml.contains("requirement r : Reqs::R;"), "{sysml}");
+    assert!(sysml.contains("// not written: NullExpression"), "{sysml}");
+    assert!(sysml.contains("part def Car;"), "{sysml}");
     // the rest of it still reads
     assert_eq!(read["checked"]["ok"], true, "{read}");
+}
+
+/// A model with one of most of what the notation writes -- connections,
+/// flows, successions and decisions, the action statements, transitions
+/// with triggers, guards and effects, satisfactions, metadata, comments,
+/// filtered imports and expressions.
+const EVERYTHING: &str = "package Rich {
+    private import ScalarValues::*;
+    metadata def Safety { attribute isMandatory : Boolean; }
+    attribute def Go;
+    item def Fuel;
+    enum def Color { enum red; enum green; }
+    port def FuelPort { out item fuel : Fuel; }
+    part def Engine { in port fuelIn : ~FuelPort; attribute power : Real; }
+    part def Tank { port fuelOut : FuelPort; }
+    interface def FuelLine { end port supply : FuelPort; end port demand : ~FuelPort; }
+    comment about Engine /* engines
+     *   burn fuel */
+    doc Overview /* The rich model. */
+    alias Motor for Engine;
+    requirement def PowerReq {
+        subject e : Engine;
+        attribute minimum : Real;
+        require constraint { e.power >= minimum }
+    }
+    requirement powerReq : PowerReq;
+    calc def Double { in x : Real; return : Real; x * 2 }
+    part car {
+        part engine : Engine { @Safety { isMandatory = true; } }
+        part tank : Tank;
+        private attribute color : Color = Color::red;
+        attribute doubled : Real = Double(engine.power);
+        interface : FuelLine connect supply ::> tank.fuelOut to demand ::> engine.fuelIn;
+        flow of Fuel from tank.fuelOut.fuel to engine.fuelIn.fuel;
+        bind engine.power = doubled;
+        satisfy powerReq by engine;
+        perform drive;
+        exhibit state modes : Modes;
+        timeslice running;
+    }
+    action drive {
+        attribute n : Integer := 0;
+        first start;
+        then action check;
+        then decide;
+            if n > 3 then stop;
+            else go;
+        action go { assign n := n + 1; }
+        then fork;
+            then left;
+            then right;
+        action left;
+        action right;
+        then join together;
+        action stop {
+            if n == 0 { action nothing; } else if n == 1 { action one; } else { action many; }
+            while n > 0 { assign n := n - 1; } until n == 0;
+            loop { action spin; } until true;
+            for i : Integer in (1, 2, 3) { assign n := n + i; }
+            send Go() to car;
+            accept after 5;
+        }
+        then done;
+    }
+    state def Modes {
+        entry; then off;
+        state off;
+        accept Go then on;
+        state on { do action run; exit action halt; }
+        accept when car.engine.power > 100 do send Go() to car then off;
+        transition stopped first on if false then off;
+    }
+    package Safe { public import car::**[@Safety]; }
+    view tree { expose car::*; render Views::asTreeDiagram; }
+    dependency trace from car to powerReq;
+}
+";
+
+/// What `import_json` writes back is the model it read: exported again, it
+/// is the document it was read from, element for element and `@id` for
+/// `@id` -- behaviour, connections and expressions as much as
+/// declarations.
+#[test]
+fn import_json_writes_back_what_exports_the_same() {
+    let exported = |text: &str| -> Value {
+        // derived properties and all, the document is larger than what is
+        // answered unasked for
+        let answers = built_in(&[call(
+            "export_json",
+            json!({ "text": text, "max_bytes": 64_000_000 }),
+        )]);
+        let answer = answered(&answers[0]);
+        assert!(answer["document"].is_array(), "{answer}");
+        answer["document"].clone()
+    };
+    let document = exported(EVERYTHING);
+    let read = answered(&built_in(&[call("import_json", json!({ "json": document }))])[0]);
+    assert_eq!(read["unwritten"], json!([]), "{read}");
+    assert_eq!(read["checked"]["ok"], true, "{read}");
+    let sysml = read["sysml"].as_str().unwrap();
+    for said in [
+        "interface : FuelLine connect supply ::> tank.fuelOut to demand ::> engine.fuelIn;",
+        "flow of Fuel from tank.fuelOut.fuel to engine.fuelIn.fuel;",
+        "bind engine.power = doubled;",
+        "satisfy powerReq by engine;",
+        "then action check;",
+        "if n > 3 then stop;",
+        "else go;",
+        "} else if n == 1 {",
+        "} until n == 0;",
+        "for i : Integer in (1, 2, 3) {",
+        "accept when car.engine.power > 100 do send Go() to car then off;",
+        "transition stopped first on if false then off;",
+        "public import car::*::**[@Safety];",
+        "private attribute color : Color = Color::red;",
+        "comment about Engine /* engines\n     *   burn fuel\n     */",
+    ] {
+        assert!(sysml.contains(said), "no `{said}` in\n{sysml}");
+    }
+    assert_eq!(exported(sysml), document, "{sysml}");
 }
 
 /// A stand-in for a model server: answers the next `count` connections,
@@ -3685,7 +3797,7 @@ fn the_api_tools_read_what_a_model_server_holds() {
     assert_eq!(elements["next_offset"], 5, "{}", elements["next_offset"]);
     assert!(elements["total"].as_u64().unwrap() > 5);
     let sysml = elements["model"]["sysml"].as_str().unwrap();
-    assert!(sysml.contains("part def Truck :> Car::Vehicle"), "{sysml}");
+    assert!(sysml.contains("part def Truck :> Vehicle"), "{sysml}");
     assert_eq!(elements["model"]["checked"]["ok"], true);
 
     // a refusal is the server's, said without the secret

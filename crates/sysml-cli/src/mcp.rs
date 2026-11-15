@@ -2524,7 +2524,24 @@ impl Server {
             .ids()
             .filter_map(|id| {
                 let uuid = model.name(id)?;
-                let name = qualified(&self.base, *outside.get(uuid)?);
+                let stood_for = *outside.get(uuid)?;
+                // an alias is named by its own name, not that of what it
+                // is an alias for: `import ParametersOfInterestMetadata::moe;`
+                let alias = (base.kind(stood_for) == sysml_model::ElementKind::Membership)
+                    .then(|| {
+                        base.maybe(stood_for, "memberName")
+                            .and_then(sysml_model::Value::as_str)
+                    })
+                    .flatten()
+                    .zip(base.owner(stood_for));
+                let name = match alias {
+                    Some((alias, owner)) => format!(
+                        "{}::{}",
+                        qualified(&self.base, owner),
+                        sysml_syntax::quote(alias)
+                    ),
+                    None => qualified(&self.base, stood_for),
+                };
                 if named.contains(uuid) {
                     library.push(name.clone());
                 }
@@ -4140,7 +4157,7 @@ fn tools() -> Value {
         },
         {
             "name": "import_json",
-            "description": "Read a document of the standard JSON interchange -- what `export_json`, `sysml export` or a model server writes -- and answer what it holds: `sysml`, the model written back out as the textual notation (packages, imports, aliases, definitions and usages with their typings, specializations, subsettings, redefinitions, multiplicities, literal values and documentation, every name it refers to qualified), `counts` of each metaclass, and `checked`, whether that text parses and every name in it resolves against the standard library. `unwritten` lists what the notation was not written for -- behaviour, connector ends, any expression that is not a literal -- each with the element it is in; the text marks the place with `// not written: <metaclass>`, so read it as the declarations of the model rather than the whole of it. A document that refers to standard library elements without carrying them is read all the same: those `@id`s are the library's own, and `library` names what was referred to. One that names an `@id` nothing answers to, or is not a document at all, is refused with what the reader said.",
+            "description": "Read a document of the standard JSON interchange -- what `export_json`, `sysml export` or a model server writes -- and answer what it holds: `sysml`, the model written back out as the textual notation -- declarations with their typings, specializations, redefinitions, multiplicities and values, connections, flows, successions and transitions by what they connect, the action statements, satisfactions, metadata, comments, imports and expressions, each name written the way it would be found from where it stands -- `counts` of each metaclass, and `checked`, whether that text parses and every name in it resolves against the standard library. An expression is written as the text the document kept of it, which `export_json` and `sysml export` keep of every one, and otherwise from its structure; a name the model resolved through a feature chain (`v.m`) it holds only as where the chain ends, so text written from structure names that instead. `unwritten` lists what could not be written, each with the element it is in, and the text marks the place with `// not written: <metaclass>`; read a non-empty one as the declarations of the model rather than the whole of it. A document that refers to standard library elements without carrying them is read all the same: those `@id`s are the library's own, and `library` names what was referred to. One that names an `@id` nothing answers to, or is not a document at all, is refused with what the reader said.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
