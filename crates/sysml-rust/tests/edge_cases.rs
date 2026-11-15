@@ -807,8 +807,8 @@ fn state_machines_cover_their_table() {
     .unwrap();
     // a trigger typed by a generated item carries it in the event
     assert!(rust.contains("Start(Job),"));
-    // a scalar-typed trigger has no event payload shape: bare event
-    assert!(rust.contains("    Label,"));
+    // a scalar-typed trigger carries its scalar, as a field would
+    assert!(rust.contains("    Label(String),"), "{rust}");
     // a bound item rides along by its Rust path
     assert!(rust.contains("Remote(fake::Payload),"));
     // guard without payload, guard with payload, effect hook and call
@@ -817,6 +817,57 @@ fn state_machines_cover_their_table() {
     assert!(rust.contains("/// SysML effect of `start`."));
     assert!(rust.contains("hooks.effect_start(job);"));
     assert!(rust.contains("hooks.on_exit_rest();"));
+}
+
+/// `accept go : Boolean` waits for a boolean, and the event it reacts to
+/// has to carry one. The event was a bare variant whenever the payload
+/// was a scalar rather than a generated or bound type -- at the state
+/// definition's level and inside a state body alike -- so the guard
+/// over it had nothing to read and stayed `true`. A hook takes the
+/// payload by reference, and a number is compared only as a number, so
+/// the guard reads through it.
+#[test]
+fn a_trigger_carries_a_scalar_payload() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tstate def M {\n\
+         \t\tstate a; state b;\n\
+         \t\tstate c { accept go : Boolean if go then a; }\n\
+         \t\ttransition up first a accept lvl : Integer if lvl > 3 then b;\n\
+         \t\ttransition fine first b accept r : Real if r < 2 then c;\n\
+         \t\ttransition say first b accept tag : String if tag == \"x\" then a;\n\
+         \t\ttransition quiet first a accept n : Natural then c;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(rust.contains("    CToA(bool),"), "{rust}");
+    assert!(rust.contains("    Up(i64),"), "{rust}");
+    assert!(rust.contains("    Fine(f64),"), "{rust}");
+    assert!(rust.contains("    Say(String),"), "{rust}");
+    assert!(rust.contains("    Quiet(u64),"), "{rust}");
+    // the guards translate over the payload rather than defaulting
+    assert!(
+        rust.contains("fn guard_up(&self, lvl: &i64) -> bool {\n        (*lvl) > 3\n"),
+        "{rust}"
+    );
+    assert!(rust.contains("(*r) < 2.0"), "{rust}");
+    assert!(rust.contains("tag.clone() == \"x\""), "{rust}");
+    assert!(
+        rust.contains("fn guard_c_to_a(&self, go: &bool) -> bool {\n        (*go)\n"),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("(MState::C, MEvent::CToA(go)) if hooks.guard_c_to_a(go) => {"),
+        "{rust}"
+    );
+    // no guard and no effect reads the payload, so nothing binds it
+    assert!(
+        rust.contains("(MState::A, MEvent::Quiet(_)) => {"),
+        "{rust}"
+    );
+    compiles(&rust);
 }
 
 #[test]
@@ -1915,9 +1966,10 @@ fn a_state_machine_spells_its_states_and_reserves_the_names_it_derives() {
     .unwrap();
     assert!(rust.contains("pub enum TrafficLightState"), "{rust}");
     // a transition inside a state leaves from it, and is a row of the
-    // table like any other; it used to be left out with a note saying so
+    // table like any other; it used to be left out with a note saying so.
+    // Its `go : Boolean` rides in the event, unread by any guard or effect.
     assert!(
-        rust.contains("(TrafficLightState::Waiting, TrafficLightEvent::WaitingToGreen) => {"),
+        rust.contains("(TrafficLightState::Waiting, TrafficLightEvent::WaitingToGreen(_)) => {"),
         "{rust}"
     );
     assert!(!rust.contains("transition inside state"), "{rust}");

@@ -740,6 +740,104 @@ fn a_field_holding_a_record_is_an_item_and_checks_clean() {
     checked(&sysml);
 }
 
+/// A member hides a type of its name from everything in the definition
+/// that declares it: `attribute Real : Integer; attribute x : Real;`
+/// typed `x` by the field, not by `ScalarValues::Real`, and a field named
+/// after another imported type did the same to that type. Where a member
+/// has the name, the reference is written through what declares the
+/// type -- and through the global namespace, where something hides that
+/// too.
+#[test]
+fn a_member_named_like_a_type_does_not_hide_it() {
+    let surface = sysml_rust::surface::read(
+        r#"{
+        "language": "python",
+        "module": "nest",
+        "items": [
+            { "kind": "record", "name": "Inner", "path": "nest.Inner",
+              "fields": [ { "name": "v", "type": "Integer" } ] },
+            { "kind": "record", "name": "Shadow", "path": "nest.Shadow",
+              "fields": [
+                  { "name": "Real", "type": "Integer" },
+                  { "name": "x", "type": "Real" },
+                  { "name": "String", "type": "String", "multiplicity": "optional" },
+                  { "name": "Inner", "type": "Integer" },
+                  { "name": "y", "type": "Inner", "multiplicity": "many" }
+              ] },
+            { "kind": "record", "name": "Hidden", "path": "nest.Hidden",
+              "fields": [
+                  { "name": "NestApi", "type": "Boolean" },
+                  { "name": "ScalarValues", "type": "Boolean" },
+                  { "name": "Inner", "type": "Inner" },
+                  { "name": "Boolean", "type": "Integer" },
+                  { "name": "flag", "type": "Boolean" }
+              ] },
+            { "kind": "record", "name": "Plain", "path": "nest.Plain",
+              "fields": [ { "name": "r", "type": "Real" }, { "name": "i", "type": "Inner" } ] },
+            { "kind": "function", "name": "scale", "path": "nest.scale",
+              "parameters": [ { "name": "Real", "type": "Real" },
+                              { "name": "by", "type": "Integer" },
+                              { "name": "Integer", "type": "Inner" } ],
+              "result": { "type": "Real" } }
+        ]
+    }"#,
+    )
+    .unwrap();
+    let sysml = sysml_rust::surface::to_sysml(&surface, None).sysml;
+    for line in [
+        "\t\tattribute Real : Integer;\n",
+        "\t\tattribute x : ScalarValues::Real;\n",
+        "\t\tattribute String : ScalarValues::String[0..1];\n",
+        "\t\tattribute Inner : Integer;\n",
+        "\t\titem y : NestApi::Inner[*];\n",
+        // the package's own name and `ScalarValues` are hidden as well
+        "\t\tattribute NestApi : $::ScalarValues::Boolean;\n",
+        "\t\titem Inner : $::NestApi::Inner;\n",
+        "\t\tattribute flag : $::ScalarValues::Boolean;\n",
+        // where nothing hides them, the names are written as ever
+        "\t\tattribute r : Real;\n",
+        "\t\titem i : Inner;\n",
+        "\t\tin Real : ScalarValues::Real;\n",
+        "\t\tin 'by' : ScalarValues::Integer;\n",
+        "\t\tin Integer : Inner;\n",
+        "\t\tout result : ScalarValues::Real;\n",
+    ] {
+        assert!(sysml.contains(line), "{line:?}\n{sysml}");
+    }
+    let ws = checked(&sysml);
+    // and each reference is the type it names, not the member
+    let model = ws.model();
+    let typed = |def: &str, member: &str| {
+        let def = model
+            .ids()
+            .find(|&id| {
+                model.name(id) == Some(def)
+                    && model.kind(id).is_a(sysml_model::ElementKind::Definition)
+            })
+            .unwrap();
+        let member = model
+            .owned(def)
+            .iter()
+            .flat_map(|&membership| {
+                std::iter::once(membership).chain(model.owned(membership).iter().copied())
+            })
+            .find(|&id| model.name(id) == Some(member))
+            .unwrap();
+        model.type_of(member).map(|ty| ws.qualified_name_of(ty))
+    };
+    let real = Some("ScalarValues::Real".to_string());
+    let inner = Some("NestApi::Inner".to_string());
+    assert_eq!(typed("Shadow", "x"), real);
+    assert_eq!(typed("Shadow", "y"), inner);
+    assert_eq!(typed("Hidden", "Inner"), inner);
+    assert_eq!(
+        typed("Hidden", "flag"),
+        Some("ScalarValues::Boolean".to_string())
+    );
+    assert_eq!(typed("Scale", "Real"), real);
+    assert_eq!(typed("Scale", "result"), real);
+}
+
 /// A member called `code` hides the binding's metadata definition from
 /// everything inside the definition that declares it, `@code` among
 /// them: its `:>> writtenIn` then resolved to nothing, and `import-code`
@@ -776,7 +874,7 @@ fn a_member_called_code_does_not_hide_the_binding() {
         "{sysml}"
     );
     assert!(
-        sysml.contains("item def Both {\n\t\tmetadata code_ : $::ShadowApi::code {"),
+        sysml.contains("item def Both {\n\t\t@$::ShadowApi::code {"),
         "{sysml}"
     );
     assert!(

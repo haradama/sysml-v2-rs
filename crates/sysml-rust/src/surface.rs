@@ -523,12 +523,24 @@ pub fn to_sysml(surface: &Surface, package: Option<&str>) -> Imported {
 
     let mut taken: HashSet<String> = known.keys().cloned().collect();
     taken.insert(binding::DEF.to_string());
+    let declared: HashSet<String> = surface
+        .items
+        .iter()
+        .flat_map(|item| match item {
+            Item::Function(function) => std::slice::from_ref(function),
+            Item::Record(record) => record.methods.as_slice(),
+            Item::Enumeration(enumeration) => enumeration.methods.as_slice(),
+            Item::Interface(interface) => interface.methods.as_slice(),
+        })
+        .map(|callable| camel(&callable.name))
+        .collect();
     let mut writer = Writer {
         language: &surface.language,
         module: &surface.module,
         package: package_name,
         taken,
         known,
+        declared,
         out,
         skipped,
     };
@@ -608,6 +620,10 @@ struct Writer<'a> {
     /// Every name the package declares, so that the second member to
     /// want one is renamed rather than left to shadow the first.
     taken: HashSet<String>,
+    /// What the package may yet declare an action under, so that a
+    /// reference written above a function that takes a package's or
+    /// `ScalarValues`' name already goes round it.
+    declared: HashSet<String>,
     out: String,
     skipped: Vec<String>,
 }
@@ -643,9 +659,17 @@ impl Writer<'_> {
     /// or a port, by what it holds -- and each method an `action def`
     /// beside it.
     fn record(&mut self, record: &Record) {
+        // the fields that will be written, each a name that hides any
+        // type of the same name from every field of the definition
+        let members: Vec<&str> = record
+            .fields
+            .iter()
+            .filter(|field| self.known.contains_key(&field.of))
+            .map(|field| field.name.as_str())
+            .collect();
         let mut lines = Vec::new();
         for field in &record.fields {
-            match self.typed(&field.of, field.multiplicity) {
+            match self.typed(&field.of, field.multiplicity, &members) {
                 Some(ty) => {
                     // an attribute is a value, and may not own an
                     // occurrence: a field holding a record is an item of
@@ -668,7 +692,6 @@ impl Writer<'_> {
         }
         writeln!(self.out, "\titem def {} {{", quoted(&record.name)).unwrap();
         self.body_doc(record.doc.as_deref(), None);
-        let members: Vec<&str> = lines.iter().map(|(name, _)| *name).collect();
         self.binding(&record.path, &record.capabilities, None, &members);
         for (_, line) in lines {
             writeln!(self.out, "\t\t{line}").unwrap();
@@ -726,13 +749,12 @@ impl Writer<'_> {
             .map(|parameter| parameter.name.clone())
             .chain(outputs.iter().map(|(it, _)| (*it).to_string()))
             .collect();
+        // Every parameter's name is settled before any is typed: each
+        // hides a type of its name from all of them, the ones before it
+        // as much as the ones after.
         let mut members = Vec::new();
-        let mut lines = Vec::new();
+        let mut notes = Vec::new();
         for parameter in &callable.parameters {
-            let Some(ty) = self.typed(&parameter.of, parameter.multiplicity) else {
-                self.refuse(callable, &parameter.of);
-                return;
-            };
             let mut name = parameter.name.clone();
             let mut note = None;
             if let Some((_, what)) = outputs.iter().find(|(it, _)| *it == name) {
@@ -744,28 +766,36 @@ impl Writer<'_> {
                     parameter.name, parameter.name
                 ));
             }
+            members.push(name);
+            notes.push(note);
+        }
+        members.extend(outputs.iter().map(|(it, _)| (*it).to_string()));
+        let members: Vec<&str> = members.iter().map(String::as_str).collect();
+        let mut lines = Vec::new();
+        for ((parameter, name), note) in callable.parameters.iter().zip(&members).zip(&notes) {
+            let Some(ty) = self.typed(&parameter.of, parameter.multiplicity, &members) else {
+                self.refuse(callable, &parameter.of);
+                return;
+            };
             lines.push(format!(
                 "in {} : {ty}{}",
-                quoted(&name),
+                quoted(name),
                 owned_doc(parameter.doc.as_deref(), note.as_deref())
             ));
-            members.push(name);
         }
         if let Some(result) = &callable.result {
-            let Some(ty) = self.typed(&result.of, result.multiplicity) else {
+            let Some(ty) = self.typed(&result.of, result.multiplicity, &members) else {
                 self.refuse(callable, &result.of);
                 return;
             };
             lines.push(format!("out result : {ty};"));
-            members.push("result".to_string());
         }
         if let Some(error) = &callable.error {
-            let Some(ty) = self.typed(error, Multiplicity::Optional) else {
+            let Some(ty) = self.typed(error, Multiplicity::Optional, &members) else {
                 self.refuse(callable, error);
                 return;
             };
             lines.push(format!("out error : {ty};"));
-            members.push("error".to_string());
         }
 
         let wanted = camel(&callable.name);
@@ -778,7 +808,6 @@ impl Writer<'_> {
         });
         writeln!(self.out, "\taction def {} {{", quoted(&called)).unwrap();
         self.body_doc(callable.doc.as_deref(), renamed.as_deref());
-        let members: Vec<&str> = members.iter().map(String::as_str).collect();
         self.binding(&callable.path, &[], Some(callable), &members);
         for line in lines {
             writeln!(self.out, "\t\t{line}").unwrap();
@@ -809,10 +838,8 @@ impl Writer<'_> {
     /// `members` are the names the definition declares. One of them
     /// called `code` -- a field, a parameter -- hides the metadata
     /// definition from everything inside it, `@code` among them, so
-    /// there the binding names it through the package; and through the
-    /// global namespace where a member hides the package too. The
-    /// parser reads `$::` only after a `:`, so that last binding is a
-    /// usage with a name of its own, one no member has.
+    /// there the binding names it as [`Writer::reference`] names any
+    /// hidden type.
     fn binding(
         &mut self,
         path: &str,
@@ -820,21 +847,7 @@ impl Writer<'_> {
         callable: Option<&Callable>,
         members: &[&str],
     ) {
-        let usage = if !members.contains(&binding::DEF) {
-            format!("@{}", binding::DEF)
-        } else if !members.contains(&self.package.as_str()) {
-            format!("@{}::{}", quoted(&self.package), binding::DEF)
-        } else {
-            let mut name = format!("{}_", binding::DEF);
-            while members.contains(&name.as_str()) {
-                name.push('_');
-            }
-            format!(
-                "metadata {name} : $::{}::{}",
-                quoted(&self.package),
-                binding::DEF
-            )
-        };
+        let usage = format!("@{}", self.reference(binding::DEF, members));
         write!(
             self.out,
             "\t\t{usage} {{ :>> {} = {}; :>> {} = {};",
@@ -878,12 +891,45 @@ impl Writer<'_> {
         writeln!(self.out, " }}").unwrap();
     }
 
-    /// A type under a multiplicity, as a signature writes it -- or
-    /// nothing, where the surface never declared the type.
-    fn typed(&self, of: &str, multiplicity: Multiplicity) -> Option<String> {
+    /// A type under a multiplicity, as a signature writes it inside a
+    /// definition declaring `members` -- or nothing, where the surface
+    /// never declared the type.
+    fn typed(&self, of: &str, multiplicity: Multiplicity, members: &[&str]) -> Option<String> {
         self.known
             .contains_key(of)
-            .then(|| format!("{}{}", quoted(of), multiplicity.written()))
+            .then(|| format!("{}{}", self.reference(of, members), multiplicity.written()))
+    }
+
+    /// How a definition declaring `members` names the type `of`, one of
+    /// the package's own or a scalar it imports.
+    ///
+    /// A member hides a type of its name from everything inside the
+    /// definition: written bare, `attribute x : Real;` beside an
+    /// `attribute Real` is typed by that attribute. There the type is
+    /// named through what declares it -- `ScalarValues::Real`,
+    /// `Pkg::Inner` -- and from the global namespace where that name is
+    /// hidden in turn, by a member or by something the package declares
+    /// under it. Where nothing hides it, the name is written bare, as it
+    /// always was.
+    fn reference(&self, of: &str, members: &[&str]) -> String {
+        if !members.contains(&of) {
+            return quoted(of);
+        }
+        let scope = if Primitive::named(of).is_some() {
+            "ScalarValues"
+        } else {
+            self.package.as_str()
+        };
+        let hidden = members.contains(&scope)
+            || self.known.contains_key(scope)
+            || self.taken.contains(scope)
+            || self.declared.contains(scope);
+        format!(
+            "{}{}::{}",
+            if hidden { "$::" } else { "" },
+            quoted(scope),
+            quoted(of)
+        )
     }
 }
 

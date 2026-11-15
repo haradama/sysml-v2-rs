@@ -13,6 +13,12 @@ use sysml_model::{ElementId, ElementKind, Value};
 
 use super::*;
 
+/// The Rust scalars a hook dereferences to read: they are `Copy`, and
+/// compared or added only as values, never through a reference.
+const COPIED: &[&str] = &[
+    "bool", "i64", "u64", "f64", "f32", "i32", "u32", "u8", "usize",
+];
+
 impl<'a> Generator<'a> {
     /// A `state def` as a runnable machine: states, events, hooks and a
     /// `step` over the transition table.
@@ -183,19 +189,35 @@ impl<'a> Generator<'a> {
             if let Some(guard) = &transition.guard {
                 // a guard over the event's payload translates into the
                 // default body; anything else stays an open decision
+                //
+                // The hook is handed the payload by reference. A struct
+                // reads its fields through one as it would without, but a
+                // number is compared only as a number: `lvl > 3` is no
+                // Rust for a `&i64`, and `(*lvl) > 3` is. A `String` is
+                // read by `clone()` already, which goes through it.
                 let resolve = |chain: &str| {
-                    expr::led_by(chain, |leading: &str| {
-                        transition
-                            .payload
-                            .as_ref()
-                            .filter(|(param, _)| param == leading)
-                            .map(|(param, _)| ident(param))
-                    })
+                    let (param, ty) = transition
+                        .payload
+                        .as_ref()
+                        .filter(|(param, _)| chain.split('.').next() == Some(param.as_str()))?;
+                    if chain == param && COPIED.contains(&ty.as_str()) {
+                        return Some(expr::Reference::typed(format!("(*{})", ident(param)), ty));
+                    }
+                    if chain == param {
+                        return Some(expr::Reference::typed(ident(param), ty));
+                    }
+                    expr::led_by(chain, |_| Some(ident(param)))
                 };
+                // a payload that is itself a boolean is a guard on its own:
+                // `accept go : Boolean if go`
+                let boolean_payload = transition
+                    .payload
+                    .as_ref()
+                    .filter(|(param, ty)| ty == "bool" && guard.trim() == param);
                 let body = translate(guard, &resolve, &|name| {
                     self.callable(transition.usage, name)
                 })
-                .filter(|translated| translated.boolean)
+                .filter(|translated| translated.boolean || boolean_payload.is_some())
                 .map(|translated| translated.rust)
                 .unwrap_or_else(|| "true".to_string());
                 writeln!(out, "    /// SysML guard: `[{}]`", on_one_line(guard)).unwrap();
@@ -345,12 +367,16 @@ impl<'a> Generator<'a> {
                 let waits = sysml_model::payload_parameter(model, accept)?;
                 let param = model.name(waits)?;
                 let ty = model.type_of(waits)?;
+                // a scalar is carried as Rust spells it, as a field or a
+                // parameter of that type would be: `accept go : Boolean`
+                // waits for a `bool`, and an event that dropped it left
+                // the guard over it nothing to read
                 let rust = if let Some(bound) = binding(model, ty) {
                     bound.get(binding::ITEM)?.clone()
                 } else if self.written_as_a_type(ty) {
                     type_ident(model.name(ty)?)
                 } else {
-                    return None;
+                    scalar_type(model, ty)?.to_string()
                 };
                 Some((param.to_string(), rust))
             }),

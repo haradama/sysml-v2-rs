@@ -191,6 +191,47 @@ fn every_transition_is_planned_with_what_triggers_it() {
     assert_eq!(old.kind, "signal");
 }
 
+/// A scalar payload is a payload: rustgen's event carries the `bool` of
+/// `accept go : Boolean`, and the plan a generator in another language
+/// reads has to say the same thing waits there, at the definition's level
+/// and inside a state body alike.
+#[test]
+fn a_scalar_payload_is_planned_as_its_type() {
+    let plan = plan_of(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tstate def M {\n\
+         \t\tstate a;\n\
+         \t\tstate b { accept go : Boolean if go then a; }\n\
+         \t\ttransition up first a accept lvl : Integer if lvl > 3 then b;\n\
+         \t}\n\
+         }\n",
+    );
+    assert!(plan.checked.ok, "{:?}", plan.checked);
+    let machine = plan.definitions.iter().find(|it| it.of == "S::M").unwrap();
+    let json = serde_json::to_string(&machine.transitions).unwrap();
+    let said: Vec<(&str, &str, &str)> = machine
+        .transitions
+        .iter()
+        .filter_map(|it| {
+            let on = it.on.as_ref()?;
+            Some((
+                it.from.as_str(),
+                on.name.as_str(),
+                on.typed_by.as_deref().unwrap_or(""),
+            ))
+        })
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("a", "lvl", "ScalarValues::Integer"),
+            ("b", "go", "ScalarValues::Boolean"),
+        ],
+        "{json}"
+    );
+}
+
 /// A transition written inside a state's body -- `state off { accept Go
 /// then on; }` -- names only where it goes, and leaves from the state it
 /// is written in. It was left out of the plan, so a generator reading it
