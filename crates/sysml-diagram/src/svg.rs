@@ -368,11 +368,28 @@ impl<'a> Canvas<'a> {
                     // two of them apart is which came first, not the signed
                     // lane a pair of boxes shares
                     let nth = lane + (siblings as f64 - 1.0) / 2.0;
-                    let band = band_below(self.layout, edge.from, self.style)
-                        + nth * self.style.line_height;
                     let inset = nth * self.style.line_height / 2.0;
                     let left = from.x + from.width / 3.0 + inset;
                     let right = from.x + from.width * 2.0 / 3.0 - inset;
+                    // The row is every box beside this one, and a taller
+                    // one there puts the gap under the row below whatever
+                    // sits under this box: the legs ran down through it.
+                    // The loop then turns in the gap under its own box
+                    // instead, which nothing beside it reaches into.
+                    let below = |floor: f64| floor + nth * self.style.line_height;
+                    let row = below(band_below(self.layout, edge.from, self.style));
+                    let clear = |band: f64| {
+                        !obstructed(
+                            self.layout,
+                            Some((edge.from, edge.from)),
+                            &[(left, bottom), (left, band), (right, band), (right, bottom)],
+                        )
+                    };
+                    let band = if clear(row) {
+                        row
+                    } else {
+                        below(bottom + self.style.v_gap * 0.4)
+                    };
                     self.floor = self.floor.max(band);
                     // A feature typed by what declares it faces no other
                     // box, so the border point a square would be worked out
@@ -457,6 +474,49 @@ impl<'a> Canvas<'a> {
                         held.1
                             .or_else(|| port_at(&self.placements[edge.to], edge.ends.1.as_deref())),
                     );
+                    // A line from a box back to itself, with no route from the
+                    // engine -- a swimlane view lays its boxes out by hand --
+                    // faces no other box, so both of its ends would be worked
+                    // out from the box's own middle: a line of no length,
+                    // drawn over by the box. It goes out of the right border
+                    // and back in instead, the loop the engine draws where it
+                    // routes, and short enough to stay inside the padding a
+                    // swimlane keeps round what it holds.
+                    if edge.from == edge.to
+                        && routed.is_none()
+                        && places.0.is_none()
+                        && places.1.is_none()
+                    {
+                        let nth = lane + (siblings as f64 - 1.0) / 2.0;
+                        let reach = self.style.padding * 0.8 + nth * self.style.padding * 0.4;
+                        let right = from.x + from.width;
+                        let inset = (nth * self.style.line_height / 4.0).min(from.height / 6.0);
+                        let (high, low) = (
+                            from.y + from.height / 3.0 - inset,
+                            from.y + from.height * 2.0 / 3.0 + inset,
+                        );
+                        let walked = [
+                            (right, high),
+                            (right + reach, high),
+                            (right + reach, low),
+                            (right, low),
+                        ];
+                        hold(
+                            &mut self.wires,
+                            &mut self.drawn,
+                            &walked,
+                            pen(edge.relation, &self.style.skin),
+                            false,
+                        );
+                        self.verge = self.verge.max(right + reach);
+                        if let Some(label) = &edge.label {
+                            self.asides.push(Aside {
+                                run: (walked[1], walked[2]),
+                                text: label.clone(),
+                            });
+                        }
+                        continue;
+                    }
                     // the line starts on the square's outer face rather than
                     // at its middle, so what it carries there -- a
                     // composition's diamond -- sits against the port instead
@@ -560,16 +620,30 @@ impl<'a> Canvas<'a> {
                             ((x1, channel), (x2, channel), ((x1, channel), (x2, channel)))
                         }
                         Some(Detour::Given(route)) => {
-                            let mut walked = route.to_vec();
-                            let last = walked.len() - 1;
-                            // the engine routed each line to a border point
+                            // The engine routed each line to a border point
                             // of its own, and a port that is already drawn
-                            // pulls the ones after the first back to it
-                            let start = held.0.map_or(route[0], |(point, _)| point);
-                            let finish = held.1.map_or(route[last], |(point, _)| point);
-                            walked[0] = off_port(start, route[1], first_is_port, self.style);
-                            walked[last] =
-                                off_port(finish, route[last - 1], second_is_port, self.style);
+                            // pulls the ones after the first back to it. That
+                            // square can be on another border than the one
+                            // the engine came in by, so the end is brought
+                            // round to it rather than drawn straight there,
+                            // which ran through the box.
+                            let mut walked = route.to_vec();
+                            if let Some(anchor) = held.1 {
+                                walked = rejoin(self.layout, &walked, anchor, to, self.style);
+                            }
+                            if let Some(anchor) = held.0 {
+                                walked.reverse();
+                                walked = rejoin(self.layout, &walked, anchor, from, self.style);
+                                walked.reverse();
+                            }
+                            let last = walked.len() - 1;
+                            let (start, finish) = (walked[0], walked[last]);
+                            let toward = (walked[1], walked[last - 1]);
+                            walked[0] = off_port(start, toward.0, first_is_port, self.style);
+                            walked[last] = off_port(finish, toward.1, second_is_port, self.style);
+                            self.verge = self
+                                .verge
+                                .max(walked.iter().map(|&(x, _)| x).fold(0.0, f64::max));
                             hold(
                                 &mut self.wires,
                                 &mut self.drawn,
@@ -583,11 +657,7 @@ impl<'a> Canvas<'a> {
                                 .floor
                                 .max(walked.iter().map(|&(_, y)| y).fold(0.0, f64::max));
                             let middle = walked.len() / 2;
-                            (
-                                route[1],
-                                route[last - 1],
-                                (walked[middle - 1], walked[middle]),
-                            )
+                            (toward.0, toward.1, (walked[middle - 1], walked[middle]))
                         }
                         Some(Detour::Sidestep(column)) => {
                             ((x1, y1), (x2, y2)) = detour;
@@ -1068,6 +1138,102 @@ fn given(layout: &Layout, edge: usize) -> Option<&[(f64, f64)]> {
         .get(edge)
         .map(Vec::as_slice)
         .filter(|walked| walked.len() >= 2)
+}
+
+/// An engine's route brought round to end at a port square that an
+/// earlier line already settled, on `rect`, rather than at the border
+/// point the engine chose for it.
+///
+/// The square may be on another border than the one the route came in
+/// by -- the bottom, say, of a box the route reached from above -- and a
+/// last leg drawn straight to it would run through the box and end on a
+/// border with no port in sight. So the route is cut back a little from
+/// where it met the box and joined to a point just outside the square by
+/// square bends: one corner where that clears everything, else a lane
+/// running round the box on one side. Of those, the one that runs
+/// through the fewest boxes is drawn, and of equals, the shortest.
+fn rejoin(
+    layout: &Layout,
+    route: &[(f64, f64)],
+    (point, away): ((f64, f64), (f64, f64)),
+    rect: &Placed,
+    style: &Style,
+) -> Vec<(f64, f64)> {
+    let last = route.len() - 1;
+    let met = route[last];
+    if (met.0 - point.0).abs() < SAME && (met.1 - point.1).abs() < SAME {
+        return route.to_vec();
+    }
+    let reach = style.padding;
+    // a little short of the border along the leg the engine came in on,
+    // so the new bends start outside the box
+    let before = route[last - 1];
+    let leg = (met.0 - before.0).hypot(met.1 - before.1);
+    let cut = along(met, before, reach.min(leg / 2.0));
+    let out = (point.0 + away.0 * reach, point.1 + away.1 * reach);
+    let ring = (
+        rect.x - reach,
+        rect.x + rect.width + reach,
+        rect.y - reach,
+        rect.y + rect.height + reach,
+    );
+    let candidates = [
+        vec![(out.0, cut.1)],
+        vec![(cut.0, out.1)],
+        vec![(cut.0, ring.2), (out.0, ring.2)],
+        vec![(cut.0, ring.3), (out.0, ring.3)],
+        vec![(ring.0, cut.1), (ring.0, out.1)],
+        vec![(ring.1, cut.1), (ring.1, out.1)],
+    ];
+    // the boxes round the square's own -- the parts that hold it -- hold
+    // the whole of the new stretch as well, and cost it nothing
+    let counted: Vec<&Placed> = layout
+        .placed
+        .iter()
+        .filter(|other| {
+            !(other.x < out.0
+                && out.0 < other.x + other.width
+                && other.y < out.1
+                && out.1 < other.y + other.height)
+        })
+        .collect();
+    candidates
+        .into_iter()
+        .map(|corners| {
+            let mut walked = route[..last].to_vec();
+            walked.push(cut);
+            walked.extend(corners);
+            walked.push(out);
+            walked.push(point);
+            walked.dedup_by(|one, other| {
+                (one.0 - other.0).abs() < SAME && (one.1 - other.1).abs() < SAME
+            });
+            // a bend between two points in line with it is no bend, and
+            // one the line comes back through is a spur
+            let mut nth = 1;
+            while nth + 1 < walked.len() {
+                let (one, at, other) = (walked[nth - 1], walked[nth], walked[nth + 1]);
+                let upright = (one.0 - at.0).abs() < SAME && (at.0 - other.0).abs() < SAME;
+                let level = (one.1 - at.1).abs() < SAME && (at.1 - other.1).abs() < SAME;
+                if upright || level {
+                    walked.remove(nth);
+                } else {
+                    nth += 1;
+                }
+            }
+            let under = counted
+                .iter()
+                .filter(|other| walked.windows(2).any(|leg| crosses(other, leg[0], leg[1])))
+                .count();
+            let length: f64 = walked
+                .windows(2)
+                .map(|leg| (leg[1].0 - leg[0].0).hypot(leg[1].1 - leg[0].1))
+                .sum();
+            (under, length, walked)
+        })
+        .min_by(|one, other| one.0.cmp(&other.0).then_with(|| one.1.total_cmp(&other.1)))
+        .map(|(_, _, walked)| walked)
+        .expect("a way round")
 }
 
 /// One line worked out but not yet written.
@@ -3932,6 +4098,85 @@ mod tests {
     }
 
     #[test]
+    fn a_transition_back_to_its_own_step_in_a_swimlane_is_a_loop_beside_it() {
+        // A swimlane view is laid out by hand, so no engine routes the
+        // line from `c` back to `c`; worked out centre to centre it had
+        // no length, sat at the box's middle with its guard, and the box
+        // was drawn over both.
+        let ws = resolved(
+            "action def Flow {\n\
+             \tfirst start;\n\
+             \tthen action a;\n\
+             \tthen action c;\n\
+             \tfirst c if true then c;\n\
+             \tthen done;\n\
+             }\n\
+             action run : Flow;\n\
+             part q1 { perform run.a; }\n\
+             part q2 { perform run.c; }\n",
+        );
+        let flow = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Flow")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), flow);
+        let style = Style::default();
+        let layout = crate::layout(&diagram, &style);
+        assert!(!layout.lanes.is_empty(), "the view is laned");
+        let svg = to_svg(&diagram, &layout, &style);
+        let c = diagram
+            .nodes
+            .iter()
+            .position(|node| node.name == "c")
+            .expect("the step c");
+        let rect = &layout.placed[c];
+        // the loop: one of the paths with every point on or beside c's
+        // right border, reaching out of it
+        let looped = svg
+            .lines()
+            .filter(|line| line.starts_with("<path") && line.contains("url(#transition)"))
+            .filter_map(|line| line.split(" d=\"").nth(1)?.split('"').next())
+            .find(|d| {
+                let numbers: Vec<f64> = d
+                    .split(|ch: char| ch.is_ascii_alphabetic() || ch == ' ')
+                    .filter_map(|word| word.parse().ok())
+                    .collect();
+                numbers
+                    .first()
+                    .is_some_and(|x| (x - (rect.x + rect.width)).abs() < 0.1)
+            });
+        let looped = looped.unwrap_or_else(|| panic!("no loop off c's right border in {svg}"));
+        assert!(looped.contains('V'), "a loop with no height: {looped}");
+        // the guard is written outside the box, where it can be read
+        let guard = svg
+            .lines()
+            .find(|line| line.contains(">[true]</text>"))
+            .expect("the guard");
+        let x: f64 = guard
+            .split("x=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .and_then(|x| x.parse().ok())
+            .unwrap();
+        assert!(
+            x > rect.x + rect.width,
+            "the guard is under the box: {guard}"
+        );
+        // and nothing at all is a line of no length
+        assert!(
+            !svg.lines().any(|line| {
+                line.starts_with("<line")
+                    && line.split("x1=\"").nth(1).and_then(|r| r.split('"').next())
+                        == line.split("x2=\"").nth(1).and_then(|r| r.split('"').next())
+                    && line.split("y1=\"").nth(1).and_then(|r| r.split('"').next())
+                        == line.split("y2=\"").nth(1).and_then(|r| r.split('"').next())
+            }),
+            "{svg}"
+        );
+    }
+
+    #[test]
     fn an_n_ary_dependency_meets_at_a_dot() {
         // the standard's note: two or more of either end makes it n-ary,
         // and then a client link reaches the dot with no arrowhead --
@@ -4243,6 +4488,62 @@ mod tests {
             )),
             "loop starts at {start:?} in {svg}"
         );
+    }
+
+    #[test]
+    fn a_loop_turns_above_the_box_under_it_when_the_row_reaches_lower() {
+        // `Tall` beside A puts the gap under the row below B, which sits
+        // under A; turned there, the loop's legs ran down through B and
+        // read as A composing B three times over.
+        let ws = resolved(
+            "part def A { part again : A; part b : B; }\n\
+             part def B { attribute x; }\n\
+             part def Tall { attribute a1; }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let named = |name: &str| {
+            diagram
+                .nodes
+                .iter()
+                .position(|node| node.name == name)
+                .unwrap_or_else(|| panic!("no box named {name}"))
+        };
+        let (a, b, tall) = (named("A"), named("B"), named("Tall"));
+        let mut placed: Vec<Placed> = (0..diagram.nodes.len())
+            .map(|at| place(at, 600.0, 600.0 + 60.0 * at as f64, 40.0, 40.0))
+            .collect();
+        placed[a] = place(a, 100.0, 20.0, 120.0, 100.0);
+        placed[b] = place(b, 110.0, 180.0, 100.0, 100.0);
+        placed[tall] = place(tall, 300.0, 20.0, 100.0, 300.0);
+        let layout = Layout {
+            placed,
+            width: 700.0,
+            height: 900.0,
+            routes: Vec::new(),
+            lanes: Vec::new(),
+            packages: Vec::new(),
+        };
+        let svg = to_svg(&diagram, &layout, &style);
+        let looped = svg
+            .split("<path class=\"edge\" fill=\"none\" d=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+            .find(|d| d.contains('H'))
+            .unwrap_or_else(|| panic!("no loop in {svg}"));
+        // M x top V band H x' V top
+        let numbers: Vec<f64> = looped
+            .split(' ')
+            .filter_map(|word| word.parse().ok())
+            .collect();
+        let (left, band, right) = (numbers[0], numbers[2], numbers[3]);
+        let under = &layout.placed[b];
+        assert!(
+            !crosses(under, (left, numbers[1]), (left, band))
+                && !crosses(under, (right, band), (right, numbers[1])),
+            "{looped} runs through B at {under:?}"
+        );
+        assert!(band > 120.0, "{looped} turns inside A");
     }
 
     #[test]
@@ -5031,6 +5332,123 @@ pub(crate) mod anchor_tests {
         for (start, finish) in drawn {
             assert_eq!(leaves(&squares, start, &style), 1, "{svg}");
             assert_eq!(leaves(&squares, finish, &style), 1, "{svg}");
+        }
+    }
+
+    #[test]
+    fn a_second_line_to_a_settled_port_goes_round_its_box_to_it() {
+        // The engine brought the binding into the tank from above, but
+        // the connection before it had already put the `vent` square on
+        // the tank's bottom border. The binding's last leg was drawn
+        // straight from above to that square: through the tank, under its
+        // fill, and out at a border the line seemed to stop on for no
+        // reason.
+        let ws = resolved(
+            "part def Tank { port vent; }\n\
+             part def Engine { port inlet; }\n\
+             part def Car {\n\
+             \tport ext;\n\
+             \tpart tank : Tank;\n\
+             \tpart eng : Engine;\n\
+             \tconnect tank.vent to eng.inlet;\n\
+             \tbind ext = tank.vent;\n\
+             }\n",
+        );
+        let car = ws
+            .named_elements()
+            .find(|(_, name)| *name == "Car")
+            .map(|(id, _)| id)
+            .unwrap();
+        let diagram = interconnection_diagram(ws.model(), car);
+        let style = Style::default();
+        let named = |name: &str| {
+            diagram
+                .nodes
+                .iter()
+                .position(|node| node.name.split(' ').next() == Some(name))
+                .unwrap_or_else(|| panic!("no box named {name}"))
+        };
+        let (ext, tank, eng) = (named("ext"), named("tank"), named("eng"));
+        // a column: ext over the tank over the engine, every line
+        // routed straight down from the box above to the one below
+        let mut placed: Vec<Placed> = (0..diagram.nodes.len())
+            .map(|at| Placed {
+                node: at,
+                x: 400.0,
+                y: 40.0 * at as f64,
+                width: 30.0,
+                height: 30.0,
+            })
+            .collect();
+        for (at, y, height) in [(ext, 20.0, 50.0), (tank, 200.0, 100.0), (eng, 450.0, 50.0)] {
+            placed[at] = Placed {
+                node: at,
+                x: 20.0,
+                y,
+                width: 100.0,
+                height,
+            };
+        }
+        let routes = diagram
+            .edges
+            .iter()
+            .map(|edge| {
+                let (from, to) = (&placed[edge.from], &placed[edge.to]);
+                let (upper, lower) = if from.y < to.y {
+                    (from, to)
+                } else {
+                    (to, from)
+                };
+                let down = vec![(70.0, upper.y + upper.height), (70.0, lower.y)];
+                if from.y < to.y {
+                    down
+                } else {
+                    down.into_iter().rev().collect()
+                }
+            })
+            .collect();
+        let layout = Layout {
+            placed,
+            width: 400.0,
+            height: 560.0,
+            routes,
+            lanes: Vec::new(),
+            packages: Vec::new(),
+        };
+        let svg = to_svg(&diagram, &layout, &style);
+
+        // one vent square, and no line drawn through the tank to it
+        assert_eq!(svg.matches(">vent</text>").count(), 1, "{svg}");
+        let box_of = &layout.placed[tank];
+        for d in svg
+            .split("<path class=\"edge\" fill=\"none\" d=\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next())
+        {
+            let mut walked: Vec<(f64, f64)> = Vec::new();
+            let mut words = d.split(' ');
+            while let Some(command) = words.next() {
+                let mut number = || -> f64 { words.next().unwrap().parse().unwrap() };
+                let (x, y) = walked.last().copied().unwrap_or((0.0, 0.0));
+                match command {
+                    "M" | "L" => walked.push((number(), number())),
+                    "H" => walked.push((number(), y)),
+                    "V" => walked.push((x, number())),
+                    "A" => {
+                        let _ = (number(), number(), number(), number(), number());
+                        walked.push((number(), number()));
+                    }
+                    _ => panic!("{command} in {d}"),
+                }
+            }
+            for leg in walked.windows(2) {
+                let ((x1, y1), (x2, y2)) = (leg[0], leg[1]);
+                assert!(x1 == x2 || y1 == y2, "a slanted leg in {d}");
+                assert!(
+                    !crosses(box_of, leg[0], leg[1]),
+                    "{d} runs through the tank at {box_of:?}"
+                );
+            }
         }
     }
 }

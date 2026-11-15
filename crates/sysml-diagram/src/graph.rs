@@ -950,7 +950,10 @@ pub fn interconnection_diagram(model: &Model, definition: ElementId) -> Diagram 
         // stands before it, and when nothing does -- `entry; then off;` --
         // it is the filled circle a machine starts at.
         if let [only] = &ends[..] {
-            if model.kind(child) == ElementKind::SuccessionAsUsage {
+            if matches!(
+                model.kind(child),
+                ElementKind::SuccessionAsUsage | ElementKind::Succession
+            ) {
                 let to = index
                     .get(&only.target)
                     .copied()
@@ -1156,7 +1159,10 @@ pub(crate) fn connector_relation(model: &Model, connector: ElementId) -> Relatio
         ElementKind::BindingConnector | ElementKind::BindingConnectorAsUsage => Relation::Binding,
         ElementKind::InterfaceUsage => Relation::Interface,
         ElementKind::AllocationUsage => Relation::Allocation,
-        ElementKind::SuccessionFlowUsage => Relation::SuccessionFlow,
+        // KerML writes the same three without the usage around them --
+        // `succession a then b;` in a `.kerml` file is a `Succession` --
+        // and they mean what the SysML ones do
+        ElementKind::SuccessionFlowUsage | ElementKind::SuccessionFlow => Relation::SuccessionFlow,
         // A message has no metaclass of its own: `Message : FlowUsage =
         // ... { isAbstract = true }` is how the standard writes one, so
         // the flag is what tells it from a flow.
@@ -1164,7 +1170,8 @@ pub(crate) fn connector_relation(model: &Model, connector: ElementId) -> Relatio
             Some(&Value::Bool(true)) => Relation::Message,
             _ => Relation::Flow,
         },
-        ElementKind::SuccessionAsUsage => Relation::Succession,
+        ElementKind::Flow => Relation::Flow,
+        ElementKind::SuccessionAsUsage | ElementKind::Succession => Relation::Succession,
         kind if kind.is_a(ElementKind::TransitionUsage) => Relation::Transition,
         _ => Relation::Connection,
     }
@@ -2078,7 +2085,7 @@ pub(crate) fn keyword(kind: ElementKind) -> String {
         ElementKind::WhileLoopActionUsage | ElementKind::ForLoopActionUsage => Some("loop"),
         // the metaclass is `SuccessionAsUsage`; the notation writes it
         // `succession a then b`
-        ElementKind::SuccessionAsUsage => Some("succession"),
+        ElementKind::SuccessionAsUsage | ElementKind::Succession => Some("succession"),
         // The control nodes and the rest below are spelled by the
         // notation rather than by the metaclass: `fork-node ='fork'`,
         // `ref-prefix ='ref'`, `alias-member ='alias'` and so on through

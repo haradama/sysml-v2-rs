@@ -353,20 +353,52 @@ fn widen(
         }
     }
     for (route, edge) in routes.iter_mut().zip(&diagram.edges) {
-        let last = route.len().saturating_sub(1);
-        for (nth, point) in route.iter_mut().enumerate() {
-            // an end goes where the box it is on went, wherever on the
-            // box it is
-            let shifts = match nth {
-                0 => moved[edge.from],
-                _ if nth == last => moved[edge.to],
-                _ => point.0 >= x,
-            };
+        let shifts = shifted(route, (moved[edge.from], moved[edge.to]), x);
+        for (point, shifts) in route.iter_mut().zip(shifts) {
             if shifts {
                 point.0 += room;
             }
         }
     }
+}
+
+/// Which points of one route move with a strip opened at `x`, given
+/// whether the boxes at its two ends moved.
+///
+/// An end goes where the box it is on went, wherever on the box it is,
+/// and so does every bend the end reaches by an upright stretch: the
+/// stretch stays upright only if both of its points move together. A box
+/// can straddle the strip -- one in a package beside the widened one,
+/// reaching past the edge the strip opens at -- and then its end stays
+/// put while the bend straight above it, right of the strip, would have
+/// moved, turning the stretch into a diagonal drawn across the canvas.
+/// An upright stretch touching neither end moves by which side of the
+/// strip it is on.
+fn shifted(route: &[(f64, f64)], ends: (bool, bool), x: f64) -> Vec<bool> {
+    let last = route.len().saturating_sub(1);
+    let mut shifts = vec![false; route.len()];
+    let mut start = 0;
+    while start < route.len() {
+        // the upright stretch starting here: every point after it at the
+        // same x
+        let mut end = start;
+        while end < last && (route[end + 1].0 - route[start].0).abs() < 0.01 {
+            end += 1;
+        }
+        let decided = match (start == 0, end == last) {
+            // one upright line from box to box: each end keeps to its
+            // own box, there being no bend to make the step at
+            (true, true) if ends.0 != ends.1 => None,
+            (true, _) => Some(ends.0),
+            (_, true) => Some(ends.1),
+            _ => Some(route[start].0 >= x),
+        };
+        for (nth, shift) in shifts.iter_mut().enumerate().take(end + 1).skip(start) {
+            *shift = decided.unwrap_or(if nth == 0 { ends.0 } else { ends.1 });
+        }
+        start = end + 1;
+    }
+    shifts
 }
 
 /// The packages each edge is written in: the innermost one holding both
@@ -575,6 +607,37 @@ mod tests {
         );
         // and the canvas holds the frame it was widened to
         assert!(layout.width >= frame.x + frame.width + style.margin);
+    }
+
+    #[test]
+    fn making_room_for_a_long_package_name_keeps_every_route_square() {
+        // C sits in a package beside the one that is widened, and reaches
+        // past the edge the room is opened at: its end stayed put while
+        // the bend straight above it moved over, and the line ran
+        // diagonally across the canvas from one to the other.
+        let style = Style::default();
+        let ws = resolved(
+            "package Outer {\n\
+             \tpackage First {\n\
+             \t\tpart def A;\n\
+             \t\tpackage InnerWithAnotherQuiteLongPackageNameHere_abcdefghijklmnop \
+             { part def B :> A; }\n\
+             \t}\n\
+             \tpackage Sibling { part def C :> First::A; }\n\
+             }\n",
+        );
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let layout = laid_out(&diagram, &style);
+        assert_eq!(layout.routes.len(), 2);
+        for route in &layout.routes {
+            for leg in route.windows(2) {
+                let ((x1, y1), (x2, y2)) = (leg[0], leg[1]);
+                assert!(
+                    (x1 - x2).abs() < 0.01 || (y1 - y2).abs() < 0.01,
+                    "a slanted leg in {route:?}"
+                );
+            }
+        }
     }
 
     #[test]
