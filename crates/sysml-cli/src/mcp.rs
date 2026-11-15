@@ -26,9 +26,20 @@
 //!   what does it rest on?
 //! - `trace` -- which requirements are satisfied and verified, by what,
 //!   and which are not?
+//! - `export_json` / `import_json` -- the model as the standard's JSON
+//!   interchange, and a document of it read back as the notation
+//! - `api_projects`, `api_branches`, `api_commits`, `api_elements` --
+//!   what a SysML v2 API & Services model server holds, read and never
+//!   written
+//!
+//! Besides the tools, the standard library's files and the project's are
+//! resources a client can list and read, and the workflows the tools are
+//! for -- writing a model from a requirement, reviewing coverage,
+//! renaming, modelling existing code -- are prompts.
 //!
 //! Every tool reads and none writes, and each says so in its annotations,
-//! so a client may run them without asking each time. `rename` too: it
+//! so a client may run them without asking each time; the `api_` ones
+//! say as well that they reach past this machine. `rename` too: it
 //! answers the edits and the client makes them, and `diagram` answers
 //! the SVG for the client to save. An answer comes as
 //! structured content and as the same JSON in text, for clients of either
@@ -93,6 +104,14 @@ traceability matrix -- every requirement, what satisfies and verifies \
 it, and which nothing does -- and `diagram` draws the model as SVG for \
 someone to look at.
 
+The standard's JSON interchange goes both ways: `export_json` writes the \
+model as the document a tool that reads the standard takes, and \
+`import_json` reads one back and answers it as the notation. A model \
+server is read with `api_projects`, `api_branches`, `api_commits` and \
+`api_elements` -- the last can answer a commit as the notation too. The \
+standard library's files are resources, `sysml://library/<path>`, to \
+read when what a library definition says matters more than its name.
+
 Rename with `rename`, not by search and replace: it answers every edit \
 the rename takes, across files and through redefinitions, with the new \
 name quoted where it has to be, and says whether the model still \
@@ -148,6 +167,10 @@ pub struct Server {
     /// unresolved, so `check` says which it is rather than leaving a
     /// client to read a page of false alarms.
     library: Option<String>,
+    /// The directory the library was read from, where it was: what a
+    /// library file's resource name is relative to. The copy built in
+    /// names its files relative already.
+    library_root: Option<std::path::PathBuf>,
     /// The model being worked on, where the launcher named one.
     project: Option<Project>,
     /// The workspaces the last few calls were answered against, newest
@@ -162,6 +185,16 @@ pub struct Server {
     /// removed is a different list, and the walk that reads the project
     /// is redone on every call to find out.
     cache: Vec<Cached>,
+    /// The library with the specializations it implies written in, as
+    /// `sysml export` writes a model over it -- made the first time a
+    /// model is exported, since it is a pass over every element of the
+    /// library and no other tool wants it.
+    exporting: Option<Workspace>,
+    /// Every `@id` the library's elements are published under, and the
+    /// element each names -- for a document that refers into the library
+    /// without carrying it, which is what an export without the library
+    /// is.
+    published: Option<std::collections::HashMap<String, ElementId>>,
 }
 
 /// How many workspaces [`Server::cache`] keeps. Two, so that a client
@@ -263,7 +296,8 @@ impl Server {
         // server that answers `library_search` with nothing at all is
         // worse than useless: it reads as "the library does not declare
         // that", which is a wrong answer rather than a missing one.
-        if loaded.is_none() && fallback {
+        let from_binary = loaded.is_none() && fallback;
+        if from_binary {
             for (name, text) in sysml_stdlib::FILES {
                 base.add_file(*name, text);
             }
@@ -272,12 +306,17 @@ impl Server {
         }
         let mut server = Server {
             base,
+            library_root: library
+                .filter(|_| loaded.is_some() && !from_binary)
+                .map(Path::to_path_buf),
             library: loaded,
             project: project.map(|root| Project {
                 root: root.display().to_string(),
                 files: Vec::new(),
             }),
             cache: Vec::new(),
+            exporting: None,
+            published: None,
         };
         server.refresh();
         server
@@ -342,6 +381,7 @@ impl Server {
 
         // a notification is told, not asked
         let id = id?;
+        let invalid_params = |message: String| (INVALID_PARAMS, message);
         let result = match method {
             "initialize" => Ok(json!({
                 "protocolVersion": params
@@ -349,13 +389,30 @@ impl Server {
                     .and_then(Value::as_str)
                     .filter(|asked| SPOKEN.contains(asked))
                     .unwrap_or(PROTOCOL_VERSION),
-                "capabilities": { "tools": {} },
+                // Every revision this server speaks has resources and
+                // prompts as well as tools -- 2024-11-05 introduced all
+                // three -- so all three are said whichever is spoken.
+                // Neither list changes while the server runs, and nothing
+                // is subscribed to: the project is read again on every
+                // call instead.
+                "capabilities": {
+                    "tools": {},
+                    "resources": {},
+                    "prompts": {},
+                },
                 "serverInfo": { "name": "sysml-mcp", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": INSTRUCTIONS,
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools() })),
-            "tools/call" => self.call(&params),
+            "tools/call" => self.call(&params).map_err(invalid_params),
+            "resources/list" => self.resources(&params).map_err(invalid_params),
+            "resources/templates/list" => {
+                page_of(&params, &resource_templates(), "resourceTemplates").map_err(invalid_params)
+            }
+            "resources/read" => self.resource(&params),
+            "prompts/list" => page_of(&params, &prompts(), "prompts").map_err(invalid_params),
+            "prompts/get" => prompt(&params).map_err(invalid_params),
             _ => {
                 return Some(json!({
                     "jsonrpc": "2.0",
@@ -366,10 +423,10 @@ impl Server {
         };
         Some(match result {
             Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-            Err(message) => json!({
+            Err((code, message)) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": -32602, "message": message },
+                "error": { "code": code, "message": message },
             }),
         })
     }
@@ -407,6 +464,12 @@ impl Server {
             }),
             "impact" => self.impact(&arguments),
             "trace" => self.trace(&arguments),
+            "export_json" => self.export_json(&arguments),
+            "import_json" => self.import_json(&arguments),
+            "api_projects" => api_projects(&arguments),
+            "api_branches" => api_branches(&arguments),
+            "api_commits" => api_commits(&arguments),
+            "api_elements" => self.api_elements(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
         // The answer twice: as structured content, which a client of the
@@ -764,7 +827,7 @@ impl Server {
                 let said = json!({
                     "rule": violation.rule,
                     "says": violation.says,
-                    "element": ws.qualified_name_written(violation.element),
+                    "element": qualified(&ws, violation.element),
                 });
                 // placed where the element is declared, as the command
                 // line places it, wherever that is one of the files opened
@@ -883,11 +946,55 @@ impl Server {
                 .flat_map(|&file| ws.file_roots(file).to_vec())
                 .collect(),
         };
-        let described: Vec<Value> = roots
-            .iter()
-            .map(|&elem| describe(&mut ws, elem, depth, inherited))
-            .collect();
-        Ok(json!({ "elements": described }))
+        // A page of the top-level elements, and of those no more than an
+        // answer a model can read: an outline of a project of a hundred
+        // files was every definition in it, at depth, in one answer that
+        // a client cut off or a model lost the start of.
+        let offset = whole_number(arguments, "offset")?.unwrap_or(0);
+        let limit = whole_number(arguments, "limit")?.unwrap_or(50).max(1);
+        let mut described: Vec<Value> = Vec::new();
+        let mut size = 0;
+        let mut cut = false;
+        for &elem in roots.iter().skip(offset).take(limit) {
+            let one = describe(&mut ws, elem, depth, inherited);
+            let more = serde_json::to_string(&one).map_or(0, |it| it.len());
+            // one element is always answered, however large: a page of
+            // nothing would be asked for again and answer nothing again
+            if !described.is_empty() && size + more > OUTLINED {
+                cut = true;
+                break;
+            }
+            size += more;
+            described.push(one);
+        }
+        let next = offset + described.len();
+        let mut said = json!({
+            "elements": described,
+            "total": roots.len(),
+            "offset": offset,
+        });
+        if next < roots.len() {
+            said["next_offset"] = json!(next);
+            said["truncated"] = json!(true);
+            said["note"] = json!(match cut {
+                true => format!(
+                    "cut at {next} of {} top-level elements to keep the answer under {OUTLINED} \
+                     bytes; ask again with `offset: {next}` for the rest, or narrow it with \
+                     `within` or a lower `depth`",
+                    roots.len()
+                ),
+                false => format!(
+                    "{} more top-level element(s) after these; ask again with `offset: {next}`",
+                    roots.len() - next
+                ),
+            });
+        } else if size > OUTLINED {
+            said["note"] = json!(format!(
+                "this one element outlines to more than {OUTLINED} bytes; `within` one of its \
+                 members, or a lower `depth`, answers less"
+            ));
+        }
+        Ok(said)
     }
 
     /// The Rust a model implies, and what it leaves for a person.
@@ -940,6 +1047,10 @@ impl Server {
             .iter()
             .flat_map(|&file| ws.file_roots(file).to_vec())
             .collect();
+        let offset = whole_number(arguments, "offset")?.unwrap_or(0);
+        let most = whole_number(arguments, "max_bytes")?
+            .unwrap_or(GENERATED)
+            .max(1);
         let generated = sysml_rust::generate(ws.model(), &roots).map_err(|err| err.to_string())?;
         let open: Vec<Value> = generated
             .open
@@ -953,7 +1064,42 @@ impl Server {
                 })
             })
             .collect();
-        Ok(json!({ "rust": generated.rust, "open": open }))
+        // The code a page at a time, cut at the end of a line: a model of
+        // any size generates more than an answer can carry, and a client
+        // that cuts an answer off cuts it mid-token. `open` is the work
+        // list and is answered whole every time.
+        let total = generated.rust.len();
+        if offset > total || !generated.rust.is_char_boundary(offset) {
+            return Err(format!(
+                "`offset` {offset} is not where a page starts: the code is {total} bytes, and \
+                 a page starts at 0 or at the `next_offset` the last one gave"
+            ));
+        }
+        let rest = &generated.rust[offset..];
+        let page = match rest.len() > most {
+            false => rest,
+            true => {
+                let mut end = most;
+                while !rest.is_char_boundary(end) {
+                    end -= 1;
+                }
+                // to the last line that fits, or the cut itself where one
+                // line is longer than a page
+                let end = rest[..end].rfind('\n').map_or(end, |at| at + 1);
+                &rest[..end]
+            }
+        };
+        let mut said = json!({ "rust": page, "open": open, "total_bytes": total });
+        let next = offset + page.len();
+        if next < total {
+            said["truncated"] = json!(true);
+            said["next_offset"] = json!(next);
+            said["note"] = json!(format!(
+                "the code is {total} bytes and this is {offset}..{next}; ask again with \
+                 `offset: {next}` for the next page"
+            ));
+        }
+        Ok(said)
     }
 
     /// An existing Rust API stated as SysML.
@@ -1303,17 +1449,25 @@ impl Server {
             said["shortName"] = json!(short);
         }
         if let Some(ty) = model.type_of(elem) {
-            said["type"] = json!(ws.qualified_name_written(ty));
+            said["type"] = json!(qualified(&ws, ty));
         }
         // An alias is a name for something else, and what it names is
         // what a caller asking about it wants next.
         if let Some(names) = ws.alias_target(elem) {
-            said["alias_for"] = json!(ws.qualified_name_written(names));
+            said["alias_for"] = json!(qualified(&ws, names));
         }
         if let Some(doc) = ws.documentation_of(elem) {
             said["documentation"] = json!(doc);
         }
         said["declared"] = match ws.declared_at(elem) {
+            // the library's files are the first opened, and each is a
+            // resource the client can read whole
+            Some((file, range)) if file < self.base.file_count() => placed(
+                &ws,
+                file,
+                range,
+                json!({ "resource": format!("{LIBRARY_URI}{}", encoded(&self.library_path(file))) }),
+            ),
             Some((file, range)) => placed(&ws, file, range, json!({})),
             // made by the toolchain rather than written: nowhere to go
             None => Value::Null,
@@ -1405,7 +1559,7 @@ impl Server {
         if renaming.declared.0 < self.base.file_count() {
             return Err(format!(
                 "`{}` is declared in the standard library, which is not yours to rename",
-                ws.qualified_name_written(renaming.target)
+                qualified(&ws, renaming.target)
             ));
         }
         let element = qualified(&ws, renaming.target);
@@ -1972,7 +2126,7 @@ impl Server {
             }
             // a usage's definition is where what it demands is said
             if let Some(ty) = model.type_of(elem) {
-                row["definition"] = json!(ws.qualified_name_written(ty));
+                row["definition"] = json!(qualified(&ws, ty));
             }
             if let Some((file, range)) = ws.element_place(elem) {
                 row["at"] = files.place(&ws, file, range.start().into());
@@ -1995,6 +2149,1038 @@ impl Server {
     }
 }
 
+impl Server {
+    /// The model as the standard's JSON, the document `sysml export`
+    /// writes -- answered, not written.
+    ///
+    /// A document is far larger than the model it is of: every element
+    /// carries every property its metaclass declares, derived ones
+    /// derived. So the answer says how large it is first, can be of one
+    /// element and what is under it, leaves the library out unless it is
+    /// asked for, and stops at a size rather than build what no client can
+    /// carry.
+    fn export_json(&mut self, arguments: &Value) -> Result<Value, String> {
+        self.refresh();
+        let whole = match arguments.get("include_library") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(it)) => *it,
+            Some(_) => return Err("`include_library` must be true or false".to_string()),
+        };
+        let most = whole_number(arguments, "max_bytes")?
+            .unwrap_or(EXPORTED)
+            .clamp(1, EXPORTED_AT_MOST);
+        let files = self.composition(arguments)?;
+        if files.files.is_empty() {
+            return Err(
+                "give either `text` or `path`, or start the server with `--project`".to_string(),
+            );
+        }
+        // The library with what it implies already written in, so that
+        // a model over it is exported as `sysml export` exports one: the
+        // implied specializations are part of what the standard
+        // interchanges, and what inheritance is derived from.
+        let mut ws = match &self.exporting {
+            Some(ws) => ws.clone(),
+            None => {
+                let mut ws = self.base.clone();
+                ws.materialize_implied();
+                self.exporting = Some(ws.clone());
+                ws
+            }
+        };
+        let library_files = ws.file_count();
+        let open: Vec<usize> = files
+            .files
+            .iter()
+            .map(|(name, text)| ws.add_file(name.clone(), text))
+            .collect();
+        // What the parser could not follow is missing whole declarations,
+        // so what would be exported is not the model that was written;
+        // `sysml export` refuses it too.
+        let broken: Vec<String> = open
+            .iter()
+            .filter(|&&file| !ws.file_parse(file).ok())
+            .map(|&file| ws.file_name(file).to_string())
+            .collect();
+        if !broken.is_empty() {
+            return Err(format!(
+                "{} does not parse, so the document would be of a guess at it. Ask `check` \
+                 for where.",
+                broken.join(", ")
+            ));
+        }
+        let stats = ws.resolve_files(&open);
+        ws.materialize_implied();
+        let within = match optional_str(arguments, "within")? {
+            Some(wanted) => Some(element_asked(&mut ws, &open, wanted)?),
+            None => None,
+        };
+
+        // What only the resolver knows, gathered as `sysml export`
+        // gathers it.
+        let mut extras = sysml_interchange::Extras::default();
+        let ids: Vec<ElementId> = ws.model().ids().collect();
+        for &id in &ids {
+            let imported = ws.imported_members(id);
+            if !imported.is_empty() {
+                extras.imported.insert(id, imported);
+            }
+            let inheritable = ws.inheritable_imported_members(id);
+            if !inheritable.is_empty() {
+                extras.inheritable_imported.insert(id, inheritable);
+            }
+            if let Some(target) = ws.imported_alias(id).or_else(|| ws.import_of(id)) {
+                extras.import_targets.insert(id, target);
+            }
+        }
+        for file in 0..library_files {
+            for &root in ws.file_roots(file) {
+                extras.library.extend(ws.model().descendants(root));
+            }
+        }
+        if !whole {
+            extras.omitted = extras.library.clone();
+        }
+        // one element and what is under it: everything else is referred
+        // to by the `@id` it always has, as the library is
+        if let Some(root) = within {
+            let kept: HashSet<ElementId> = ws.model().descendants(root).into_iter().collect();
+            extras
+                .omitted
+                .extend(ids.iter().copied().filter(|id| !kept.contains(id)));
+        }
+        let elements = ws.model().len() - extras.omitted.len();
+        let library_written = match whole {
+            true => extras.library.len() - extras.library.intersection(&extras.omitted).count(),
+            false => 0,
+        };
+
+        let mut said = json!({
+            "elements": elements,
+            "library": match whole {
+                true => "included",
+                false => "referred to by @id, not included",
+            },
+            "within": within.map(|root| qualified(&ws, root)),
+        });
+        if whole {
+            said["library_elements"] = json!(library_written);
+        }
+        if stats.unresolved > 0 {
+            said["warnings"] = json!([format!(
+                "{} name(s) resolve to nothing, so what they type or relate is missing from \
+                 the document; `check` says where they are",
+                stats.unresolved
+            )]);
+        }
+        let summary = match arguments.get("summary") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(it)) => *it,
+            Some(_) => return Err("`summary` must be true or false".to_string()),
+        };
+        // Written out to be measured -- the size said is that of the file
+        // `sysml export` writes -- and read back to be answered as data.
+        let mut out = Capped {
+            bytes: Vec::new(),
+            written: 0,
+            most,
+            keep: !summary,
+        };
+        match sysml_interchange::write_json(ws.model(), &extras, &mut out) {
+            Ok(objects) => {
+                said["objects"] = json!(objects);
+                said["bytes"] = json!(out.written);
+                said["truncated"] = json!(false);
+                if !summary {
+                    let document: Value = serde_json::from_slice(&out.bytes)
+                        .map_err(|why| format!("the document written does not read back: {why}"))?;
+                    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+                    for object in document.as_array().into_iter().flatten() {
+                        if let Some(kind) = object["@type"].as_str() {
+                            *counts.entry(kind).or_default() += 1;
+                        }
+                    }
+                    said["counts"] = json!(counts);
+                    said["document"] = document;
+                }
+            }
+            // only the cap fails a write to memory
+            Err(_) => {
+                said["truncated"] = json!(true);
+                said["document"] = Value::Null;
+                said["note"] = json!(format!(
+                    "the document is more than {most} bytes, so it is not answered: narrow it \
+                     with `within`{}, or raise `max_bytes` (at most {EXPORTED_AT_MOST}); \
+                     `sysml export` writes any size to a file",
+                    match whole {
+                        true => ", leave out the library",
+                        false => "",
+                    }
+                ));
+            }
+        }
+        Ok(said)
+    }
+
+    /// A document of the standard's JSON read back, and what it holds
+    /// said as the notation.
+    fn import_json(&mut self, arguments: &Value) -> Result<Value, String> {
+        let bytes: Vec<u8> = match (arguments.get("json"), optional_str(arguments, "path")?) {
+            (Some(Value::String(text)), _) => text.clone().into_bytes(),
+            (Some(given @ Value::Array(_)), _) => {
+                serde_json::to_vec(given).map_err(|why| why.to_string())?
+            }
+            (Some(Value::Null) | None, Some(path)) => std::fs::read(self.located(path))
+                .map_err(|err| format!("cannot read `{path}`: {err}"))?,
+            (Some(Value::Null) | None, None) => {
+                return Err(
+                    "give either `json` -- the document, as text or as the array \
+                     itself -- or `path` to a file holding it"
+                        .to_string(),
+                )
+            }
+            (Some(_), _) => {
+                return Err("`json` must be the document as text, or the array itself".to_string())
+            }
+        };
+        self.imported_document(&bytes)
+    }
+
+    /// What a document holds, as the notation and in counts.
+    fn imported_document(&mut self, bytes: &[u8]) -> Result<Value, String> {
+        let read = self.read_document(bytes)?;
+        let model = &read.model;
+        let written = crate::textual::write(model, &read.roots, &read.outside);
+        let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+        for id in model.ids().filter(|id| !read.outside.contains_key(id)) {
+            *counts.entry(model.kind(id).name()).or_default() += 1;
+        }
+        // The text, checked the way an import of code is: what was written
+        // from the document is a claim about it, and one pass over the
+        // library says whether every name in it resolves.
+        let name = match written.kerml {
+            true => "imported.kerml",
+            false => "imported.sysml",
+        };
+        let mut ws = self.base.clone();
+        let file = ws.add_file(name, &written.sysml);
+        ws.resolve_files(&[file]);
+        let found = ws.findings(&[file]);
+        let place = |finding: &sysml_semantics::Finding, extra: Value| {
+            crate::at(&written.sysml, finding.range, extra)
+        };
+        let parse_errors: Vec<Value> = found
+            .syntax
+            .iter()
+            .map(|f| place(f, json!({ "message": f.what })))
+            .collect();
+        let unresolved: Vec<Value> = found
+            .names
+            .iter()
+            .map(|f| place(f, json!({ "name": f.what })))
+            .collect();
+        let library = &read.library;
+        let unwritten: Vec<Value> = written
+            .unwritten
+            .iter()
+            .map(|(kind, within)| json!({ "kind": kind, "in": within }))
+            .collect();
+        Ok(json!({
+            "objects": read.objects,
+            "elements": counts.values().sum::<usize>(),
+            "counts": counts,
+            "library_references": library.len(),
+            "library": library.iter().take(50).collect::<Vec<_>>(),
+            "dialect": if written.kerml { "kerml" } else { "sysml" },
+            "sysml": written.sysml,
+            "unwritten": unwritten,
+            "checked": {
+                "ok": parse_errors.is_empty() && unresolved.is_empty(),
+                "parseErrors": parse_errors,
+                "unresolved": unresolved,
+            },
+        }))
+    }
+
+    /// A document read into a model, with what it refers to in the
+    /// library and does not carry stood in for.
+    ///
+    /// A document `export_json` writes without the library names every
+    /// library element its model specializes, and every definition
+    /// specializes one; a page of a model server's elements names its
+    /// neighbours the same way. Read as it stands, either is refused as
+    /// naming what it does not carry. The library this server holds
+    /// computes the same `@id`s, so each one it knows is read as an
+    /// element standing for that library element -- named where it is
+    /// used, declared nowhere -- and only an `@id` nothing answers to is
+    /// refused.
+    fn read_document(&mut self, bytes: &[u8]) -> Result<Document, String> {
+        use sysml_interchange::ImportError;
+        let refused = |why: ImportError| match why {
+            ImportError::UnknownReference(id) => format!(
+                "the document names element {id} and does not carry it, and the standard \
+                 library this server holds declares nothing under that @id either: it is part \
+                 of a model rather than one whole. `export_json` with `include_library`, or \
+                 `sysml export --include-library`, writes a document that stands on its own"
+            ),
+            why => format!("the document cannot be read: {why}"),
+        };
+        match sysml_interchange::read_json(bytes) {
+            Ok((model, roots, objects)) => {
+                return Ok(Document {
+                    model,
+                    roots,
+                    objects,
+                    outside: Default::default(),
+                    library: Vec::new(),
+                })
+            }
+            Err(ImportError::UnknownReference(_)) => {}
+            Err(why) => return Err(refused(why)),
+        }
+        let mut document: Vec<Value> = serde_json::from_slice(bytes)
+            .map_err(|why| refused(ImportError::NotJson(why.to_string())))?;
+        let objects = document.len();
+        let declared: HashSet<String> = document
+            .iter()
+            .filter_map(|object| object["@id"].as_str().map(str::to_string))
+            .collect();
+        // The references a reader resolves: what each element says it
+        // owns, and the properties its metaclass stores. A derived one is
+        // not read back, and the library's are in every list of inherited
+        // members by the hundred.
+        let mut wanted: Vec<String> = Vec::new();
+        // and of those, the ones the model names rather than owns: the
+        // namespace a workspace hangs its files off owns the library's
+        // top level, and says so in every document
+        let mut named: HashSet<String> = HashSet::new();
+        for object in &document {
+            let kind = object["@type"]
+                .as_str()
+                .and_then(sysml_model::ElementKind::from_name);
+            for (key, value) in object.as_object().into_iter().flatten() {
+                let owns = matches!(
+                    key.as_str(),
+                    "ownedElement" | "ownedRelatedElement" | "ownedRelationship"
+                );
+                let read = owns
+                    || kind
+                        .and_then(|kind| kind.feature(key))
+                        .is_some_and(|meta| !meta.derived);
+                if !read {
+                    continue;
+                }
+                let referred = match value {
+                    Value::Array(all) => all.iter().collect(),
+                    one => vec![one],
+                };
+                for id in referred.iter().filter_map(|it| it["@id"].as_str()) {
+                    if !declared.contains(id) {
+                        wanted.push(id.to_string());
+                        if !owns {
+                            named.insert(id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let published = self.published();
+        let mut outside: std::collections::HashMap<String, ElementId> = Default::default();
+        let base = self.base.model();
+        let stand_in = |document: &mut Vec<Value>,
+                        outside: &mut std::collections::HashMap<String, ElementId>,
+                        id: &str|
+         -> bool {
+            if outside.contains_key(id) {
+                return true;
+            }
+            let Some(&elem) = published.get(id) else {
+                return false;
+            };
+            document.push(json!({
+                "@type": base.kind(elem).name(),
+                "@id": id,
+                "declaredName": id,
+            }));
+            outside.insert(id.to_string(), elem);
+            true
+        };
+        for id in &wanted {
+            stand_in(&mut document, &mut outside, id);
+        }
+        // and whatever the reader turns out to resolve besides, one at a
+        // time: the handful of derived properties it does read back
+        let (model, roots) = loop {
+            match sysml_interchange::from_json(&Value::Array(document.clone())) {
+                Ok(read) => break read,
+                Err(ImportError::UnknownReference(id))
+                    if outside.len() < STOOD_IN && stand_in(&mut document, &mut outside, &id) =>
+                {
+                    named.insert(id);
+                }
+                Err(why) => return Err(refused(why)),
+            }
+        };
+        let mut library: Vec<String> = Vec::new();
+        let outside: std::collections::HashMap<ElementId, String> = model
+            .ids()
+            .filter_map(|id| {
+                let uuid = model.name(id)?;
+                let name = qualified(&self.base, *outside.get(uuid)?);
+                if named.contains(uuid) {
+                    library.push(name.clone());
+                }
+                Some((id, name))
+            })
+            .collect();
+        library.sort();
+        library.dedup();
+        Ok(Document {
+            library,
+            roots: roots
+                .into_iter()
+                .filter(|root| !outside.contains_key(root))
+                .collect(),
+            model,
+            objects,
+            outside,
+        })
+    }
+
+    /// Every `@id` the library publishes, and what it names: an element,
+    /// or the membership that owns one, which a reference to stands for
+    /// the element it owns.
+    fn published(&mut self) -> std::collections::HashMap<String, ElementId> {
+        if let Some(published) = &self.published {
+            return published.clone();
+        }
+        let (uuids, bridges) = sysml_interchange::published_uuids(
+            self.base.model(),
+            &sysml_interchange::Extras::default(),
+        );
+        let published: std::collections::HashMap<String, ElementId> = bridges
+            .into_iter()
+            .chain(uuids)
+            .map(|(elem, uuid)| (uuid.to_string(), elem))
+            .collect();
+        self.published = Some(published.clone());
+        published
+    }
+}
+
+impl Server {
+    /// The elements of one commit on a model server, a page at a time --
+    /// or one of them -- and, where asked, what they hold as the notation.
+    fn api_elements(&mut self, arguments: &Value) -> Result<Value, String> {
+        let project = required_str(arguments, "project", "the id of the project")?;
+        let commit = required_str(arguments, "commit", "the id of the commit")?;
+        let (server, client) = api_client(arguments)?;
+        let said = |err: crate::api::Error| refused_by(&server, &err);
+        if let Some(element) = optional_str(arguments, "element")? {
+            let found = client.element(project, commit, element).map_err(said)?;
+            return Ok(json!({ "server": crate::api::redacted(&server), "element": found }));
+        }
+        let all = client.elements(project, commit).map_err(said)?;
+        let offset = whole_number(arguments, "offset")?.unwrap_or(0);
+        let limit = whole_number(arguments, "limit")?
+            .unwrap_or(100)
+            .clamp(1, 1000);
+        let page: Vec<Value> = all.iter().skip(offset).take(limit).cloned().collect();
+        let next = offset + page.len();
+        let mut answer = json!({
+            "server": crate::api::redacted(&server),
+            "total": all.len(),
+            "offset": offset,
+            "elements": page,
+        });
+        if next < all.len() {
+            answer["next_offset"] = json!(next);
+        }
+        let sysml = match arguments.get("sysml") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(it)) => *it,
+            Some(_) => return Err("`sysml` must be true or false".to_string()),
+        };
+        // the whole commit, not the page: a page names its neighbours and
+        // does not carry them
+        if sysml {
+            let bytes = serde_json::to_vec(&all).map_err(|why| why.to_string())?;
+            answer["model"] = self.imported_document(&bytes)?;
+        }
+        Ok(answer)
+    }
+}
+
+/// The model server a call asks, and a client for it: the `server` the
+/// call names, or `SYSML_API_URL`, or the one `sysml api` asks when told
+/// nothing.
+///
+/// What a call is told about a server never carries the user and
+/// password its URL may hold -- an answer is read by a model and logged
+/// by a client -- and a request goes to that server alone: `api.rs` does
+/// not follow a page onto another one.
+fn api_client(arguments: &Value) -> Result<(String, crate::api::Client), String> {
+    let server = match optional_str(arguments, "server")? {
+        Some(server) => server.to_string(),
+        None => std::env::var("SYSML_API_URL").unwrap_or_else(|_| API_DEFAULT.to_string()),
+    };
+    if !(server.starts_with("http://") || server.starts_with("https://")) {
+        return Err(format!(
+            "`{}` is not the URL of a model server: it starts `http://` or `https://`",
+            crate::api::redacted(&server)
+        ));
+    }
+    let timeout = whole_number(arguments, "timeout")?
+        .unwrap_or(30)
+        .clamp(1, 300);
+    let client = crate::api::Client::new(&server, std::time::Duration::from_secs(timeout as u64));
+    Ok((server, client))
+}
+
+/// What `sysml api` asks when it is told no server.
+const API_DEFAULT: &str = "http://localhost:9000";
+
+/// A model server's refusal, said as `sysml api` says one: which server,
+/// without its secret, and what went wrong.
+fn refused_by(server: &str, err: &crate::api::Error) -> String {
+    format!("{}: {err}", crate::api::redacted(server))
+}
+
+/// The projects a model server holds.
+fn api_projects(arguments: &Value) -> Result<Value, String> {
+    let (server, client) = api_client(arguments)?;
+    let projects = client.projects().map_err(|err| refused_by(&server, &err))?;
+    Ok(json!({
+        "server": crate::api::redacted(&server),
+        "total": projects.len(),
+        "projects": projects,
+    }))
+}
+
+/// The branches of one project, each with the commit it is at.
+fn api_branches(arguments: &Value) -> Result<Value, String> {
+    let project = required_str(arguments, "project", "the id of the project")?;
+    let (server, client) = api_client(arguments)?;
+    let branches = client
+        .branches(project)
+        .map_err(|err| refused_by(&server, &err))?;
+    Ok(json!({
+        "server": crate::api::redacted(&server),
+        "project": project,
+        "branches": branches,
+    }))
+}
+
+/// The commits of one project, in the order the server keeps them.
+fn api_commits(arguments: &Value) -> Result<Value, String> {
+    let project = required_str(arguments, "project", "the id of the project")?;
+    let (server, client) = api_client(arguments)?;
+    let commits = client
+        .commits(project)
+        .map_err(|err| refused_by(&server, &err))?;
+    Ok(json!({
+        "server": crate::api::redacted(&server),
+        "project": project,
+        "total": commits.len(),
+        "commits": commits,
+    }))
+}
+
+/// A string a call has to give.
+fn required_str<'a>(arguments: &'a Value, key: &str, what: &str) -> Result<&'a str, String> {
+    optional_str(arguments, key)?.ok_or_else(|| format!("`{key}` is {what}"))
+}
+
+impl Server {
+    /// Every file this server can show a client, project first: those are
+    /// what the client is working on, and the library is what it reads
+    /// to find out what is there to use.
+    ///
+    /// A project's file is named by its `file://` URI, since it is a file
+    /// -- the one a client opens, and whose path it hands back to a tool
+    /// as `path` -- and only the files of the project are served under
+    /// one: the URI names what to look up, never something to read off
+    /// the disk. A library file is `sysml://library/<path>`, its path in
+    /// the release, whether the library was read from a directory or is
+    /// the copy built into this binary, which has no file to name.
+    fn listed(&mut self) -> Vec<Listed> {
+        self.refresh();
+        let mut listed = Vec::new();
+        for (path, text) in self.project.iter().flat_map(|it| &it.files) {
+            let Ok(uri) = url::Url::from_file_path(path) else {
+                continue;
+            };
+            let root = self.project.as_ref().map(|it| Path::new(&it.root));
+            let name = root
+                .and_then(|root| {
+                    let root = std::fs::canonicalize(root).ok()?;
+                    Path::new(path)
+                        .strip_prefix(root)
+                        .ok()
+                        .map(Path::to_path_buf)
+                })
+                .map_or(path.clone(), |rel| rel.to_string_lossy().replace('\\', "/"));
+            listed.push(Listed {
+                uri: uri.to_string(),
+                declared: top_level_names(&name, text),
+                name,
+                text: text.clone(),
+                library: false,
+            });
+        }
+        for file in 0..self.base.file_count() {
+            let name = self.library_path(file);
+            // parsed already, and its top level named
+            let model = self.base.model();
+            let mut declared: Vec<String> = self
+                .base
+                .file_roots(file)
+                .iter()
+                .filter_map(|&root| model.name(root).map(str::to_string))
+                .collect();
+            declared.truncate(8);
+            listed.push(Listed {
+                uri: format!("{LIBRARY_URI}{}", encoded(&name)),
+                name,
+                text: self.base.file_parse(file).syntax().text().to_string(),
+                declared,
+                library: true,
+            });
+        }
+        listed
+    }
+
+    /// A library file's path in the release, which is what its resource
+    /// is named by.
+    fn library_path(&self, file: usize) -> String {
+        let written = self.base.file_name(file);
+        self.library_root
+            .as_ref()
+            .and_then(|root| Path::new(written).strip_prefix(root).ok())
+            .map_or(written.to_string(), |rel| {
+                rel.to_string_lossy().replace('\\', "/")
+            })
+    }
+
+    /// `resources/list`: a page of what [`Server::listed`] lists.
+    fn resources(&mut self, params: &Value) -> Result<Value, String> {
+        let described: Vec<Value> = self
+            .listed()
+            .into_iter()
+            .map(|it| {
+                let declared = &it.declared;
+                let whose = match it.library {
+                    true => "Standard library file",
+                    false => "Project file",
+                };
+                let mut said = json!({
+                    "uri": it.uri,
+                    "name": it.name,
+                    "title": it.name.rsplit('/').next().unwrap_or(&it.name),
+                    "mimeType": mime_type(&it.name),
+                    "size": it.text.len(),
+                    "description": match declared.is_empty() {
+                        true => whose.to_string(),
+                        false => format!("{whose}; declares {}", declared.join(", ")),
+                    },
+                });
+                if it.library {
+                    said["annotations"] = json!({ "audience": ["assistant"], "priority": 0.3 });
+                }
+                said
+            })
+            .collect();
+        page_of(params, &described, "resources")
+    }
+
+    /// `resources/read`: one file, by the URI it was listed under.
+    fn resource(&mut self, params: &Value) -> Result<Value, (i64, String)> {
+        let uri = params.get("uri").and_then(Value::as_str).ok_or((
+            INVALID_PARAMS,
+            "`uri` names the resource to read".to_string(),
+        ))?;
+        // the URI as it was listed, or spelled any other way that names
+        // the same file: `sysml://library/Kernel Libraries/...` unencoded
+        let wanted = match uri.strip_prefix(LIBRARY_URI) {
+            Some(path) => Wanted::Library(decoded(path)),
+            None => match url::Url::parse(uri)
+                .ok()
+                .and_then(|it| it.to_file_path().ok())
+            {
+                Some(path) => Wanted::File(canonical(&path.to_string_lossy())),
+                None => Wanted::Nothing,
+            },
+        };
+        let found = self.listed().into_iter().find(|it| match &wanted {
+            Wanted::Library(name) => it.library && it.name == *name,
+            Wanted::File(path) => {
+                !it.library
+                    && url::Url::parse(&it.uri)
+                        .ok()
+                        .and_then(|listed| listed.to_file_path().ok())
+                        .is_some_and(|listed| listed.to_string_lossy() == path.as_str())
+            }
+            Wanted::Nothing => false,
+        });
+        let Some(found) = found else {
+            return Err((
+                RESOURCE_NOT_FOUND,
+                format!(
+                    "no resource `{uri}`: `resources/list` lists the project's files and the \
+                     standard library's, and the library's are `{LIBRARY_URI}<path>`"
+                ),
+            ));
+        };
+        Ok(json!({
+            "contents": [{
+                "uri": found.uri,
+                "mimeType": mime_type(&found.name),
+                "text": found.text,
+            }],
+        }))
+    }
+}
+
+/// One file a client may read as a resource.
+struct Listed {
+    uri: String,
+    /// Its path, relative to the project or the library.
+    name: String,
+    text: String,
+    /// What it declares at its top level, which is how a client picks
+    /// the one it wants out of ninety-four.
+    declared: Vec<String>,
+    library: bool,
+}
+
+/// What a `resources/read` asks for.
+enum Wanted {
+    Library(String),
+    File(String),
+    Nothing,
+}
+
+/// Where the standard library's files are named from.
+const LIBRARY_URI: &str = "sysml://library/";
+
+/// JSON-RPC's code for parameters a method cannot take.
+const INVALID_PARAMS: i64 = -32602;
+
+/// The code MCP gives a resource that is not there.
+const RESOURCE_NOT_FOUND: i64 = -32002;
+
+/// How many of anything one page of a list holds.
+const PAGE: usize = 50;
+
+/// The type a model file is served as.
+///
+/// SysML v2 has no registered media type. `text/plain` says only that it
+/// is text; the two below say that too -- a client that knows neither
+/// still reads a `text/` type as text -- and also which notation it is,
+/// which matters: a keyword in one is a name in the other. `x-` is what a
+/// type nobody registered is written as.
+fn mime_type(name: &str) -> &'static str {
+    match name.ends_with(".kerml") {
+        true => "text/x-kerml",
+        false => "text/x-sysml",
+    }
+}
+
+/// The names a file declares at its top level, read off the text alone:
+/// a description, not an answer anything resolves.
+fn top_level_names(name: &str, text: &str) -> Vec<String> {
+    let parse = sysml_syntax::parse_dialect(text, sysml_syntax::Dialect::from_path(name));
+    let (model, roots) = sysml_model::build_model(&parse);
+    let mut names: Vec<String> = roots
+        .iter()
+        .flat_map(|&root| {
+            // a file's roots are what it declares, or the namespace it
+            // hangs them off
+            match model.name(root) {
+                Some(name) => vec![name.to_string()],
+                None => model
+                    .owned(root)
+                    .iter()
+                    .filter_map(|&it| model.name(it).map(str::to_string))
+                    .collect(),
+            }
+        })
+        .collect();
+    names.truncate(8);
+    names
+}
+
+/// A library file's path as one URI path: every byte but the unreserved
+/// ones and `/` percent-encoded, so `Kernel Libraries` is
+/// `Kernel%20Libraries`.
+fn encoded(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+/// [`encoded`], undone -- and a path that was never encoded left as it is.
+fn decoded(path: &str) -> String {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (bytes[at], hex) {
+            (b'%', Some(byte)) => {
+                out.push(byte);
+                at += 3;
+            }
+            (byte, _) => {
+                out.push(byte);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// One page of `all`, under `key`, from where the request's `cursor`
+/// says -- with the cursor of the next page where there is one.
+///
+/// A cursor is opaque to the client, and here it is only where the next
+/// page starts; one this server did not hand out is refused rather than
+/// read as the start, which would answer the first page again as though
+/// it were the next.
+fn page_of(params: &Value, all: &[Value], key: &str) -> Result<Value, String> {
+    let from =
+        match params.get("cursor") {
+            None | Some(Value::Null) => 0,
+            Some(Value::String(cursor)) => cursor
+                .parse::<usize>()
+                .ok()
+                .filter(|&at| at <= all.len())
+                .ok_or_else(|| format!("`{cursor}` is not a cursor this server handed out"))?,
+            Some(_) => return Err("`cursor` is the string a page before gave".to_string()),
+        };
+    let page: Vec<Value> = all.iter().skip(from).take(PAGE).cloned().collect();
+    let next = from + page.len();
+    let mut said = json!({ key: page });
+    if next < all.len() {
+        said["nextCursor"] = json!(next.to_string());
+    }
+    Ok(said)
+}
+
+/// The resources a client can name without listing them first.
+fn resource_templates() -> Vec<Value> {
+    vec![json!({
+        "uriTemplate": format!("{LIBRARY_URI}{{+path}}"),
+        "name": "library-file",
+        "title": "Standard library file",
+        "description": "A file of the SysML v2 / KerML standard library, by its path in the release: `Kernel Libraries/Kernel Semantic Library/Base.kerml`, `Domain Libraries/Quantities and Units/ISQBase.sysml`. What the library declares is the source of truth for every name a model uses from it; `definition` of a library name says which file declares it, as `declared.resource`.",
+        "mimeType": "text/x-sysml",
+    })]
+}
+
+/// The workflows this server is built for, each as the steps to take and
+/// the tools to take them with.
+///
+/// A prompt is text the client hands its model when the user picks it,
+/// so it says which tool to call when and what to read in the answer --
+/// and names only tools that exist, which a test holds it to.
+fn prompts() -> Vec<Value> {
+    PROMPTS
+        .iter()
+        .map(|it| {
+            let arguments: Vec<Value> = it
+                .arguments
+                .iter()
+                .map(|(name, description, required)| {
+                    json!({ "name": name, "description": description, "required": required })
+                })
+                .collect();
+            json!({
+                "name": it.name,
+                "title": it.title,
+                "description": it.description,
+                "arguments": arguments,
+            })
+        })
+        .collect()
+}
+
+/// `prompts/get`: one prompt, its arguments filled in.
+fn prompt(params: &Value) -> Result<Value, String> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`name` names the prompt".to_string())?;
+    let Some(found) = PROMPTS.iter().find(|it| it.name == name) else {
+        return Err(format!(
+            "no prompt `{name}`: there are {}",
+            PROMPTS
+                .iter()
+                .map(|it| format!("`{}`", it.name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    let given = params.get("arguments").cloned().unwrap_or(json!({}));
+    let mut text = found.text.to_string();
+    for (argument, _, required) in found.arguments {
+        let value = match given.get(argument) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(it)) if !it.trim().is_empty() => Some(it.as_str()),
+            Some(Value::String(_)) => None,
+            Some(_) => return Err(format!("`{argument}` must be a string")),
+        };
+        if *required && value.is_none() {
+            return Err(format!("the prompt `{name}` needs `{argument}`"));
+        }
+        // an argument left out is said as what it stands for, not as a
+        // hole in the sentence
+        let said = value.map_or_else(|| (found.unset)(argument).to_string(), |it| it.to_string());
+        text = text.replace(&format!("{{{argument}}}"), &said);
+    }
+    Ok(json!({
+        "description": found.description,
+        "messages": [{
+            "role": "user",
+            "content": { "type": "text", "text": text },
+        }],
+    }))
+}
+
+/// One prompt: what it is called and for, what it takes -- each argument
+/// a name, what it is, and whether it has to be given -- and the text,
+/// with `{argument}` where each goes.
+struct Prompt {
+    name: &'static str,
+    title: &'static str,
+    description: &'static str,
+    arguments: &'static [(&'static str, &'static str, bool)],
+    /// What an optional argument left out reads as in the text.
+    unset: fn(&str) -> &'static str,
+    text: &'static str,
+}
+
+const PROMPTS: [Prompt; 4] = [
+    Prompt {
+        name: "write_model",
+        title: "Write a model from a requirement",
+        description: "Write a SysML v2 model for a requirement or a description in prose, with every construct taken from `notation`, every library name found with `library_search`, and `check` run until it answers `ok`.",
+        arguments: &[
+            ("requirement", "What the model is to say: the requirement or description, in prose", true),
+            ("package", "The package to write it in", false),
+            ("path", "Where the file will be written, so `check` reads it as that file of the project", false),
+        ],
+        unset: |argument| match argument {
+            "package" => "a package named for what the requirement is about",
+            _ => "a new `.sysml` file of your choosing",
+        },
+        text: "Write a SysML v2 model of this:\n\n{requirement}\n\nPut it in {package}, in {path}. SysML v2 is newer than what you were trained on, so take nothing from memory; this server answers from the language's own standard library.\n\n1. Call `notation` with no arguments for the list of constructs and when each is wanted, then `notation` with `of` for each one you will write (`requirement`, `part`, `attribute`, `satisfy`, ...). Copy the shape of the examples it answers.\n2. For every quantity, unit, port or type the text needs, call `library_search` with its name or with words for it (`in: documentation` where the name is not obvious), and use the qualified name the library gives. Call it with `scope: model` too, so that what the project already declares is used rather than declared again.\n3. Write the model. Call `check` with it as `text` (and `name` set to the file it will be written as). For each `unresolved` finding: `declared_as` means the name is right and an import is missing; `did_you_mean` means the name is wrong. Fix every one, and every `rules.violations` entry, and call `check` again. Repeat until it answers `ok: true` with `rules.asked: true`.\n4. Call `format` on the text and keep what it answers.\n5. Call `trace` on it and say which requirements are satisfied and verified, and which are not.\n\nDo not say the model is finished until `check` answers `ok: true`.",
+    },
+    Prompt {
+        name: "review_requirements",
+        title: "Review requirement coverage",
+        description: "Review which requirements are satisfied and verified, by what, which are not, and what a change to each would reach -- with `trace`, `find` and `impact`, citing where each link is written.",
+        arguments: &[(
+            "within",
+            "A package or element to review, by qualified or short name (default: the whole model)",
+            false,
+        )],
+        unset: |_| "the whole model",
+        text: "Review the requirements of {within} for coverage. Answer from the tools, not from reading files: what links a requirement to what is not written where the requirement is.\n\n1. Call `trace` (with `within` where a package or element was named) for the matrix: every requirement, what satisfies it and what verifies it, and the `unsatisfied` and `unverified` lists.\n2. Call `find` with `kind: Requirement` and `without: satisfies`, and again with `without: verifies`, to cross-check those lists, and read each requirement's `documentation` for what it demands.\n3. For each requirement nothing satisfies or verifies, call `relations` on it to see what it is linked to at all.\n4. For each requirement that is covered, call `impact` on it with `direction: affected` to see what a change to it would reach -- the parts that satisfy it and the cases that verify it -- and say where the chain runs through something unexpected.\n\nReport a table of requirement, satisfied by, verified by, and gap, citing the `path:line` each answer gives, then the gaps in order of what they leave open.",
+    },
+    Prompt {
+        name: "rename_safely",
+        title: "Rename an element everywhere",
+        description: "Rename an element across every file and through every redefinition with `rename`, apply the edits it answers, and `check` that the model still resolves.",
+        arguments: &[
+            ("element", "The element to rename, by qualified or short name", true),
+            ("new_name", "What to rename it to", true),
+        ],
+        unset: |_| "",
+        text: "Rename `{element}` to `{new_name}` in the model, without search and replace: that renames whatever shares the spelling and misses what reaches the element through inheritance.\n\n1. Call `references` with `element: {element}` to see every place it is named, and `impact` on it if the rename is part of a larger change.\n2. Call `rename` with `element: {element}` and `new_name: {new_name}`. If it refuses, report why and stop. Read `checked`: if `ok` is false, `introduced` lists the names the rename would leave dangling -- report those and stop rather than apply it.\n3. Apply the edits it answers, file by file under `files`: each range is in the file as it is now, so apply them last first. `rename` writes nothing itself.\n4. Call `check` with no source, for the whole project, and confirm it answers as it did before the rename.\n\nReport how many edits in how many files were made.",
+    },
+    Prompt {
+        name: "model_from_code",
+        title: "Model existing code",
+        description: "State existing code as a SysML package bound to it -- a Rust crate through `import_rust`, any other language through a surface and `import_code` -- and `check` what comes back.",
+        arguments: &[
+            ("source", "The code to model: a crate, a directory or a file", true),
+            ("language", "The language it is written in (default: Rust)", false),
+            ("package", "What to call the package written", false),
+        ],
+        unset: |argument| match argument {
+            "language" => "Rust",
+            _ => "the name the code gives itself",
+        },
+        text: "State the code at {source}, written in {language}, as a SysML package named {package}, so that a model can type its ports and perform its actions against what already exists rather than a parallel invention.\n\n1. For Rust: run `cargo +nightly rustdoc -- -Zunstable-options --output-format json` on the crate (this server does not run cargo), then call `import_rust` with `rustdoc` set to the JSON file it writes and `package` set if one was asked for.\n   For any other language: read the code and write a surface -- its records, enumerations, interfaces and functions, each with the name and path the code gives it -- in the shape the `import_code` input schema states, then call `import_code` with it as `surface`.\n2. Read `skipped`: it names what had no SysML shape, which is left to model by hand. Read `checked`: `ok: false` lists names that do not resolve.\n3. Call `check` with the `sysml` it answered as `text` and fix anything it reports; then call `outline` on it to confirm the shape is what the code is.\n4. Write the package to a `.sysml` file of the project.\n\nReport what was modelled, what was skipped and why.",
+    },
+];
+
+/// A document read back.
+struct Document {
+    model: sysml_model::Model,
+    /// What nothing in it owns, short of what stands in for the library.
+    roots: Vec<ElementId>,
+    /// How many objects the document held.
+    objects: usize,
+    /// The elements that stand for library elements it names and does not
+    /// carry, each with the library's name for it.
+    outside: std::collections::HashMap<ElementId, String>,
+    /// The library's names for those the model refers to, rather than
+    /// only owns through the namespace at the top of the document.
+    library: Vec<String>,
+}
+
+/// How many library elements a document may name without carrying before
+/// it is read as the model server's business rather than this one's.
+const STOOD_IN: usize = 10_000;
+
+/// How large a document `export_json` answers by default, as `sysml
+/// export` writes it. Every element carries every property its metaclass
+/// declares, and a namespace every membership its imports bring in:
+/// sixteen lines that import `ISQ::*` are a document of a megabyte.
+const EXPORTED: usize = 4_000_000;
+
+/// And at most, whatever is asked: the standard library alone is 754 MB.
+const EXPORTED_AT_MOST: usize = 64_000_000;
+
+/// A writer into memory that refuses to grow past `most`, so that a
+/// document too large to answer is found out without being built.
+struct Capped {
+    bytes: Vec<u8>,
+    /// how much has been written, kept or not
+    written: usize,
+    most: usize,
+    /// whether what is written is kept, or only counted
+    keep: bool,
+}
+
+impl Write for Capped {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() > self.most {
+            return Err(std::io::Error::other("past the size asked for"));
+        }
+        self.written += buf.len();
+        if self.keep {
+            self.bytes.extend_from_slice(buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// The relations whose source says something of its target that holds
 /// only while the source is as it was: what a change to the source makes
 /// someone check again of the target. A change to a part is a change to
@@ -2006,6 +3192,13 @@ const CLAIMS: [&str; 5] = [
     "allocated_to",
     "connected_to",
 ];
+
+/// How many bytes of outline one answer carries, short of the one
+/// element it always carries.
+const OUTLINED: usize = 200_000;
+
+/// How many bytes of code `generate_rust` answers at a time by default.
+const GENERATED: usize = 100_000;
 
 /// How many elements `impact` lists at most. A link to something every
 /// part uses reaches most of a large model, and an answer that size is
@@ -2335,6 +3528,12 @@ fn summary(ws: &Workspace, files: &mut Texts, elem: ElementId) -> Value {
 
 /// The owner path by effective names, so `part :>> engine;` reads as the
 /// `engine` it is rather than `?`.
+///
+/// Every element an answer names is named by this. Some were named by
+/// `Workspace::qualified_name_written`, which reads declared names only,
+/// and a violation on a redefinition -- or the outline of anything inside
+/// one -- came back as `Car::Truck::'?'::'?'`: a name that cannot be
+/// handed back to any tool, for an element that has a perfectly good one.
 fn qualified(ws: &Workspace, elem: ElementId) -> String {
     let model = ws.model();
     let mut segments = Vec::new();
@@ -2456,11 +3655,11 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
             // wants was the thing labelled uselessly. What it names is what it is.
             let names = ws.alias_target(elem).unwrap_or(elem);
             let mut entry = json!({
-                "name": ws.qualified_name_written(elem),
+                "name": qualified(ws, elem),
                 "kind": ws.model().kind(names).name(),
             });
             if names != elem {
-                entry["alias_for"] = json!(ws.qualified_name_written(names));
+                entry["alias_for"] = json!(qualified(ws, names));
             }
             if let Some(doc) = ws.documentation_of(names) {
                 entry["documentation"] = json!(doc);
@@ -2475,11 +3674,11 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
 fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) -> Value {
     let model = ws.model();
     let mut entry = json!({
-        "name": ws.qualified_name_written(elem),
+        "name": qualified(ws, elem),
         "kind": model.kind(elem).name(),
     });
     if let Some(ty) = model.type_of(elem) {
-        entry["type"] = json!(ws.qualified_name_written(ty));
+        entry["type"] = json!(qualified(ws, ty));
     }
     if let Some(direction) = ws.model().direction(elem) {
         entry["direction"] = json!(direction);
@@ -2501,7 +3700,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
     if !supertypes.is_empty() {
         entry["specializes"] = json!(supertypes
             .iter()
-            .map(|&up| ws.qualified_name_written(up))
+            .map(|&up| qualified(ws, up))
             .collect::<Vec<_>>());
     }
     // depth 0 asked for the element and nothing inside it, and used to
@@ -2517,9 +3716,12 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
             members.extend(ws.model().owned(up).iter().copied());
         }
     }
+    // By the name each answers to rather than the one it declares: `part
+    // :>> wheels[6];` is the `wheels` a subtype narrows, and leaving it out
+    // left out the one thing the subtype says about it.
     let named: Vec<ElementId> = members
         .into_iter()
-        .filter(|&child| ws.model().name(child).is_some())
+        .filter(|&child| ws.model().effective_name(child).is_some())
         .collect();
     let mut inside = Vec::new();
     for child in named {
@@ -2527,7 +3729,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
             describe(ws, child, depth - 1, false)
         } else {
             json!({
-                "name": ws.qualified_name_written(child),
+                "name": qualified(ws, child),
                 "kind": ws.model().kind(child).name(),
             })
         });
@@ -2572,6 +3774,18 @@ fn canonical(path: &str) -> String {
     std::fs::canonicalize(path)
         .map(|full| full.display().to_string())
         .unwrap_or_else(|_| path.to_string())
+}
+
+/// A count a call may give, refused where it is given as anything but a
+/// whole number rather than read as not given.
+fn whole_number(arguments: &Value, key: &str) -> Result<Option<usize>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(given) => given
+            .as_u64()
+            .map(|it| Some(it as usize))
+            .ok_or_else(|| format!("`{key}` must be a whole number, 0 or more")),
+    }
 }
 
 fn number(arguments: &Value, key: &str) -> Result<usize, String> {
@@ -2681,7 +3895,7 @@ fn tools() -> Value {
         },
         {
             "name": "outline",
-            "description": "The shape a model has once it is resolved: every definition, what it specializes, and the features inside it. `within` names one element to describe instead of the whole model, and may name one of the standard library's, so a type can be looked at before it is used. Ask this rather than re-reading a model file -- what a definition inherits is not written in the text, and neither is what a library name turns out to be.",
+            "description": "The shape a model has once it is resolved: every definition, what it specializes, and the features inside it. `within` names one element to describe instead of the whole model, and may name one of the standard library's, so a type can be looked at before it is used. Ask this rather than re-reading a model file -- what a definition inherits is not written in the text, and neither is what a library name turns out to be. A large model is answered a page of top-level elements at a time: `total` counts them, and `truncated` with `next_offset` says there is more and where to ask from with `offset`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -2692,15 +3906,24 @@ fn tools() -> Value {
                     "within": { "type": "string", "description": "A qualified name to describe instead of the whole model" },
                     "depth": { "type": "integer", "description": "How many levels of nesting to descend: 0 is the element alone, 1 names what is directly inside it (default 2, at most 16)" },
                     "inherited": { "type": "boolean", "description": "Also list the features that come from supertypes (default false)" },
+                    "offset": { "type": "integer", "description": "Skip this many top-level elements: the `next_offset` a cut answer gave (default 0)" },
+                    "limit": { "type": "integer", "description": "Outline at most this many top-level elements (default 50). An answer is cut short of 200 kB as well, and says so with `truncated` and `next_offset`." },
                 },
             },
         },
         {
             "name": "generate_rust",
-            "description": "The Rust a model implies, written the one way the generator writes it: definitions become structs and enums with multiplicities as containers and inheritance flattened, ports bound to an existing Rust API become generic parameters and `perform`ed actions methods, state definitions become state machines. Do not hand-write what this returns. `open` is the other half of the answer -- every place the model deliberately left something for a person: the traits an abstract definition becomes, the `todo!`s an untranslatable expression keeps, a state machine's hooks, and everything with no generated shape, each with what it is about and why. That list is the work. A model that does not resolve is refused rather than generated from, because what came out would quietly be missing whatever the model misspelt.",
+            "description": "The Rust a model implies, written the one way the generator writes it: definitions become structs and enums with multiplicities as containers and inheritance flattened, ports bound to an existing Rust API become generic parameters and `perform`ed actions methods, state definitions become state machines. Do not hand-write what this returns. `open` is the other half of the answer -- every place the model deliberately left something for a person: the traits an abstract definition becomes, the `todo!`s an untranslatable expression keeps, a state machine's hooks, and everything with no generated shape, each with what it is about and why. That list is the work. A model that does not resolve is refused rather than generated from, because what came out would quietly be missing whatever the model misspelt. The code of a large model comes a page at a time, cut at the end of a line: `truncated` and `next_offset` say there is more, and `offset` asks for it.",
             "inputSchema": {
                 "type": "object",
-                "properties": source_properties,
+                "properties": {
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                    "offset": { "type": "integer", "description": "Where in the code to start: 0, or the `next_offset` the last page gave" },
+                    "max_bytes": { "type": "integer", "description": "At most this many bytes of code, cut at the end of a line (default 100000). `truncated` and `next_offset` say there is more; `open` is answered whole on every page." },
+                },
             },
         },
         {
@@ -2818,7 +4041,7 @@ fn tools() -> Value {
         },
         {
             "name": "definition",
-            "description": "Where an element is declared and what it is: its qualified name (which every other tool takes back as `element`), metaclass, short name, type, what an alias stands for, documentation, and `declared` -- the path and the line/column range of the name it is declared with, or null for an element the toolchain made rather than anyone wrote. Ask about a name as it is used, by `line` and `column` in the file `text` or `path` gives, or about an element by `element`. Use this to find out what a name in front of you actually resolves to -- which may be something in the standard library, or an inherited feature a definition never spells out -- instead of guessing from the spelling.",
+            "description": "Where an element is declared and what it is: its qualified name (which every other tool takes back as `element`), metaclass, short name, type, what an alias stands for, documentation, and `declared` -- the path and the line/column range of the name it is declared with -- and, for a name the standard library declares, `resource`, the URI `resources/read` answers that whole library file under -- or null for an element the toolchain made rather than anyone wrote. Ask about a name as it is used, by `line` and `column` in the file `text` or `path` gives, or about an element by `element`. Use this to find out what a name in front of you actually resolves to -- which may be something in the standard library, or an inherited feature a definition never spells out -- instead of guessing from the spelling.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -2916,18 +4139,103 @@ fn tools() -> Value {
                 },
             },
         },
+        {
+            "name": "export_json",
+            "description": "The model as the standard JSON interchange of SysML v2 API & Services -- the document `sysml export` writes, every element an object with its `@type`, a deterministic `@id` and every property its metaclass declares -- answered under `document`, written nowhere. It is large: every element carries its derived properties too, and a namespace every membership its imports bring in, so sixteen lines that import `ISQ::*` are a megabyte. The answer says how large first -- `elements`, `objects`, `bytes` (as `sysml export` would write it), and `counts` of each `@type` -- and stops at `max_bytes` (default 4 MB) with `truncated` rather than build what cannot be carried. `summary: true` answers the sizes alone. `within` writes one element and what it owns; everything else it refers to is named by its `@id`, as the standard library is unless `include_library` writes that in too (off by default -- the library alone is 754 MB). A model that does not parse is refused. Use this to hand a model to a tool that reads the standard's JSON, or to see what an element is as the standard defines it; `import_json` reads one back.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                    "within": { "type": "string", "description": "A qualified or short name: write this element and what it owns, and only refer to the rest" },
+                    "include_library": { "type": "boolean", "description": "Write the standard library in as well, marked `isLibraryElement`, so the document stands on its own (default false: it is referred to by `@id`)" },
+                    "summary": { "type": "boolean", "description": "Answer the sizes and leave the document out (default false)" },
+                    "max_bytes": { "type": "integer", "description": "The largest document to answer, in bytes as `sysml export` writes it (default 4000000, at most 64000000)" },
+                },
+            },
+        },
+        {
+            "name": "import_json",
+            "description": "Read a document of the standard JSON interchange -- what `export_json`, `sysml export` or a model server writes -- and answer what it holds: `sysml`, the model written back out as the textual notation (packages, imports, aliases, definitions and usages with their typings, specializations, subsettings, redefinitions, multiplicities, literal values and documentation, every name it refers to qualified), `counts` of each metaclass, and `checked`, whether that text parses and every name in it resolves against the standard library. `unwritten` lists what the notation was not written for -- behaviour, connector ends, any expression that is not a literal -- each with the element it is in; the text marks the place with `// not written: <metaclass>`, so read it as the declarations of the model rather than the whole of it. A document that refers to standard library elements without carrying them is read all the same: those `@id`s are the library's own, and `library` names what was referred to. One that names an `@id` nothing answers to, or is not a document at all, is refused with what the reader said.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "json": { "description": "The document: its text, or the array of element objects itself" },
+                    "path": { "type": "string", "description": "A file holding the document, instead of `json`" },
+                },
+            },
+        },
+        {
+            "name": "api_projects",
+            "description": "The projects a SysML v2 API & Services model server holds, each with its `id`, `name` and `description` -- read over the network from `server`, or from the URL in `SYSML_API_URL`, or from http://localhost:9000, the one `sysml api` asks. Every page of the listing is read. Only reads: nothing is created or committed. A URL with a user and password in it is sent that server alone, and never said back.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "server": { "type": "string", "description": "The server's base URL, e.g. http://localhost:9000 (default: `SYSML_API_URL`, else that)" },
+                    "timeout": { "type": "integer", "description": "Give up on a request after this many seconds (default 30, at most 300)" },
+                },
+            },
+        },
+        {
+            "name": "api_branches",
+            "description": "The branches of one project on a model server, each with its `name` and `head` -- the commit it is at, whose id `api_elements` takes. Reads over the network as `api_projects` does.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The project's id, as `api_projects` gives it" },
+                    "server": { "type": "string", "description": "The server's base URL (default: `SYSML_API_URL`, else http://localhost:9000)" },
+                    "timeout": { "type": "integer", "description": "Give up on a request after this many seconds (default 30, at most 300)" },
+                },
+                "required": ["project"],
+            },
+        },
+        {
+            "name": "api_commits",
+            "description": "The commits of one project on a model server, each with its `id`, `created` and `description`, in the order the server keeps them. Reads over the network as `api_projects` does.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The project's id, as `api_projects` gives it" },
+                    "server": { "type": "string", "description": "The server's base URL (default: `SYSML_API_URL`, else http://localhost:9000)" },
+                    "timeout": { "type": "integer", "description": "Give up on a request after this many seconds (default 30, at most 300)" },
+                },
+                "required": ["project"],
+            },
+        },
+        {
+            "name": "api_elements",
+            "description": "The elements of one commit on a model server, as the server's own JSON: a page of them (`offset`, `limit`, `total`, `next_offset`), or the one `element` names. `sysml: true` also reads the whole commit the way `import_json` reads a document and answers it under `model` -- the textual notation of what the commit holds, checked against the standard library -- which is how to read a model a server holds without reading its JSON. Reads over the network as `api_projects` does.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "The project's id, as `api_projects` gives it" },
+                    "commit": { "type": "string", "description": "The commit's id, as `api_commits` gives it or a branch's `head`" },
+                    "element": { "type": "string", "description": "One element's id, to fetch that element alone" },
+                    "offset": { "type": "integer", "description": "Skip this many elements (default 0)" },
+                    "limit": { "type": "integer", "description": "At most this many elements on the page (default 100, at most 1000)" },
+                    "sysml": { "type": "boolean", "description": "Also answer the whole commit as the textual notation, under `model` (default false)" },
+                    "server": { "type": "string", "description": "The server's base URL (default: `SYSML_API_URL`, else http://localhost:9000)" },
+                    "timeout": { "type": "integer", "description": "Give up on a request after this many seconds (default 30, at most 300)" },
+                },
+                "required": ["project", "commit"],
+            },
+        },
     ]);
-    // Every tool here only reads: none writes a file, none reaches past
-    // this machine, and asking twice answers the same. Said, a client
-    // may run them without asking its user each time.
+    // Every tool here only reads: none writes a file, and asking twice
+    // answers the same. Said, a client may run them without asking its
+    // user each time. All but the `api_` ones stay on this machine; those
+    // ask a model server, which is the open world the hint is about -- a
+    // client that lets the rest run unasked may want to ask about them.
     for tool in every.as_array_mut().into_iter().flatten() {
-        let title = tool["name"].as_str().unwrap_or_default().replace('_', " ");
+        let name = tool["name"].as_str().unwrap_or_default().to_string();
         tool["annotations"] = json!({
-            "title": title,
+            "title": name.replace('_', " "),
             "readOnlyHint": true,
             "destructiveHint": false,
             "idempotentHint": true,
-            "openWorldHint": false,
+            "openWorldHint": name.starts_with("api_"),
         });
     }
     every

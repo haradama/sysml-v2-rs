@@ -2,7 +2,11 @@
 //! REST standard (projects / commits / elements), against any conforming
 //! model server. Blocking I/O via `ureq`.
 //!
+//! The `sysml api` subcommand and the MCP server's `api_*` tools both
+//! talk through this, so it is in the library rather than the binary.
+//!
 //! ```no_run
+//! use sysml_cli::api::Client;
 //! let client = Client::new("http://localhost:9000", std::time::Duration::from_secs(30));
 //! for project in client.projects().unwrap() {
 //!     println!("{} {}", project.id, project.name.unwrap_or_default());
@@ -21,8 +25,11 @@ pub enum Error {
     /// The server answered, and said no. The body is what it said, which
     /// is where a model server explains itself.
     Status {
+        /// the HTTP status
         code: u16,
+        /// the reason phrase that came with it
         reason: String,
+        /// what the server said, trimmed
         body: String,
     },
     /// No answer to speak of: refused, timed out, or not HTTP.
@@ -122,10 +129,13 @@ pub fn redacted(text: &str) -> String {
 /// A project on the model server.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Project {
+    /// What the server calls it.
     #[serde(rename = "@id")]
     pub id: String,
+    /// What a person calls it.
     #[serde(default)]
     pub name: Option<String>,
+    /// What it is for, where the server says.
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -133,14 +143,43 @@ pub struct Project {
 /// A commit within a project.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Commit {
+    /// What the server calls it.
     #[serde(rename = "@id")]
     pub id: String,
+    /// When it was made, as the server writes a time.
     #[serde(default)]
     pub created: Option<String>,
+    /// What it was for.
     #[serde(default)]
     pub description: Option<String>,
 }
 
+/// A branch of a project: a name for the commit it is at.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Branch {
+    /// What the server calls it.
+    #[serde(rename = "@id")]
+    pub id: String,
+    /// What a person calls it: `main`.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// When it was made, as the server writes a time.
+    #[serde(default)]
+    pub created: Option<String>,
+    /// The commit the branch is at, where it is at one.
+    #[serde(default)]
+    pub head: Option<Identified>,
+}
+
+/// A reference to something the server holds, by its id.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Identified {
+    /// The id.
+    #[serde(rename = "@id")]
+    pub id: String,
+}
+
+/// A connection to one model server.
 pub struct Client {
     base: String,
     agent: ureq::Agent,
@@ -199,6 +238,21 @@ impl Client {
                     .map(String::from)
                     .ok()
             });
+            // A page is asked of the server that was asked for the first,
+            // and of nobody else: a `Link` is whatever the server says,
+            // and following one to another host would send that host a
+            // request this client was never told to make -- with the
+            // user and password, where the link is written relative to a
+            // base that carries them.
+            if let Some(next) = &next {
+                let origin = |at: &str| url::Url::parse(at).map(|it| it.origin()).ok();
+                if origin(next) != origin(&self.base) {
+                    return Err(Error::Transport(redacted(&format!(
+                        "the server said the next page is at {next}, which is not this server; \
+                         it was not asked"
+                    ))));
+                }
+            }
             match next {
                 Some(next) if !read.contains(&next) => url = next,
                 _ => return Ok(all),
@@ -240,6 +294,11 @@ impl Client {
     /// `GET /projects/{id}/commits`
     pub fn commits(&self, project_id: &str) -> Result<Vec<Commit>, Error> {
         self.get_all(&format!("/projects/{}/commits", segment(project_id)?))
+    }
+
+    /// `GET /projects/{id}/branches`
+    pub fn branches(&self, project_id: &str) -> Result<Vec<Branch>, Error> {
+        self.get_all(&format!("/projects/{}/branches", segment(project_id)?))
     }
 
     /// `POST /projects/{id}/commits` — `changes` are element payloads as
@@ -694,6 +753,36 @@ mod tests {
         ));
         // `../commits/x` is one segment once its slash is encoded
         assert_eq!(segment("../commits/x").unwrap(), "..%2Fcommits%2Fx");
+    }
+
+    #[test]
+    fn lists_branches_with_the_commit_each_is_at() {
+        let base = serve_once(
+            r#"[{"@id":"b1","@type":"Branch","name":"main","head":{"@id":"c9"}},{"@id":"b2"}]"#,
+        );
+        let branches = Client::new(base, QUICK).branches("p1").unwrap();
+        assert_eq!(branches[0].name.as_deref(), Some("main"));
+        assert_eq!(branches[0].head.as_ref().map(|c| c.id.as_str()), Some("c9"));
+        assert!(branches[1].head.is_none());
+    }
+
+    #[test]
+    fn a_next_page_on_another_server_is_not_followed() {
+        // the link names a host nobody asked for; following it would put
+        // a request there, and the user and password with it
+        let base = serve(1, |_, _| {
+            response(
+                "200 OK",
+                &["Link: <http://elsewhere.invalid/projects?page=2>; rel=\"next\"".to_string()],
+                r#"[{"@id":"p1"}]"#,
+            )
+        });
+        let with_secret = base.replace("http://", "http://user:secret@");
+        let err = Client::new(with_secret, QUICK).projects().unwrap_err();
+        let said = err.to_string();
+        assert!(said.contains("not this server"), "{said}");
+        assert!(said.contains("elsewhere.invalid"), "{said}");
+        assert!(!said.contains("secret"), "{said}");
     }
 
     #[test]

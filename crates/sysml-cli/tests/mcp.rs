@@ -101,6 +101,10 @@ fn a_client_handshakes_lists_and_calls() {
     assert_eq!(answers[0]["result"]["protocolVersion"], "2024-11-05");
     assert_eq!(answers[0]["result"]["serverInfo"]["name"], "sysml-mcp");
     assert!(answers[0]["result"]["capabilities"]["tools"].is_object());
+    // and the library and project as resources, the workflows as prompts:
+    // 2024-11-05 has both, so they are said in the oldest revision too
+    assert!(answers[0]["result"]["capabilities"]["resources"].is_object());
+    assert!(answers[0]["result"]["capabilities"]["prompts"].is_object());
     // What reaches a model that has not called anything yet. A server
     // whose whole point is that the answer comes from the library rather
     // than from memory is worth nothing to a client that writes first
@@ -142,7 +146,13 @@ fn a_client_handshakes_lists_and_calls() {
             "rename",
             "diagram",
             "impact",
-            "trace"
+            "trace",
+            "export_json",
+            "import_json",
+            "api_projects",
+            "api_branches",
+            "api_commits",
+            "api_elements"
         ]
     );
     // a client builds its call from the schema, so it has to be there
@@ -2266,17 +2276,33 @@ fn a_project_that_is_not_a_directory_is_refused_at_startup() {
 }
 
 /// Every tool says it only reads, so a client may run it without asking
-/// its user each time -- and none of them is anything but that.
+/// its user each time -- and none of them is anything but that. The ones
+/// that ask a model server say they reach past this machine, and only
+/// they do.
 #[test]
 fn every_tool_says_it_only_reads() {
     let answers = session(&[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})]);
     let tools = answers[0]["result"]["tools"].as_array().unwrap();
     assert!(tools.iter().any(|tool| tool["name"] == "format"));
+    let open: Vec<&str> = tools
+        .iter()
+        .filter(|tool| tool["annotations"]["openWorldHint"] == true)
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        open,
+        [
+            "api_projects",
+            "api_branches",
+            "api_commits",
+            "api_elements"
+        ]
+    );
     for tool in tools {
         let said = &tool["annotations"];
         assert_eq!(said["readOnlyHint"], true, "{tool}");
         assert_eq!(said["destructiveHint"], false, "{tool}");
-        assert_eq!(said["openWorldHint"], false, "{tool}");
+        assert_eq!(said["idempotentHint"], true, "{tool}");
         assert!(said["title"].is_string(), "{tool}");
     }
 }
@@ -3297,4 +3323,677 @@ fn notation_answers_for_the_constructs_a_review_asks_about() {
     assert!(shown(2).contains("viewpoint"), "{}", shown(2));
     assert!(shown(3).contains("snapshot part"), "{}", shown(3));
     assert!(shown(4).contains("= 1200 [kg];"), "{}", shown(4));
+}
+
+/// Drive a server holding the copy of the library built in, which is what
+/// a launcher that names none gets.
+fn built_in(lines: &[Value]) -> Vec<Value> {
+    let input: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    let mut server = sysml_cli::mcp::Server::new(None);
+    let mut out: Vec<u8> = Vec::new();
+    sysml_cli::mcp::serve(&mut server, Cursor::new(input.as_bytes()), &mut out).unwrap();
+    String::from_utf8(out)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every answer is JSON"))
+        .collect()
+}
+
+/// The model the interchange tests write and read: a definition that
+/// inherits, a redefinition with no name of its own, a library type, a
+/// multiplicity and a value.
+const CAR: &str = "package Car {\n\
+    \tprivate import ISQ::*;\n\
+    \tdoc /* A car. */\n\
+    \tabstract part def Vehicle {\n\
+    \t\tattribute mass : MassValue;\n\
+    \t\tpart wheels : Wheel[4];\n\
+    \t\tin port fuel : FuelPort;\n\
+    \t}\n\
+    \tpart def Wheel;\n\
+    \tport def FuelPort;\n\
+    \tpart def Truck :> Vehicle {\n\
+    \t\tpart :>> wheels[6];\n\
+    \t\tattribute :>> mass = 3;\n\
+    \t}\n\
+    \tpart truck : Truck;\n\
+    }\n";
+
+/// `export_json` answers the document `sysml export` writes, says how
+/// large it is, and stops short of what it was told it may not answer.
+#[test]
+fn export_json_answers_the_document_sysml_export_writes() {
+    let dir = scratch("sysml-mcp-export");
+    let file = dir.join("car.sysml");
+    std::fs::write(&file, CAR).unwrap();
+    let path = file.display().to_string();
+    let answers = built_in(&[
+        call("export_json", json!({ "path": path })),
+        call("export_json", json!({ "path": path, "summary": true })),
+        call(
+            "export_json",
+            json!({ "path": path, "within": "Car::Truck" }),
+        ),
+        call("export_json", json!({ "path": path, "max_bytes": 1000 })),
+        call("export_json", json!({ "text": "package P { part def A" })),
+    ]);
+    let whole = answered(&answers[0]);
+    assert_eq!(whole["truncated"], false, "{whole}");
+    assert_eq!(whole["library"], "referred to by @id, not included");
+    let document = whole["document"].as_array().expect("the document itself");
+    assert_eq!(whole["objects"], document.len());
+    assert_eq!(whole["counts"]["PartDefinition"], 3, "{}", whole["counts"]);
+
+    // The same objects `sysml export` writes, each the same -- but for the
+    // namespace a workspace hangs its files off, which lists the files'
+    // roots in the order they were loaded, and the server loads the
+    // library first where the command line loads it last.
+    let out = Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(["export", &path])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let written: Vec<Value> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(written.len(), document.len());
+    // the size said is that of the file `sysml export` writes, but for
+    // the line it ends with
+    assert_eq!(whole["bytes"], out.stdout.len() - 1);
+    let by_id = |objects: &[Value]| -> std::collections::BTreeMap<String, Value> {
+        objects
+            .iter()
+            .map(|it| (it["@id"].as_str().unwrap().to_string(), it.clone()))
+            .collect()
+    };
+    let (ours, theirs) = (by_id(document), by_id(&written));
+    assert_eq!(
+        ours.keys().collect::<Vec<_>>(),
+        theirs.keys().collect::<Vec<_>>()
+    );
+    for (id, object) in &ours {
+        if object["@type"] == "Namespace" && object["owner"].is_null() {
+            let sorted = |it: &Value| {
+                let mut ids: Vec<String> = it["ownedRelationship"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|r| r["@id"].as_str().unwrap().to_string())
+                    .collect();
+                ids.sort();
+                ids
+            };
+            assert_eq!(sorted(object), sorted(&theirs[id]));
+            continue;
+        }
+        assert_eq!(object, &theirs[id], "{id}");
+    }
+
+    // the sizes alone, for a client that asks before it takes
+    let summary = answered(&answers[1]);
+    assert_eq!(summary["bytes"], whole["bytes"], "{summary}");
+    assert!(summary.get("document").is_none(), "{summary}");
+
+    // one element and what it owns, the rest referred to by @id
+    let truck = answered(&answers[2]);
+    assert_eq!(truck["within"], "Car::Truck", "{truck}");
+    let names: Vec<&str> = truck["document"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|it| it["declaredName"].as_str())
+        .collect();
+    assert!(names.contains(&"Truck"), "{names:?}");
+    assert!(!names.contains(&"Vehicle"), "{names:?}");
+
+    // too large is said, and nothing is built past it
+    let capped = answered(&answers[3]);
+    assert_eq!(capped["truncated"], true, "{capped}");
+    assert!(capped["document"].is_null());
+    assert!(
+        capped["note"].as_str().unwrap().contains("`within`"),
+        "{capped}"
+    );
+    assert_eq!(capped["elements"], whole["elements"]);
+
+    // and what does not parse is not exported as a guess at it
+    assert_eq!(answers[4]["result"]["isError"], true);
+    assert!(answered(&answers[4])["error"]
+        .as_str()
+        .unwrap()
+        .contains("does not parse"));
+}
+
+/// `import_json` reads a document back and answers it as the notation --
+/// including one that names the library without carrying it, which is
+/// what every export without the library is.
+#[test]
+fn import_json_reads_a_document_back_as_the_notation() {
+    let answers = built_in(&[
+        call("export_json", json!({ "text": CAR })),
+        call("import_json", json!({ "json": "[{" })),
+        call("import_json", json!({ "json": "{}" })),
+        call(
+            "import_json",
+            json!({ "json": r#"[{"@type":"PartDefinition","@id":"a","ownedRelationship":[{"@id":"nowhere"}]}]"# }),
+        ),
+        call(
+            "import_json",
+            json!({ "json": r#"[{"@type":"Bogus","@id":"a"}]"# }),
+        ),
+        call("import_json", json!({})),
+    ]);
+    let document = answered(&answers[0])["document"].clone();
+    let read = answered(&built_in(&[call("import_json", json!({ "json": document }))])[0]);
+    let sysml = read["sysml"].as_str().unwrap();
+    // what was declared, with every name it refers to qualified -- the
+    // library's by the library's own names
+    assert!(sysml.contains("abstract part def Vehicle {"), "{sysml}");
+    assert!(
+        sysml.contains("attribute mass : ISQBase::MassValue;"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("part wheels : Car::Wheel [4];"), "{sysml}");
+    assert!(sysml.contains("in port fuel : Car::FuelPort;"), "{sysml}");
+    assert!(
+        sysml.contains("part def Truck :> Car::Vehicle {"),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains("part :>> Car::Vehicle::wheels [6];"),
+        "{sysml}"
+    );
+    assert!(
+        sysml.contains("attribute :>> Car::Vehicle::mass = 3;"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("private import ISQ::*;"), "{sysml}");
+    assert!(sysml.contains("doc /* A car. */"), "{sysml}");
+    assert_eq!(read["checked"]["ok"], true, "{read}");
+    assert_eq!(read["counts"]["PartDefinition"], 3, "{read}");
+    assert_eq!(read["dialect"], "sysml");
+    let library: Vec<&str> = read["library"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| it.as_str().unwrap())
+        .collect();
+    assert!(library.contains(&"ISQBase::MassValue"), "{library:?}");
+    assert!(library.contains(&"ISQ"), "{library:?}");
+    // what the notation is not written for, it says rather than guesses
+    assert_eq!(read["unwritten"], json!([]), "{read}");
+
+    // and a document that will not read is refused with what the
+    // reader said about it
+    let refused = |answer: &Value| -> String {
+        assert_eq!(answer["result"]["isError"], true, "{answer}");
+        answered(answer)["error"].as_str().unwrap().to_string()
+    };
+    assert!(
+        refused(&answers[1]).contains("not JSON"),
+        "{}",
+        refused(&answers[1])
+    );
+    assert!(
+        refused(&answers[2]).contains("array"),
+        "{}",
+        refused(&answers[2])
+    );
+    let dangling = refused(&answers[3]);
+    assert!(dangling.contains("nowhere"), "{dangling}");
+    assert!(dangling.contains("does not carry it"), "{dangling}");
+    assert!(
+        refused(&answers[4]).contains("Bogus"),
+        "{}",
+        refused(&answers[4])
+    );
+    assert!(
+        refused(&answers[5]).contains("`json`"),
+        "{}",
+        refused(&answers[5])
+    );
+}
+
+/// What the notation is not written for is marked where it would be and
+/// listed, so the text reads as the declarations rather than the whole.
+#[test]
+fn import_json_says_what_it_did_not_write() {
+    let model = "package Reqs {\n\
+                 \trequirement def R;\n\
+                 \tpart def Car;\n\
+                 \trequirement r : R;\n\
+                 \tpart car : Car {\n\t\tsatisfy r;\n\t}\n\
+                 }\n";
+    let answers = built_in(&[call("export_json", json!({ "text": model }))]);
+    let document = answered(&answers[0])["document"].clone();
+    let read = answered(&built_in(&[call("import_json", json!({ "json": document }))])[0]);
+    let unwritten = read["unwritten"].as_array().unwrap();
+    assert!(
+        unwritten
+            .iter()
+            .any(|it| it["kind"] == "SatisfyRequirementUsage" && it["in"] == "Reqs::car"),
+        "{read}"
+    );
+    let sysml = read["sysml"].as_str().unwrap();
+    assert!(
+        sysml.contains("// not written: SatisfyRequirementUsage"),
+        "{sysml}"
+    );
+    assert!(sysml.contains("requirement r : Reqs::R;"), "{sysml}");
+    // the rest of it still reads
+    assert_eq!(read["checked"]["ok"], true, "{read}");
+}
+
+/// A stand-in for a model server: answers the next `count` connections,
+/// each with what `answer` says for the request target, and keeps every
+/// target it was asked for and every `Authorization` header it was sent.
+fn model_server(
+    count: usize,
+    answer: impl Fn(&str) -> (String, String) + Send + 'static,
+) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{BufRead, BufReader};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = std::sync::Arc::clone(&asked);
+    std::thread::spawn(move || {
+        for _ in 0..count {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let target = line.split(' ').nth(1).unwrap_or_default().to_string();
+            loop {
+                line.clear();
+                let _ = reader.read_line(&mut line);
+                if line.trim_end().is_empty() {
+                    break;
+                }
+                if line.to_lowercase().starts_with("authorization:") {
+                    seen.lock()
+                        .unwrap()
+                        .push(format!("auth {}", line.trim_end()));
+                }
+            }
+            seen.lock().unwrap().push(target.clone());
+            let (status, body) = answer(&target);
+            let mut stream = stream;
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, asked)
+}
+
+/// The `api_` tools read what a model server holds, and say which server
+/// without the secret its URL carries.
+#[test]
+fn the_api_tools_read_what_a_model_server_holds() {
+    // a commit is the standard's JSON for a model: the one `export_json`
+    // writes, as `sysml api push` sends it
+    let document = answered(&built_in(&[call("export_json", json!({ "text": CAR }))])[0])
+        ["document"]
+        .to_string();
+    let (base, asked) = model_server(5, move |target| {
+        let ok = |body: &str| ("200 OK".to_string(), body.to_string());
+        match target {
+            "/projects" => ok(r#"[{"@id":"p1","@type":"Project","name":"Demo"}]"#),
+            "/projects/p1/branches" => {
+                ok(r#"[{"@id":"b1","@type":"Branch","name":"main","head":{"@id":"c1"}}]"#)
+            }
+            "/projects/p1/commits" => {
+                ok(r#"[{"@id":"c1","@type":"Commit","description":"first"}]"#)
+            }
+            "/projects/p1/commits/c1/elements" => ok(&document),
+            _ => (
+                "404 Not Found".to_string(),
+                r#"{"error":"no such thing"}"#.to_string(),
+            ),
+        }
+    });
+    let server = base.replace("http://", "http://user:secret@");
+    let answers = built_in(&[
+        call("api_projects", json!({ "server": server })),
+        call("api_branches", json!({ "server": server, "project": "p1" })),
+        call("api_commits", json!({ "server": server, "project": "p1" })),
+        call(
+            "api_elements",
+            json!({ "server": server, "project": "p1", "commit": "c1", "limit": 5, "sysml": true }),
+        ),
+        call("api_commits", json!({ "server": server, "project": "p9" })),
+        call("api_projects", json!({ "server": "ftp://somewhere" })),
+        call("api_commits", json!({ "server": server })),
+    ]);
+    let projects = answered(&answers[0]);
+    assert_eq!(projects["projects"][0]["name"], "Demo", "{projects}");
+    assert_eq!(projects["server"], base, "the secret is not said back");
+    let branches = answered(&answers[1]);
+    assert_eq!(branches["branches"][0]["head"]["@id"], "c1", "{branches}");
+    let commits = answered(&answers[2]);
+    assert_eq!(commits["commits"][0]["description"], "first", "{commits}");
+
+    // a page of the elements, and the whole commit as the notation
+    let elements = answered(&answers[3]);
+    assert_eq!(elements["elements"].as_array().unwrap().len(), 5);
+    assert_eq!(elements["next_offset"], 5, "{}", elements["next_offset"]);
+    assert!(elements["total"].as_u64().unwrap() > 5);
+    let sysml = elements["model"]["sysml"].as_str().unwrap();
+    assert!(sysml.contains("part def Truck :> Car::Vehicle"), "{sysml}");
+    assert_eq!(elements["model"]["checked"]["ok"], true);
+
+    // a refusal is the server's, said without the secret
+    assert_eq!(answers[4]["result"]["isError"], true);
+    let said = answered(&answers[4])["error"].as_str().unwrap().to_string();
+    assert!(said.contains("HTTP 404"), "{said}");
+    assert!(said.contains("no such thing"), "{said}");
+    assert!(!said.contains("secret"), "{said}");
+    // a URL that is not a model server's, and a call short of what it
+    // needs, are refused before anything is sent
+    assert!(answered(&answers[5])["error"]
+        .as_str()
+        .unwrap()
+        .contains("http://"));
+    assert!(answered(&answers[6])["error"]
+        .as_str()
+        .unwrap()
+        .contains("`project`"));
+    // and what was asked was asked of that server, once each
+    let asked: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|it| !it.starts_with("auth "))
+        .cloned()
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            "/projects",
+            "/projects/p1/branches",
+            "/projects/p1/commits",
+            "/projects/p1/commits/c1/elements",
+            "/projects/p9/commits",
+        ]
+    );
+}
+
+/// The library's files and the project's are resources: listed a page at
+/// a time, read by the URI they were listed under, and nothing else read.
+#[test]
+fn the_library_and_the_project_are_resources() {
+    let dir = scratch("sysml-mcp-resources");
+    std::fs::write(dir.join("car.sysml"), "package Car { part def Wheel; }\n").unwrap();
+    let request = |id: u64, method: &str, params: Value| json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let answers = in_project(
+        &dir,
+        &[
+            request(1, "resources/list", json!({})),
+            request(2, "resources/list", json!({ "cursor": "50" })),
+            request(
+                3,
+                "resources/read",
+                json!({ "uri": "sysml://library/Kernel%20Libraries/Kernel%20Semantic%20Library/Base.kerml" }),
+            ),
+            // spelled with the spaces it stands for, it is the same file
+            request(
+                4,
+                "resources/read",
+                json!({ "uri": "sysml://library/Kernel Libraries/Kernel Semantic Library/Base.kerml" }),
+            ),
+            request(
+                5,
+                "resources/read",
+                json!({ "uri": "file:///etc/hostname" }),
+            ),
+            request(6, "resources/list", json!({ "cursor": "nonsense" })),
+            request(7, "resources/templates/list", json!({})),
+        ],
+    );
+    let first = answers[0]["result"]["resources"].as_array().unwrap();
+    assert_eq!(first.len(), 50);
+    // the project first, by the file it is
+    assert_eq!(first[0]["name"], "car.sysml", "{}", first[0]);
+    assert_eq!(first[0]["mimeType"], "text/x-sysml");
+    assert!(first[0]["description"].as_str().unwrap().contains("Car"));
+    let uri = first[0]["uri"].as_str().unwrap().to_string();
+    assert!(uri.starts_with("file:///"), "{uri}");
+    assert!(first[1]["uri"]
+        .as_str()
+        .unwrap()
+        .starts_with("sysml://library/"));
+    assert_eq!(answers[0]["result"]["nextCursor"], "50");
+    // every file once, the library's ninety-four and the project's one
+    let second = answers[1]["result"]["resources"].as_array().unwrap();
+    assert_eq!(first.len() + second.len(), 94 + 1);
+    assert!(answers[1]["result"]["nextCursor"].is_null());
+
+    let base = &answers[2]["result"]["contents"][0];
+    assert_eq!(base["mimeType"], "text/x-kerml");
+    assert!(base["text"]
+        .as_str()
+        .unwrap()
+        .contains("standard library package Base"));
+    assert_eq!(answers[3]["result"]["contents"][0]["text"], base["text"]);
+
+    // a file URI names a file of the project, and is no way to read others
+    assert_eq!(answers[4]["error"]["code"], -32002, "{}", answers[4]);
+    assert_eq!(answers[5]["error"]["code"], -32602, "{}", answers[5]);
+    let read = in_project(&dir, &[request(8, "resources/read", json!({ "uri": uri }))]);
+    assert_eq!(
+        read[0]["result"]["contents"][0]["text"],
+        "package Car { part def Wheel; }\n"
+    );
+
+    let template = &answers[6]["result"]["resourceTemplates"][0];
+    assert_eq!(template["uriTemplate"], "sysml://library/{+path}");
+
+    // and `definition` of a library name says which of them declares it
+    let declared = answered(
+        &in_project(
+            &dir,
+            &[call("definition", json!({ "element": "ISQ::MassValue" }))],
+        )[0],
+    );
+    assert_eq!(
+        declared["declared"]["resource"],
+        "sysml://library/Domain%20Libraries/Quantities%20and%20Units/ISQBase.sysml",
+        "{declared}"
+    );
+}
+
+/// The prompts are the workflows the tools are for, each naming tools
+/// that exist, with what it was given written in.
+#[test]
+fn the_prompts_are_the_workflows_with_their_arguments() {
+    let request = |id: u64, method: &str, params: Value| json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+    let answers = session(&[
+        request(1, "prompts/list", json!({})),
+        request(2, "tools/list", json!({})),
+        request(
+            3,
+            "prompts/get",
+            json!({ "name": "rename_safely", "arguments": { "element": "Car::Wheel", "new_name": "Tyre" } }),
+        ),
+        request(
+            4,
+            "prompts/get",
+            json!({ "name": "rename_safely", "arguments": { "element": "A" } }),
+        ),
+        request(5, "prompts/get", json!({ "name": "nothing" })),
+        request(6, "prompts/get", json!({ "name": "review_requirements" })),
+    ]);
+    let prompts = answers[0]["result"]["prompts"].as_array().unwrap();
+    let names: Vec<&str> = prompts
+        .iter()
+        .map(|it| it["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "write_model",
+            "review_requirements",
+            "rename_safely",
+            "model_from_code"
+        ]
+    );
+    let tools: Vec<String> = answers[1]["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|it| format!("`{}`", it["name"].as_str().unwrap()))
+        .collect();
+    // each prompt's steps call tools that are there to call
+    let steps = [
+        (
+            "write_model",
+            &["notation", "library_search", "check", "format", "trace"][..],
+        ),
+        (
+            "review_requirements",
+            &["trace", "find", "relations", "impact"],
+        ),
+        ("rename_safely", &["references", "rename", "check"]),
+        (
+            "model_from_code",
+            &["import_rust", "import_code", "check", "outline"],
+        ),
+    ];
+    for (name, called) in steps {
+        let arguments: serde_json::Map<String, Value> =
+            prompts.iter().find(|it| it["name"] == name).unwrap()["arguments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| (it["name"].as_str().unwrap().to_string(), json!("X")))
+                .collect();
+        let got = session(&[request(
+            1,
+            "prompts/get",
+            json!({ "name": name, "arguments": arguments }),
+        )]);
+        let text = got[0]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(got[0]["result"]["messages"][0]["role"], "user");
+        for tool in called {
+            let tool = format!("`{tool}`");
+            assert!(tools.contains(&tool), "{tool} is no tool");
+            assert!(text.contains(&tool), "{name} does not call {tool}");
+        }
+        assert!(
+            !text.contains('{'),
+            "an argument left unfilled in {name}: {text}"
+        );
+    }
+
+    let rename = answers[2]["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(rename.contains("`element: Car::Wheel`"), "{rename}");
+    assert!(rename.contains("`new_name: Tyre`"), "{rename}");
+    assert_eq!(answers[3]["error"]["code"], -32602);
+    assert!(answers[3]["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("new_name"));
+    assert_eq!(answers[4]["error"]["code"], -32602);
+    // an optional argument left out reads as what it stands for
+    let review = answers[5]["result"]["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(review.contains("the whole model"), "{review}");
+}
+
+/// An outline is answered a page of top-level elements at a time, and
+/// names a redefinition by the name it answers to.
+#[test]
+fn an_outline_is_paged_and_names_what_a_redefinition_answers_to() {
+    let text = "package A { part def X; }\npackage B { part def Y; }\npackage C {\n\
+                \tpart def V { part w; }\n\
+                \tpart def T :> V { part :>> w { part hub; } }\n}\n";
+    let answers = session(&[
+        call("outline", json!({ "text": text, "limit": 2 })),
+        call("outline", json!({ "text": text, "offset": 2, "depth": 4 })),
+        call("outline", json!({ "text": text, "limit": "two" })),
+    ]);
+    let first = answered(&answers[0]);
+    assert_eq!(first["elements"].as_array().unwrap().len(), 2, "{first}");
+    assert_eq!(first["total"], 3);
+    assert_eq!(first["truncated"], true);
+    assert_eq!(first["next_offset"], 2);
+    assert!(
+        first["note"].as_str().unwrap().contains("`offset: 2`"),
+        "{first}"
+    );
+    let rest = answered(&answers[1]);
+    assert_eq!(rest["elements"][0]["name"], "C", "{rest}");
+    assert!(rest.get("next_offset").is_none(), "{rest}");
+    // `part :>> w` declares no name and answers to `w`; what is inside it
+    // was `C::T::'?'::hub`, a name no tool could be handed back
+    let shown = rest.to_string();
+    assert!(shown.contains("\"C::T::w\""), "{shown}");
+    assert!(shown.contains("\"C::T::w::hub\""), "{shown}");
+    assert!(!shown.contains("'?'"), "{shown}");
+    assert_eq!(answers[2]["result"]["isError"], true);
+}
+
+/// The code of a large model comes a page at a time, cut at the end of a
+/// line, and the pages put together are the whole of it.
+#[test]
+fn generate_rust_answers_a_page_at_a_time() {
+    let text = "package P {\n\
+                \tpart def A { attribute x; }\n\
+                \tpart def B { attribute y; }\n\
+                \tpart def C { attribute z; }\n}\n";
+    // one server for every page, as a client asks them
+    let mut server = sysml_cli::mcp::Server::without_library(None);
+    let mut ask =
+        |arguments: Value| answered(&server.handle(&call("generate_rust", arguments)).unwrap());
+    let whole = ask(json!({ "text": text }));
+    let rust = whole["rust"].as_str().unwrap().to_string();
+    assert!(whole.get("truncated").is_none(), "{whole}");
+    assert_eq!(whole["total_bytes"], rust.len());
+
+    let mut pages = String::new();
+    let mut offset = 0;
+    let mut asked = 0;
+    loop {
+        let page = ask(json!({ "text": text, "offset": offset, "max_bytes": 120 }));
+        let got = page["rust"].as_str().unwrap();
+        assert!(
+            got.len() <= 120 || !got[..got.len() - 1].contains('\n'),
+            "{got}"
+        );
+        pages.push_str(got);
+        asked += 1;
+        match page["next_offset"].as_u64() {
+            Some(next) => {
+                assert!(
+                    got.ends_with('\n'),
+                    "a page ends at the end of a line: {got:?}"
+                );
+                assert_eq!(page["truncated"], true);
+                offset = next as usize;
+            }
+            None => break,
+        }
+    }
+    assert!(asked > 1);
+    assert_eq!(pages, rust);
+    // and a page starts where one was said to
+    let wrong = server
+        .handle(&call(
+            "generate_rust",
+            json!({ "text": text, "offset": rust.len() + 1 }),
+        ))
+        .unwrap();
+    assert_eq!(wrong["result"]["isError"], true);
 }

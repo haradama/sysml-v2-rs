@@ -142,6 +142,25 @@ pub fn element_uuid_with(model: &Model, extras: &Extras, id: ElementId) -> Uuid 
     uuid_of_path(&format!("sysml-v2-rs:{}", segments.join("/")))
 }
 
+/// The UUID every element of `model` is published under, and the UUID of
+/// the membership a document stands between each element and its owner
+/// where it stands one -- worked out in the one walk down the ownership
+/// tree that [`to_json_with`] makes.
+///
+/// What a reader needs to say what a document refers to and does not
+/// carry. A document exported without its library names the library's
+/// elements by these, and whoever holds the same library computes the
+/// same ones, so an `@id` that is nowhere in the document can still be
+/// told to be `ISQBase::MassValue`. Asking [`element_uuid_with`] of every
+/// element in turn would cost the square of the model's depth.
+pub fn published_uuids(
+    model: &Model,
+    extras: &Extras,
+) -> (HashMap<ElementId, Uuid>, HashMap<ElementId, Uuid>) {
+    let Identities { uuids, bridges, .. } = identities(model, extras);
+    (uuids, bridges)
+}
+
 /// Where an element sits among the siblings that answer to the same name.
 ///
 /// The plain position among all of them made every UUID in a file depend
@@ -4138,6 +4157,12 @@ mod tests {
         let json = to_json(&model);
         for (id, object) in model.ids().zip(json.as_array().unwrap()) {
             assert_eq!(object["@id"], element_uuid(&model, id).to_string());
+        }
+        // and the table of them is the same again, so a reader that looks
+        // an `@id` up in it finds the element the document meant
+        let (uuids, _) = published_uuids(&model, &Extras::default());
+        for id in model.ids() {
+            assert_eq!(uuids[&id], element_uuid(&model, id));
         }
     }
 

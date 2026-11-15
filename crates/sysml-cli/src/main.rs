@@ -13,7 +13,7 @@ use sysml_cli::report::{self, Said, Severity};
 use sysml_syntax::fmt::Layout;
 use sysml_syntax::{Diagnostic, Dialect};
 
-mod api;
+use sysml_cli::api;
 
 /// `print!` that stops quietly when the reader has gone.
 ///

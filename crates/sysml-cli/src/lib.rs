@@ -6,9 +6,11 @@
 //! `sysml-semantics`. A library as well as a subcommand, so its tests can
 //! drive it directly.
 
+pub mod api;
 pub mod mcp;
 pub mod notation;
 pub mod report;
+pub mod textual;
 
 /// A finding with its place in the text: where it starts and where it
 /// ends, as the byte offset the model sees and as the line and column an
