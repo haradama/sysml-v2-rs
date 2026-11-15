@@ -282,3 +282,36 @@ fn a_skin_without_a_drawing_is_refused_by_the_parser() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--diagram"));
 }
+
+/// What a supertype imports publicly is among the memberships it hands
+/// down, and only the resolver knows what an import brought in -- so the
+/// CLI has to say which imports were public when it hands the model to
+/// the interchange. It said what every import brought in, all at once,
+/// and `Derived :> Base` came out inheriting nothing of the `public
+/// import Lib::*;` in `Base`.
+#[test]
+fn a_subtype_written_out_inherits_what_its_supertype_imports_publicly() {
+    let source = written(
+        "public-import.sysml",
+        "package Q {\n  package Lib { part def X; }\n  package Other { part def Y; }\n  \
+         part def Base { public import Lib::*; private import Other::*; }\n  \
+         part def Derived :> Base;\n}\n",
+    );
+    let out = sysml(&["export", source.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let objects = document.as_array().unwrap();
+    let named = |name: &str| {
+        objects
+            .iter()
+            .find(|it| it["declaredName"] == name)
+            .unwrap()
+    };
+    let inherited = named("Derived")["inheritedMembership"].as_array().unwrap();
+    assert!(inherited.contains(&named("X")["owningMembership"]));
+    assert!(!inherited.contains(&named("Y")["owningMembership"]));
+}

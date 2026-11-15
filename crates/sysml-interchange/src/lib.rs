@@ -554,13 +554,17 @@ fn folded_role(bridge: &Json) -> Option<Role> {
 /// model derives empty closures -- which is what it knows.
 struct Closures<'a> {
     model: &'a Model,
+    /// Namespace -> what its public and protected imports bring in, which
+    /// a type specializing it inherits with its own memberships.
+    imported: &'a HashMap<ElementId, Vec<ElementId>>,
     inherited: std::cell::RefCell<HashMap<ElementId, std::rc::Rc<Vec<ElementId>>>>,
 }
 
 impl<'a> Closures<'a> {
-    fn new(model: &'a Model) -> Closures<'a> {
+    fn new(model: &'a Model, extras: &'a Extras) -> Closures<'a> {
         Closures {
             model,
+            imported: &extras.inheritable_imported,
             inherited: std::cell::RefCell::new(HashMap::new()),
         }
     }
@@ -585,12 +589,16 @@ impl<'a> Closures<'a> {
         self.model
             .owned(id)
             .iter()
+            // a subsetting written on its own in a feature's body is a
+            // member of that feature, and specializes something else
+            .filter(|&&child| !bridged(self.model, child))
             .filter_map(|&child| {
                 let target = match self.model.kind(child) {
                     ElementKind::Subclassification => "superclassifier",
                     ElementKind::Subsetting => "subsettedFeature",
                     ElementKind::Redefinition => "redefinedFeature",
-                    ElementKind::FeatureTyping => "type",
+                    // a `ConjugatedPortTyping` among them
+                    kind if kind.is_a(ElementKind::FeatureTyping) => "type",
                     ElementKind::ReferenceSubsetting => "referencedFeature",
                     _ => return None,
                 };
@@ -672,8 +680,22 @@ impl<'a> Closures<'a> {
             let own = self
                 .owned_memberships(supertype)
                 .filter(|&membership| self.visibility(membership) != Vis::Private);
+            // `nonPrivateMemberships` counts what the supertype imports
+            // publicly or protectedly among its own: `part def Base {
+            // public import Lib::*; }` hands `Lib::X` to every `Derived
+            // :> Base`, where a name written in `Derived` finds it
+            let imported = self
+                .imported
+                .get(&supertype)
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&member| {
+                    bridged(self.model, member)
+                        || self.model.kind(member) == ElementKind::Membership
+                });
             let inherited = self.inherited(supertype);
-            for membership in own.chain(inherited.iter().copied()) {
+            for membership in own.chain(imported).chain(inherited.iter().copied()) {
                 if seen.insert(membership) {
                     candidates.push(membership);
                 }
@@ -759,11 +781,63 @@ impl<'a> Closures<'a> {
 /// a namespace owns its own members that way in turn.
 fn bridged(model: &Model, owned: ElementId) -> bool {
     if only_a_relationship(model.kind(owned)) {
-        return false;
+        return a_statement_of_its_own(model, owned);
     }
     !model.owner(owned).is_some_and(|owner| {
         let kind = model.kind(owner);
         kind.is_a(ElementKind::Relationship) && !kind.is_a(ElementKind::Namespace)
+    })
+}
+
+/// Is this relationship a member of its namespace rather than a part of
+/// one of the elements it relates?
+///
+/// `subset S::f subsets S::g;` written in a package is a statement of its
+/// own: KerML parses it as a `NonFeatureElement` the package owns through
+/// an `OwningMembership`, exactly as it would a class. A package has no
+/// `ownedSpecialization` to hold it -- a namespace owns relationships only
+/// as memberships and imports. Written as the package's own relationship,
+/// the subsetting came out with the package as its `owningFeature`, which
+/// is neither a feature nor anything it relates.
+///
+/// Inside a type the same statement is told apart by its ends: the type a
+/// specialization is written on is its `specific`, so one owned by a type
+/// that is not its source end was written on its own. One that names the
+/// type it stands in as its source reads the same either way, and is
+/// taken as the ordinary kind -- the model does not say which it was.
+/// Memberships, imports and annotations are what an element owns as
+/// relationships, and never members.
+fn a_statement_of_its_own(model: &Model, id: ElementId) -> bool {
+    let kind = model.kind(id);
+    if kind.is_a(ElementKind::Membership)
+        || kind.is_a(ElementKind::Import)
+        || kind.is_a(ElementKind::Annotation)
+    {
+        return false;
+    }
+    let Some(owner) = model.owner(id) else {
+        return false;
+    };
+    let owner_kind = model.kind(owner);
+    if !owner_kind.is_a(ElementKind::Namespace) {
+        return false;
+    }
+    if !owner_kind.is_a(ElementKind::Type) {
+        return true;
+    }
+    stated_source(model, id).is_some_and(|sources| !sources.contains(&owner))
+}
+
+/// The source end a relationship states itself, under the most specific
+/// name its metaclass gives it -- nothing where it leaves that to its
+/// owner.
+fn stated_source(model: &Model, id: ElementId) -> Option<Vec<ElementId>> {
+    let kind = model.kind(id);
+    let (_, sources, _) = ENDS.iter().find(|(of, _, _)| kind.is_a(*of))?;
+    sources.iter().find_map(|name| match model.maybe(id, name) {
+        Some(Value::Ref(end)) => Some(vec![*end]),
+        Some(Value::RefList(ends)) if !ends.is_empty() => Some(ends.clone()),
+        _ => None,
     })
 }
 
@@ -855,6 +929,13 @@ pub struct Extras {
     pub imported: HashMap<ElementId, Vec<ElementId>>,
     /// Import element -> the member or namespace it resolved to.
     pub import_targets: HashMap<ElementId, ElementId>,
+    /// Namespace -> the members its public and protected imports bring
+    /// in, in import order: the imported part of KerML's
+    /// `nonPrivateMemberships`, which a type specializing the namespace
+    /// inherits. [`Extras::imported`] does not say which import brought a
+    /// member in, so it cannot say this; a private import's members stay
+    /// where they were imported.
+    pub inheritable_imported: HashMap<ElementId, Vec<ElementId>>,
     /// Elements that belong to a library model (`isLibraryElement`).
     pub library: std::collections::HashSet<ElementId>,
     /// Elements to leave out of the document altogether.
@@ -900,6 +981,9 @@ struct Writing<'a> {
     features: HashMap<ElementKind, Vec<&'static sysml_model::FeatureMeta>>,
     /// The inheritance closures the derived properties are read from.
     closures: Closures<'a>,
+    /// Feature -> the types its `TypeFeaturings` name, wherever in the
+    /// model each one stands.
+    featurings: HashMap<ElementId, Vec<ElementId>>,
 }
 
 impl Writing<'_> {
@@ -1078,7 +1162,25 @@ impl Writing<'_> {
                         .filter(|&&it| !import || self.model.kind(it).is_a(ElementKind::Namespace))
                         .map(|it| self.reference(it))
                         .collect();
-                    fill_ends(&mut object, self.model.kind(id), owner, related);
+                    fill_ends(&mut object, self.model.kind(id), owner.clone(), related);
+                    // An annotation's ends each have an `owning` name, and
+                    // that one says who owns it, not who it relates:
+                    // `owningAnnotatedElement` is set only where the
+                    // annotated element owns the annotation. Written down
+                    // the same chain as the end it subsets, `comment about
+                    // C` -- an annotation its comment owns -- said C owned
+                    // it as well.
+                    if self.model.kind(id).is_a(ElementKind::Annotation) {
+                        for (end, owning) in [
+                            ("annotatedElement", "owningAnnotatedElement"),
+                            ("annotatingElement", "owningAnnotatingElement"),
+                        ] {
+                            let owns = owner.is_some() && object.get(end) == owner.as_ref();
+                            if !owns {
+                                object.insert(owning.into(), Json::Null);
+                            }
+                        }
+                    }
                     // and what it owns is related by it all the same:
                     // `ownedRelatedElement` subsets `relatedElement`
                     if let Some(Json::Array(ends)) =
@@ -1382,6 +1484,9 @@ impl Writing<'_> {
                 Some(self.owned_of_kind(id, ElementKind::Subclassification))
             }
             "ownedTyping" => Some(self.owned_of_kind(id, ElementKind::FeatureTyping)),
+            // the steps of a chain, each its own relationship, which the
+            // `chainingFeature` beside it is read off
+            "ownedFeatureChaining" => Some(self.owned_of_kind(id, ElementKind::FeatureChaining)),
             "ownedSubsetting" => Some(self.owned_of_kind(id, ElementKind::Subsetting)),
             "ownedRedefinition" => Some(self.owned_of_kind(id, ElementKind::Redefinition)),
             "ownedReferenceSubsetting" => self
@@ -1407,14 +1512,9 @@ impl Writing<'_> {
             ),
             // an owned feature is featured by -- and its membership is --
             // its owning type's
-            "featuringType" if kind.is_a(ElementKind::Feature) => Some(Json::Array(
-                self.model
-                    .owner(id)
-                    .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Type))
-                    .iter()
-                    .map(|it| self.reference(it))
-                    .collect(),
-            )),
+            "featuringType" if kind.is_a(ElementKind::Feature) => {
+                Some(self.references(&self.featuring_types(id)))
+            }
             "owningFeatureMembership" if kind.is_a(ElementKind::Feature) => {
                 let of_a_type = bridged(self.model, id)
                     && self.model.owner(id).is_some()
@@ -1428,6 +1528,17 @@ impl Writing<'_> {
             }
             // a relationship owned by one of the elements it relates
             // names that end again in its own vocabulary
+            // and a specialization's `owningType`, which the end names
+            // above redefine, is the type it is written on
+            "owningType" if is_relationship => Some(match self.model.owner(id) {
+                Some(owner)
+                    if !bridged(self.model, id)
+                        && self.model.kind(owner).is_a(ElementKind::Type) =>
+                {
+                    self.reference(&owner)
+                }
+                _ => Json::Null,
+            }),
             "owningClassifier"
             | "owningFeature"
             | "owningFeatureOfType"
@@ -1599,6 +1710,44 @@ impl Writing<'_> {
         }
     }
 
+    /// `featuringType`: the owning type a feature membership makes one,
+    /// then the `featuringType` of every `TypeFeaturing` the feature is
+    /// the `featureOfType` of -- `featured by B` owned by the feature, or
+    /// `featuring of S::f by B;` standing in a package -- and, for a
+    /// chain, what its first chaining feature is featured by.
+    ///
+    /// Read off the owner alone, `feature fb : A featured by B` was said
+    /// to be featured by the type it sits in and never by B, which a
+    /// `TypeFeaturing` in the same document named.
+    fn featuring_types(&self, id: ElementId) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        let mut chained = std::collections::HashSet::from([id]);
+        let mut at = id;
+        loop {
+            let owning = self
+                .model
+                .owner(at)
+                .filter(|&owner| self.model.kind(owner).is_a(ElementKind::Type));
+            let featured = self.featurings.get(&at).into_iter().flatten().copied();
+            for featuring in owning.into_iter().chain(featured) {
+                if !out.contains(&featuring) {
+                    out.push(featuring);
+                }
+            }
+            // `chainingFeature->first().featuringType`, which may be a
+            // chain in turn
+            let first = match self.model.maybe(at, "chainingFeature") {
+                Some(Value::RefList(chain)) => chain.first().copied(),
+                Some(Value::Ref(only)) => Some(*only),
+                _ => None,
+            };
+            match first {
+                Some(next) if chained.insert(next) => at = next,
+                _ => return out,
+            }
+        }
+    }
+
     /// `owningRelationship.owningRelatedElement`, read off the shape the
     /// document is written in: the namespace a membership bridges from,
     /// the element that owns the relationship holding this one -- and
@@ -1639,6 +1788,10 @@ impl Writing<'_> {
                 .owned(id)
                 .iter()
                 .filter(|&&child| self.model.kind(child).is_a(wanted))
+                // a relationship that is a member here is owned through
+                // its membership, and is none of this element's own
+                // specializations
+                .filter(|&&child| !only_a_relationship(wanted) || !bridged(self.model, child))
                 .map(|child| self.reference(child))
                 .collect(),
         )
@@ -1671,8 +1824,32 @@ fn writing<'a>(model: &'a Model, extras: &'a Extras) -> Writing<'a> {
         bridge_uuids,
         qualified,
         features,
-        closures: Closures::new(model),
+        closures: Closures::new(model, extras),
+        featurings: featurings(model),
     }
+}
+
+/// Feature -> the `featuringType` of each `TypeFeaturing` it is the
+/// `featureOfType` of, in model order: the feature the relationship
+/// names, or where it names none, the feature that owns it.
+fn featurings(model: &Model) -> HashMap<ElementId, Vec<ElementId>> {
+    let mut out: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
+    for id in model.ids() {
+        if model.kind(id) != ElementKind::TypeFeaturing {
+            continue;
+        }
+        let Some(Value::Ref(featuring)) = model.maybe(id, "featuringType") else {
+            continue;
+        };
+        let feature = match model.maybe(id, "featureOfType") {
+            Some(Value::Ref(feature)) => Some(*feature),
+            _ => model.owner(id),
+        };
+        if let Some(feature) = feature {
+            out.entry(feature).or_default().push(*featuring);
+        }
+    }
+    out
 }
 
 /// Write the document out, an element at a time.
@@ -2101,6 +2278,16 @@ fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), Impor
             }
             if let Some(role) = folded_role(bridge) {
                 model.set_member_role(member, role);
+            }
+            // a feature held by a plain `OwningMembership` was declared a
+            // member and not a feature of its owner -- `member feature g`,
+            // the `[0..1]` of a cross feature -- which the model records
+            // rather than works out. Not restored, every such feature came
+            // back a `FeatureMembership`'s and inherited as a feature.
+            if bridge["@type"] == "OwningMembership"
+                && model.kind(member).is_a(ElementKind::Feature)
+            {
+                model.set_owning_member(member);
             }
         }
         Ok(members)
@@ -3210,6 +3397,10 @@ mod tests {
             if !imported.is_empty() {
                 extras.imported.insert(id, imported);
             }
+            let inheritable = ws.inheritable_imported_members(id);
+            if !inheritable.is_empty() {
+                extras.inheritable_imported.insert(id, inheritable);
+            }
             if let Some(target) = ws.import_of(id) {
                 extras.import_targets.insert(id, target);
             }
@@ -4277,5 +4468,215 @@ mod tests {
             from_json(&dangling),
             Err(ImportError::UnknownReference(_))
         ));
+    }
+
+    /// A KerML text, resolved, exported, and the objects it wrote.
+    fn kerml_objects(source: &str) -> Vec<Json> {
+        let mut ws = sysml_semantics::Workspace::new();
+        ws.add_file("test.kerml", source);
+        ws.resolve_all();
+        let json = to_json(ws.model());
+        json.as_array().unwrap().clone()
+    }
+
+    /// `owningAnnotatedElement` subsets `owningRelatedElement`: it names
+    /// the annotated element only where that element owns the
+    /// annotation. `comment about C` is a comment owning its annotation,
+    /// and it said C owned it too -- the end it relates, copied into the
+    /// name for who holds it.
+    #[test]
+    fn an_annotation_its_comment_owns_has_no_owning_annotated_element() {
+        let objects = kerml_objects("package P { class C; comment about C /* hi */ }\n");
+        let comment = objects.iter().find(|it| it["@type"] == "Comment").unwrap();
+        let c = objects.iter().find(|it| it["declaredName"] == "C").unwrap();
+        let annotation = objects
+            .iter()
+            .find(|it| it["@type"] == "Annotation")
+            .unwrap();
+        assert_eq!(annotation["annotatedElement"]["@id"], c["@id"]);
+        assert_eq!(annotation["owningAnnotatedElement"], Json::Null);
+        assert_eq!(annotation["owningRelatedElement"]["@id"], comment["@id"]);
+        assert_eq!(annotation["owningAnnotatingElement"]["@id"], comment["@id"]);
+    }
+
+    /// A relationship written as a statement of its own is a member of
+    /// the namespace it stands in, through an `OwningMembership`, and is
+    /// owned by none of the elements it relates. `subset S::f subsets
+    /// S::g;` in a package came out with the package as its
+    /// `owningFeature` and `owningRelatedElement`, and no membership; the
+    /// same statement in a feature's body counted as that feature's own
+    /// subsetting, and the feature inherited from what it named.
+    #[test]
+    fn a_relationship_written_on_its_own_is_a_member_of_its_namespace() {
+        let source = "package P {\n\
+                        class C;\n\
+                        struct S { feature f; feature g; feature k subsets g; feature h { subset f subsets g; } }\n\
+                        subset S::f subsets S::g;\n\
+                        specialization Sp subtype S specializes C;\n\
+                      }\n";
+        let mut ws = sysml_semantics::Workspace::new();
+        ws.add_file("test.kerml", source);
+        ws.resolve_all();
+        let json = to_json(ws.model());
+        let objects = json.as_array().unwrap();
+        let by_id = |reference: &Json| {
+            objects
+                .iter()
+                .find(|it| it["@id"] == reference["@id"])
+                .unwrap()
+        };
+        let named = |name: &str| {
+            objects
+                .iter()
+                .find(|it| it["declaredName"] == name)
+                .unwrap()
+        };
+        let package = named("P");
+        let (f, g, h) = (named("f"), named("g"), named("h"));
+        let in_package = objects
+            .iter()
+            .find(|it| {
+                it["@type"] == "Subsetting"
+                    && it["subsettingFeature"]["@id"] == f["@id"]
+                    && it["subsettedFeature"]["@id"] == g["@id"]
+                    && it["owningNamespace"]["@id"] == package["@id"]
+            })
+            .expect("the subsetting in the package is a member of it");
+        let specialization = named("Sp");
+        for relationship in [in_package, specialization] {
+            for owning in [
+                "owningRelatedElement",
+                "owningFeature",
+                "owningClassifier",
+                "owningType",
+            ] {
+                if let Some(value) = relationship.get(owning) {
+                    assert_eq!(
+                        value,
+                        &Json::Null,
+                        "{owning} of a {}",
+                        relationship["@type"]
+                    );
+                }
+            }
+            let membership = by_id(&relationship["owningMembership"]);
+            assert_eq!(membership["@type"], "OwningMembership");
+            assert_eq!(membership["ownedMemberElement"]["@id"], relationship["@id"]);
+            assert_eq!(
+                membership["membershipOwningNamespace"]["@id"],
+                package["@id"]
+            );
+            assert_eq!(relationship["owningNamespace"]["@id"], package["@id"]);
+            assert_eq!(relationship["owner"]["@id"], package["@id"]);
+            assert!(package["ownedMembership"]
+                .as_array()
+                .unwrap()
+                .contains(&relationship["owningMembership"]));
+        }
+        // in a feature's body the subsetting is that feature's member,
+        // and none of its own specializations
+        let in_body = objects
+            .iter()
+            .find(|it| it["@type"] == "Subsetting" && it["owningNamespace"]["@id"] == h["@id"])
+            .expect("the subsetting in h's body is a member of h");
+        assert_eq!(in_body["owningFeature"], Json::Null);
+        assert!(!h["ownedSubsetting"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|it| it["@id"] == in_body["@id"]));
+        // and an ordinary one is still owned by the feature it is written on
+        let k = named("k");
+        let own = by_id(&k["ownedSubsetting"][0]);
+        assert_eq!(own["subsettedFeature"]["@id"], g["@id"]);
+        assert_eq!(own["owningFeature"]["@id"], k["@id"]);
+        assert_eq!(own["owningType"]["@id"], k["@id"]);
+        assert_eq!(own["owningRelatedElement"]["@id"], k["@id"]);
+        assert_eq!(own["owningMembership"], Json::Null);
+
+        // the membership folds back into ownership on the way in
+        let (rebuilt, _) = from_json(&json).unwrap();
+        assert_eq!(rebuilt.len(), ws.model().len());
+        assert_eq!(to_json(&rebuilt), json);
+    }
+
+    /// `featuringType` is every `TypeFeaturing`'s `featuringType`, with
+    /// the owning type a feature membership makes one. Read off the owner
+    /// alone, `feature fb : A featured by B` was featured by its struct
+    /// and never by B, though the document held the `TypeFeaturing`
+    /// saying so -- and `featuring of S::f by A;` standing in the package
+    /// was lost the same way.
+    #[test]
+    fn a_feature_is_featured_by_what_its_type_featurings_name() {
+        let objects = kerml_objects(
+            "package P {\n\
+               class A; class B;\n\
+               struct S { feature f; feature fb : A featured by B; }\n\
+               featuring of S::f by A;\n\
+             }\n",
+        );
+        let id = |name: &str| {
+            objects
+                .iter()
+                .find(|it| it["declaredName"] == name)
+                .unwrap()["@id"]
+                .clone()
+        };
+        let featuring = |name: &str| -> Vec<Json> {
+            objects
+                .iter()
+                .find(|it| it["declaredName"] == name)
+                .unwrap()["featuringType"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|it| it["@id"].clone())
+                .collect()
+        };
+        assert_eq!(featuring("fb"), vec![id("S"), id("B")]);
+        assert_eq!(featuring("f"), vec![id("S"), id("A")]);
+    }
+
+    /// A supertype's `nonPrivateMemberships` include what its public
+    /// imports bring in, so a type specializing it inherits those. The
+    /// closure counted only memberships the supertype owned: `Derived :>
+    /// Base` never inherited the `Lib::X` that `public import Lib::*;` in
+    /// `Base` brings in -- the name a reference written in `Derived`
+    /// resolves through -- while what `Base` imports privately stays put.
+    #[test]
+    fn a_subtype_inherits_what_its_supertype_imports_publicly() {
+        let (mut ws, model) = resolved(
+            "package Q {\n\
+               package Lib { part def X; }\n\
+               package Other { part def Y; }\n\
+               part def Base { public import Lib::*; private import Other::*; }\n\
+               part def Derived :> Base;\n\
+               part def Further :> Derived;\n\
+             }\n",
+        );
+        let extras = extras_of(&mut ws);
+        let json = to_json_with(&model, &extras);
+        let objects = json.as_array().unwrap();
+        let named = |name: &str| {
+            objects
+                .iter()
+                .find(|it| it["declaredName"] == name)
+                .unwrap()
+        };
+        let x_membership = named("X")["owningMembership"].clone();
+        let y_membership = named("Y")["owningMembership"].clone();
+        for subtype in ["Derived", "Further"] {
+            let inherited = named(subtype)["inheritedMembership"].as_array().unwrap();
+            assert!(
+                inherited.contains(&x_membership),
+                "{subtype} inherits Lib::X"
+            );
+            assert!(
+                !inherited.contains(&y_membership),
+                "{subtype} inherits Other::Y"
+            );
+            let members = named(subtype)["member"].as_array().unwrap();
+            assert!(members.iter().any(|it| it["@id"] == named("X")["@id"]));
+        }
     }
 }

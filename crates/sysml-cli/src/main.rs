@@ -767,6 +767,12 @@ fn resolved(
         if !imported.is_empty() {
             extras.imported.insert(id, imported);
         }
+        // and the part of that a specializing type inherits: what the
+        // public and protected imports bring in, and not the private ones
+        let inheritable = ws.inheritable_imported_members(id);
+        if !inheritable.is_empty() {
+            extras.inheritable_imported.insert(id, inheritable);
+        }
         // an import of an alias imports the alias, not what it stands for
         if let Some(target) = ws.imported_alias(id).or_else(|| ws.import_of(id)) {
             extras.import_targets.insert(id, target);
