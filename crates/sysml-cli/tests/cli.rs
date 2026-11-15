@@ -1198,8 +1198,9 @@ fn json_reports_what_a_program_works_from() {
     assert_eq!(v["parseErrors"], 0);
 
     // a file that cannot be read is a finding, not a stray line, and
-    // every command says so in the same place
-    for command in ["parse", "check", "stats", "fmt"] {
+    // every command says so in the same place -- `plan` among them, which
+    // printed nothing at all to stdout and left a program with no JSON
+    for command in ["parse", "check", "stats", "fmt", "plan"] {
         let mut args = vec!["--format", "json", command, "no-such-file.sysml"];
         if command == "fmt" {
             args.push("--check");
@@ -1852,4 +1853,58 @@ fn a_violation_names_its_element_as_it_would_be_written() {
     let out = sysml(&["--format", "json", "check", model.to_str().unwrap()]);
     let v = json_of(&out);
     assert_eq!(v["violations"][0]["element"], "P::'é😀'::o2", "{v}");
+}
+
+/// A library from `SYSML_LIBRARY_PATH` with a name missing in it is not the
+/// model's problem, and was counted as one: `check` of a file whose every
+/// name resolved failed with "1/2 resolved", an empty list of what did not,
+/// and nothing anywhere to say which reference that was. The counts and the
+/// exit status are about the files asked about, as the list always was, and
+/// the library's own gap is said apart.
+#[test]
+fn a_gap_in_the_library_is_not_the_models_to_answer_for() {
+    let dir = temp_dir("library-gap");
+    let library = dir.join("library");
+    std::fs::create_dir_all(&library).unwrap();
+    write(&library, "l.sysml", "package L { part x : Missing; }\n");
+    let ok = write(&dir, "ok.sysml", "part def A;\npart a : A;\n");
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_sysml"))
+            .env("SYSML_LIBRARY_PATH", &library)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let out = run(&["--format", "json", "check", ok.to_str().unwrap()]);
+    let v = json_of(&out);
+    assert!(out.status.success(), "{v}");
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["resolved"], 1);
+    assert_eq!(v["references"], 1);
+    assert_eq!(v["unresolved"].as_array().unwrap().len(), 0);
+    assert_eq!(v["libraryUnresolved"], 1);
+
+    let out = run(&["check", ok.to_str().unwrap()]);
+    assert!(out.status.success());
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("1/1 reference(s) resolved"), "{said}");
+    let noted = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        noted.contains("1 reference(s) in the library"),
+        "the library's gap is said, not hidden: {noted}"
+    );
+
+    // a model's own missing name still fails it, and is the one counted
+    let bad = write(&dir, "bad.sysml", "part a : Nowhere;\n");
+    let out = run(&["--format", "json", "check", bad.to_str().unwrap()]);
+    assert!(!out.status.success());
+    let v = json_of(&out);
+    assert_eq!(v["references"], 1);
+    assert_eq!(v["unresolved"][0]["name"], "Nowhere");
+
+    // and the library checked as what is asked about lists its own
+    let out = run(&["--format", "json", "check", library.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert_eq!(json_of(&out)["unresolved"][0]["name"], "Missing");
 }

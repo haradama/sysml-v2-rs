@@ -80,6 +80,32 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// Echoing back whatever was asked promised revisions that do not exist.
 const SPOKEN: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
 
+/// Why `project` cannot be the project a server is started with, or
+/// nothing where it can.
+///
+/// A project is a directory: its files are read from under it, and the
+/// relative names a call gives are looked for there. A path that is not
+/// there, or one that is a file, used to start a server with an empty
+/// project, which answered every call by saying to start it with
+/// `--project`. A single file is refused rather than taken as a project
+/// of one, since the names a call gives would then be looked for under a
+/// file; it is what a call's `path` is for, and its directory is the
+/// project it belongs to. A directory with nothing in it yet is a project
+/// still to be written, and is taken.
+pub fn refuse_project(project: &Path) -> Option<String> {
+    let shown = project.display();
+    match std::fs::metadata(project) {
+        Err(err) => Some(format!("cannot read the project at {shown}: {err}")),
+        Ok(found) if !found.is_dir() => Some(format!(
+            "the project at {shown} is a file, not a directory: start the server with \
+             the directory it is in as `--project`, or pass the file to a call as `path`"
+        )),
+        Ok(_) => std::fs::read_dir(project)
+            .err()
+            .map(|err| format!("cannot read the project at {shown}: {err}")),
+    }
+}
+
 /// The library and open documents, answered against.
 pub struct Server {
     /// the standard library, parsed and resolved once
@@ -320,7 +346,7 @@ impl Server {
     /// project's copy on disk was loaded beside the edit, and an edit that
     /// deleted a definition another file uses was answered `ok`.
     fn opened(&self, arguments: &Value) -> Result<Opened, String> {
-        let named = source(arguments)?;
+        let named = self.source(arguments)?;
         let named_as = named.as_ref().map(|(name, _)| self.canonical(name));
         // each once, and none that is the file the call's text replaces
         let mut seen: HashSet<String> = named_as.iter().cloned().collect();
@@ -337,8 +363,7 @@ impl Server {
             }
         }
         for path in &alongside {
-            let text = std::fs::read_to_string(path)
-                .map_err(|err| format!("cannot read `{path}`: {err}"))?;
+            let text = self.read(path)?;
             open.push(ws.add_file(path.clone(), &text));
         }
         let focus = named.map(|(name, text)| {
@@ -353,13 +378,48 @@ impl Server {
     /// files are: from the project's root where it names a file there,
     /// otherwise from the server's directory.
     fn canonical(&self, path: &str) -> String {
+        canonical(&self.located(path).to_string_lossy())
+    }
+
+    /// Where a path a call gives is on disk: under the project's root where
+    /// it names something there, otherwise as written, from the server's
+    /// own directory.
+    ///
+    /// Which file a `name` stood for was asked this way while `path` and
+    /// `alongside` were read from the server's directory alone, so a
+    /// launcher that started the server anywhere but the project's root
+    /// had `path: "sub/car.sysml"` refused as unreadable -- the same
+    /// spelling `name` was matched by.
+    fn located(&self, path: &str) -> std::path::PathBuf {
         if let Some(project) = &self.project {
             let under = Path::new(&project.root).join(path);
             if Path::new(path).is_relative() && under.exists() {
-                return canonical(&under.to_string_lossy());
+                return under;
             }
         }
-        canonical(path)
+        std::path::PathBuf::from(path)
+    }
+
+    /// The text of a file a call names, found as [`Server::located`] finds it.
+    fn read(&self, path: &str) -> Result<String, String> {
+        std::fs::read_to_string(self.located(path))
+            .map_err(|err| format!("cannot read `{path}`: {err}"))
+    }
+
+    /// The text a tool works on: written out in the call, or read from a
+    /// path, or neither -- a call that names no source is about the project
+    /// the server was started with. The name decides the dialect, so a
+    /// `.kerml` file is read as KerML whichever way it arrives.
+    fn source(&self, arguments: &Value) -> Result<Option<(String, String)>, String> {
+        let name = optional_str(arguments, "name")?;
+        if let Some(text) = optional_str(arguments, "text")? {
+            let name = name.unwrap_or("model.sysml");
+            return Ok(Some((name.to_string(), text.to_string())));
+        }
+        let Some(path) = optional_str(arguments, "path")? else {
+            return Ok(None);
+        };
+        Ok(Some((path.to_string(), self.read(path)?)))
     }
 
     /// Does it parse, and does every name in it resolve?
@@ -701,8 +761,7 @@ impl Server {
                          server does not run cargo."
                             .to_string()
                     })?;
-                std::fs::read_to_string(path)
-                    .map_err(|err| format!("cannot read `{path}`: {err}"))?
+                self.read(path)?
             }
         };
         let package = arguments.get("package").and_then(Value::as_str);
@@ -731,8 +790,7 @@ impl Server {
                          to a file holding it. `sysml import-code --schema` prints its shape."
                             .to_string()
                     })?;
-                let text = std::fs::read_to_string(path)
-                    .map_err(|err| format!("cannot read `{path}`: {err}"))?;
+                let text = self.read(path)?;
                 sysml_rust::surface::read(&text).map_err(|err| err.to_string())?
             }
         };
@@ -922,6 +980,19 @@ impl Server {
                 .flat_map(|&file| ws.file_elements(file).to_vec())
                 .collect(),
         };
+        // A relation no edge is ever called -- `verified` for `verifies` --
+        // filtered nothing out, and every element came back as lacking it:
+        // a list of "unverified" requirements that was every requirement.
+        if let Some(relation) = text("without").filter(|r| !RELATIONS.contains(r)) {
+            return Err(format!(
+                "no relation `{relation}`: `without` takes one of {}",
+                RELATIONS
+                    .iter()
+                    .map(|r| format!("`{r}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         let related: Option<HashSet<ElementId>> = text("without").map(|relation| {
             edges(&ws, &open)
                 .into_iter()
@@ -976,6 +1047,27 @@ struct Edge {
     file: usize,
     offset: usize,
 }
+
+/// Every relation [`edges`] names a link by, which is what `find`'s
+/// `without` may be given.
+const RELATIONS: [&str; 16] = [
+    "satisfies",
+    "does_not_satisfy",
+    "verifies",
+    "allocated_to",
+    "then",
+    "connected_to",
+    "imports",
+    "annotated_by",
+    "performs",
+    "typed_by",
+    "redefines",
+    "references",
+    "subsets",
+    "specializes",
+    "conjugates",
+    "mentions",
+];
 
 /// Every link the opened files make, read off the resolved model.
 ///
@@ -1076,6 +1168,8 @@ fn edges(ws: &Workspace, open: &[usize]) -> Vec<Edge> {
             offset: r.range.start().into(),
         });
     }
+    // a name added here and not there is one `without` refuses
+    debug_assert!(edges.iter().all(|e| RELATIONS.contains(&e.relation)));
     edges
 }
 
@@ -1286,24 +1380,6 @@ fn optional_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, 
         Some(Value::String(it)) => Ok(Some(it)),
         Some(_) => Err(format!("`{key}` must be a string")),
     }
-}
-
-/// The text a tool works on: written out in the call, or read from a
-/// path, or neither -- a call that names no source is about the project
-/// the server was started with. The name decides the dialect, so a
-/// `.kerml` file is read as KerML whichever way it arrives.
-fn source(arguments: &Value) -> Result<Option<(String, String)>, String> {
-    let name = optional_str(arguments, "name")?;
-    if let Some(text) = optional_str(arguments, "text")? {
-        let name = name.unwrap_or("model.sysml");
-        return Ok(Some((name.to_string(), text.to_string())));
-    }
-    let Some(path) = optional_str(arguments, "path")? else {
-        return Ok(None);
-    };
-    let text =
-        std::fs::read_to_string(path).map_err(|err| format!("cannot read `{path}`: {err}"))?;
-    Ok(Some((path.to_string(), text)))
 }
 
 /// What each of these elements is, for an answer that only names them.

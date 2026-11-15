@@ -2159,3 +2159,101 @@ fn nothing_is_visible_inside_a_comment_or_a_string() {
         "{visible}"
     );
 }
+
+/// A relation no link is ever called filtered nothing out, so `without:
+/// "verified"` -- one letter from `verifies` -- answered that every
+/// requirement was unverified. It is refused, with the names there are.
+#[test]
+fn find_refuses_a_relation_that_is_not_one() {
+    let answers = session(&[call(
+        "find",
+        json!({ "text": LINKED, "kind": "RequirementUsage", "without": "verified" }),
+    )]);
+    assert_eq!(answers[0]["result"]["isError"], true, "{answers:?}");
+    let why = answered(&answers[0])["error"].as_str().unwrap().to_string();
+    assert!(why.contains("`verified`"), "{why}");
+    assert!(why.contains("`verifies`"), "{why}");
+    assert!(why.contains("`allocated_to`"), "{why}");
+}
+
+/// A relative `path` or `alongside` names a file the way a relative `name`
+/// does: from the project's root. They were read from the server's own
+/// directory, so a server started anywhere else -- as these tests start it,
+/// from the crate -- could not read `sub/car.sysml` while `name:
+/// "sub/car.sysml"` matched it.
+#[test]
+fn a_relative_path_is_read_from_the_projects_root() {
+    let dir = scratch("sysml-mcp-relative");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::create_dir_all(dir.join("extra")).unwrap();
+    std::fs::write(
+        dir.join("sub/car.sysml"),
+        "package Car {\n\tprivate import Bits::*;\n\tpart w : Wheel;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("bits.sysml"),
+        "package Bits {\n\tpart def Wheel;\n}\n",
+    )
+    .unwrap();
+    assert!(!std::path::Path::new("sub/car.sysml").exists());
+
+    let answer =
+        answered(&in_project(&dir, &[call("check", json!({ "path": "sub/car.sysml" }))])[0]);
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["references"], 2, "{answer}");
+
+    let answer = answered(
+        &in_project(
+            &dir,
+            &[call(
+                "check",
+                json!({
+                    "text": "package Use {\n\tpart v :> Car::w;\n}\n",
+                    "alongside": ["sub/car.sysml"],
+                }),
+            )],
+        )[0],
+    );
+    // `Car` is the project's already; named again it is the same file,
+    // read once, from where the project has it
+    assert_eq!(answer["ok"], true, "{answer}");
+}
+
+/// A project that is not a directory is refused when the server starts,
+/// where its launcher reads stderr and the exit code. It used to start with
+/// an empty project and answer every call by saying to start it with
+/// `--project`, which it had been.
+#[test]
+fn a_project_that_is_not_a_directory_is_refused_at_startup() {
+    let dir = scratch("sysml-mcp-not-a-project");
+    let file = dir.join("one.sysml");
+    std::fs::write(&file, "part def One;\n").unwrap();
+    for project in [dir.join("missing"), file] {
+        let out = Command::new(env!("CARGO_BIN_EXE_sysml"))
+            .args([
+                "--no-library",
+                "mcp",
+                "--project",
+                project.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{project:?}");
+        assert!(out.stdout.is_empty(), "{project:?}");
+        let said = String::from_utf8_lossy(&out.stderr);
+        assert!(said.contains(project.to_str().unwrap()), "{said}");
+    }
+    // and a directory is what a project is
+    let out = Command::new(env!("CARGO_BIN_EXE_sysml"))
+        .args(["--no-library", "mcp", "--project", dir.to_str().unwrap()])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

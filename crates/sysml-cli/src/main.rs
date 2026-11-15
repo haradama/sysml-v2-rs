@@ -15,6 +15,47 @@ use sysml_syntax::{Diagnostic, Dialect};
 
 mod api;
 
+/// `print!` that stops quietly when the reader has gone.
+///
+/// `sysml export f.sysml | head`, `sysml check m/ | true`: the reader
+/// closes the pipe, and `print!` panics on what is left. Every write to
+/// stdout in this file goes through these, so that no command is left
+/// out the way all but two were when [`written`] alone covered it.
+macro_rules! out {
+    ($($arg:tt)*) => { to_stdout(format_args!($($arg)*)) };
+}
+
+/// `println!` that stops quietly when the reader has gone; see [`out!`].
+macro_rules! outln {
+    () => { to_stdout(format_args!("\n")) };
+    ($($arg:tt)*) => { to_stdout(format_args!("{}\n", format_args!($($arg)*))) };
+}
+
+/// Write to stdout, or end the run if it cannot be written.
+///
+/// A closed pipe ends it quietly and successfully, as [`written`] does:
+/// stopping is what the reader asked for. Any other failure -- a full
+/// disk behind a redirect -- is said, and the run fails.
+fn to_stdout(args: std::fmt::Arguments<'_>) {
+    use std::io::Write as _;
+    let failed = {
+        let mut out = std::io::stdout().lock();
+        out.write_fmt(args).err()
+    };
+    if let Some(err) = failed {
+        stdout_failed(&err);
+    }
+}
+
+/// End the run over a write to stdout that failed; see [`to_stdout`].
+fn stdout_failed(err: &std::io::Error) -> ! {
+    if err.kind() == std::io::ErrorKind::BrokenPipe {
+        std::process::exit(0);
+    }
+    eprintln!("error: cannot write to stdout: {err}");
+    std::process::exit(1);
+}
+
 fn parse_file(path: &Path, text: &str) -> sysml_syntax::Parse {
     let dialect = path
         .extension()
@@ -528,6 +569,15 @@ fn main() -> ExitCode {
                 library.or_else(|| std::env::var_os("SYSML_LIBRARY_PATH").map(Into::into));
             let project =
                 project.or_else(|| std::env::var_os("SYSML_PROJECT_PATH").map(Into::into));
+            // A project that is not a directory to read is refused here, at
+            // startup, where the launcher reads stderr and the exit code.
+            // Taken as given, it started a server with nothing in its
+            // project, and every call after said to start the server with
+            // `--project` -- which it had been.
+            if let Some(refused) = project.as_deref().and_then(sysml_cli::mcp::refuse_project) {
+                eprintln!("error: {refused}");
+                return ExitCode::FAILURE;
+            }
             // there is nowhere to report a failure to write: the only
             // way this ends badly is the client going away mid-answer,
             // and the exit code is what its launcher reads
@@ -593,9 +643,9 @@ fn stats(files: &[PathBuf], format: Format) -> ExitCode {
         let mut rows: Vec<_> = counts.into_iter().collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         for (kind, n) in rows {
-            println!("{n:6}  {kind}");
+            outln!("{n:6}  {kind}");
         }
-        println!("{total:6}  total elements ({errors} parse error(s))");
+        outln!("{total:6}  total elements ({errors} parse error(s))");
     }
     // counting the elements of a file that did not parse is counting
     // what the parser guessed at, and `parse` and `check` already exit
@@ -646,11 +696,21 @@ fn export(
             }
         }
         None => {
+            use std::io::Write as _;
             let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-            sysml_interchange::write_json(ws.model(), &extras, &mut out)
-                .expect("a model serializes");
-            // the line `println!` used to put on the end of it
-            let _ = std::io::Write::write_all(&mut out, b"\n");
+            // what fails here is the writing -- the model is built and
+            // serializes -- and `| head` makes it fail, which used to
+            // panic as though the model were at fault
+            let failed = sysml_interchange::write_json(ws.model(), &extras, &mut out)
+                .map_err(std::io::Error::from)
+                // the line `println!` used to put on the end of it
+                .and_then(|_| out.write_all(b"\n"))
+                .and_then(|()| out.flush())
+                .err();
+            if let Some(err) = failed {
+                drop(out);
+                stdout_failed(&err);
+            }
         }
     }
     ExitCode::SUCCESS
@@ -823,7 +883,7 @@ fn fmt(
                 }
             }
         } else {
-            print!("{formatted}");
+            out!("{formatted}");
         }
     }
     let ok = dirty == 0 && broken.is_empty() && unreadable.is_empty() && unwritten.is_empty();
@@ -864,17 +924,24 @@ impl Unreadable {
     /// `unreadable` list, so a program that watches for one watches for
     /// all of them.
     fn refuse(path: &Path, error: std::io::Error, command: &str, format: Format) -> ExitCode {
-        let unreadable = Unreadable {
+        Unreadable {
             path: path.display().to_string(),
             verb: "read",
             error: error.to_string(),
-        };
-        unreadable.say();
+        }
+        .stop(command, format)
+    }
+
+    /// Say this and stop, the way `command` says things: the same
+    /// `unreadable` list [`Unreadable::refuse`] gives, for a path that
+    /// was found unreadable while loading.
+    fn stop(&self, command: &str, format: Format) -> ExitCode {
+        self.say();
         if format == Format::Json {
             report(serde_json::json!({
                 "command": command,
                 "ok": false,
-                "unreadable": [unreadable.json()],
+                "unreadable": [self.json()],
             }));
         }
         ExitCode::FAILURE
@@ -1008,18 +1075,18 @@ fn plan(paths: &[PathBuf], format: Format, bare: bool, schema: bool) -> ExitCode
     if schema {
         let schema =
             serde_json::to_string_pretty(&sysml_rust::plan::schema()).expect("a schema is JSON");
-        println!("{schema}");
+        outln!("{schema}");
         return ExitCode::SUCCESS;
     }
     let mut ws = sysml_semantics::Workspace::new();
+    // Said in JSON as every other command says it: a program asking for
+    // a plan of a path that is not there was handed an empty stdout.
     if let Err(unreadable) = load_paths(&mut ws, paths) {
-        unreadable.say();
-        return ExitCode::FAILURE;
+        return unreadable.stop("plan", format);
     }
     let own: Vec<usize> = (0..ws.file_count()).collect();
     if let Err(unreadable) = ensure_library(&mut ws, bare) {
-        unreadable.say();
-        return ExitCode::FAILURE;
+        return unreadable.stop("plan", format);
     }
     ws.resolve_all();
     let roots: Vec<sysml_model::ElementId> = own
@@ -1031,7 +1098,7 @@ fn plan(paths: &[PathBuf], format: Format, bare: bool, schema: bool) -> ExitCode
         Format::Json => report(serde_json::to_value(&planned).expect("a built plan serializes")),
         Format::Text => {
             for definition in &planned.definitions {
-                println!(
+                outln!(
                     "{} -- {} ({} feature(s))",
                     definition.of,
                     definition.shape,
@@ -1043,7 +1110,7 @@ fn plan(paths: &[PathBuf], format: Format, bare: bool, schema: bool) -> ExitCode
             // no definition at all -- a package of imports, a model
             // whose declarations are all in the file next to it.
             if planned.definitions.is_empty() {
-                println!("no definitions: nothing here implies any code");
+                outln!("no definitions: nothing here implies any code");
             }
         }
     }
@@ -1500,12 +1567,12 @@ fn import(
         let mut rows: Vec<_> = counts.into_iter().collect();
         rows.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         for (kind, n) in rows {
-            println!("{n:6}  {kind}");
+            outln!("{n:6}  {kind}");
         }
         // The document holds more objects than the model holds elements:
         // a membership that only carries ownership is an object there and
         // an edge here, which is what `export` counted on the way out.
-        println!(
+        outln!(
             "{:6}  total elements, {} owned by nothing, from {objects} object(s)",
             model.len(),
             roots.len()
@@ -1931,8 +1998,28 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
         return ExitCode::FAILURE;
     }
 
-    let stats = ws.resolve_all();
+    // The library first and the files asked about on it, the way both
+    // servers stand their documents on a library resolved once. Resolving
+    // everything in one pass counted the library's references in with the
+    // model's: a library from `SYSML_LIBRARY_PATH` with one name missing
+    // failed the check of a file whose every name resolved, with "1/2
+    // resolved", an empty list of what did not, and nothing said about
+    // where the other one was. The counts, the list and the exit status
+    // are now all about the same files; what the library lacks is said in
+    // a sentence of its own, and `sysml check` of the library is what
+    // lists it.
+    let beneath: Vec<usize> = (own.len()..ws.file_count()).collect();
+    let underneath = ws.resolve_files(&beneath);
+    let stats = ws.resolve_files(&own);
     let total = stats.resolved + stats.unresolved;
+    if underneath.unresolved > 0 && format == Format::Text {
+        eprintln!(
+            "note: {} reference(s) in the library ({}) resolve to nothing; \
+             they are not counted here, and `sysml check` of the library lists them",
+            underneath.unresolved,
+            library.json().as_str().unwrap_or("none"),
+        );
+    }
     // rounded down, so that a model with a name missing never reads as
     // 100.0% -- one in seventeen thousand came out as exactly that
     let rate = if total == 0 {
@@ -2098,6 +2185,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
             "resolved": stats.resolved,
             "references": total,
             "unresolved": unresolved,
+            "libraryUnresolved": underneath.unresolved,
             "collisions": collisions,
             "violations": violations,
             "rules": {
@@ -2128,12 +2216,12 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
         n => format!(" ({n} more only in part)"),
     };
     match askable {
-        true => println!(
+        true => outln!(
             "{resolution}, {} constraint(s) checked{partly}, {} violation(s)",
             checked.held.len(),
             checked.violations.len()
         ),
-        false => println!("{resolution}"),
+        false => outln!("{resolution}"),
     }
     if sound {
         ExitCode::SUCCESS
@@ -2267,7 +2355,7 @@ fn corpus(dir: &Path, worst: usize, list_failures: bool, format: Format) -> Exit
         }));
     } else {
         for (ext, stat) in &by_ext {
-            println!(
+            outln!(
                 ".{ext}: {}/{} files ok ({:.1}%), {} total error(s)",
                 stat.ok,
                 stat.total,
@@ -2277,12 +2365,12 @@ fn corpus(dir: &Path, worst: usize, list_failures: bool, format: Format) -> Exit
         }
         if list_failures {
             for (errors, path) in &failing {
-                println!("FAIL {errors:5} {}", path.display());
+                outln!("FAIL {errors:5} {}", path.display());
             }
         } else if worst > 0 && !failing.is_empty() {
-            println!("\nworst {} file(s):", worst.min(failing.len()));
+            outln!("\nworst {} file(s):", worst.min(failing.len()));
             for (errors, path) in failing.iter().take(worst) {
-                println!("  {errors:5} error(s)  {}", path.display());
+                outln!("  {errors:5} error(s)  {}", path.display());
             }
         }
     }
@@ -2387,7 +2475,7 @@ fn written(text: &str) -> bool {
 }
 
 fn report(value: serde_json::Value) {
-    println!(
+    outln!(
         "{}",
         serde_json::to_string_pretty(&value).expect("a built value serializes")
     );
@@ -2530,7 +2618,7 @@ fn api_command(
             match format {
                 Format::Text => {
                     for line in lines {
-                        println!("{line}");
+                        outln!("{line}");
                     }
                 }
                 Format::Json => report(json),

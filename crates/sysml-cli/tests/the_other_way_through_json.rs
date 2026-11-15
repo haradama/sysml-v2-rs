@@ -32,8 +32,23 @@ fn dir() -> PathBuf {
 
 fn written(name: &str, text: &str) -> PathBuf {
     let at = dir().join(name);
-    std::fs::write(&at, text).unwrap();
+    let beside = aside(&at);
+    std::fs::write(&beside, text).unwrap();
+    std::fs::rename(&beside, &at).unwrap();
     at
+}
+
+/// Where this run writes a file before putting it in place.
+///
+/// The directory is shared by every run, so that the 754 MB document is
+/// not left behind once per run; two runs at once -- two checkouts, or a
+/// test run beside a coverage run -- then wrote `whole.json` over each
+/// other while the other was reading it. Written beside and renamed, a
+/// reader has the whole of one document or the whole of the other.
+fn aside(at: &Path) -> PathBuf {
+    let mut name = at.file_name().unwrap().to_os_string();
+    name.push(format!(".{}.part", std::process::id()));
+    at.with_file_name(name)
 }
 
 /// The document the four tests below share, written once.
@@ -68,18 +83,20 @@ fn whole_document() -> PathBuf {
 fn exported(name: &str, model: &str) -> PathBuf {
     let source = written(&format!("{name}.sysml"), model);
     let json = dir().join(format!("{name}.json"));
+    let beside = aside(&json);
     let out = sysml(&[
         "export",
         source.to_str().unwrap(),
         "--include-library",
         "-o",
-        json.to_str().unwrap(),
+        beside.to_str().unwrap(),
     ]);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    std::fs::rename(&beside, &json).unwrap();
     json
 }
 
