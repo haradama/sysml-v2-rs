@@ -135,7 +135,8 @@ fn a_client_handshakes_lists_and_calls() {
             "generation_plan",
             "library_search",
             "relations",
-            "find"
+            "find",
+            "format"
         ]
     );
     // a client builds its call from the schema, so it has to be there
@@ -2256,4 +2257,113 @@ fn a_project_that_is_not_a_directory_is_refused_at_startup() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// Every tool says it only reads, so a client may run it without asking
+/// its user each time -- and none of them is anything but that.
+#[test]
+fn every_tool_says_it_only_reads() {
+    let answers = session(&[json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})]);
+    let tools = answers[0]["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|tool| tool["name"] == "format"));
+    for tool in tools {
+        let said = &tool["annotations"];
+        assert_eq!(said["readOnlyHint"], true, "{tool}");
+        assert_eq!(said["destructiveHint"], false, "{tool}");
+        assert_eq!(said["openWorldHint"], false, "{tool}");
+        assert!(said["title"].is_string(), "{tool}");
+    }
+}
+
+/// An answer is structured content as well as text, the two the same:
+/// a client of the 2025-06-18 revision hands the first to its model as
+/// data, and an older one reads only the second.
+#[test]
+fn an_answer_is_structured_as_well_as_written() {
+    let answers = session(&[
+        call("check", json!({ "text": "part def A;" })),
+        call("check", json!({ "text": 42 })),
+    ]);
+    for answer in &answers {
+        let structured = &answer["result"]["structuredContent"];
+        assert!(structured.is_object(), "{answer}");
+        assert_eq!(&answered(answer), structured, "{answer}");
+    }
+    assert_eq!(answers[1]["result"]["isError"], true);
+    assert!(answers[1]["result"]["structuredContent"]["error"].is_string());
+}
+
+/// `format` answers the file as `sysml fmt` lays it out, writes nothing,
+/// and refuses text it cannot parse rather than re-spacing a guess.
+#[test]
+fn format_answers_the_laid_out_text_and_writes_nothing() {
+    let dir = scratch("sysml-mcp-format");
+    let file = dir.join("a.sysml");
+    let written = "package P{part def A;part a:A;}\n";
+    std::fs::write(&file, written).unwrap();
+    let answers = session(&[
+        call("format", json!({ "path": file.to_str().unwrap() })),
+        call(
+            "format",
+            json!({ "text": "package P {\n    part def A;\n}\n" }),
+        ),
+        call("format", json!({ "text": "package P { part def }" })),
+        call("format", json!({})),
+    ]);
+    let laid_out = answered(&answers[0]);
+    assert_eq!(laid_out["changed"], true, "{laid_out}");
+    assert_eq!(
+        laid_out["formatted"],
+        "package P {\n    part def A;\n    part a : A;\n}\n"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), written);
+    assert_eq!(answered(&answers[1])["changed"], false);
+    for refused in &answers[2..] {
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+    }
+    assert!(answered(&answers[2])["error"]
+        .as_str()
+        .unwrap()
+        .contains("does not parse"));
+}
+
+/// `focus` reports on the file a call names and leaves what is wrong
+/// elsewhere in the project unsaid, though it is still resolved against.
+/// Without it, an edit to one file of a hundred was answered with what
+/// was wrong in all of them.
+#[test]
+fn a_focused_check_reports_on_the_file_it_names() {
+    let dir = scratch("sysml-mcp-focus");
+    std::fs::write(
+        dir.join("parts.sysml"),
+        "package Parts {\n\tpart def Wheel;\n\tpart broken : NoSuchThing;\n}\n",
+    )
+    .unwrap();
+    let car = dir.join("car.sysml");
+    let text =
+        "package Car {\n\tprivate import Parts::*;\n\tpart w : Wheel;\n\tpart t : Tyre;\n}\n";
+    std::fs::write(&car, text).unwrap();
+    let path = car.to_str().unwrap();
+    let answers = in_project(
+        &dir,
+        &[
+            call("check", json!({ "path": path })),
+            call("check", json!({ "path": path, "focus": true })),
+            call("check", json!({ "focus": true })),
+        ],
+    );
+    let names = |answer: &Value| -> Vec<String> {
+        answer["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|it| it["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&answered(&answers[0])), ["NoSuchThing", "Tyre"]);
+    let focused = answered(&answers[1]);
+    // `Wheel` still resolves from the sibling, and only the edit's own
+    // miss is reported
+    assert_eq!(names(&focused), ["Tyre"], "{focused}");
+    assert_eq!(answers[2]["result"]["isError"], true);
 }

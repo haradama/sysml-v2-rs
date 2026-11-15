@@ -13,6 +13,15 @@
 //! - `import_code` -- what is this code, in any language, as a model?
 //! - `find` -- which elements are of this kind, here, or lack this link?
 //! - `relations` -- what is this element linked to, both ways?
+//! - `outline` -- what shape does it have once resolved, inherited and all?
+//! - `generate_rust` / `import_rust` -- the Rust a model implies, and the
+//!   model a crate's API already is
+//! - `format` -- how does `sysml fmt` lay this out?
+//!
+//! Every tool reads and none writes, and each says so in its annotations,
+//! so a client may run them without asking each time. An answer comes as
+//! structured content and as the same JSON in text, for clients of either
+//! revision.
 //!
 //! Where something can be derived exactly -- the Rust a model implies, the
 //! SysML a crate's API already is -- the tool says in the same answer what
@@ -320,15 +329,21 @@ impl Server {
             "generation_plan" => self.generation_plan(&arguments),
             "relations" => self.relations(&arguments),
             "find" => self.find(&arguments),
+            "format" => self.format(&arguments),
             _ => return Err(format!("no tool `{name}`")),
         };
-        Ok(match answered {
-            Ok(value) => json!({ "content": [text(&value)], "isError": false }),
-            Err(why) => json!({
-                "content": [text(&json!({ "error": why }))],
-                "isError": true,
-            }),
-        })
+        // The answer twice: as structured content, which a client of the
+        // 2025-06-18 revision hands its model as data, and as the same JSON
+        // in text, which is all an older client reads.
+        let said = match answered {
+            Ok(value) => (value, false),
+            Err(why) => (json!({ "error": why }), true),
+        };
+        Ok(json!({
+            "content": [text(&said.0)],
+            "structuredContent": said.0,
+            "isError": said.1,
+        }))
     }
 
     /// The workspace one call is answered against: the library, the project
@@ -433,7 +448,32 @@ impl Server {
     /// to be said here -- that the two shapes were one -- was not so.
     fn check(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
-        let Opened { mut ws, open, .. } = self.opened(arguments)?.about_something()?;
+        let focused = match arguments.get("focus") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(it)) => *it,
+            Some(_) => return Err("`focus` must be true or false".to_string()),
+        };
+        let Opened {
+            mut ws,
+            open,
+            focus,
+            ..
+        } = self.opened(arguments)?.about_something()?;
+        // `focus` asks about the file the call named and nothing else:
+        // in a project of a hundred files, an edit to one was answered
+        // with what is wrong in all of them, and what the edit itself
+        // broke was somewhere in the list.
+        let reported = match (focused, focus) {
+            (true, Some(file)) => vec![file],
+            (true, None) => {
+                return Err(
+                    "`focus` reports on the file a call names: give `text` or `path` too"
+                        .to_string(),
+                )
+            }
+            (false, _) => open.clone(),
+        };
+        let in_report = |file: usize| reported.contains(&file);
 
         // The answer is about the whole model that was opened, since that is what
         // the reference counts are over. Each finding says which file it is in,
@@ -467,7 +507,12 @@ impl Server {
         // syntax first: a file that does not parse has no names worth
         // resolving, so what would be said about them is about a tree
         // the parser guessed at
-        let broken = ws.findings(&open).syntax;
+        let broken: Vec<_> = ws
+            .findings(&open)
+            .syntax
+            .into_iter()
+            .filter(|f| in_report(f.file))
+            .collect();
         if !broken.is_empty() {
             let errors: Vec<Value> = broken
                 .iter()
@@ -495,17 +540,17 @@ impl Server {
         //     attribute temp : Temperature;       -- `TemperatureValue`, misremembered
         //
         // and they are not the same mistake.
-        let missed: Vec<String> = diagnosed
+        let names: Vec<&sysml_semantics::Finding> = diagnosed
             .found
             .names
             .iter()
-            .map(|f| f.what.clone())
+            .filter(|f| in_report(f.file))
             .collect();
+        let missed: Vec<String> = names.iter().map(|f| f.what.clone()).collect();
         let might = ws.suggestions(&missed);
-        let unresolved: Vec<Value> = diagnosed
-            .found
-            .names
+        let unresolved: Vec<Value> = names
             .iter()
+            .copied()
             .zip(&might)
             .map(|(f, might)| {
                 let mut said = json!({ "name": f.what });
@@ -532,6 +577,7 @@ impl Server {
             .found
             .collisions
             .iter()
+            .filter(|f| in_report(f.file))
             .map(|f| place(f, json!({ "message": f.what })))
             .collect();
         // `unevaluated` is a count and not a list: it says nothing about
@@ -542,6 +588,12 @@ impl Server {
         let violations: Vec<Value> = checked
             .violations
             .iter()
+            .filter(|violation| {
+                !focused
+                    || ws
+                        .element_place(violation.element)
+                        .is_some_and(|(file, _)| in_report(file))
+            })
             .map(|violation| {
                 let said = json!({
                     "rule": violation.rule,
@@ -915,6 +967,39 @@ impl Server {
             found = hunt(how);
         }
         Ok(json!({ "found": found, "searched": how }))
+    }
+
+    /// The model source as `sysml fmt` writes it.
+    ///
+    /// Answered rather than written: every tool here reads and none
+    /// writes, so a client is never surprised by a file it did not change
+    /// itself. Text that does not parse is refused, as `sysml fmt` refuses
+    /// it -- re-spacing what the parser could not follow can move where a
+    /// quote or a comment ends.
+    fn format(&mut self, arguments: &Value) -> Result<Value, String> {
+        let Some((name, text)) = self.source(arguments)? else {
+            return Err("give either `text` or `path`: formatting is of one file".to_string());
+        };
+        let width = match arguments.get("width") {
+            None | Some(Value::Null) => sysml_syntax::fmt::Layout::default().width,
+            Some(given) => given
+                .as_u64()
+                .ok_or_else(|| "`width` must be a whole number, 0 for no limit".to_string())?
+                as usize,
+        };
+        let parse = sysml_syntax::parse_dialect(&text, sysml_syntax::Dialect::from_path(&name));
+        if !parse.ok() {
+            return Err(format!(
+                "`{name}` does not parse, so it is not formatted: re-spacing what the parser \
+                 could not follow can change what it says. Ask `check` for where."
+            ));
+        }
+        let formatted =
+            sysml_syntax::fmt::format_parsed_with(&parse, sysml_syntax::fmt::Layout { width });
+        Ok(json!({
+            "changed": formatted != text,
+            "formatted": formatted,
+        }))
     }
 
     /// What one element is linked to, both ways: what it satisfies,
@@ -1583,13 +1668,19 @@ fn tools() -> Value {
             "description": "The other files of the model, loaded so that references into them resolve. Give these whenever the model spans more than one file.",
         },
     });
-    json!([
+    let mut every = json!([
         {
             "name": "check",
             "description": "Parse a SysML v2 / KerML model, resolve every name in it against the standard library, and run the well-formedness constraints the specification itself states. Answers which references resolve to nothing and where -- across every file that was opened, each finding under its own path, each with what it might have meant: `declared_as` names the elements that answer to it somewhere, so the name is right and wants an import, while `did_you_mean` names what is near it, so the name itself is wrong -- which root packages of your own take a name the standard library has already taken (`collisions`: both sides still resolve, but the name means one thing in your model and another in the library), and which constraints the model breaks. `library` and `project` say what was loaded, or are null; without the library every reference into it reads as unresolved. The constraints are put only to a model that parses, resolves and has the library to be asked against -- one asked with a name still dangling answers about the hole and not about the model -- so read `rules.asked` before reading an empty `rules.violations` as a clean bill. `rules.unevaluated` counts the constraints that could not be asked at all, and `rules.partly` those some elements could not answer -- a violation among those is not reported -- both of which say what this toolchain does not yet build rather than anything about the model. Use this on anything you write before believing it.",
             "inputSchema": {
                 "type": "object",
-                "properties": source_properties,
+                "properties": {
+                    "text": source_properties["text"],
+                    "path": source_properties["path"],
+                    "name": source_properties["name"],
+                    "alongside": source_properties["alongside"],
+                    "focus": { "type": "boolean", "description": "Report only what is found in the file `text` or `path` names, while still resolving it against everything else (default false: every file opened). Use it to ask about one edit in a large project." },
+                },
             },
         },
         {
@@ -1732,7 +1823,34 @@ fn tools() -> Value {
                 },
             },
         },
-    ])
+        {
+            "name": "format",
+            "description": "The file as `sysml fmt` lays it out: indentation, spacing and line breaks, with nothing it says changed. The formatted text is answered, not written -- write it yourself if you want it. Text that does not parse is refused rather than re-spaced, since moving tokens the parser could not follow can change what they say. `changed` says whether formatting made any difference.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": source_properties["text"],
+                    "path": { "type": "string", "description": "A file to read instead of `text`" },
+                    "name": source_properties["name"],
+                    "width": { "type": "integer", "description": "The line width to fit, 0 for none (default that of `sysml fmt`)" },
+                },
+            },
+        },
+    ]);
+    // Every tool here only reads: none writes a file, none reaches past
+    // this machine, and asking twice answers the same. Said, a client
+    // may run them without asking its user each time.
+    for tool in every.as_array_mut().into_iter().flatten() {
+        let title = tool["name"].as_str().unwrap_or_default().replace('_', " ");
+        tool["annotations"] = json!({
+            "title": title,
+            "readOnlyHint": true,
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+        });
+    }
+    every
 }
 
 /// Serve until the reader ends: one JSON-RPC message per line in, one

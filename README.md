@@ -128,6 +128,13 @@ checked package.
 { "mcpServers": { "sysml": { "command": "sysml", "args": ["mcp"] } } }
 ```
 
+`--project <dir>` (or `SYSML_PROJECT_PATH`) names the model being worked
+on, so a call that names no file is about all of it, and `check` with
+`focus` reports on the one file an edit touched. The `.mcp.json` in this
+repository runs the binary from `target/` and builds it with `cargo run`
+only when there is none -- a build a client may not wait out at start-up,
+so build it once first: `cargo build --release -p sysmlv2-cli`.
+
 ## Any language, both ways
 
 Rust is the language that ships: `sysml import-rust` reads a crate
