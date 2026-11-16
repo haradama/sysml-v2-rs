@@ -230,6 +230,45 @@ impl Writer<'_> {
         let model = self.model;
         let kind = model.kind(elem);
         let indent = "    ".repeat(depth);
+        // `specialization Gen subtype A specializes B;`, `disjoint A
+        // from B;` -- a relationship between two things neither of
+        // which is where it is written
+        if let Some((source, target, declared, words)) = relates(kind) {
+            let named = |prop: &str| match model.maybe(elem, prop) {
+                Some(Value::Ref(it)) => self.feature_ref(*it),
+                _ => None,
+            };
+            match (named(source), named(target)) {
+                (Some(one), Some(other)) => {
+                    let mut line = format!("{indent}{}", self.prefix(elem));
+                    let (before, between) = words;
+                    match (model.name(elem), kind) {
+                        // `featuring F of y by C;` names it in the
+                        // middle of the one word
+                        (Some(name), K::TypeFeaturing) => {
+                            let _ = write!(
+                                line,
+                                "featuring {} of {one} by {other}",
+                                sysml_syntax::quote(name)
+                            );
+                        }
+                        (Some(name), _) => {
+                            let _ = write!(
+                                line,
+                                "{declared} {} {before} {one} {between} {other}",
+                                sysml_syntax::quote(name)
+                            );
+                        }
+                        (None, _) => {
+                            let _ = write!(line, "{before} {one} {between} {other}");
+                        }
+                    }
+                    self.finish(line, elem, depth, &[]);
+                }
+                _ => self.leave_out(elem, &indent),
+            }
+            return;
+        }
         match kind {
             K::Documentation | K::Comment => {
                 let body = model
@@ -328,48 +367,6 @@ impl Writer<'_> {
             }
             K::Dependency => {
                 self.dependency(elem, &indent);
-                return;
-            }
-            // `specialization Gen subtype A specializes B;`, `disjoint A
-            // from B;` -- a relationship between two things neither of
-            // which is where it is written
-            _ if relates(kind).is_some() => {
-                let Some((source, target, declared, words)) = relates(kind) else {
-                    return;
-                };
-                let named = |prop: &str| match model.maybe(elem, prop) {
-                    Some(Value::Ref(it)) => self.feature_ref(*it),
-                    _ => None,
-                };
-                match (named(source), named(target)) {
-                    (Some(one), Some(other)) => {
-                        let mut line = format!("{indent}{}", self.prefix(elem));
-                        let (before, between) = words;
-                        match (model.name(elem), kind) {
-                            // `featuring F of y by C;` names it in the
-                            // middle of the one word
-                            (Some(name), K::TypeFeaturing) => {
-                                let _ = write!(
-                                    line,
-                                    "featuring {} of {one} by {other}",
-                                    sysml_syntax::quote(name)
-                                );
-                            }
-                            (Some(name), _) => {
-                                let _ = write!(
-                                    line,
-                                    "{declared} {} {before} {one} {between} {other}",
-                                    sysml_syntax::quote(name)
-                                );
-                            }
-                            (None, _) => {
-                                let _ = write!(line, "{before} {one} {between} {other}");
-                            }
-                        }
-                        self.finish(line, elem, depth, &[]);
-                    }
-                    _ => self.leave_out(elem, &indent),
-                }
                 return;
             }
             // `first start;` -- the step an action begins with, named
@@ -1599,11 +1596,11 @@ impl Writer<'_> {
                 }
             }
         }
-        if let Some(&receiver) = parameters.get(1) {
-            if let Some(value) = self.value_of(receiver) {
-                let _ = write!(said, " via {}", self.expr(value)?);
-            }
-        }
+        let receiver = parameters.get(1).and_then(|&it| self.value_of(it));
+        said.push_str(&match receiver {
+            Some(value) => format!(" via {}", self.expr(value)?),
+            None => String::new(),
+        });
         Some(said)
     }
 
@@ -2386,7 +2383,6 @@ impl Writer<'_> {
             (K::LiteralInfinity, _) => Some("*".to_string()),
             (K::LiteralInteger, Some(Value::Int(n))) => Some(n.to_string()),
             (K::LiteralRational, Some(Value::Real(r))) => Some(format!("{r:?}")),
-            (K::LiteralRational, Some(Value::Int(n))) => Some(format!("{n}.0")),
             (K::LiteralBoolean, Some(Value::Bool(b))) => Some(b.to_string()),
             (K::LiteralString, Some(Value::String(s))) => Some(string(s)),
             _ => None,
@@ -2464,18 +2460,12 @@ impl Writer<'_> {
         // ScalarValues::*;` is written for, and the only way to a private
         // member a view exposes
         if let Some(name) = self.simple_name(elem).filter(|_| !self.importing) {
-            for (depth, &nearer) in around.iter().enumerate() {
+            for &nearer in &around {
                 if self.declares(nearer, &name, elem) {
                     break;
                 }
                 if self.imports(nearer, elem) {
-                    let shadowed = around[..depth]
-                        .iter()
-                        .any(|&closer| self.declares(closer, &name, elem));
-                    if !shadowed {
-                        return Some(sysml_syntax::quote(&name));
-                    }
-                    break;
+                    return Some(sysml_syntax::quote(&name));
                 }
             }
         }

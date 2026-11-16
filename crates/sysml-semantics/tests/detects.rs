@@ -14,13 +14,12 @@
 //!
 //! Breaking the corpus, next door, reaches far more of them than writing
 //! models by hand -- but not all. A constraint the corpus asks of three
-//! elements has nothing much to break: of the hundred and eight that no
-//! break had reached, nine were answered of fewer than ten elements. Six
-//! of the models here came of aiming at those.
+//! elements has nothing much to break, so some models here are aimed at
+//! exactly those constraints.
 //!
-//! A seventh came of asking why an aimed model did not work.
-//! `validateSubjectMembershipOwningType` was answered of eighteen subjects
-//! and could not have been false of any: it asks whether the owning type
+//! Another comes of asking why an aimed model did not work.
+//! `validateSubjectMembershipOwningType` is answered of few subjects
+//! and could not be false of any if misread: it asks whether the owning type
 //! is one of four and writes the second as a metaclass that does not
 //! exist. Read as the constraint's own words say, a subject under an
 //! action definition is reported.
@@ -194,8 +193,8 @@ const REJECTED: &[(&str, &str, &[&str])] = &[
     (
         "a rendering belongs to a view",
         // `render` names a rendering the library declares; `asTree`, which
-        // this once wrote, was never there, and went unreported only for
-        // as long as nothing looked the name up
+        // is not in the library, and goes unreported only for as long as
+        // nothing looks the name up
         "package P {\n\tpart def Q;\n\tpart q : Q {\n\t\trender Views::asTreeDiagram;\n\t}\n}\n",
         &["validateViewRenderingMembershipOwningType"],
     ),
@@ -375,24 +374,19 @@ fn a_name_declared_again_is_said_where_it_is_repeated() {
 /// The same question asked of the corpus, by breaking it on purpose.
 ///
 /// Writing a wrong model by hand reaches the constraints one at a time,
-/// and only the ones whose shape is already understood. The corpus is 403
-/// files of rich, correct SysML: change one thing in one of them and it is
+/// and only the ones whose shape is already understood. The corpus is
+/// many files of rich, correct SysML: change one thing in one of them and it is
 /// still a model, still parses, still resolves -- and is now wrong in a
 /// way somebody's editor could be wrong.
 ///
-/// Four sweeps got here. Fifty keyword swaps over every file left 1674
-/// models, tripped twenty-six constraints, and found a panic: `connector
-/// ps : P ([0..*] myCart, ...)` counted the `*` of the bound as a step of
-/// the name beside it. A second widened the swaps past the definition
-/// keywords -- 4257 models, thirty-nine constraints. A third broke one
-/// place at a time and took whole lines out and put them in twice: 12040
-/// models, fourteen more. A fourth reordered neighbouring lines and broke
-/// two places at once, and found nothing new. Only the first found a
-/// panic.
-///
-/// What the fourth did find was elsewhere: breaking the standard library
-/// rather than a model reaches four more, next door. Sixty-two of the
-/// hundred and seventy answered constraints are demonstrated to fire.
+/// Several kinds of sweep reach them. Keyword swaps over every file
+/// trip many constraints, and can find a panic: `connector ps : P
+/// ([0..*] myCart, ...)` must not count the `*` of the bound as a step of
+/// the name beside it. Swaps past the definition keywords reach more;
+/// so does breaking one place at a time, taking whole lines out and putting
+/// them in twice. Reordering neighbouring lines and breaking two places
+/// at once reach little that is new. Breaking the standard library
+/// rather than a model reaches a few more, next door.
 ///
 /// Each row is one break, the file it is made in, and constraints that
 /// must notice. Others may notice too -- one keyword can be wrong several
@@ -815,7 +809,7 @@ const LIBRARY_BROKEN: &[(&str, Break, &[&str])] = &[
     (
         // a second `else arr.elements#(...);` is a succession on its own,
         // to an expression that is no feature to run to -- its index is
-        // no multiplicity, which it was once read as
+        // no multiplicity, which it must not be read as
         "CollectionFunctions.kerml",
         Repeat(66),
         &["validateConnectorRelatedFeatures"],

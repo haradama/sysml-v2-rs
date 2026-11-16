@@ -65,7 +65,7 @@ impl Workspace {
     /// relationships resolution reifies, so a type that was never resolved has
     /// no members to show and no supertype to inherit from. Resolving every
     /// loaded file answers that by doing far more work than the question
-    /// needs: a standard library is thousands of references, of which a model
+    /// needs: a standard library is very many references, of which a model
     /// uses a handful.
     pub fn resolve_reached(&mut self, files: &[usize]) -> ResolveStats {
         let mut stats = self.resolve_files(files);
@@ -473,7 +473,7 @@ impl Workspace {
                             // `validateSubsettingFeaturingTypes` and
                             // `validateRedefinitionFeaturingTypes` ask.
                             //
-                            // A reference subsetting is one too -- 106 of them under the standard
+                            // A reference subsetting is one too -- many of them under the standard
                             // library alone -- and a connector end written `lcp ::> w.lcp` reaches
                             // what it relates through the chain. For a cross subsetting there is
                             // more: `deriveFeatureCrossFeature` reads

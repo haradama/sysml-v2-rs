@@ -100,8 +100,8 @@ mod tests {
 
     #[test]
     fn a_column_past_a_line_is_the_end_of_that_line_not_the_next() {
-        // hovering past the end of `part x :` used to answer about
-        // whatever the line below began with
+        // hovering past the end of `part x :` must not answer about
+        // whatever the line below begins with
         let text = "part x :\nA;\n";
         let index = LineIndex::new(text);
         assert_eq!(

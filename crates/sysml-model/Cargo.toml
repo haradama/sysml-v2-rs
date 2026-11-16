@@ -1,16 +1,15 @@
 [package]
 name = "sysmlv2-model"
 description = "In-memory element model (abstract syntax) for SysML v2 / KerML, generated from the official metamodel"
-# its own: all 175 metaclasses and every property document themselves
-# now, out of the same metamodel comment a constraint's `says` comes from
-version = "0.1.2"
+# its own: what a number moves for is a change in the crate it is on
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 # its own, not the workspace one: `readme` inherited from
-# `workspace.package` resolves against the workspace root, so every
-# crate published carried the whole project's README
+# `workspace.package` resolves against the workspace root, which would
+# make every crate's README the whole project's
 readme = "README.md"
 # `src/generated.rs` carries the specification's own OCL and wording,
 # which is the OMG's rather than this crate's to license. NOTICE says

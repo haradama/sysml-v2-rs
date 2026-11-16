@@ -103,13 +103,13 @@ impl Workspace {
                 // `unions`, `intersects` and `differences` narrow an
                 // extent rather than specialize a type, and nothing is
                 // inherited through them: read as specializations, a
-                // connector typed by a union of two associations had
+                // connector typed by a union of two associations would have
                 // the ends of both.
                 //
                 // `disjoint from` says the opposite of a specialization:
                 // `class Occurrence specializes Anything disjoint from
                 // DataValue` is no `DataValue`, and read as one every
-                // part had the `self` of a data value beside its own.
+                // part would have the `self` of a data value beside its own.
                 //
                 // Nor do `featured by` and `inverse of` specialize. The
                 // first says whose feature this one is -- a
@@ -117,9 +117,9 @@ impl Workspace {
                 // feature's featuring types and never among its
                 // supertypes -- and the second that it runs the other way
                 // along the same pairs, a `FeatureInverting`. Read as
-                // specializations, `feature fb : A featured by B` had the
+                // specializations, `feature fb : A featured by B` would have the
                 // features of a `B` as though it were one, and a name that
-                // `B` alone declares resolved inside it.
+                // `B` alone declares would resolve inside it.
                 if matches!(
                     part,
                     SyntaxKind::UNIONS_KW
@@ -225,7 +225,7 @@ impl Workspace {
         // its own. Read from that statement whenever it is asked for,
         // `T.s.x` names the `x` of a `Sig` wherever it is written, and not
         // only below the transition `T` that declares it -- which is where
-        // the typing was attached once `T` had been resolved.
+        // the typing is attached once `T` has been resolved.
         if supers.is_empty() {
             if let Some((context, parts)) = self.typed_where_written(elem) {
                 for (_, targets) in parts

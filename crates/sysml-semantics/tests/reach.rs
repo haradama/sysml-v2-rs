@@ -13,8 +13,8 @@ fn settled() -> Workspace {
 
 /// A document put on a library that is already resolved reaches into
 /// nothing: every element of the library has been resolved once, and
-/// resolving it again used to record every reference in it a second
-/// time -- fourteen thousand of them, on the standard library, per
+/// resolving it again must not record every reference in it a second
+/// time -- on the standard library that is a great many, per
 /// keystroke that asked.
 #[test]
 fn a_reach_does_not_re_enter_a_file_resolved_whole() {

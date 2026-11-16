@@ -54,15 +54,13 @@ colour from the line that refers to it, so a drawing carries a copy of
 each marker it paints.
 
 `background` paints the canvas. Nothing leaves it transparent, which is
-what a drawing dropped into a page wants and what this has always
-written; a drawing meant to stand on its own -- saved, printed, pasted
+what a drawing dropped into a page wants; a drawing meant to stand on its own -- saved, printed, pasted
 somewhere whose colour nobody chose -- wants one, and usually the same
 colour as `page`.
 
 Colour says nothing the SysML v2 notation defines: the shapes carry the
 meaning, and a skin never changes which marker means what. A drawing
-nobody painted is the drawing this wrote before skins existed, byte for
-byte.
+nobody painted is the default one, byte for byte the same each time.
 
 ## What is drawn
 

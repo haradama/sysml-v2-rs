@@ -28,7 +28,7 @@ use crate::Workspace;
 /// The metamodel states these in OCL beside the constraints, so a
 /// derived property is answered by evaluating what the specification
 /// says it is rather than by a second account of it written here.
-/// Parsed once: there are 235 of them and they are asked for constantly.
+/// Parsed once: there are many of them and they are asked for constantly.
 fn derivations() -> &'static [(ElementKind, String, Expr)] {
     static PARSED: OnceLock<Vec<(ElementKind, String, Expr)>> = OnceLock::new();
     PARSED.get_or_init(|| {
@@ -115,13 +115,12 @@ const TYPED_BY: [&str; 5] = [
 /// counterparts name something the membership does not own, and are left
 /// alone.
 ///
-/// `ParameterMembership::ownedMemberParameter` was not always among them.
-/// While an expression was kept as text rather than as the parameters the
-/// specification counts, reading it as the member made `result` a definite
-/// nothing rather than an unanswered question, and 2847 of a sound corpus
-/// were reported as violations. An expression is now built as that tree,
-/// and two of the four constraints this name reaches hold of the whole
-/// corpus; the other two are refused for reasons of their own.
+/// `ParameterMembership::ownedMemberParameter` is among them because an
+/// expression is built as the tree of parameters the specification
+/// counts. Were it kept as text, reading it as the member would make
+/// `result` a definite nothing rather than an unanswered question, and a
+/// sound corpus would be reported as violations. Some of the constraints
+/// this name reaches are refused for reasons of their own.
 const OWNED_MEMBER: [&str; 14] = [
     "action",
     "condition",
@@ -143,7 +142,7 @@ const OWNED_MEMBER: [&str; 14] = [
 /// builder reads off a keyword.
 ///
 /// Name resolution writes every specialization the semantic libraries
-/// imply, marking the relationship and the element that gained one. So a
+/// imply, marking the relationship and the element that has one. So a
 /// relationship carrying neither is one nothing implied, which is what
 /// the metamodel declares the default to be.
 const WRITTEN_FLAGS: [&str; 2] = ["isImplied", "isImpliedIncluded"];
@@ -265,7 +264,7 @@ const MISNAMED: [(&str, &str); 6] = [
 ///
 /// Closing what is open only helps where the body can then be answered.
 /// `Type::multiplicities` is left out for that reason: closed, it parses,
-/// and `validateFeatureEndMultiplicity` reports twelve hundred violations
+/// and `validateFeatureEndMultiplicity` reports violations
 /// of a sound corpus, because the `allSuperTypes()` and `hasBounds(1, 1)`
 /// it goes on to call answer nothing and an `exists` over nothing is
 /// `false`.
@@ -367,22 +366,22 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// writes `then decide; if true then m;` with `m` a merge node: that one
 /// succession must have its target end both 0..1 and 1..1, and its source
 /// end both 0..1 and 1..1. The corpus says which pair to keep -- with the
-/// `.multiplicity` its siblings write, the mended pair is false of all six
-/// decision nodes and all eight merge nodes, and the ControlNode two hold
-/// of every one of the fourteen. The pilot implementation runs none of the
-/// four and records an issue of its own, SYSML21-306.
+/// `.multiplicity` its siblings write, the mended pair is false of every
+/// decision node and merge node, and the ControlNode two hold of every
+/// one of them. The pilot implementation runs none of these four and
+/// records an issue of its own, SYSML21-306.
 ///
 /// `validateSubsettingFeaturingTypes` is
 /// `subsettingFeature.canAccess(subsettedFeature)`, and `canAccess` holds
 /// the subsetted feature to being featured within one of the featuring
 /// types the subsetting one reaches -- walking *up*, never down. Read as
-/// the metamodel states it, 8653 of the corpus's 20569 subsettings are
+/// the metamodel states it, many of the corpus's subsettings are
 /// rejected.
 ///
 /// The pilot does run it, and does two things the metamodel does not
 /// state: it asks only where the subsetted feature has a featuring type,
-/// which exempts 956 outright, and `TypeUtil.isCompatible` answers one
-/// step more widely. Neither is what the remaining 7697 turn on. They turn
+/// which exempts many outright, and `TypeUtil.isCompatible` answers one
+/// step more widely. Neither is what the rest turn on. They turn
 /// on direction: `accept a : A` gives a transition an `accepted` featured
 /// by the transition and a payload featured by the trigger it owns, and no
 /// upward walk from one reaches the other.
@@ -399,11 +398,11 @@ fn closed(name: &str, ocl: &'static str) -> std::borrow::Cow<'static, str> {
 /// `Feature` owned by the relationship, carrying the steps as
 /// `FeatureChaining`. This model stands the chain up the same way, so both
 /// ends are owned by the redefinition and featured by nothing. The OCL as
-/// written has no such guard, and reports this one of the corpus's 12941.
+/// written has no such guard, and reports this one of the corpus's.
 ///
 /// `validateMultiplicityRangeBoundResultTypes` holds every bound to coming
 /// to a `ScalarValues::Integer`, and `[nCauses]` counts with an attribute
-/// the notation gives no type. Nineteen of the corpus's 6376 ranges are
+/// the notation gives no type. Some of the corpus's ranges are
 /// written that way, the standard library's own among them. The pilot does
 /// not run the OCL at all: `checkMultiplicityRange` carries "TODO: Correct
 /// validateMultiplicityBoundResults OCL from KERML-199" and asks instead
@@ -510,14 +509,14 @@ fn named_after(rule: &sysml_model::Rule) -> String {
 /// Six is what this can answer for. Past it the walk reaches
 /// `Type::directionOfExcluding`, which climbs the supertypes of every
 /// feature of every type, and opens constraints the model cannot yet meet:
-/// at eight one, at ten a hundred, at twelve four hundred and sixty of the
-/// corpus are reported as violations. Those are the model missing what the
+/// each step past it reports more of the corpus
+/// as violations. Those are the model missing what the
 /// specification counts, not the bound being too low.
 ///
 /// The bound also only buys work: inherited memberships go through five
 /// operations that call one another over every supertype, and no depth
-/// completes them -- at twelve, two thirds of every operation invoked and
-/// a third of the time, all spent arriving at the same "cannot say".
+/// completes them -- a deeper bound spends most operations and time
+/// arriving at the same "cannot say".
 const DEPTH: usize = 6;
 
 /// One constraint that does not hold, and of what.
@@ -602,7 +601,7 @@ impl Workspace {
         // for. Name resolution reifies what the notation leaves implicit -- a
         // typing, a subsetting, the ends of a connector -- and the constraints
         // are about those too. Asking only what was written left every rule about
-        // a `Subsetting` asked of nothing, with two thousand in the model.
+        // a `Subsetting` asked of nothing, however many are in the model.
         let mut under: Vec<ElementId> = Vec::new();
         let mut seen: HashSet<ElementId> = HashSet::new();
         for &file in files {
@@ -663,9 +662,9 @@ impl Workspace {
         // Anywhere in the model, and not only under the files asked: what
         // the toolchain builds does not depend on which files are checked.
         // Tallied over those alone, a check of SysML files -- which have no
-        // `chains` -- had no `FeatureChaining`, and every rule reading a
-        // `featureTarget` went unevaluated until an unrelated KerML file
-        // with one was checked beside them.
+        // `chains` -- would have no `FeatureChaining`, and every rule reading
+        // a `featureTarget` would go unevaluated until an unrelated KerML
+        // file with one was checked beside them.
         let present: HashSet<ElementKind> = self
             .model()
             .ids()
@@ -1655,11 +1654,11 @@ impl Scope<'_> {
                         .then_some(member)
                 })
                 .collect();
-            // Owning none of them used to be answered "cannot say", on the grounds
-            // that the builder reifies some of the abstract syntax's relationships
-            // and not others. That cost 188818 answers over the corpus, and the
-            // published abstract syntax says it was wrong: a literal is written
-            // closed on itself, owning nothing.
+            // Owning none of them is not "cannot say", though the builder
+            // reifies some of the abstract syntax's relationships and not
+            // others: the published abstract syntax says a literal is written
+            // closed on itself, owning nothing, and "cannot say" would cost
+            // a great many answers over the corpus.
             //
             // What the metamodel declares single-valued answers with the value rather
             // than a collection of one.
@@ -1874,7 +1873,7 @@ impl Scope<'_> {
         // `maybe` rather than `get`, because this is the one place where any
         // property may fairly be asked of any element: the abstract syntax a
         // constraint reaches through is the specification's rather than this
-        // model's. Six hundred and thirteen pairs go through here that the
+        // model's. Many pairs go through here that the
         // metaclass does not have, and none is a misspelling.
         let held = model.maybe(elem, name).or_else(|| {
             redefining(model.kind(elem), name).and_then(|under| model.maybe(elem, under))
@@ -2743,7 +2742,7 @@ fn redefining(kind: ElementKind, name: &str) -> Option<&'static str> {
 /// `featuringTypes`, `associationEnds`, `connectorEnds`,
 /// `featureMemberships` and `subsettedFeatures` are written that way and
 /// declared in the singular. There is no other reading, and the
-/// alternative is answering none of the six constraints that navigate
+/// alternative is answering none of the constraints that navigate
 /// through them.
 ///
 /// Only where the written name is declared nowhere on the metaclass, so a
@@ -2918,7 +2917,7 @@ mod tests {
         (ws, elem)
     }
 
-    /// Twenty-two constraints are about a membership, and this model
+    /// Some constraints are about a membership, and this model
     /// keeps the containment one stands for rather than the membership
     /// itself. Put back together, they are asked of what the model does
     /// hold -- and what one of them reports is the member, which is
@@ -3625,7 +3624,7 @@ mod tests {
         // be hiding.
         //
         // Relationships answer the same way and once did not: an empty answer was
-        // called ambiguous, and the doubt cost 188818 answers over the corpus.
+        // called ambiguous, and the doubt costs a great many answers over the corpus.
         // The published abstract syntax settles it -- a literal is written closed
         // on itself, owning nothing.
         let (mut ws, car) = about("part def Car;\n", "Car");

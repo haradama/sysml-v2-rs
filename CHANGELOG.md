@@ -1,6 +1,6 @@
 # Changelog
 
-Ten crates are published from this repository and each carries its own
+Each crate published from this repository carries its own
 version, because what a number moves for is a change in the crate it is
 on. So an entry here names the crates it is about and the version each
 went to; a crate not named in an entry did not change in it.
@@ -8,7 +8,13 @@ went to; a crate not named in an entry did not change in it.
 Dates are the day the tag was cut. Anything under **Unreleased** is on
 `main` and is not on crates.io yet.
 
-## Unreleased
+## 2026-11-16
+
+Published: `sysmlv2-syntax` **0.1.4**, `sysmlv2-model` **0.1.3**,
+`sysmlv2-semantics` **0.1.3**, `sysmlv2-interchange` **0.2.1**,
+`sysmlv2-lsp` **0.2.1**, `sysmlv2-diagram` **0.2.2**,
+`sysmlv2-rust` **0.1.2**, `sysmlv2-cli` **0.2.0** (breaking: the keys
+of `--format json` and `sysml mcp`, below).
 
 ### Lines that can be told apart
 

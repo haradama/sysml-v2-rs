@@ -168,8 +168,8 @@ struct Formatter {
     joints: Vec<Joint>,
     /// Where a note trailing the line starts, if one does. What the
     /// line says ends there, and only that has to fit: a long `// note`
-    /// after `attribute x = 1;` used to break the code before it, which
-    /// left the note no shorter and the code split for nothing.
+    /// after `attribute x = 1;` must not break the code before it, which
+    /// would leave the note no shorter and the code split for nothing.
     note_at: Option<usize>,
     /// A line holding a comment that spans lines is already more than
     /// one line, and the offsets a break is spliced in at do not survive
@@ -287,10 +287,10 @@ impl Formatter {
     }
 
     /// A block comment that spans lines, its interior brought under the
-    /// column the `/*` now sits in.
+    /// column the `/*` sits in.
     ///
     /// The interior is part of the same token as the `/*`, so moving the
-    /// one used to leave the other standing in a column that meant
+    /// one would leave the other standing in a column that meant
     /// something in the file it was written in and nothing in the file
     /// that came out. What the comment says is unchanged: a body is read
     /// with this margin taken off.
@@ -492,8 +492,9 @@ impl Formatter {
 ///
 /// The lexer ends a line note at either character, so a file written
 /// with lone carriage returns is one of lines to it. Counted by `\n`
-/// alone, the same file had no breaks at all: a note on a line of its
-/// own was taken for one trailing the line above, and blank lines went.
+/// alone, the same file would have no breaks at all: a note on a line of
+/// its own would be taken for one trailing the line above, and blank
+/// lines would go.
 fn line_breaks(text: &str) -> usize {
     text.replace("\r\n", "\n").matches(['\r', '\n']).count()
 }
@@ -516,9 +517,9 @@ fn space_between(prev: &SyntaxToken, next: &SyntaxToken) -> bool {
 /// `x :::`, which reads as `::` then `:`.
 ///
 /// Punctuation is not the only thing that runs together. A `.` before a
-/// number is the start of one, so `1 . 5` came out as `1.5`, a real
-/// where there had been an error, and `a. 5` as `a.5`, which lexes as
-/// `a` and `.5` and was spaced the other way on the next pass. So every
+/// number is the start of one, so `1 . 5` must not come out as `1.5`, a real
+/// where there was an error, nor `a. 5` as `a.5`, which lexes as
+/// `a` and `.5` and would be spaced the other way on the next pass. So every
 /// pair written tight is lexed again, whatever it is made of; the pairs
 /// are short, and this is the one thing formatting must never do.
 fn would_fuse(prev: &str, next: &str) -> bool {
@@ -675,8 +676,8 @@ mod tests {
     }
 
     /// The interior is part of the same token as the `/*`, so moving one
-    /// without the other used to leave the body standing in a column
-    /// that meant nothing -- which is what a reader saw whenever their
+    /// without the other would leave the body standing in a column
+    /// that meant nothing -- which a reader would see whenever their
     /// editor formatted a file whose indentation was not already right.
     #[test]
     fn a_doc_that_moves_takes_its_body_with_it() {
@@ -765,9 +766,9 @@ mod tests {
 
     /// A file written with lone carriage returns has lines like any
     /// other: the note on a line of its own stays there, and the blank
-    /// line before it stays too. Counted by `\n` alone, the file had no
-    /// line breaks, so the note was hung on the end of `part x;` and the
-    /// blank line went.
+    /// line before it stays too. Counted by `\n` alone, the file would have no
+    /// line breaks, so the note would be hung on the end of `part x;` and
+    /// the blank line would go.
     #[test]
     fn a_lone_carriage_return_breaks_a_line() {
         let expected = "package P {\n    part x;\n\n    // own line\n    part y;\n}\n";
@@ -833,8 +834,8 @@ mod tests {
         assert_eq!(fmt("part\u{feff}def A;"), "part def A;\n");
     }
 
-    /// A run of notes used to cost the formatter a scan each, so a file
-    /// that is mostly notes took time in the square of its length.
+    /// A run of notes must not cost the formatter a scan each, or a file
+    /// that is mostly notes would take time in the square of its length.
     #[test]
     fn a_file_of_notes_formats_in_one_pass() {
         let input = "part def A {\n".to_string() + &"    // note\n".repeat(20_000) + "}\n";

@@ -19,11 +19,10 @@ struct Class {
     features: Vec<Feature>,
     /// What the specification says the metaclass is, in prose.
     ///
-    /// The metamodel writes one for every one of the 175, in the same
-    /// `ownedComment` a constraint's `says` comes from. Nothing read it
-    /// until now, and the crate whose whole subject is the abstract
-    /// syntax was the one crate on docs.rs with no sentence against any
-    /// of it.
+    /// The metamodel writes one for every one of them, in the same
+    /// `ownedComment` a constraint's `says` comes from. It is carried
+    /// into the generated docs so that the crate whose whole subject is the
+    /// abstract syntax has a sentence against each element.
     says: String,
 }
 
@@ -135,7 +134,7 @@ pub fn generate_source(kerml_xmi: &str, sysml_xmi: &str) -> String {
 ///
 /// A constraint calls `inputParameters()` or `referencedFeatureTarget()`
 /// as readily as it navigates a property, and the metamodel says what
-/// they come to in the same OCL. Four of the hundred and three carry no
+/// they come to in the same OCL. Some of them carry no
 /// body, and those are the ones nothing here can call.
 fn collect_operations(doc: &roxmltree::Document, xml: &str, out: &mut Vec<Operation>) {
     for node in doc.descendants() {
@@ -270,7 +269,7 @@ fn plain(html: &str) -> String {
     // What the XML parser handed back was decoded once, and these were
     // written twice over: `&amp;quot;` in the file reaches here as
     // `&quot;`, which is prose about visibility with the quotation marks
-    // still spelled out. Sixteen of them across the two documents.
+    // still spelled out, in several places in the two documents.
     let out = out
         .replace("&quot;", "\"")
         .replace("&nbsp;", " ")
@@ -488,7 +487,7 @@ const DOC_WIDTH: usize = 70;
 ///
 /// The prose is the OMG's, reproduced as written apart from the
 /// wrapping: `NOTICE` says which parts of the generated file are theirs
-/// and this is now among them.
+/// and this is among them.
 fn doc(w: &mut String, indent: usize, says: &str) {
     if says.is_empty() {
         return;

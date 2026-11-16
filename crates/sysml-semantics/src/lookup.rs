@@ -80,8 +80,8 @@ impl Workspace {
     ///
     /// The candidates are gathered rather than searched for: ranking them the
     /// way [`search_names`](Self::search_names) does is work for a person
-    /// choosing between near misses, and taking the best few hundred first
-    /// only meant that enough elements called `x` could push `SomePackage::x`
+    /// choosing between near misses, and taking only the best few first
+    /// would let enough elements called `x` push `SomePackage::x`
     /// out of its own answer.
     pub fn named_globally(&mut self, qualified: &str) -> Option<ElementId> {
         if let Some(&found) = self.globals.get(qualified) {

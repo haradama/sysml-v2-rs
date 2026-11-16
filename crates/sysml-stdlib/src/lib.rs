@@ -7,9 +7,9 @@
 //! A toolchain that cannot find them reports every name in every model as
 //! unresolved.
 //!
-//! Until this crate the path had to be given, and getting one meant
-//! cloning a repository whose history is two gigabytes for one and a third
-//! megabytes of model. Here they are instead, in the binary:
+//! Without this crate the path has to be given, and getting one means
+//! cloning a repository whose history dwarfs the model it holds. Here
+//! they are instead, in the binary:
 //!
 //! ```
 //! let mut ws = sysml_semantics::Workspace::new();
@@ -60,7 +60,7 @@ mod tests {
     }
 
     /// The two files everything else leans on, so that a table built
-    /// from the wrong directory fails here rather than as ten thousand
+    /// from the wrong directory fails here rather than as very many
     /// unresolved names somewhere downstream.
     #[test]
     fn the_bases_every_model_reaches_are_among_them() {

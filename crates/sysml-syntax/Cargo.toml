@@ -1,17 +1,15 @@
 [package]
 name = "sysmlv2-syntax"
 description = "Lexer, parser and lossless syntax tree for the SysML v2 / KerML textual notation"
-# its own: the crates here move when what is in them moves, and what
-# moved is the documentation -- every typed view of the tree carries the
-# line the workspace holds a public item to
-version = "0.1.3"
+# its own: what a number moves for is a change in the crate it is on
+version = "0.1.4"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 # its own, not the workspace one: `readme` inherited from
-# `workspace.package` resolves against the workspace root, so every
-# crate published carried the whole project's README
+# `workspace.package` resolves against the workspace root, which would
+# make every crate's README the whole project's
 readme = "README.md"
 keywords.workspace = true
 categories.workspace = true

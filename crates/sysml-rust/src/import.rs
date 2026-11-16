@@ -386,10 +386,12 @@ impl Walk<'_, '_> {
 fn settled(index: &serde_json::Map<String, Json>, members: &[Member]) -> HashMap<String, String> {
     let mut names = HashMap::new();
     for Member { id, name } in members {
-        let Some(entry) = index.get(&id_key(id)) else {
-            continue;
-        };
-        let Some(inner) = entry.get("inner").and_then(Json::as_object) else {
+        let Some((entry, inner)) = index.get(&id_key(id)).and_then(|entry| {
+            entry
+                .get("inner")
+                .and_then(Json::as_object)
+                .map(|inner| (entry, inner))
+        }) else {
             continue;
         };
         let made = match inner.keys().next().map(String::as_str) {

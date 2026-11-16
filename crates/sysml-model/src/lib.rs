@@ -1,6 +1,6 @@
 //! In-memory element model (abstract syntax) for SysML v2 / KerML.
 //!
-//! The metamodel — [`ElementKind`] (175 metaclasses), their inheritance
+//! The metamodel — [`ElementKind`] (every metaclass), their inheritance
 //! hierarchy, feature metadata and enumerations — is generated from the
 //! official Ecore definition (see `vendor/metamodel/`, regenerate with
 //! `cargo run -p sysmlv2-model --features codegen --bin sysml-codegen`).
@@ -34,9 +34,9 @@ pub mod generated;
 ///
 /// Written from the keyword that declared it, so that the resolver and
 /// the interchange read one answer rather than each working it out from
-/// the syntax again -- they used to, and looked at different parts of
-/// it: one saw a `private` on the wrapper of a declaration, the other
-/// only on the declaration itself.
+/// the syntax again, since each would look at different parts of it:
+/// one sees a `private` on the wrapper of a declaration, the other only
+/// on the declaration itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Vis {
     /// `public`, and what nothing written means for a member
@@ -76,8 +76,8 @@ impl Vis {
 /// the ones their type declares, and the interchange, to write the
 /// membership metaclass the standard names for each. It is an enum
 /// rather than a string so that adding one is a compile error in both
-/// until they say what it means -- the three used to spell the same
-/// dozen words separately.
+/// until they say what it means -- spelling the same words separately
+/// in each would let them drift apart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     /// `subject x;` -- what a requirement, use case or verification is about
@@ -438,9 +438,9 @@ pub struct Multiplicity {
 /// The declared multiplicity of a usage, or nothing where none was
 /// written -- which the specification reads as one of the thing.
 ///
-/// Every generator asks this and each used to walk it for itself, and
-/// what a bound that is not a literal means was decided differently in
-/// each. It is read once here and interpreted by whoever asks.
+/// Every generator asks this; walking it separately in each would
+/// decide differently what a bound that is not a literal means. It is
+/// read once here and interpreted by whoever asks.
 pub fn declared_multiplicity(model: &Model, usage: ElementId) -> Option<Multiplicity> {
     let Some(Value::Ref(range)) = model.get(usage, "multiplicity") else {
         return None;
@@ -632,6 +632,30 @@ impl Value {
         }
     }
 
+    /// The truth value, if this is one.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(it) => Some(*it),
+            _ => None,
+        }
+    }
+
+    /// The integer, if this is one.
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Int(it) => Some(*it),
+            _ => None,
+        }
+    }
+
+    /// The real number, if this is one.
+    pub fn as_real(&self) -> Option<f64> {
+        match self {
+            Value::Real(it) => Some(*it),
+            _ => None,
+        }
+    }
+
     /// The element a single reference points at.
     pub fn as_id(&self) -> Option<ElementId> {
         match self {
@@ -807,8 +831,8 @@ impl Model {
     /// a property the metaclass does not have is an error.
     ///
     /// So is a value of the wrong shape, where the assertions are on: the
-    /// metamodel says what each property holds, and until this checked it
-    /// `set(part, "isAbstract", Value::String("yes"))` was accepted and
+    /// metamodel says what each property holds, and without the check
+    /// `set(part, "isAbstract", Value::String("yes"))` would be accepted and
     /// written back out as a string where every reader expects a boolean.
     pub fn set(&mut self, id: ElementId, prop: &str, value: Value) -> &mut Model {
         let kind = self.kind(id);
@@ -1236,7 +1260,7 @@ mod tests {
     }
 
     /// The metamodel says what each property holds. A value of another
-    /// shape used to be kept and written back out as itself -- an
+    /// shape is refused rather than kept and written back out as itself -- an
     /// `isAbstract` of `"yes"` where every reader expects a boolean.
     ///
     /// Only where the assertions are on: this is a check on the code
@@ -1250,10 +1274,10 @@ mod tests {
         model.set(part, "isAbstract", Value::String("yes".to_string()));
     }
 
-    /// There is no longer a role this does not know: `Role` is an
+    /// There is no role this does not know: `Role` is an
     /// enum and the match over it has no catch-all, so one added to the
     /// model does not fall through to plain ownership -- it stops the
-    /// build until this says which membership the standard names for it.
+    /// build until this match says which membership the standard names for it.
     /// What is left to check is the element that has no role at all.
     #[test]
     fn a_member_with_no_role_is_owned_plainly() {

@@ -298,7 +298,7 @@ fn a_new_name_is_whatever_this_file_reads_as_one_name() {
         )
     };
 
-    // a quoted name is a name, and used to be refused
+    // a quoted name is a name, and must not be refused
     let quoted = rename(&mut client, "'two words'");
     assert!(quoted.error.is_none(), "{:?}", quoted.error);
     let edits = quoted.result.unwrap()["changes"][uri]
@@ -391,9 +391,10 @@ fn a_document_that_does_not_parse_is_left_alone() {
 
 #[test]
 fn a_notification_this_server_cannot_read_is_dropped_rather_than_fatal() {
-    // a client is not supposed to send these; one that does used to end
-    // the session, leaving the file it was editing with no diagnostics,
-    // no completion and no navigation until the window was reloaded
+    // a client is not supposed to send these; one that does must not end
+    // the session, which would leave the file it was editing with no
+    // diagnostics, no completion and no navigation until the window was
+    // reloaded
     let uri = "file:///nonsense.sysml";
     let (mut client, handle) = opened(uri, "package Demo {\n    part def Vehicle;\n}\n");
     for method in [
@@ -727,8 +728,8 @@ fn the_client_says_how_the_preview_is_painted() {
 }
 
 /// After `P::` the completion is what `P` holds, and no keyword: one was
-/// never what could be written there, and the names around the cursor
-/// were offered in place of `P`'s.
+/// never what can be written there, and the names around the cursor
+/// must not be offered in place of `P`'s.
 #[test]
 fn completion_after_a_qualifier_offers_what_the_qualifier_holds() {
     let (mut client, handle) = serving();
@@ -813,9 +814,9 @@ fn references_at(client: &mut Client, uri: &str, line: u32, character: u32) -> V
 }
 
 /// `part` is a name in KerML and a keyword in SysML. A rename asked in
-/// a KerML file read it as a name and wrote it bare into a SysML file
-/// that names the same element, which then stopped parsing; each file
-/// gets it the way it has to be written there.
+/// a KerML file must not be read as a name and written bare into a SysML
+/// file that names the same element, which would then stop parsing; each
+/// file gets it the way it has to be written there.
 #[test]
 fn a_new_name_is_quoted_in_a_file_that_reads_it_as_a_keyword() {
     let kerml = "file:///p/k.kerml";

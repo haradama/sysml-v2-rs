@@ -135,7 +135,7 @@ fn a_qualified_name_is_answered_by_its_last_segment() {
 }
 
 /// Several names at once, because the walk over every declared name is
-/// what costs -- sixty thousand of them with the standard library
+/// what costs -- very many of them with the standard library
 /// loaded, once rather than once per name.
 #[test]
 fn several_names_are_answered_in_one_walk() {
@@ -234,9 +234,9 @@ fn a_short_name_is_not_near_every_other_short_name() {
 }
 
 /// Names are case-sensitive, so "declared as" -- the very name, wanting
-/// only an import -- is the exact spelling alone. `B` used to be "declared
-/// as" the `b` being declared on the same line, and the quick fix wrote
-/// `part b : b;`. Another case is a near miss, and the nearest.
+/// only an import -- is the exact spelling alone. `B` is not "declared
+/// as" the `b` being declared on the same line, or the quick fix would
+/// write `part b : b;`. Another case is a near miss, and the nearest.
 #[test]
 fn another_case_is_a_near_miss_not_the_name() {
     let ws = resolved("part def A;\npart a : A;\npart b : B;\n");
@@ -276,7 +276,7 @@ fn what_cannot_be_named_from_outside_is_not_offered() {
 /// scope, so neither "declared as ... an import would" nor "did you mean"
 /// is the answer; what it names is. A definition specializes a classifier
 /// (`Subclassification::superclassifier : Classifier`), so `part def B :>
-/// a;` naming a part usage names nothing -- it used to resolve -- and a
+/// a;` naming a part usage names nothing -- though a name resolves -- and a
 /// usage subsets a feature.
 #[test]
 fn a_name_of_the_wrong_kind_of_thing_says_what_it_names() {

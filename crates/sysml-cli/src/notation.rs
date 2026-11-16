@@ -1,6 +1,6 @@
 //! How each construct is written, with an example that has been checked.
 //!
-//! SysML v2 was adopted in 2025 and there is very little of it in what any
+//! SysML v2 is recent and there is very little of it in what any
 //! language model was trained on. What an agent transcribing a
 //! specification gets wrong is not the systems engineering -- it is the
 //! notation: whether a requirement's condition goes in `require constraint

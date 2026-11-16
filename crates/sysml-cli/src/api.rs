@@ -211,13 +211,13 @@ impl Client {
 
     /// Every object a listing holds. The standard pages a long listing
     /// and points at the next page in a `Link` header; a client that
-    /// read one page would take the first fifty projects for all of
+    /// read one page would take the first page of projects for all of
     /// them.
     fn get_all<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<Vec<T>, Error> {
         let mut url = format!("{}{path}", self.base);
         let mut all = Vec::new();
         // every page read, not only the last: two pages that point at
-        // each other were read in turn for ever
+        // each other would be read in turn for ever
         let mut read = std::collections::HashSet::new();
         loop {
             read.insert(url.clone());

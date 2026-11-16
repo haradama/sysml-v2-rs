@@ -4,9 +4,9 @@
 //! only way to know it is right is to apply what it offers and look at
 //! what the model says afterwards: the same references resolving to the
 //! same number of things. Every name the first few symbols of each of the
-//! 309 example models declare is renamed here, about twelve hundred in all
-//! -- which is how it came out that a name mentioned inside a qualified
-//! one, in an import, or through a redefinition was left behind.
+//! example models declare is renamed here, a great many in all -- which
+//! is how to catch a name mentioned inside a qualified one, in an import,
+//! or through a redefinition being left behind.
 
 mod common;
 

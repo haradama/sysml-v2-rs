@@ -385,7 +385,7 @@ fn a_calc_usage_performs_its_definition_over_what_the_part_bound() {
     assert!(rust.contains("pub fn widen(&self, extra: i64) -> i64 {"));
     assert!(rust.contains("widen(self.capacity, extra)"));
     // the parameters a usage binds declare no type of their own, and
-    // that is no longer a reason to skip the method
+    // that is not a reason to skip the method
     assert!(!rust.contains("not generated: calc"));
 }
 
@@ -1784,8 +1784,8 @@ fn a_diamond_flattens_and_only_a_real_circle_is_refused() {
 
 /// Metadata is how a model says anything about anything, and only one
 /// definition of it -- this crate's own `@code` -- says which Rust item
-/// something stands for. A `@Safety { :>> level = "high"; }` once read
-/// as a binding, and its part vanished without so much as a note.
+/// something stands for. A `@Safety { :>> level = "high"; }` read
+/// as a binding would make its part vanish without so much as a note.
 #[test]
 fn somebody_elses_metadata_is_not_a_rust_binding() {
     let rust = generate(
@@ -1807,9 +1807,9 @@ fn somebody_elses_metadata_is_not_a_rust_binding() {
 }
 
 /// A struct has a size only if everything it holds inline does. The
-/// cycle detector used to look at declared members of structs alone, so
+/// cycle detector must look past the declared members of structs, or
 /// a circle closing through an inherited field, or through the payload
-/// of a variation's variant, reached `rustc` with no `Box` in it.
+/// of a variation's variant, reaches `rustc` with no `Box` in it.
 #[test]
 fn a_cycle_through_an_inherited_field_or_a_variant_payload_is_boxed() {
     let rust = generate(
@@ -1966,7 +1966,7 @@ fn a_state_machine_spells_its_states_and_reserves_the_names_it_derives() {
     .unwrap();
     assert!(rust.contains("pub enum TrafficLightState"), "{rust}");
     // a transition inside a state leaves from it, and is a row of the
-    // table like any other; it used to be left out with a note saying so.
+    // table like any other, not left out with a note saying so.
     // Its `go : Boolean` rides in the event, unread by any guard or effect.
     assert!(
         rust.contains("(TrafficLightState::Waiting, TrafficLightEvent::WaitingToGreen(_)) => {"),
@@ -2048,7 +2048,7 @@ fn a_generic_parameter_is_named_the_way_a_type_is() {
 
 /// Every multiplicity a model can write, as the container it means.
 /// `[1..1]` is the default said out loud and `[0]` is nothing at all;
-/// both used to come out as a `Vec`, which claims neither.
+/// neither comes out as a `Vec`, which claims neither.
 #[test]
 fn a_multiplicity_becomes_the_container_it_states() {
     let rust = generate(
@@ -2076,7 +2076,7 @@ fn a_multiplicity_becomes_the_container_it_states() {
 }
 
 /// What the generator was handed that it could not write as Rust that
-/// compiles, it now writes otherwise or leaves open and says so: a
+/// compiles, it writes otherwise or leaves open and says so: a
 /// number specialized under a name of its own, a redefinition under a
 /// new name, two generals handing down one name, text joined with `+`,
 /// and values an `Integer` cannot hold.

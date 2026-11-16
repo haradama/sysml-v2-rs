@@ -88,7 +88,7 @@ fn build_node(
         IMPORT | EXPOSE => Some(import_kind(node)),
         // `dependency use from A to B;` -- a relationship in its own
         // right, with clients on one side of `to` and suppliers on the
-        // other, and nothing at all in the model until now
+        // other
         DEPENDENCY => Some(ElementKind::Dependency),
         // `flow f of Fuel from a to b` -- what the flow carries, which the
         // standard owns from the flow as a feature of its own
@@ -108,9 +108,9 @@ fn build_node(
         //
         // KerML writes the same thing and calls it a `MetadataFeature`, which is
         // what `MetadataUsage` specializes. Read as the usage, `#atom classifier
-        // MyBike;` was given the base the library states for a usage and so had a
-        // second metaclass among its types beside the one it names, since a
-        // `MetadataDefinition` is a `Metaclass`.
+        // MyBike;` would be given the base the library states for a usage and so
+        // have a second metaclass among its types beside the one it names, since
+        // a `MetadataDefinition` is a `Metaclass`.
         METADATA_ANNOTATION | PREFIX_METADATA => Some(match built.dialect {
             sysml_syntax::Dialect::KerML => ElementKind::MetadataFeature,
             sysml_syntax::Dialect::SysML => ElementKind::MetadataUsage,
@@ -1694,8 +1694,8 @@ fn reify_action_arguments(
         }
         // `send new Sig(1) to p` writes what it sends straight after the
         // keyword, as any expression at all: `SendNode = ... 'send' (
-        // NodeParameterMember ...`. Left out, the payload parameter had no
-        // value and what was sent was in the model nowhere.
+        // NodeParameterMember ...`. Left out, the payload parameter has no
+        // value and what is sent is in the model nowhere.
         let written = match slot {
             Some(SyntaxKind::COLON_EQ) => node
                 .children()
@@ -1843,8 +1843,8 @@ fn reify_guard(model: &mut Model, node: &SyntaxNode, transition: ElementId, buil
     // `transition first a if g then b;` writes the guard as one node, and
     // `if g then b;` in an action body as the statement's own `if`:
     // `GuardedTargetSuccession = 'if' GuardExpressionMember 'then' ...`.
-    // Looking only for the first, the guard of the second was dropped and
-    // the branch read as taken whatever held.
+    // Looking only for the first, the guard of the second would be dropped
+    // and the branch read as taken whatever held.
     let (text, asked) = match node
         .children()
         .find(|child| child.kind() == SyntaxKind::COND_EXPR)
@@ -2201,7 +2201,7 @@ fn control_kind(node: &SyntaxNode) -> Option<ElementKind> {
         // action itself, named as the one it performs
         // (`StatePerformActionUsage : PerformActionUsage`) rather than as
         // a wrapper around a declaration. Without this the subaction of
-        // every state written that way was dropped, body and all.
+        // every state written that way is dropped, body and all.
         let subaction = matches!(
             tokens(node).next(),
             Some(SyntaxKind::ENTRY_KW | SyntaxKind::DO_KW | SyntaxKind::EXIT_KW)
@@ -2504,8 +2504,8 @@ fn definition_kind(node: &SyntaxNode) -> ElementKind {
         // DefinitionExtensionKeyword* 'def' Definition` -- `individual
         // def IO1;` names no kind and is an occurrence definition all
         // the same, which is what `isIndividual` is declared on. Read as
-        // a definition of unspecified kind it was not individual at
-        // all, and the usages typed by it had no individual definition
+        // a definition of unspecified kind it would not be individual at
+        // all, and the usages typed by it would have no individual definition
         // to have.
         _ if has_token(node, INDIVIDUAL_KW) => "OccurrenceDefinition",
         // What is left is `#service def X`, which takes its kind from the
@@ -3014,8 +3014,8 @@ fn leading_keywords(node: &SyntaxNode) -> impl Iterator<Item = SyntaxKind> {
 /// Nor is a declaration that says anything of its own besides:
 /// `connection : C connect x references t.a to y references w.b;` is
 /// nameless and nests its two ends, and taken for a wrapper the connection
-/// was built as nothing -- its ends became members of what owned it, and
-/// its type was never looked up.
+/// would be built as nothing -- its ends would become members of what owns
+/// it, and its type would never be looked up.
 fn is_prefix_wrapper(node: &SyntaxNode) -> bool {
     use SyntaxKind::*;
     matches!(node.kind(), DEFINITION | USAGE)
@@ -3103,7 +3103,7 @@ fn names_an_end(node: &SyntaxNode) -> bool {
         // `InterfaceUsageDeclaration = UsageDeclaration ValuePart? (
         // 'connect' InterfacePart )? | InterfacePart` -- a declaration
         // only in front of a `connect`: `interface b to c;` connects `b`
-        // and `c`, and read as an interface called `b` it had one end
+        // and `c`, and read as an interface called `b` it would have one end
         || has_token(node, SyntaxKind::INTERFACE_KW)
             && has_token(node, SyntaxKind::TO_KW)
             && !has_token(node, SyntaxKind::CONNECT_KW)
@@ -3153,9 +3153,9 @@ mod tests {
     /// other.
     ///
     /// A declaration collects loose keywords -- a reserved word written
-    /// as a name is swept into it -- and the role used to be whichever
-    /// role keyword turned up anywhere among them. `part frame : R;`
-    /// came out as a framed concern, which the standard makes a kind of
+    /// as a name is swept into it -- so the role is not whichever role
+    /// keyword turns up anywhere among them. `part frame : R;` would
+    /// come out as a framed concern, which the standard makes a kind of
     /// requirement constraint, so two of the specification's constraints
     /// about requirements were violated by a file that declares none.
     #[test]
@@ -3309,7 +3309,7 @@ mod tests {
     /// bound this builder cannot read must still take up its place: drop
     /// it and `[1..18446744073709551615]` arrives as a lone `1`, which
     /// every consumer reads as exactly one -- a wrong answer with
-    /// nothing to show that anything was lost.
+    /// nothing to show that anything is lost.
     #[test]
     fn a_bound_it_cannot_read_still_takes_up_its_place() {
         let cases = [
@@ -3680,8 +3680,8 @@ mod tests {
     /// server.publish_request[1];`, and the keyword after the `then` is
     /// as much a declaration as the `send` of a `then send ...`. Read as
     /// the succession alone, the step the source wrote was in the model
-    /// nowhere and the succession ran into nothing -- thirty-five of the
-    /// corpus related fewer than the two things a concrete connector
+    /// nowhere and the succession ran into nothing -- many in the corpus
+    /// would relate fewer than the two things a concrete connector
     /// relates.
     #[test]
     fn a_then_before_a_declaring_keyword_still_declares() {
@@ -4762,9 +4762,8 @@ mod tests {
             .zip([ElementKind::MembershipImport, ElementKind::MembershipImport])
         {
             assert_eq!(model.kind(*import), ElementKind::NamespaceImport);
-            let [package] = model.owned(*import) else {
-                panic!("one filter package, not {:?}", model.owned(*import));
-            };
+            assert_eq!(model.owned(*import).len(), 1, "one filter package");
+            let package = &model.owned(*import)[0];
             assert_eq!(model.kind(*package), ElementKind::Package);
             let owned = model.owned(*package);
             assert_eq!(model.kind(owned[0]), named);
@@ -5062,11 +5061,11 @@ mod tests {
     ///
     /// The bounds of a multiplicity (`MultiplicityExpressionMember :
     /// OwningMembership`), KerML's prefix metadata (`#M class Tagged;`
-    /// builds a `MetadataFeature`, which the check once read as the SysML
-    /// `MetadataUsage` only), a `member feature` (`TypeFeatureMember :
+    /// builds a `MetadataFeature`, which a check for the SysML
+    /// `MetadataUsage` alone would miss), a `member feature` (`TypeFeatureMember :
     /// OwningMembership`) and a cross feature (`OwnedCrossFeatureMember :
-    /// OwningMembership`) all came out behind a `FeatureMembership`, as
-    /// features of what they were written in.
+    /// OwningMembership`) must not come out behind a `FeatureMembership`,
+    /// as features of what they are written in.
     #[test]
     fn what_a_type_owns_as_a_member_is_not_its_feature() {
         let (model, _) = kerml(
@@ -5288,10 +5287,7 @@ mod tests {
         let bound = |model: &Model, id: ElementId| {
             let range = reference(model, id, "multiplicity")?;
             let bound = reference(model, range, "bound")?;
-            match model.get(bound, "value") {
-                Some(Value::Int(n)) => Some(*n),
-                _ => None,
-            }
+            model.get(bound, "value").and_then(Value::as_int)
         };
         let members = model.owned(roots[0]);
         let connectors: Vec<Option<i64>> = members

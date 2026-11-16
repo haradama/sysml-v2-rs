@@ -516,12 +516,11 @@ fn contained(base: String, container: Container) -> String {
 }
 
 /// The least number of values a usage's multiplicity admits, where it is
-/// a number: `[*]` is `0`, `[2..*]` is `2`, `[n..*]` is no number.
+/// a number: `[*]` is `0`, `[2..*]` is `2`, `[n..*]` is no number. A usage
+/// with no declared multiplicity has none to say.
 fn lower_bound(model: &Model, usage: ElementId) -> Option<i64> {
     use sysml_model::Bound;
-    let Some(declared) = sysml_model::declared_multiplicity(model, usage) else {
-        return Some(1);
-    };
+    let declared = sysml_model::declared_multiplicity(model, usage)?;
     match declared.bound.or(declared.lower) {
         Some(Bound::Exactly(n)) if n >= 0 => Some(n),
         // `[*]` alone is `0..*`

@@ -254,9 +254,9 @@ fn greeting(server: Box<Server>, message: Message, out: &mut Vec<Message>) -> (P
         {
             // The project's files that no editor holds open are read from
             // disk, and only a client watching them can say they changed:
-            // without that, a `git checkout` left this server answering
-            // about the files as they were, and a rename wrote its edits at
-            // the old offsets into the new text. A client that can be asked
+            // without that, a `git checkout` would leave this server
+            // answering about the files as they were, and a rename would
+            // write its edits at the old offsets into the new text. A client that can be asked
             // to watch is asked, once it may be spoken to.
             if server.watch_files {
                 out.push(Message::Request(lsp_server::Request {
@@ -491,7 +491,7 @@ fn begin(mut files: Files, params: serde_json::Value) -> Result<Box<Server>, Str
     // which is what changing any of these takes.
     //
     // A settings file holds `"40"` as readily as `40`, and the one that
-    // was a string was dropped without a word; a width that is neither
+    // is a string must not be dropped without a word; a width that is neither
     // is said to be, where the client collects this server's log.
     if let Some(said) = init
         .initialization_options
@@ -705,8 +705,8 @@ impl Server {
                     }
                 }
                 // only the first keystroke costs this: once the layer
-                // has been built without the file, it no longer holds a
-                // copy of it to be contradicted
+                // has been built without the file, it holds no copy of
+                // it to be contradicted
                 if self.contradicted(&uri) {
                     self.project = None;
                 }
@@ -739,7 +739,8 @@ impl Server {
                 // the buffer that spoke for the file is gone, so the
                 // file on disk speaks for it again; and a document that
                 // brought the files beside it in takes them away again,
-                // where they were kept, and answered for, until restart
+                // where they would otherwise be kept, and answered for,
+                // until restart
                 if unheld
                     || self.file_of(&params.text_document.uri).is_some_and(|path| {
                         self.substituted.contains(&path) || self.read_for_being_open(&path)
@@ -763,7 +764,7 @@ impl Server {
                 }));
                 // what the closed file said reached the others: a
                 // sibling that imported it was reading the buffer and
-                // now reads the file, and nothing else would tell it so
+                // reads the file instead, and nothing else would tell it so
                 self.publish_diagnostics(out, None);
             }
             // How the set the handshake brought changes afterwards: a
@@ -797,9 +798,9 @@ impl Server {
     ///
     /// `changed` is the document the client has just told this server about,
     /// which is published either way: a client that waits to hear back about
-    /// the keystroke it sent has to hear something. Every keystroke in one
-    /// file used to republish every open file, and an editor takes each of
-    /// those apart and lays it out again.
+    /// the keystroke it sent has to hear something. Republishing every open
+    /// file on every keystroke in one would make an editor take each of
+    /// those apart and lay it out again.
     fn publish_diagnostics(&mut self, out: &mut Vec<Message>, changed: Option<&Url>) {
         let docs = self.docs.clone();
         let analysis = self.analysis();
@@ -1355,9 +1356,9 @@ mod tests {
 
     /// A client that can be asked to watch the project's files is asked,
     /// once the handshake lets the server speak; one that cannot, or that
-    /// has no folder open, is not. Unwatched, a file changed on disk was
-    /// answered about as it had been, and a rename wrote its edits at the
-    /// old offsets.
+    /// has no folder open, is not. Unwatched, a file changed on disk would be
+    /// answered about as it was before the change, and a rename would write its edits at
+    /// the old offsets.
     #[test]
     fn a_client_that_can_watch_files_is_asked_to() {
         let ask = |capabilities: serde_json::Value, root: Option<&str>| {
@@ -1488,7 +1489,7 @@ mod tests {
         ));
         // a request after `shutdown` is refused as the specification
         // says, with `InvalidRequest`, and the session waits on for
-        // `exit`; it used to end there, unanswered and failed
+        // `exit`; it must not end there, unanswered and failed
         out.clear();
         let flow = session.handle(
             request(3, "textDocument/hover", serde_json::json!({})),

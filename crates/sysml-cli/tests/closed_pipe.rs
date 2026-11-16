@@ -3,7 +3,7 @@
 //! `sysml export m.sysml | head` closes the pipe after a screenful, and
 //! `print!` panics on the rest -- exit 101 and a backtrace hint, for what
 //! the reader asked for. Every command writes to stdout through one
-//! place now, which stops quietly; these run a few that did not.
+//! place, which stops quietly; these run a few commands to show it.
 
 use std::io::Write as _;
 use std::process::{Command, Stdio};

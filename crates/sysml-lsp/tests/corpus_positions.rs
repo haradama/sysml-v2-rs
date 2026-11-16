@@ -2,9 +2,8 @@
 //!
 //! An editor sends requests wherever the cursor happens to be: inside a
 //! name, on a brace, past the end of a line, past the end of the file.
-//! This covers roughly a quarter of a million requests across all 309
-//! example models, at columns chosen to land off the end as often as on a
-//! name. It also applies a run of incremental edits and then sends the
+//! This covers a great many requests across every example model, at
+//! columns chosen to land off the end as often as on a name. It also applies a run of incremental edits and then sends the
 //! same text whole, so the two must agree -- an off-by-one in UTF-16
 //! offsets shows up as nothing else.
 
@@ -103,10 +102,10 @@ fn every_position_in_the_corpus() {
                     // follow, of a feature that borrows its name, or of something the
                     // standard library declares -- is the answer, not a fault.
                     //
-                    // That last one only began to happen when the server gained a copy of the
-                    // library: before, a cursor on `Anything` landed on nothing, and the
-                    // refusal that says an editor must not write into the library was never
-                    // reached.
+                    // That last one happens because the server holds a copy of the
+                    // library: a cursor on `Anything` lands on a library name, and the
+                    // refusal that says an editor must not write into the library is
+                    // what answers it.
                     if !e.contains("nothing to rename here")
                         && !e.contains("alias")
                         && !e.contains("declares no name")

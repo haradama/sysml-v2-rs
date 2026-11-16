@@ -2,7 +2,7 @@
 //!
 //! Each crate has its own corpus test asking about its own concern. This
 //! asks the one none of them do -- does any of it fall over -- by running
-//! the whole set over all 403 files: resolve, export to JSON and read it
+//! the whole set over every file: resolve, export to JSON and read it
 //! back, draw every view, and format. Nothing may panic; the JSON must
 //! survive a round trip unchanged; the SVG must be balanced; and
 //! formatting must be idempotent, keep every token, and leave the library

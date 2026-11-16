@@ -2,13 +2,13 @@
 //!
 //! Every crate here tests against the official SysML-v2-Release, which
 //! arrives as a git submodule and may not be checked out. Asking whether
-//! it is there is one question, and it was being answered five times by
-//! five copies that had drifted apart: some canonicalised the path and
-//! some did not; some probed the release directory and some the library
-//! inside it, so a submodule checked out but empty was a skip for four and
-//! a failure for the fifth; some said out loud that they were skipping and
-//! some went quiet. One walked the tree with `Path::is_dir`, which follows
-//! a link and so goes round in circles.
+//! it is there is one question, and answering it separately in each crate
+//! lets the copies drift apart: some canonicalise the path and some do
+//! not; some probe the release directory and some the library inside it,
+//! so a submodule checked out but empty is a skip for some and a failure
+//! for others; some say out loud that they are skipping and some go
+//! quiet. A walk of the tree with `Path::is_dir` follows a link and so
+//! goes round in circles.
 //!
 //! So it is answered here, once. This crate is `publish = false` and only
 //! ever a dev-dependency, and a path dev-dependency carries no version, so
@@ -43,7 +43,7 @@ pub fn announced(root: &Path) -> Option<PathBuf> {
 /// The standard library is what is probed, rather than the directory
 /// that holds it: an uninitialised submodule leaves the directory
 /// behind and empties it, so its being there says nothing. The release
-/// is wanted for its *examples* now -- the library is `sysml-stdlib`'s
+/// is wanted for its *examples* -- the library is `sysml-stdlib`'s
 /// -- but it is still the surest sign that the submodule came down.
 ///
 /// The path comes back canonical. A test that hands it to a subprocess
@@ -62,7 +62,7 @@ pub fn checked_out(root: &Path) -> Option<PathBuf> {
 /// nobody runs.
 ///
 /// It is checked in, so it is always there -- which is why this is not an
-/// `Option`, and why a test needing only the library no longer skips in a
+/// `Option`, and why a test needing only the library never skips in a
 /// checkout with no submodule. Canonical, for the same reason [`vendor`]
 /// is: a test that hands the path to a subprocess has to be given the
 /// spelling the subprocess will use.
@@ -90,7 +90,7 @@ pub fn models(root: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Those and the standard library together: all 403 files.
+/// Those and the standard library together: every file.
 ///
 /// The examples come from the release and the library from
 /// `sysml-stdlib`, which is where each of them lives.
@@ -210,7 +210,7 @@ mod tests {
 
     /// The library is not the release's, so it is there whether the
     /// submodule is or not -- which is why the tests that need only the
-    /// library no longer skip.
+    /// library never skip.
     #[test]
     fn the_library_is_there_without_a_submodule() {
         assert_eq!(model_files(&library()).len(), 94);

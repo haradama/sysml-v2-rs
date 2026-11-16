@@ -54,8 +54,8 @@ fn corpus_formats_safely_and_idempotently() {
         // Every break the formatter writes is `\n`. A `\r` survives only
         // inside a comment body or a block note, whose interior is one
         // token's text and is emitted as the author wrote it -- a `//`
-        // note used to carry the `\r` of a CRLF line ending too, which
-        // left twenty of these files formatted with both endings mixed.
+        // note must not carry the `\r` of a CRLF line ending too, which
+        // would leave a file formatted with both endings mixed.
         let stray: Vec<String> = sysml_syntax::lex_dialect(&formatted, dialect)
             .0
             .into_iter()

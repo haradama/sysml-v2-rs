@@ -38,9 +38,9 @@ fn examples_resolve_completely_against_the_library() {
     );
 }
 
-/// The KerML examples resolve too, which completes the corpus: all 403
-/// files parse and every reference in any of them resolves -- and now
-/// resolves to something other than itself.
+/// The KerML examples resolve too, which completes the corpus: every
+/// file parses and every reference in any of them resolves -- to
+/// something other than itself.
 #[test]
 fn kerml_examples_resolve_completely_against_the_library() {
     let Some(root) = vendor() else { return };
@@ -62,9 +62,9 @@ fn kerml_examples_resolve_completely_against_the_library() {
 /// function LiteralIntegerEvaluation specializes LiteralEvaluation {
 /// return : Integer[1]; }`.
 ///
-/// Each kind of literal is a metaclass of its own, and none of them was
-/// given the implicit specialization the library states, so a literal
-/// specialized nothing and had no type, no result and no members at
+/// Each kind of literal is a metaclass of its own, and each is given
+/// the implicit specialization the library states; without it a literal
+/// would specialize nothing and have no type, no result and no members at
 /// all. The library states no evaluation for an infinite literal, so
 /// that one is a literal evaluation and nothing narrower.
 #[test]
@@ -339,8 +339,7 @@ fn every_end_of_a_connection_participates_in_the_link_it_makes() {
 ///
 /// Neither shows while the implied relationships are only computed.
 /// Written down, as `export` writes them, `validateMetadataFeature
-/// Metaclass` reported seventy-two models of the corpus, which are
-/// sound.
+/// Metaclass` reports models of the corpus that are sound.
 #[test]
 fn a_metadata_annotation_takes_the_base_its_own_language_names() {
     let Some(root) = vendor() else { return };

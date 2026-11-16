@@ -266,7 +266,7 @@ struct File {
     /// Every element built from the file, in the order the model holds
     /// them. A question about a position is a question about one file,
     /// and answering it by walking the whole model walks the standard
-    /// library -- forty thousand elements -- per keystroke.
+    /// library -- a great many elements -- per keystroke.
     elements: Vec<ElementId>,
 }
 
@@ -407,7 +407,7 @@ pub struct Workspace {
     deferred_waiting: Vec<ElementId>,
     /// How deep the walk through inherited members is. Nothing else
     /// bounds it: what a namespace specializes is written in the
-    /// model, and the model can say it thousands of times over.
+    /// model, and the model can say it very many times over.
     walking: usize,
     /// The import filter conditions being evaluated, from the outermost
     /// in. A condition names something -- `@Safety` -- and finding that
@@ -457,7 +457,7 @@ pub struct Workspace {
     /// Members of a namespace by the names they answer to, in the
     /// order a lookup would have walked them. Searching the list itself
     /// costs a scan of every member of the namespace per lookup, which
-    /// on a package of ten thousand parts is what makes a project take
+    /// on a package of very many parts is what makes a project take
     /// minutes to open rather than seconds.
     members: HashMap<ElementId, HashMap<String, Vec<ElementId>>>,
     /// What the pass under way has already reified, so that a second
@@ -680,9 +680,9 @@ impl Workspace {
     /// the two kinds a reader wants apart.
     ///
     /// Three front ends ask this -- the command line, the language
-    /// server and the MCP server -- and they used to work it out for
-    /// themselves. One of them forgot the syntax half, so `sysml check`
-    /// reported a file that does not parse as sound. Whether to go on to
+    /// server and the MCP server -- and working it out separately lets one
+    /// forget the syntax half, so `sysml check` would report a file that
+    /// does not parse as sound. Whether to go on to
     /// the names when the syntax is broken is a judgement each of them
     /// makes: an editor shows both while you type, a batch check stops.
     /// What must not differ is what there is to show.
@@ -801,11 +801,10 @@ impl Workspace {
     pub fn named_after(&self, elem: ElementId) -> Vec<ElementId> {
         // Who borrows a name from whom, over the whole model, once.
         //
-        // This used to be asked one step at a time, and each step was a
-        // scan of every element there is: with the standard library
-        // loaded that is a millisecond and a quarter apiece, so a
-        // feature sixty redefinitions deep cost seventy-five
-        // milliseconds -- in the rename an editor is waiting on, and
+        // Asking this one step at a time would make each step a scan of
+        // every element there is: with the standard library loaded that
+        // is costly apiece, so a feature many redefinitions deep would
+        // cost far more -- in the rename an editor is waiting on, and
         // growing with the model rather than with the answer.
         let mut borrowers: HashMap<ElementId, Vec<ElementId>> = HashMap::new();
         for heir in self.model.ids() {
@@ -1007,7 +1006,7 @@ impl Workspace {
     /// with. Names that tie keep the order the model holds them in.
     ///
     /// The language server's symbol search and the MCP server's library search
-    /// are both this; they used to sort differently, and only one put an exact
+    /// are both this, so that they sort alike and put an exact
     /// match first.
     pub fn search_names(&self, query: &str, limit: usize) -> Vec<ElementId> {
         let needle = query.to_lowercase();
@@ -1084,7 +1083,7 @@ impl Workspace {
     /// `TemperatureValue` misremembered.
     ///
     /// Asked for several names at once because the walk over every declared
-    /// name is what costs: sixty thousand with the library loaded, once rather
+    /// name is what costs, with the library loaded: once rather
     /// than once per name.
     pub fn suggestions(&self, wanted: &[String]) -> Vec<Suggestion> {
         // the last segment is what a name answers to; `ISQ::Volume`
@@ -1120,9 +1119,9 @@ impl Workspace {
             for (at, needle) in lowered.iter().enumerate() {
                 // Names are case-sensitive, so "declared as" -- a claim
                 // that this is the very name, wanting only an import --
-                // holds of the exact spelling alone. `B` used to be
+                // holds of the exact spelling alone. `B` is not
                 // "declared as" the `b` being declared on the same line,
-                // and an editor's quick fix wrote `part b : b;`. The same
+                // or an editor's quick fix would write `part b : b;`. The same
                 // letters in another case are a near miss, and the
                 // nearest there is.
                 if &spelled == needle {
@@ -1565,8 +1564,7 @@ impl Workspace {
     /// `doc /* ... */` over several lines arrives as `"* Two states, and the
     /// LED follows\n         * which one is current"`. The `*` down the left
     /// is decoration and so is the indentation that carried it, and every
-    /// reader wanting the sentence had to know that -- the diagrams stripped
-    /// it, hover and the MCP server did not.
+    /// reader wanting the sentence would otherwise have to know that.
     pub fn documentation_of(&self, elem: ElementId) -> Option<String> {
         self.documented(elem).map(prose)
     }
@@ -1606,7 +1604,7 @@ fn prose(body: &str) -> String {
 /// held by it -- and this does, the way rustc's own suggestions do.
 ///
 /// A row is given up as soon as every way through it costs more than
-/// `most`, which is what makes a walk over sixty thousand names worth
+/// `most`, which is what makes a walk over every declared name worth
 /// doing: almost all are abandoned on their first letter.
 fn within(name: &str, wanted: &str, most: usize) -> Option<usize> {
     let name: Vec<char> = name.chars().collect();
@@ -1915,8 +1913,8 @@ mod tests {
 
     /// A report points at what a reader can go and look at.
     ///
-    /// Most of a model was never written down: of the official corpus's 109616
-    /// elements only 30235 have syntax of their own, and the other 79380 -- an
+    /// Most of a model was never written down: of the official corpus's
+    /// elements only some have syntax of their own, and the rest -- an
     /// implied specialization, a reified connector end, a multiplicity -- are
     /// shown where whatever owns them was written. The one element under no
     /// file is the root, and nothing a constraint is asked of is that.
@@ -2294,7 +2292,7 @@ mod tests {
     ///
     /// The library types the standard implies are found by their whole name,
     /// and the last segment of one is often what a model calls its own
-    /// features: `x` names two hundred and seventy elements of the published
+    /// features: `x` names very many elements of the published
     /// corpus by itself. Taking only the first few hundred candidates left the
     /// answer to how many other things happened to be called the same.
     #[test]

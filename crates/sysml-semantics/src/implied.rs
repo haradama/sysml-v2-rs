@@ -26,7 +26,7 @@ impl Workspace {
     /// `connect a to b` names no end at all. Read without it every such
     /// connector has four ends -- the two written and the two inherited -- and
     /// "a connector specializing a binary one is binary" is true of none of
-    /// the eight hundred in the corpus.
+    /// the corpus's connectors.
     pub(crate) fn imply_end_redefinitions(&mut self, ids: &[ElementId]) {
         for &elem in ids {
             let mine = self.own_ends(elem);
@@ -313,7 +313,7 @@ impl Workspace {
     /// resolution has always used those without materializing them. This pass
     /// writes each one the model does not already reach as an owned
     /// `Subclassification` or `Subsetting` with `isImplied` set, the way the
-    /// standard interchanges them, and marks what gained one
+    /// standard interchanges them, and marks what has one
     /// `isImpliedIncluded`.
     ///
     /// Call after [`resolve_all`](Workspace::resolve_all); bases that do not
@@ -415,7 +415,7 @@ impl Workspace {
     /// have to: a result parameter of a function that specializes another
     /// redefines that one's. Without it the specializing function has two
     /// result parameters, and "a function has exactly one" is true of none of
-    /// the five hundred in the corpus that declare one.
+    /// the corpus's functions that declare one.
     fn imply_return_redefinitions(&mut self) -> usize {
         let mut written = 0;
         for elem in self.model.ids().collect::<Vec<_>>() {

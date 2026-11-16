@@ -60,10 +60,10 @@ fn no_library_is_the_way_to_say_otherwise() {
 /// A library path that will not load falls back to the copy built in,
 /// rather than to no library at all.
 ///
-/// One mistyped `sysml.library.path` used to underline every name in
-/// every file, silently: the server degraded to an empty library and
-/// nothing anywhere said why. The command line and the MCP server had
-/// both stopped doing that; this was the front end left.
+/// One mistyped `sysml.library.path` must not underline every name in
+/// every file, silently: degrading to an empty library with nothing
+/// anywhere saying why. The command line and the MCP server do not do
+/// that, and this front end must not either.
 #[test]
 fn a_library_that_will_not_load_falls_back_to_the_one_built_in() {
     let found = diagnostics_for(json!({ "libraryPath": "/nowhere/at/all" }), REACHES);
@@ -93,6 +93,8 @@ fn a_library_that_cannot_be_read_falls_back_too() {
     let shut = std::env::temp_dir().join("sysml-lsp-library-shut");
     std::fs::create_dir_all(&shut).unwrap();
     let hidden = shut.join("hidden.sysml");
+    // a run that stopped before putting the mode back leaves it shut
+    let _ = std::fs::remove_file(&hidden);
     std::fs::write(&hidden, "package Hidden;\n").unwrap();
     std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
     let found = diagnostics_for(json!({ "libraryPath": shut.to_str().unwrap() }), REACHES);
@@ -100,13 +102,13 @@ fn a_library_that_cannot_be_read_falls_back_too() {
     assert!(found.is_empty(), "{found:?}");
 }
 
-/// The copy built in was no file, so nothing in it had a place for a
-/// workspace-symbol answer to go to -- and the search was cut to its limit
-/// before those were dropped. (Written out to a cache now, it has places,
-/// and the project's own are ranked before it for the same reason.) A query as short as `e` matches thousands of
-/// the library's names, so the limit was spent on them and the answer held
-/// one of this document's three. What has nowhere to go is passed over
-/// before anything is counted.
+/// The copy built in is written out to a cache so that it has places for
+/// a workspace-symbol answer to go to, and the project's own names are
+/// ranked before it. Were the search cut to its limit before the names
+/// with nowhere to go were dropped, a query as short as `e`, which
+/// matches a great many of the library's names, would spend the limit on
+/// them and the answer would hold one of this document's three. What has
+/// nowhere to go is passed over before anything is counted.
 #[test]
 fn the_library_built_in_does_not_crowd_out_the_documents_own_symbols() {
     let (mut client, handle) = serving();
@@ -129,7 +131,7 @@ fn the_library_built_in_does_not_crowd_out_the_documents_own_symbols() {
         .iter()
         .map(|it| it["name"].as_str().unwrap())
         .collect();
-    // the library may follow, now that it has files to go to, but the
+    // the library may follow, since it has files to go to, but the
     // document's own come first, every one of them
     let mut names = all[..3.min(all.len())].to_vec();
     names.sort_unstable();
@@ -139,8 +141,8 @@ fn the_library_built_in_does_not_crowd_out_the_documents_own_symbols() {
 
 /// A name from the copy built in can be jumped to.
 ///
-/// That copy is no file, so a definition inside it had no URL and
-/// go-to-definition on `Part` answered null, while the crate said that
+/// That copy is no file, so a definition inside it would have no URL and
+/// go-to-definition on `Part` would answer null, while the crate says that
 /// definitions inside the library can be jumped to. Where there is a
 /// filesystem the copy is written out to a cache directory and answered
 /// from there, as a library directory the client named would be.

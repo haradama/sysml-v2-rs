@@ -2,10 +2,9 @@
 //!
 //! `sysml export` writes the JSON the SysML v2 API & Services standard
 //! defines, and `sysml_interchange::from_json` reads it back -- round-trip
-//! tested over the whole standard library since it was written, and
-//! called from no front end at all. A document off a model server had
-//! nowhere to go, and `sysml api` could fetch one. `sysml import` is
-//! where it goes.
+//! tested over the whole standard library. A document off a model server
+//! needs somewhere to go, since `sysml api` can fetch one: `sysml import`
+//! is where it goes.
 //!
 //! Two things it can do with what it reads, and the boundary between them
 //! is what a model on its own is enough for: counting the elements, and
@@ -40,9 +39,9 @@ fn written(name: &str, text: &str) -> PathBuf {
 
 /// Where this run writes a file before putting it in place.
 ///
-/// The directory is shared by every run, so that the 754 MB document is
+/// The directory is shared by every run, so that the huge document is
 /// not left behind once per run; two runs at once -- two checkouts, or a
-/// test run beside a coverage run -- then wrote `whole.json` over each
+/// test run beside a coverage run -- would write `whole.json` over each
 /// other while the other was reading it. Written beside and renamed, a
 /// reader has the whole of one document or the whole of the other.
 fn aside(at: &Path) -> PathBuf {
@@ -55,15 +54,14 @@ fn aside(at: &Path) -> PathBuf {
 ///
 /// Every one of them needs the library carried -- `import` refuses a
 /// document that points outside itself, which is what the test below is
-/// about -- and the library is all but the whole of the 754 MB. So they
+/// about -- and the library is all but the whole of the document. So they
 /// ask the same model of it: two part definitions, one specializing the
 /// other, and an `Engine` for the drawing to show.
 ///
-/// Writing it costs 83 MB and reading it 862 MB, so the four may run at
-/// once, as the harness would have them. They could not always: the
-/// document used to be built whole as a `serde_json::Value` on the way
-/// out and again on the way in, which was 6.7 and 6.9 GB -- four at once
-/// asked a CI runner for 27 GB and were killed for it.
+/// Writing it and reading it are cheap enough that the four may run at
+/// once, as the harness would have them. That holds only while the
+/// document is never built whole as a `serde_json::Value` on the way out
+/// or in: at that size four at once would exhaust a CI runner's memory.
 fn whole_document() -> PathBuf {
     static AT: OnceLock<PathBuf> = OnceLock::new();
     AT.get_or_init(|| {
@@ -286,8 +284,8 @@ fn a_skin_without_a_drawing_is_refused_by_the_parser() {
 /// What a supertype imports publicly is among the memberships it hands
 /// down, and only the resolver knows what an import brought in -- so the
 /// CLI has to say which imports were public when it hands the model to
-/// the interchange. It said what every import brought in, all at once,
-/// and `Derived :> Base` came out inheriting nothing of the `public
+/// the interchange. Saying what every import brought in, all at once,
+/// would have `Derived :> Base` inherit nothing of the `public
 /// import Lib::*;` in `Base`.
 #[test]
 fn a_subtype_written_out_inherits_what_its_supertype_imports_publicly() {

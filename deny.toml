@@ -21,14 +21,14 @@ all-features = true
 
 [advisories]
 # An advisory with no fixed version yet would be ignored here by name and
-# a line saying why. There are none, and an empty list is a claim.
+# a line saying why, so an empty list is a claim.
 ignore = []
 # A crate its author withdrew is one nobody should be resolving to,
 # advisory or not
 yanked = "deny"
 
 [licenses]
-# Every licence anything in the tree is actually under, as of writing.
+# Every licence anything in the tree is actually under.
 # A list rather than a rule about categories: a new licence arriving
 # should be a decision somebody makes, not one a pattern makes for them.
 allow = [

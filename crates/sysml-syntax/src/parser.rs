@@ -1872,10 +1872,10 @@ impl Parser<'_> {
     ///
     /// Both notations reserve their keywords, and a name that collides
     /// with one is written in single quotes: `part def 'frame';`. Bare,
-    /// the keyword used to fall through to [`Self::element_tail`], which
-    /// sweeps up loose keywords -- so the definition came out with no
-    /// name at all, and nothing was said, because nothing had asked for
-    /// one.
+    /// the keyword would fall through to [`Self::element_tail`], which
+    /// sweeps up loose keywords -- so the definition would come out with
+    /// no name at all, and nothing would be said, because nothing asked
+    /// for one.
     ///
     /// Only after `def` (or a KerML classifier keyword), where a name is
     /// the one thing that belongs. A usage's name is not so certain:
@@ -2422,9 +2422,9 @@ mod tests {
     }
 
     /// A declaration left without its `;` is an error where the next one
-    /// begins, and the next one is a declaration of its own. It used to
-    /// be read as owned by the one before it, with no error at all, and
-    /// `fmt --write` then joined the two lines into one.
+    /// begins, and the next one is a declaration of its own. It is not
+    /// read as owned by the one before it with no error at all, which
+    /// would let `fmt --write` join the two lines into one.
     #[test]
     fn a_declaration_without_its_semicolon_is_an_error() {
         for text in [
@@ -2870,9 +2870,9 @@ mod tests {
         }
     }
 
-    /// Nesting past the limit used to take the process down: the recursion
-    /// overflowed the stack while parsing, and where the tree was built by
-    /// a loop instead it overflowed again when rowan dropped it.
+    /// Nesting past the limit must not take the process down: the recursion
+    /// would overflow the stack while parsing, and where the tree is built by
+    /// a loop instead it would overflow again when rowan dropped it.
     #[test]
     fn nesting_past_the_limit_is_reported_once_and_left_flat() {
         for text in [
@@ -2903,8 +2903,8 @@ mod tests {
         }
     }
 
-    /// `part a0 part a1 part a2 ... ;` used to nest each declaration in
-    /// the one before it until the depth limit gave up. Each is a
+    /// `part a0 part a1 part a2 ... ;` must not nest each declaration in
+    /// the one before it until the depth limit gives up. Each is a
     /// declaration of its own that is missing its `;`, so nothing nests.
     #[test]
     fn declarations_run_together_are_siblings_not_a_nest() {
@@ -2926,9 +2926,9 @@ mod tests {
         assert_eq!(parse.syntax().children().count(), 20_000);
     }
 
-    /// A definition named after a reserved word used to lose its name:
-    /// `element_tail` swept the keyword up and nothing said so, because
-    /// nothing had asked for a name. The word is kept -- as the name it
+    /// A definition named after a reserved word must not lose its name,
+    /// as `element_tail` sweeping the keyword up would, silently, because
+    /// nothing asked for a name. The word is kept -- as the name it
     /// was written as, so an editor can still find and rename it -- and
     /// the message says how to spell it.
     #[test]
@@ -3211,9 +3211,9 @@ mod tests {
     /// tests for one there asked for a name, so `@$::P::code { }` was
     /// turned away, `#$::P::code part y;` read as a stray `#` before an
     /// expression, and `metadata $::P::code { }` left the reference
-    /// standing as an expression rather than the usage's type. The
-    /// importer had to write `metadata code_ : $::P::code` to get round
-    /// it, and now writes `@$::P::code`.
+    /// standing as an expression rather than the usage's type. An
+    /// importer would otherwise have to write `metadata code_ : $::P::code`
+    /// to get round it, instead of `@$::P::code`.
     #[test]
     fn a_metadata_definition_may_be_named_from_the_global_root() {
         let annotation = check_ok("part x { @$::P::code { } }");

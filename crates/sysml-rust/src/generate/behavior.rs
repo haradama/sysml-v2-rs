@@ -1209,9 +1209,6 @@ impl<'a> Generator<'a> {
         let [condition, then, rest @ ..] = clauses.as_slice() else {
             return Err("an `if` with no condition or no body".to_string());
         };
-        if !model.kind(*condition).is_a(ElementKind::Expression) {
-            return Err("an `if` with no condition".to_string());
-        }
         let condition = self.condition(*condition, wiring.def)?;
         let mut lines = vec![format!("if {condition} {{")];
         lines.extend(self.block(*then, scope, false, wiring)?);
@@ -1285,9 +1282,8 @@ impl<'a> Generator<'a> {
     /// over the behaviour's own `in` parameters -- or why it is not one.
     fn condition(&self, expression: ElementId, def: ElementId) -> Result<String, String> {
         let model = self.model;
-        let Some(text) = expression_text(model, expression) else {
-            return Err("a condition the model holds no text for".to_string());
-        };
+        let text = expression_text(model, expression)
+            .ok_or("a condition the model holds no text for".to_string())?;
         let parameters = self.in_parameters(def);
         let resolve = |chain: &str| {
             expr::led_by(chain, |leading: &str| {

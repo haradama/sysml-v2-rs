@@ -119,7 +119,7 @@ fn renaming_a_borrowed_name_rewrites_the_declaration_it_came_from() {
     spans.sort_unstable();
     // the declaration on line 2 and the mention on line 3, each the
     // width of the name and nothing more -- the whole `part :>>
-    // component;` used to be replaced by `unit`
+    // component;` must not be replaced by `unit`
     assert_eq!(spans, [(2, 28, 37), (3, 32, 41)]);
     assert!(
         edits.iter().all(|edit| edit["newText"] == "unit"),

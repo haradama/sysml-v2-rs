@@ -149,7 +149,8 @@ pub struct Node {
 /// And the definition's own ports, which a connection inside it runs to
 /// when it delegates through one: `connect p to a.q;` in `part def Sys {
 /// port p; part a; }`. A port is no box, so the port on the boundary was
-/// on the canvas nowhere, and every such connection was dropped in silence.
+/// on the canvas nowhere, and every such connection would be dropped in
+/// silence.
 #[derive(Default)]
 struct EndsOfFlow {
     start: Option<usize>,
@@ -3078,7 +3079,7 @@ mod tests {
 
     #[test]
     fn a_keyworded_member_is_drawn_as_one_line_not_two() {
-        // each of these is composite as well as keyworded, and used to
+        // each of these is composite as well as keyworded, and must not
         // get a composition diamond beside its own line
         let ws = resolved(
             "action def B;\n\
@@ -3175,7 +3176,7 @@ mod tests {
     #[test]
     fn a_special_kind_of_member_keeps_its_own_heading() {
         // every one of these is a subtype of a kind that has a
-        // compartment of its own, and used to be filed under it
+        // compartment of its own, and must not be filed under it
         let ws = resolved(
             "requirement def R;\n\
              state def S;\n\
@@ -4049,7 +4050,7 @@ mod tests {
     fn a_dependency_is_drawn_from_each_client_to_each_supplier() {
         // `Dependency = 'dependency' ( Identification? 'from' )? client
         // += ... 'to' supplier += ...`, drawn as `binary-dependency` --
-        // and until now not drawn, or even built, at all
+        // each client-supplier pair is built and drawn as an edge
         let ws = resolved(
             "package P {\n\
              \tpart def A;\n\
@@ -5847,8 +5848,8 @@ mod behaviour_tests {
 
     #[test]
     fn a_boundary_drawn_on_its_own_still_says_what_it_relates_to() {
-        // the box the whole view is read inside used to be pushed after
-        // the compartments were worked out, so it alone went without them
+        // the box the whole view is read inside is pushed before the
+        // compartments are worked out, or it alone would go without them
         let diagram = internal(
             "part def Whole;\npart def Millis :> Whole { port p; }\n",
             "Millis",
@@ -5863,7 +5864,7 @@ mod behaviour_tests {
 
     #[test]
     fn the_internal_view_of_a_usage_shows_what_its_type_is_made_of() {
-        // `--internal vehicle` on a usage used to draw an empty page:
+        // `--internal vehicle` on a usage must not draw an empty page:
         // the usage owns no parts of its own, and only its type does
         let diagram = internal(
             "part def Wheel;\n\
@@ -5992,7 +5993,7 @@ mod behaviour_tests {
         assert_eq!(diagram.edges[0].label, None);
     }
 
-    /// What used to drop out of an internal view without a word: a step
+    /// What must not drop out of an internal view without a word: a step
     /// written without a name, with every succession through it; the
     /// `start` and `done` a flow begins and ends at; a state that handles
     /// an event and stays; and a connection to the definition's own port.
@@ -6577,7 +6578,7 @@ mod faithfulness_tests {
     fn a_connection_a_nested_part_inherits_reaches_the_parts_redeclared() {
         // Base's connections are written in terms of Base's `a` and `c`,
         // and the boxes drawn for `s : Sub` are Sub's redeclarations of
-        // them: the connections were dropped for want of an end
+        // them: without that, the connections are dropped for want of an end
         let diagram = internal(
             "part def Base { part a; part b; part c; connect a to b; connect b to c; }\n\
              part def Sub :> Base { part redefines a; part c2 :>> c; }\n\

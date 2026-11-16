@@ -1,6 +1,6 @@
 //! A Model Context Protocol server for SysML v2, over stdio.
 //!
-//! SysML v2 was adopted in 2025 and hardly appears in what a language
+//! SysML v2 is recent and hardly appears in what a language
 //! model has read. Asked to write it, a model writes something that looks
 //! right and names things that do not exist. This server answers the
 //! questions it should have asked instead:
@@ -66,7 +66,7 @@ use sysml_semantics::Workspace;
 ///
 /// The protocol hands this straight to the model on the other side, and
 /// it is the only thing here that reaches one that has not called a tool
-/// yet. SysML v2 was adopted in 2025 and there is little of it in any
+/// yet. SysML v2 is recent and there is little of it in any
 /// model's training data, so what a model writes unaided looks right and
 /// names things that do not exist -- which is the failure this server is
 /// here to stop, and it stops nothing if it is never asked.
@@ -137,9 +137,9 @@ const SPOKEN: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
 ///
 /// A project is a directory: its files are read from under it, and the
 /// relative names a call gives are looked for there. A path that is not
-/// there, or one that is a file, used to start a server with an empty
-/// project, which answered every call by saying to start it with
-/// `--project`. A single file is refused rather than taken as a project
+/// there, or one that is a file, is refused: taken as given it would start
+/// a server with an empty project, which answers every call by saying to
+/// start it with `--project`. A single file is refused rather than taken as a project
 /// of one, since the names a call gives would then be looked for under a
 /// file; it is what a call's `path` is for, and its directory is the
 /// project it belongs to. A directory with nothing in it yet is a project
@@ -176,10 +176,10 @@ pub struct Server {
     /// The workspaces the last few calls were answered against, newest
     /// first.
     ///
-    /// Opening a project of a hundred files over the library and
-    /// resolving it took a third of a second, and putting the
-    /// specification's constraints to it two seconds more -- every call,
-    /// though nothing on disk had changed since the last. What a call is
+    /// Opening a project over the library and resolving it, and putting
+    /// the specification's constraints to it, is slow enough to notice --
+    /// on every call, though nothing on disk may have changed since the
+    /// last. What a call is
     /// answered against is decided by the name and text of every file it
     /// opens, so that is what one is kept under: a file edited, added or
     /// removed is a different list, and the walk that reads the project
@@ -349,7 +349,7 @@ impl Server {
     ///
     /// A message may be a batch: revision 2025-03-26, which this server
     /// says it speaks, has a server accept an array of requests and answer
-    /// with an array of what they draw. It used to be refused whole. The
+    /// with an array of what they draw, so a batch is not refused whole. The
     /// array holds the answers to the requests that draw one, and a batch
     /// of notifications draws nothing at all.
     pub fn handle(&mut self, request: &Value) -> Option<Value> {
@@ -586,11 +586,11 @@ impl Server {
     /// it names something there, otherwise as written, from the server's
     /// own directory.
     ///
-    /// Which file a `name` stood for was asked this way while `path` and
-    /// `alongside` were read from the server's directory alone, so a
-    /// launcher that started the server anywhere but the project's root
-    /// had `path: "sub/car.sysml"` refused as unreadable -- the same
-    /// spelling `name` was matched by.
+    /// Which file a `name` stands for is asked this way, and `path` and
+    /// `alongside` follow it rather than the server's directory alone: a
+    /// launcher may start the server anywhere but the project's root, and
+    /// `path: "sub/car.sysml"` must not be refused as unreadable -- it is
+    /// the same spelling `name` is matched by.
     fn located(&self, path: &str) -> std::path::PathBuf {
         if let Some(project) = &self.project {
             let under = Path::new(&project.root).join(path);
@@ -661,9 +661,9 @@ impl Server {
             stats,
         } = self.open(files).about_something()?;
         // `focus` asks about the file the call named and nothing else:
-        // in a project of a hundred files, an edit to one was answered
+        // in a project of many files, an edit to one would be answered
         // with what is wrong in all of them, and what the edit itself
-        // broke was somewhere in the list.
+        // broke would be somewhere in the list.
         let reported = match (focused, focus) {
             (true, Some(file)) => vec![file],
             (true, None) => {
@@ -734,9 +734,9 @@ impl Server {
         // a list of complaints about the hole.
         //
         // Focused, the constraints are put to the file the call named and
-        // to nothing else. They were put to every file opened and all but
-        // the named one's answers thrown away, and over a project of a
-        // hundred files that was most of what an edit took to check. What
+        // to nothing else. Put to every file opened, with all but the
+        // named one's answers thrown away, they would be most of what an
+        // edit takes to check over a project of many files. What
         // the constraints say of an element is decided by the model it is
         // in, which is resolved whole either way; which elements are
         // asked decides only which are answered for -- and those are the
@@ -885,8 +885,8 @@ impl Server {
         let offset = offset_of(&text, line, column)
             .ok_or_else(|| format!("line {line}, column {column} is past the end of the text"))?;
         // Inside a comment or a string no name is written, so none may
-        // be: the names in scope around a block comment were offered for
-        // a point in its prose.
+        // be: names in scope around a block comment would otherwise be
+        // offered for a point in its prose.
         use sysml_syntax::SyntaxKind::{BLOCK_NOTE, COMMENT_BODY, LINE_NOTE, STRING};
         let at = sysml_syntax::TextSize::from(offset as u32);
         let in_prose = ws
@@ -917,7 +917,7 @@ impl Server {
     fn outline(&mut self, arguments: &Value) -> Result<Value, String> {
         self.refresh();
         // 0 is the element alone; anything but a count is refused rather
-        // than read as the default, which a negative one used to be
+        // than read as the default, as a negative one would be
         let depth = match arguments.get("depth") {
             None | Some(Value::Null) => 2,
             Some(given) => given
@@ -954,9 +954,9 @@ impl Server {
                 .collect(),
         };
         // A page of the top-level elements, and of those no more than an
-        // answer a model can read: an outline of a project of a hundred
-        // files was every definition in it, at depth, in one answer that
-        // a client cut off or a model lost the start of.
+        // answer a model can read: an outline of a project of many files
+        // would be every definition in it, at depth, in one answer that
+        // a client cuts off or a model loses the start of.
         let offset = whole_number(arguments, "offset")?.unwrap_or(0);
         let limit = whole_number(arguments, "limit")?.unwrap_or(50).max(1);
         let mut described: Vec<Value> = Vec::new();
@@ -1249,7 +1249,7 @@ impl Server {
                 // the text of it: an `alias Rueda for Wheel;` read
                 // unresolved is a `Membership` with no documentation and
                 // nothing to say what it names, which is the answer a
-                // caller least wants and the one it used to get.
+                // caller least wants.
                 Some((ws, open))
             }
         };
@@ -1507,14 +1507,17 @@ impl Server {
             .iter()
             .filter(|(file, _)| !open.contains(file))
             .count();
-        let mut listed = Vec::new();
-        if let Some((file, range)) = ws.declared_at(elem) {
-            let mut place = placed(&ws, file, range, json!({ "declaration": true }));
-            if !open.contains(&file) {
-                place["library"] = json!(true);
-            }
-            listed.push(place);
-        }
+        let mut listed: Vec<Value> = ws
+            .declared_at(elem)
+            .into_iter()
+            .map(|(file, range)| {
+                let mut place = placed(&ws, file, range, json!({ "declaration": true }));
+                if !open.contains(&file) {
+                    place["library"] = json!(true);
+                }
+                place
+            })
+            .collect();
         for (file, range) in places.into_iter().filter(|(file, _)| open.contains(file)) {
             listed.push(placed(&ws, file, range, json!({})));
         }
@@ -1595,14 +1598,14 @@ impl Server {
                 .iter()
                 .map(|edit| crate::at(&text, edit.range, json!({ "new_text": edit.new_text })))
                 .collect();
-            if let Some(at) = at {
+            at.into_iter().for_each(|at| {
                 for edit in written.iter().rev() {
                     texts[at].replace_range(
                         usize::from(edit.range.start())..usize::from(edit.range.end()),
                         &edit.new_text,
                     );
                 }
-            }
+            });
             if !listed.is_empty() {
                 said.push(json!({ "path": ws.file_name(file), "edits": listed }));
             }
@@ -1644,13 +1647,14 @@ impl Server {
             .iter()
             .filter(|f| {
                 let key = (after.file_name(f.file).to_string(), f.what.clone());
-                match was.iter().position(|it| *it == key) {
-                    Some(at) => {
+                // each one that was there before is used up, so that a
+                // second of the same name is new
+                was.iter()
+                    .position(|it| *it == key)
+                    .inspect(|&at| {
                         was.remove(at);
-                        false
-                    }
-                    None => true,
-                }
+                    })
+                    .is_none()
             })
             .map(|f| place(f, json!({ "name": f.what })))
             .collect();
@@ -2293,7 +2297,10 @@ impl Server {
             most,
             keep: !summary,
         };
-        match sysml_interchange::write_json(ws.model(), &extras, &mut out) {
+        let written = sysml_interchange::write_json(ws.model(), &extras, &mut out);
+        // a writer is flushed when it is done with
+        let _ = out.flush();
+        match written {
             Ok(objects) => {
                 said["objects"] = json!(objects);
                 said["bytes"] = json!(out.written);
@@ -2455,7 +2462,7 @@ impl Server {
         // The references a reader resolves: what each element says it
         // owns, and the properties its metaclass stores. A derived one is
         // not read back, and the library's are in every list of inherited
-        // members by the hundred.
+        // members in great numbers.
         let mut wanted: Vec<String> = Vec::new();
         // and of those, the ones the model names rather than owns: the
         // namespace a workspace hangs its files off owns the library's
@@ -2534,23 +2541,7 @@ impl Server {
             .filter_map(|id| {
                 let uuid = model.name(id)?;
                 let stood_for = *outside.get(uuid)?;
-                // an alias is named by its own name, not that of what it
-                // is an alias for: `import ParametersOfInterestMetadata::moe;`
-                let alias = (base.kind(stood_for) == sysml_model::ElementKind::Membership)
-                    .then(|| {
-                        base.maybe(stood_for, "memberName")
-                            .and_then(sysml_model::Value::as_str)
-                    })
-                    .flatten()
-                    .zip(base.owner(stood_for));
-                let name = match alias {
-                    Some((alias, owner)) => format!(
-                        "{}::{}",
-                        qualified(&self.base, owner),
-                        sysml_syntax::quote(alias)
-                    ),
-                    None => qualified(&self.base, stood_for),
-                };
+                let name = qualified(&self.base, stood_for);
                 if named.contains(uuid) {
                     library.push(name.clone());
                 }
@@ -2730,10 +2721,13 @@ impl Server {
     fn listed(&mut self) -> Vec<Listed> {
         self.refresh();
         let mut listed = Vec::new();
-        for (path, text) in self.project.iter().flat_map(|it| &it.files) {
-            let Ok(uri) = url::Url::from_file_path(path) else {
-                continue;
-            };
+        // a project's paths are absolute, so each has a `file://` URI
+        for (uri, path, text) in self
+            .project
+            .iter()
+            .flat_map(|it| &it.files)
+            .filter_map(|(path, text)| Some((url::Url::from_file_path(path).ok()?, path, text)))
+        {
             let root = self.project.as_ref().map(|it| Path::new(&it.root));
             let name = root
                 .and_then(|root| {
@@ -2872,7 +2866,7 @@ struct Listed {
     name: String,
     text: String,
     /// What it declares at its top level, which is how a client picks
-    /// the one it wants out of ninety-four.
+    /// the one it wants out of the library's many.
     declared: Vec<String>,
     library: bool,
 }
@@ -3171,10 +3165,10 @@ const STOOD_IN: usize = 10_000;
 /// How large a document `export_json` answers by default, as `sysml
 /// export` writes it. Every element carries every property its metaclass
 /// declares, and a namespace every membership its imports bring in:
-/// sixteen lines that import `ISQ::*` are a document of a megabyte.
+/// a few lines that import `ISQ::*` are a document of megabytes.
 const EXPORTED: usize = 4_000_000;
 
-/// And at most, whatever is asked: the standard library alone is 754 MB.
+/// And at most, whatever is asked: the standard library alone is very large.
 const EXPORTED_AT_MOST: usize = 64_000_000;
 
 /// A writer into memory that refuses to grow past `most`, so that a
@@ -3626,7 +3620,7 @@ fn notation(arguments: &Value) -> Result<Value, String> {
 /// something the project declares elsewhere.
 ///
 /// Given as anything but a list of paths it is refused: a single path
-/// written as a string used to be dropped without a word, and the model
+/// written as a string would be dropped without a word, and the model
 /// checked without the files it was meant to be checked with.
 fn alongside(arguments: &Value) -> Result<Vec<String>, String> {
     let refused = || "`alongside` must be an array of paths".to_string();
@@ -3641,8 +3635,8 @@ fn alongside(arguments: &Value) -> Result<Vec<String>, String> {
 }
 
 /// An argument that is a string where it is given at all. One of another
-/// type is refused rather than read as absent: `text: 42` answered about
-/// the project instead, as if no text had been sent.
+/// type is refused rather than read as absent: `text: 42` would answer
+/// about the project instead, as if no text had been sent.
 fn optional_str<'a>(arguments: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
     match arguments.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -3660,7 +3654,7 @@ fn entries(ws: &Workspace, found: &[ElementId]) -> Vec<Value> {
             // its friendliest names that way: `alias TemperatureValue for
             // ThermodynamicTemperatureValue;`. Read off the alias itself the
             // metaclass is `Membership` with no documentation, so what a caller most
-            // wants was the thing labelled uselessly. What it names is what it is.
+            // wants would be labelled uselessly. What it names is what it is.
             let names = ws.alias_target(elem).unwrap_or(elem);
             let mut entry = json!({
                 "name": qualified(ws, elem),
@@ -3711,7 +3705,7 @@ fn describe(ws: &mut Workspace, elem: ElementId, depth: usize, inherited: bool) 
             .map(|&up| qualified(ws, up))
             .collect::<Vec<_>>());
     }
-    // depth 0 asked for the element and nothing inside it, and used to
+    // depth 0 asks for the element and nothing inside it, and must not
     // be answered as 1
     if depth == 0 {
         return entry;

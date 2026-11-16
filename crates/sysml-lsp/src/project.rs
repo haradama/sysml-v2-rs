@@ -49,7 +49,7 @@ pub(crate) enum Library {
 /// either the old file whole or the new one whole.
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn written_out_library() -> Option<PathBuf> {
-    // FNV-1a over every name and text: a dozen milliseconds at most,
+    // FNV-1a over every name and text: cheap enough to do on every open,
     // and what tells this binary's copy from another's
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for (name, text) in sysml_stdlib::FILES {
@@ -124,8 +124,8 @@ impl Server {
             _ => None,
         };
         let mut complaints = Vec::new();
-        // The copy built in is no file, and a definition inside it had no
-        // URL to jump to: go-to-definition on `Part` answered null. Where
+        // The copy built in is no file, and a definition inside it has no
+        // URL to jump to: go-to-definition on `Part` would answer null. Where
         // there is a filesystem it is written out once per release to a
         // cache directory and read under those paths, which is then the
         // library's directory as a named one would be. Where there is
@@ -150,20 +150,19 @@ impl Server {
             // A named directory that will not load falls back to the
             // copy built in, and says so where the launcher can read it.
             //
-            // It used to degrade to an *empty* library, silently: one
-            // mistyped `sysml.library.path` and every name in every file
-            // underlined as unresolved, with nothing anywhere saying
-            // why. The command line and the MCP server had both stopped
-            // doing that; this was the one front end left where a wrong
-            // path cost the editor every name in the model rather than
-            // the library the client meant.
+            // Degrading to an *empty* library, silently, would be worse:
+            // one mistyped `sysml.library.path` and every name in every
+            // file underlined as unresolved, with nothing anywhere saying
+            // why. The command line and the MCP server do not do that,
+            // and here a wrong path must not cost the editor every name
+            // in the model rather than the library the client meant.
             Library::At(dir) => {
                 // Read before any of it is declared: half a library is
                 // worse than the copy built in, since the names it does
                 // declare resolve and the ones it does not are reported
                 // as though the model were wrong. The complaint names
                 // the file rather than the directory -- one unreadable
-                // file among a hundred is otherwise a refusal with
+                // file among many is otherwise a refusal with
                 // nothing to act on.
                 //
                 // The walk takes what it can reach, so a path that is
@@ -210,8 +209,8 @@ impl Server {
         // resolve the library once; the caches are cloned into every
         // layer above, so this cost is paid only at startup
         library.resolve_all();
-        // a named directory that fell back to the copy built in is left
-        // out of the project still, and the copy is the library now
+        // a named directory that falls back to the copy built in is left
+        // out of the project still, and the copy is the library
         let mut excluded_dirs: Vec<PathBuf> = library_dir.iter().cloned().collect();
         if let Some(dir) = built_in_dir {
             excluded_dirs.push(dir.clone());
@@ -366,7 +365,7 @@ impl Server {
     /// editor shows is what resolves -- and so that nothing is declared
     /// twice. A file merely opened is not left out: its buffer and the
     /// disk agree, so the layer below can speak for it, and rebuilding
-    /// this layer on every open and close was the slowest thing this
+    /// this layer on every open and close would be the slowest thing this
     /// server did.
     fn project(&mut self) -> &Workspace {
         if self.project.is_none() {
@@ -437,10 +436,9 @@ impl Server {
             // missing is resolved again -- normally nothing at all, and
             // never the whole project. Asked only when this layer added
             // a buffer of its own, which is the only way a declaration
-            // the layer below lacked can be here; it used to be asked
-            // only for the first kind, so `part a : B;` went on
-            // underlining `B` after a new buffer declared it until `a`
-            // itself was edited.
+            // the layer below lacks can be here. Asked only for the first
+            // kind, `part a : B;` would go on underlining `B` after a new
+            // buffer declared it, until `a` itself was edited.
             if !open.is_empty() {
                 let mut stale: Vec<usize> = ws
                     .unresolved()

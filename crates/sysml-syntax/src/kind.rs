@@ -7,7 +7,7 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(non_camel_case_types)]
 // Each name says what it is, and a line against every one of them would
-// be two hundred and seventy-nine restatements of the name. This is the
+// be a restatement of the name for every kind. This is the
 // whole of what the crate's `missing_docs` exempts.
 #[allow(missing_docs)]
 #[repr(u16)]
@@ -549,11 +549,11 @@ pub enum SysMLLanguage {}
 
 /// Every kind, in the order they are numbered.
 ///
-/// This is what turns a raw number back into a kind. It used to be a
-/// `transmute`, which rested on `SyntaxKind` being `#[repr(u16)]` with
+/// This is what turns a raw number back into a kind. It is not a
+/// `transmute`, which would rest on `SyntaxKind` being `#[repr(u16)]` with
 /// contiguous discriminants from zero -- true, and checked by nothing: a
-/// variant given a number of its own, anywhere in a list of two hundred
-/// and seventy-nine, would leave a hole that the bounds check in front
+/// variant given a number of its own, anywhere in the list, would leave
+/// a hole that the bounds check in front
 /// of it still let through. Here the length is the compiler's to check
 /// and the order is `every_kind_is_numbered_by_where_it_stands`'s, and
 /// this crate needs no `unsafe` at all.
@@ -883,9 +883,9 @@ pub enum Reserved {
 /// What each kind is reserved in, indexed by the kind itself.
 ///
 /// Built from [`KEYWORDS`] at compile time. The two dialect predicates
-/// used to be hand-kept lists of what each notation does *not* reserve,
-/// so a keyword added to one list and forgotten in the other silently
-/// became a name in a notation that reserves it.
+/// are not hand-kept lists of what each notation does *not* reserve:
+/// a keyword added to one list and forgotten in the other would silently
+/// become a name in a notation that reserves it.
 const RESERVED_IN: [Reserved; SyntaxKind::EOF as usize + 1] = {
     let mut table = [Reserved::Neither; SyntaxKind::EOF as usize + 1];
     let mut i = 0;
@@ -1090,10 +1090,8 @@ mod tests {
 
     /// The invariant `kind_from_raw` reads the table by.
     ///
-    /// Six kinds used to be round-tripped here, out of two hundred and
-    /// seventy-nine, which is six more than nothing and two hundred and
-    /// seventy-three short of the claim. A variant inserted with a
-    /// number of its own would have passed.
+    /// Every kind is round-tripped here, not a sample: a variant
+    /// inserted with a number of its own would otherwise pass.
     #[test]
     fn every_kind_is_numbered_by_where_it_stands() {
         for (at, &kind) in ALL.iter().enumerate() {

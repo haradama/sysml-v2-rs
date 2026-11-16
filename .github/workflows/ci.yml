@@ -99,8 +99,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # no lockfile is checked in, so this resolves afresh -- which is
       # what somebody depending on the published crates would get, and
-      # the reason the number was wrong: a dependency had raised its own
-      # minimum and nothing here noticed
+      # what catches a dependency that has raised its own minimum
       - name: check on the declared minimum
         run: cargo check --workspace --all-features --all-targets
 
@@ -119,8 +118,8 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       # `cargo fmt --all` and `cargo clippy --workspace` reach the
-      # members, and this is not one: excluded from the workspace, it was
-      # the only Rust here that neither gate had ever read
+      # members, and this is not one: excluded from the workspace, it is
+      # Rust that neither gate would otherwise read
       - name: it is held to what the workspace is held to
         run: |
           set -eu
@@ -178,8 +177,8 @@ jobs:
       # `src/generated.rs` is the one piece of `rustgen` output committed
       # anywhere, which makes this the only place a reader would ever
       # find out that what the generator writes is not what `cargo fmt`
-      # leaves. It was not: the header's `#![allow(...)]` came out one
-      # lint to a line where `rustfmt` joins them. This is what holds it.
+      # leaves, such as a header whose `#![allow(...)]` lists lint per
+      # line where `rustfmt` joins them. This is what holds it.
       - name: it is held to what the workspace is held to
         working-directory: examples/arduino-uno
         run: |

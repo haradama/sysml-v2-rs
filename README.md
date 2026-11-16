@@ -13,15 +13,12 @@ official metamodel, name resolution, the specification's well-formedness
 constraints, standard JSON interchange, SVG diagrams, a formatter, a
 language server, a REST API client, and a CLI.
 
-**All 403 files of the official
+Every file of the official
 [SysML-v2-Release](https://github.com/Systems-Modeling/SysML-v2-Release)
-corpus parse, and every reference in them resolves** — the standard
-libraries on their own (17411/17411), with the SysML examples
-(25057/25057), and the KerML examples beside them (19146/19146). That
-counts the operands of `connect`, `bind`, `allocate`, `first ... then`
-and `satisfy ... by`, what an `alias` is `for`, the path each `import`
-writes, and the names inside expressions, alongside every typing and
-specialization.
+corpus parses, and every reference in them resolves: the standard
+libraries on their own, with the SysML examples, and the KerML examples
+beside them. `sysml corpus <dir>` reports the current figures for a
+checkout.
 
 ## Install
 
@@ -101,8 +98,8 @@ is what the code reads either way.
 | Crate | | |
 | --- | --- | --- |
 | [`sysmlv2-syntax`](crates/sysml-syntax) | Lexer, recursive-descent parser, lossless CST and typed AST. Parsing never fails: bad input still reproduces the source, with diagnostics beside it | [![crates.io](https://img.shields.io/crates/v/sysmlv2-syntax?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-syntax) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-syntax?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-syntax) |
-| [`sysmlv2-model`](crates/sysml-model) | The abstract syntax: 175 metaclasses generated from the OMG metamodel, arena storage, and the builder that turns an AST into one | [![crates.io](https://img.shields.io/crates/v/sysmlv2-model?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-model) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-model?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-model) |
-| [`sysmlv2-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the 180 constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation | [![crates.io](https://img.shields.io/crates/v/sysmlv2-semantics?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-semantics) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-semantics?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-semantics) |
+| [`sysmlv2-model`](crates/sysml-model) | The abstract syntax: every metaclass generated from the OMG metamodel, arena storage, and the builder that turns an AST into one | [![crates.io](https://img.shields.io/crates/v/sysmlv2-model?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-model) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-model?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-model) |
+| [`sysmlv2-semantics`](crates/sysml-semantics) | Name resolution — imports, aliases, inheritance, implicit library specializations, connector ends, the names inside expressions — and the constraints the specification states in OCL, evaluated. Three answers rather than two: what cannot be checked is *not evaluated* rather than a violation | [![crates.io](https://img.shields.io/crates/v/sysmlv2-semantics?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-semantics) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-semantics?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-semantics) |
 | [`sysmlv2-interchange`](crates/sysml-interchange) | Standard JSON: every metaclass's full property set, derived ownership and naming, reified memberships, deterministic UUIDs. Round-trip tested over the whole library | [![crates.io](https://img.shields.io/crates/v/sysmlv2-interchange?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-interchange) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-interchange?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-interchange) |
 | [`sysmlv2-diagram`](crates/sysml-diagram) | Diagrams in the standard's own notation, laid out by the Eclipse Layout Kernel. [What is drawn](crates/sysml-diagram#what-is-drawn) | [![crates.io](https://img.shields.io/crates/v/sysmlv2-diagram?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-diagram) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-diagram?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-diagram) |
 | [`sysmlv2-rust`](crates/sysml-rust) | Both directions between Rust and a model: a crate's API imported as SysML, and the Rust a model implies — with a list of what it left for a person to write. Rust is the language that ships; the seam it goes through, a `surface` in and a `plan` out, is stated as data so that any other language is yours to add | [![crates.io](https://img.shields.io/crates/v/sysmlv2-rust?style=flat-square&color=fc8d62&label=)](https://crates.io/crates/sysmlv2-rust) [![docs.rs](https://img.shields.io/docsrs/sysmlv2-rust?style=flat-square&color=66c2a5&label=docs)](https://docs.rs/sysmlv2-rust) |
@@ -181,7 +178,7 @@ sysml plan --schema                     # what a generator reads
 
 [`examples/import-python`](examples/import-python) and
 [`examples/generate-python`](examples/generate-python) are one of each,
-in a few hundred lines of Python; `sysml import-rust --surface` shows
+in Python; `sysml import-rust --surface` shows
 the surface the Rust importer reads off a real crate, and `sysml
 --format json plan` the plan a generator is handed.
 
@@ -193,7 +190,7 @@ A model on the left, the diagram of it on the right, redrawn as you type
 — the PlantUML web server's arrangement, without the server. The parser,
 name resolution, the constraints, the layout and the renderer are the
 same `.wasm` the extension ships, running in the reader's tab, so nothing
-is uploaded and the whole site is five static files.
+is uploaded and the whole site is static files.
 
 The address bar carries the model, so a link is the whole thing a reader
 needs; a fragment is never sent, so sharing one is between the two people
@@ -225,9 +222,7 @@ language server, compiled to WebAssembly and run in a worker. One
 package for Linux, macOS and Windows, and the same one in a browser, at
 vscode.dev or github.dev, where there is no machine under the editor to
 run a program on. The module holds the parser, the metamodel, name
-resolution, the constraints, the diagrams and the standard library:
-6.3 MiB, 1.7 MiB over the wire, half a second to load a library and
-single-figure milliseconds to answer a keystroke.
+resolution, the constraints, the diagrams and the standard library.
 
 ## Development
 

@@ -3,7 +3,7 @@
 //! [`sysml_model::RULES`] carries those constraints as the metamodel
 //! states them, verbatim. This parses the subset they use into a tree that
 //! [`crate::rules`] evaluates: navigation, the collection operations,
-//! `let`, `if`, and the logical and comparison operators -- what the 180
+//! `let`, `if`, and the logical and comparison operators -- what the
 //! constraints contain and no more, because a parser that accepts what the
 //! corpus never writes is a parser nothing checks.
 

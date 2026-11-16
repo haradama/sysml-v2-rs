@@ -1,11 +1,11 @@
 //! The client the end-to-end tests drive the server with.
 //!
-//! Six of these had grown, one per test file, and they had drifted: the
-//! same request was `request` in three and `ask` in two, returning a value
-//! in one and a `Result` in the other; one waited ten seconds for an
-//! answer and the rest thirty; `diagnostics` meant three different things.
-//! None of that was a difference between the tests, and reading one meant
-//! first working out which client it had.
+//! A client per test file would drift apart: the same request called
+//! `request` in some and `ask` in others, returning a value in one and a
+//! `Result` in another; one waiting a short time for an answer and the
+//! rest longer; `diagnostics` meaning different things. None of that is a
+//! difference between the tests, and reading one would mean first working
+//! out which client it had.
 //!
 //! So there is one client, and the two shapes of each question keep
 //! separate names: `ask` hands back the server's error, `request` asserts

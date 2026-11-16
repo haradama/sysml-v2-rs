@@ -59,8 +59,8 @@ impl Dialect {
     /// Pick a dialect from a file name or path, by its extension.
     ///
     /// The one place the rule lives: the formatter, the workspace and the
-    /// corpus tests each used to spell it, and not all of them ignored
-    /// the case of the extension.
+    /// corpus tests all use it, so that all of them ignore the case of
+    /// the extension alike.
     pub fn from_path(path: impl AsRef<std::path::Path>) -> Dialect {
         path.as_ref()
             .extension()
@@ -351,7 +351,7 @@ impl Diagnostic {
 /// measuring the column in characters.
 ///
 /// The command line prints this and the MCP server puts it in its
-/// answers; they had a copy each, identical but for whether they counted
+/// answers; a copy in each would differ in whether it counts
 /// from zero. A language server needs a different measure -- the
 /// protocol counts a column in UTF-16 code units -- and keeps its own.
 ///

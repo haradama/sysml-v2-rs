@@ -1,16 +1,15 @@
 [package]
 name = "sysmlv2-lsp"
 description = "Language server for SysML v2 / KerML (diagnostics, go-to-definition, hover, symbols, formatting)"
-# its own, now that it has one: the server reads a width to format at
-# and a skin to draw in
-version = "0.2.0"
+# its own: what a number moves for is a change in the crate it is on
+version = "0.2.1"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 # its own, not the workspace one: `readme` inherited from
-# `workspace.package` resolves against the workspace root, so every
-# crate published carried the whole project's README
+# `workspace.package` resolves against the workspace root, which would
+# make every crate's README the whole project's
 readme = "README.md"
 keywords.workspace = true
 categories.workspace = true

@@ -242,8 +242,8 @@ fn visible_names_through_imports_and_ends() {
 
 /// `import Q::**` reaches what is nested in Q, and lookup has always
 /// followed it there. What may be written at a point is the same
-/// question asked a second way, and it used to stop at Q's own members
-/// -- so a name the model resolves was one the editor never offered.
+/// question asked a second way, and it must not stop at Q's own members
+/// -- or a name the model resolves would be one the editor never offers.
 #[test]
 fn a_recursive_import_offers_what_is_nested_in_it() {
     let text = "package Q {\n    class A;\n    package Q2 { class F; }\n}\npackage S {\n    public import Q::**;\n    class Z :> F;\n    class Y :> A;\n}\n";
@@ -309,8 +309,8 @@ fn the_most_redefined_supertype_member_wins() {
 }
 
 /// Five ways a model says "the thing you already have", each of which
-/// this resolver used to miss -- and miss quietly, because the feature
-/// doing the saying answered to the name it was asking about.
+/// this resolver must not miss -- and would miss quietly, because the feature
+/// doing the saying answers to the name it was asking about.
 #[test]
 fn what_a_model_means_by_naming_something_it_already_has() {
     // `include x[0..*]` — the brackets are how many times, not which one
@@ -434,9 +434,9 @@ fn a_base_type_behind_a_condition_offers_every_side_of_it() {
 }
 
 /// What is wrong with a model is worked out once, and the command line,
-/// the language server and the MCP server each render that. They used to
-/// work it out for themselves, and one of them left out the syntax half,
-/// so `sysml check` called a file that does not parse sound.
+/// the language server and the MCP server each render that. Were each to
+/// work it out for itself, one could leave out the syntax half, and
+/// `sysml check` would call a file that does not parse sound.
 #[test]
 fn what_is_wrong_is_said_once_and_kept_apart() {
     let mut ws = ws(&[
@@ -534,7 +534,7 @@ fn a_search_puts_what_was_asked_for_first() {
 /// once into the model, once again by the resolver -- and they looked at
 /// different parts of it. The model saw a `private` written on the
 /// wrapper of a declaration; the resolver, which only read the
-/// declaration's own first few tokens, did not. Now the resolver reads
+/// declaration's own first few tokens, would not. So the resolver reads
 /// what the model recorded, and adds only the rule that is its own: an
 /// import with nothing written keeps to itself.
 #[test]
@@ -594,10 +594,10 @@ fn a_named_redefinition_of_nothing_is_not_its_own_answer() {
 
 /// `do action D` in a transition declares what the transition does on
 /// the way across, and the transition owns it as its effect
-/// (`EffectBehaviorMember : TransitionFeatureMembership`). It used to be
-/// hoisted into the state around it and read as that state's own `do`,
-/// so two transitions each doing `action D` gave the state two members
-/// called `D`.
+/// (`EffectBehaviorMember : TransitionFeatureMembership`). It is not
+/// hoisted into the state around it as that state's own `do`, which
+/// would give the state two members called `D` for two transitions each
+/// doing `action D`.
 #[test]
 fn a_transition_owns_the_effect_it_declares() {
     let ws = ws(&[(
@@ -761,9 +761,9 @@ fn an_event_written_through_a_message_references_the_chain() {
 
 /// `self` and `that` stand for the type an expression is written in --
 /// unless the model declares a feature of that name where it is written,
-/// which is then what the name means. It used to be passed over: inside
-/// a definition the name was read as the definition, and at a package's
-/// top level it resolved to nothing.
+/// which is then what the name means. It is not passed over: inside
+/// a definition the name would otherwise be read as the definition, and
+/// at a package's top level it would resolve to nothing.
 #[test]
 fn a_feature_the_model_calls_self_or_that_is_what_the_name_means() {
     let ws = ws(&[(
@@ -863,7 +863,7 @@ fn degenerate_semantic_metadata_values() {
     )]);
     // The self-referential base is skipped and the degenerate value
     // yields no base, so what those two usages redefine is nowhere to be
-    // found -- which they now say. What matters is that both
+    // found -- which they say. What matters is that both
     // semantic_base edge branches executed. And `meta X` asks about an
     // `X` this workspace does not have, which is a name like any other.
     let names: Vec<&str> = ws.unresolved().iter().map(|u| u.name.as_str()).collect();
@@ -1150,7 +1150,7 @@ fn resolving_what_is_reached_says_the_same_as_resolving_everything() {
 
 #[test]
 fn a_connector_relates_what_it_is_written_with() {
-    // Six spellings, each of which used to relate nothing: the ends of
+    // Spellings that each must relate something: the ends of
     // a `bind` sit around its `=`, an `interface` may name its first
     // end before `to` rather than after `connect`, a count may stand
     // between the keyword and the end, a list may be parenthesised, and
@@ -1802,7 +1802,7 @@ fn implied_specializations_are_materialized_once() {
             .unwrap()
     };
 
-    // Vehicle gained an implied subclassification of Parts::Part...
+    // Vehicle has an implied subclassification of Parts::Part...
     let vehicle = named("Vehicle");
     let implied: Vec<_> = model
         .owned(vehicle)
@@ -1849,7 +1849,7 @@ fn implied_specializations_are_materialized_once() {
             && model.maybe(child, "isImplied") == Some(&sysml_model::Value::Bool(true))
     }));
 
-    // running the pass again writes nothing: everything is reachable now
+    // running the pass again writes nothing: everything is reachable already
     assert_eq!(ws.materialize_implied(), 0);
 }
 
@@ -2042,8 +2042,8 @@ fn a_name_missing_when_it_was_first_looked_up_is_found_once_its_file_arrives() {
     let b = ws.add_file("b.sysml", "package B { part def Vehicle; }");
     let c = ws.add_file("c.sysml", "package C { part v : A::Vehicle; }");
     ws.resolve_files(&[b, c]);
-    // `A::Vehicle` is found through the re-export, which is what the
-    // cached failure used to stop. What `a.sysml` was told about its own
+    // `A::Vehicle` is found through the re-export, which a
+    // cached failure must not stop. What `a.sysml` was told about its own
     // import while `B` was missing stands until `a.sysml` is resolved
     // again -- a pass reports the files it was given -- so the test is
     // about the file that was.
@@ -2193,9 +2193,9 @@ fn a_cursor_past_the_end_of_the_file_is_not_inside_a_call() {
     assert!(ws.definition_at(0, past).is_none());
 }
 
-/// Looking a name up used to scan every member of the namespace, so a
-/// package of n parts cost n scans of n members to resolve. Ten
-/// thousand of them is a real model, and it took minutes.
+/// Looking a name up must not scan every member of the namespace, or a
+/// package of n parts would cost n scans of n members to resolve. A
+/// package of thousands is a real model, and that would take minutes.
 #[test]
 fn a_package_of_thousands_of_members_resolves_without_scanning_them_all() {
     let n = 8000;
@@ -2413,7 +2413,7 @@ fn only_a_subsetting_may_name_the_declaration_that_writes_it() {
 }
 
 /// A model can specialize deeper than a stack goes. Walking what it
-/// inherits took the process down with it; now the walk stops and the
+/// inherits must not take the process down with it; the walk stops and the
 /// name is reported as one that resolves to nothing.
 #[test]
 fn a_specialization_chain_deeper_than_the_stack_is_a_finding() {
@@ -2586,7 +2586,7 @@ fn a_succession_records_what_it_follows() {
 
     // `then merge m;` writes the node and the succession into it as one
     // statement, so the succession's other end is the sibling that
-    // statement also became -- not an operand anywhere in the text
+    // statement also is -- not an operand anywhere in the text
     assert_eq!(
         related("action def A {\n\taction a;\n\tthen merge m;\n}\n"),
         ["a", "m"]
@@ -2726,8 +2726,8 @@ fn what_a_send_an_accept_and_an_assign_name_is_looked_up() {
 /// redefines that one's.
 ///
 /// Without it the specializing function has two result parameters, and "a
-/// function has exactly one" is true of none of the five hundred in the
-/// corpus that declare one. The walk carries on past a general type that
+/// function has exactly one" is true of none of the corpus's functions
+/// that declare one. The walk carries on past a general type that
 /// declares no result of its own, since one may be inherited in turn.
 #[test]
 fn a_result_parameter_redefines_the_one_the_general_function_declares() {
@@ -2852,9 +2852,9 @@ fn a_conjugated_port_is_typed_by_the_conjugate_and_has_what_it_conjugates() {
 /// `end cart : ShoppingCart crosses selectedProduct.inCart` says which
 /// feature of the other end this one is reached across, and the standard
 /// makes a `CrossSubsetting` of it. Written in the same shape as
-/// `subsets`, it was arriving as a plain subsetting -- so no model built
-/// here had one, and the constraint about owning at most one could not be
-/// asked. What an end crosses to is reached through the ends of the
+/// `subsets`, it must not arrive as a plain subsetting -- or no model built
+/// here would have one, and the constraint about owning at most one could
+/// not be asked. What an end crosses to is reached through the ends of the
 /// association, this one included, so the path may start with the name
 /// being declared.
 #[test]
@@ -2930,7 +2930,7 @@ fn an_end_that_crosses_says_so_with_a_cross_subsetting() {
 ///
 /// `classifier U unions A, B;` narrows an extent; it does not
 /// specialize, and nothing is inherited through it. Read as a
-/// specialization, a connector typed by a union of two associations had
+/// specialization, a connector typed by a union of two associations would have
 /// the ends of both -- four where it relates two -- and
 /// `validateConnectorBinarySpecialization` says a connector with more
 /// than two ends does not specialize the binary link.
@@ -2964,7 +2964,7 @@ fn a_union_is_not_a_specialization() {
 /// the answer is its neighbour in the same body. That neighbour was
 /// kept as a related feature and not as an end, so
 /// `connectorEnd->at(1)` reached past it to the one that was written --
-/// and the four constraints that count what a control node is joined by
+/// and the constraints that count what a control node is joined by
 /// read the ends in the order the connector relates them.
 #[test]
 fn a_succession_that_names_one_end_reifies_both() {
@@ -3201,8 +3201,8 @@ fn an_else_and_a_list_of_ends_say_what_they_relate() {
 ///
 /// "A TransitionUsage is not a Connector: what it relates it relates
 /// through a Succession of its own" -- read as the transition's, the
-/// succession related nothing and the constraints counting what a control
-/// node is joined by had no ends to read. And `connect ( cause1 ::>
+/// succession would relate nothing and the constraints counting what a control
+/// node is joined by would have no ends to read. And `connect ( cause1 ::>
 /// causer1, ... )` writes each end in the list, named and referring.
 #[test]
 fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
@@ -3281,7 +3281,7 @@ fn a_transition_relates_through_its_succession_and_a_list_writes_ends() {
 /// `interface i : WHI connect [1] lugNutPort ::> wheel.lugNutPort to ...`
 /// -- what stands after `connect` is the end, and what it refers to is
 /// what the connector relates. Read as a member of the interface,
-/// twenty-one of the corpus related nothing at all.
+/// many in the corpus would relate nothing at all.
 #[test]
 fn a_named_declaration_with_a_reference_is_the_end() {
     let mut ws = Workspace::new();
@@ -3452,9 +3452,9 @@ fn a_connector_end_is_one_thing() {
 /// stands only in front of the keyword that introduces the first end,
 /// so without a `bind` or an `of` the name after `binding` is that end
 /// -- and a binding that writes no `=` at all declares a name and
-/// nothing else. Eighty-eight of the library's bindings were binding
-/// nothing, and the `=` was being read a second time as a value, which
-/// wrote two edits over the one name on a rename.
+/// nothing else. Reading the `=` a second time as a value would make
+/// the library's bindings bind nothing and write two edits over the one
+/// name on a rename.
 #[test]
 fn a_binding_binds_what_was_written_around_its_equals() {
     let mut ws = Workspace::new();
@@ -3769,9 +3769,8 @@ fn a_feature_that_redefines_an_end_is_an_end_and_is_not_composite() {
 /// is one succession and not two.
 ///
 /// Read as a succession as well, the `first` took the flow its `then`
-/// writes and left that one relating its own declaration to itself: the
-/// corpus had merge and fork nodes with a succession from themselves to
-/// themselves.
+/// writes and left that one relating its own declaration to itself, giving
+/// merge and fork nodes a succession from themselves to themselves.
 #[test]
 fn a_first_names_the_step_that_comes_first_and_writes_no_flow() {
     let mut ws = Workspace::new();
@@ -4555,7 +4554,7 @@ fn a_recursive_import_that_has_nothing_passes_the_name_on() {
 /// The KerML corpus wrote names in places nothing looked at: the ends of a
 /// conjugation statement, the parameters and names of a body expression,
 /// what `->` invokes, a member reached through a call or a cast, a filter
-/// statement's condition, a cast in a bracketed filter. Each is now looked
+/// statement's condition, a cast in a bracketed filter. Each is looked
 /// up, so a name that is not there is reported -- and a relationship
 /// statement's own name is declared rather than looked up.
 #[test]
@@ -4726,7 +4725,7 @@ fn a_name_is_recorded_once() {
 
 /// After `P::` what is offered is what `P` holds -- its public members --
 /// and after `x.` the features of `x`, not the names around the cursor.
-/// `import P::|` used to be offered `P` and `Q` and nothing in `P`.
+/// `import P::|` is not offered `P` and `Q` and nothing in `P`.
 #[test]
 fn what_is_offered_after_a_qualifier_is_what_the_qualifier_holds() {
     let text = "package P {\n\
@@ -4830,9 +4829,9 @@ fn a_filter_by_a_keyword_named_like_a_metaclass_asks_for_the_keyword() {
 
 /// An alias chain resolves whichever way round it is written. Written
 /// front to back -- `alias A0 for A1; ... alias A1999 for X;` -- each link
-/// is worked out inside the one before it, and the walk ran out of depth
-/// with all but the last few hundred links naming nothing, at a cost
-/// that grew with the square of the chain. A chain that closes on itself
+/// is worked out inside the one before it, and the walk must not run out
+/// of depth, leaving all but the last links naming nothing, at a cost
+/// that grows with the square of the chain. A chain that closes on itself
 /// still names nothing, however long it is.
 #[test]
 fn an_alias_chain_resolves_in_whatever_order_it_is_written() {
@@ -4865,7 +4864,7 @@ fn an_alias_chain_resolves_in_whatever_order_it_is_written() {
 
 /// `disjoint from` says a type is not the other, so nothing of the
 /// other's is inherited through it. Read as a specialization, every
-/// occurrence had the `self` of a data value beside its own, because the
+/// occurrence would have the `self` of a data value beside its own, because the
 /// library writes `class Occurrence specializes Anything disjoint from
 /// DataValue`.
 #[test]
@@ -4884,9 +4883,9 @@ fn a_disjoint_type_inherits_nothing_of_what_it_is_disjoint_from() {
 
 /// `featured by` says whose feature a feature is and `inverse of` that it
 /// runs the other way along the same pairs; neither says it is one of the
-/// other. Read as specializations, as both once were, `fb` below had the
+/// other. Read as specializations, `fb` below would have the
 /// `b` of a `B` and `h` the `a` of an `A`, and a name only the featuring
-/// type or the inverted feature's type declares resolved inside it.
+/// type or the inverted feature's type declares would resolve inside it.
 #[test]
 fn featuring_and_inverting_types_are_not_inherited_from() {
     let ws = ws(&[(
@@ -5049,8 +5048,8 @@ fn a_port_typed_by_a_conjugate_is_typed_by_a_conjugated_port_typing() {
 /// relationship's own: `ownedRelatedElement += OwnedFeatureChain`, with
 /// each step a `FeatureChaining` under it, as `chains f.x` writes them.
 /// Stood up before the relationship, the chain was owned by `sub` through a
-/// `FeatureMembership` -- so `sub` had a feature named `x` among its
-/// `ownedFeature`s that nothing wrote -- and had no chainings at all.
+/// `FeatureMembership` -- so `sub` would have a feature named `x` among its
+/// `ownedFeature`s that nothing wrote -- and no chainings at all.
 #[test]
 fn a_chain_written_in_a_declaration_is_owned_by_the_relationship() {
     for (file, text, kind, target) in [

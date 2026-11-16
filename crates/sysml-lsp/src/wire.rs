@@ -255,10 +255,13 @@ mod tests {
     #[test]
     fn a_message_with_half_a_character_in_it_is_still_read() {
         let body = br#"{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"text":"// \ud83d\n"}}"#;
-        let Ok(Message::Notification(note)) = read(body) else {
-            panic!("the change is read");
-        };
-        assert_eq!(note.params["text"], "// \u{fffd}\n");
+        assert!(
+            matches!(
+                read(body),
+                Ok(Message::Notification(note)) if note.params["text"] == "// \u{fffd}\n"
+            ),
+            "the change is read, with the half a character mended"
+        );
     }
 
     #[test]

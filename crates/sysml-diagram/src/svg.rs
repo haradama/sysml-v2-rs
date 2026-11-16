@@ -105,8 +105,8 @@ pub(crate) fn markers(skin: &crate::Skin) -> String {
 
 /// One drawing being made.
 ///
-/// Nine accumulators used to travel together through six hundred lines,
-/// and what tied them was that a drawing is made in passes. Every line
+/// The accumulators travel together, and what ties them is that a
+/// drawing is made in passes. Every line
 /// goes down before any box, because the boxes paint over the ends. Every
 /// box before any port, because a port sits on a border. Every name last,
 /// because where a name reads best depends on what is already there. Each
@@ -2892,7 +2892,7 @@ mod tests {
     #[test]
     fn two_ports_a_tenth_of_a_pixel_apart_are_one_place() {
         // 100.4 and 100.6 fall either side of a half-pixel boundary, so
-        // bucketing by one used to leave these two squares drawn over
+        // bucketing by one would leave these two squares drawn over
         // each other while spreading a pair that straddled no boundary
         let together = piles(&[(100.4, 5.0), (100.6, 5.0), (300.0, 5.0)]);
         assert_eq!(together, [vec![0, 1], vec![2]]);
@@ -3991,9 +3991,8 @@ mod tests {
 
     /// The name is written one padding in, so the tab has to be wider
     /// than the name by more than that -- and a bold face is a tenth
-    /// wider than what [`Style::text_width`] measures. Thirteen of the
-    /// fifty-seven package names in the corpus used to sit over the end
-    /// of their tabs.
+    /// wider than what [`Style::text_width`] measures. Otherwise a long
+    /// package name sits over the end of its tab.
     #[test]
     fn a_package_tab_is_wide_enough_for_the_name_in_it() {
         let style = Style::default();
@@ -5247,9 +5246,9 @@ pub(crate) mod anchor_tests {
 
     #[test]
     fn ports_nothing_reaches_are_spread_evenly_down_their_side() {
-        // they used to be placed at (k + 1) / (k + 2) of the height,
-        // which converges on the bottom corner: the third one on a side
-        // and everything after it piled up there
+        // placing them at (k + 1) / (k + 2) of the height would
+        // converge on the bottom corner: the third one on a side and
+        // everything after it would pile up there
         // untyped, so nothing is drawn for the ports to face
         let mut source = String::from("part def Eight {\n");
         for nth in 0..8 {
@@ -5394,17 +5393,7 @@ pub(crate) mod anchor_tests {
             .iter()
             .map(|edge| {
                 let (from, to) = (&placed[edge.from], &placed[edge.to]);
-                let (upper, lower) = if from.y < to.y {
-                    (from, to)
-                } else {
-                    (to, from)
-                };
-                let down = vec![(70.0, upper.y + upper.height), (70.0, lower.y)];
-                if from.y < to.y {
-                    down
-                } else {
-                    down.into_iter().rev().collect()
-                }
+                vec![(70.0, from.y + from.height), (70.0, to.y)]
             })
             .collect();
         let layout = Layout {
@@ -5433,12 +5422,10 @@ pub(crate) mod anchor_tests {
                 match command {
                     "M" | "L" => walked.push((number(), number())),
                     "H" => walked.push((number(), y)),
-                    "V" => walked.push((x, number())),
-                    "A" => {
-                        let _ = (number(), number(), number(), number(), number());
-                        walked.push((number(), number()));
+                    _ => {
+                        assert_eq!(command, "V", "{command} in {d}");
+                        walked.push((x, number()));
                     }
-                    _ => panic!("{command} in {d}"),
                 }
             }
             for leg in walked.windows(2) {

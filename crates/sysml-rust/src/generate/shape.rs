@@ -822,7 +822,6 @@ impl<'a> Generator<'a> {
                 Some(lower) => one_too_few(format!("its multiplicity asks for at least {lower}")),
                 None => one_too_few("its multiplicity's lower bound is no number".to_string()),
             },
-            Container::Array(1) if !field.boxed => Ok(Some(format!("[{rust}]"))),
             Container::Array(n) => one_too_few(format!("its multiplicity asks for exactly {n}")),
         }
     }
@@ -958,10 +957,11 @@ fn declared_as(kind: ElementKind) -> String {
 /// `method` with the name it declares taken from `called`: kept where it
 /// is the first to want it, numbered where another method has it.
 fn named_once(method: String, called: &mut Namespace) -> String {
-    let Some(at) = method.find("fn ").map(|at| at + 3) else {
-        return method;
-    };
-    let Some(length) = method[at..].find(['(', '<']) else {
+    let Some((at, length)) = method
+        .find("fn ")
+        .map(|at| at + 3)
+        .and_then(|at| method[at..].find(['(', '<']).map(|length| (at, length)))
+    else {
         return method;
     };
     let name = &method[at..at + length];

@@ -52,10 +52,10 @@ impl Server {
     /// A file with its lines found, kept for as long as the analysis it
     /// was read from.
     ///
-    /// Find-references and workspace-symbol answer with a hundred places
-    /// at a time, most of them in the same few files. Reading each file
-    /// out of the tree and counting its lines again for every one of
-    /// them was the greater part of what those two requests did.
+    /// Find-references and workspace-symbol answer with many places at a
+    /// time, most of them in the same few files. Reading each file out of
+    /// the tree and counting its lines again for every one of them would
+    /// be the greater part of what those two requests do.
     fn placed(&mut self, file: usize) -> Option<&Placed> {
         if !self.analysis().indexed.contains_key(&file) {
             let (url, text) = self.document(file)?;
@@ -300,12 +300,12 @@ impl Server {
         // The same search the MCP server's `library_search` runs, so an
         // exact match comes first here too -- every match of it, and the
         // first that can be shown kept. Cut to the limit first, the hits
-        // that have no place to go to were dropped after the cut: the
+        // that have no place to go to would be dropped after the cut: the
         // library built into this binary is no file, and a query as short
-        // as `e` filled the limit with it and answered with one of the
-        // project's own definitions where there were three.
+        // as `e` would fill the limit with it and answer with one of the
+        // project's own definitions where there are three.
         //
-        // The library is a place to go to now that the copy built in is
+        // The library is a place to go to because the copy built in is
         // written out where there are files, and its names would crowd
         // the project's out the same way: what the project and its open
         // buffers declare comes first, in its rank, and the library's
@@ -402,8 +402,8 @@ impl Server {
     /// which is a name that resolves wherever it is written.
     ///
     /// Asked rather than published. The walk behind it is over every
-    /// declared name -- sixty thousand with the standard library loaded
-    /// -- which is nothing once, on the click that asks for it, and a
+    /// declared name -- very many with the standard library loaded --
+    /// which is nothing once, on the click that asks for it, and a
     /// stutter on every keystroke.
     pub(crate) fn code_actions(&mut self, uri: &Url, range: Range) -> Option<CodeActionResponse> {
         let text = self.docs.get(uri)?.clone();
@@ -578,7 +578,8 @@ fn written_inside_a_token(ws: &Workspace, file: usize, offset: TextSize) -> bool
 /// The formatter's text, indented the way the editor asked.
 ///
 /// The formatter indents four spaces a level, and an editor set to tabs
-/// or to two spaces had every line it formatted put back the other way.
+/// or to two spaces would have every line it formatted put back the other
+/// way.
 /// Each line's leading spaces are taken four at a time and written as the
 /// editor's own unit; what is left over, in a comment that is indented
 /// inside itself, stays as spaces.

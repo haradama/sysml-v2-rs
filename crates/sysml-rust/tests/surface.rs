@@ -920,7 +920,7 @@ fn a_member_called_code_does_not_hide_the_binding() {
     }
 }
 
-/// A parameter called `result` or `error` used to be written beside
+/// A parameter called `result` or `error` must not be written beside
 /// the `out result` or `out error` the call's outputs are, two members
 /// of one definition under one name. A generator reads the outputs by
 /// those names and passes the inputs in order, so the parameter is the

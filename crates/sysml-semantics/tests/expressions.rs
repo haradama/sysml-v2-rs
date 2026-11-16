@@ -64,8 +64,8 @@ fn what_an_expression_names_elsewhere_is_left_alone() {
 
 #[test]
 fn a_named_connection_is_something_the_model_can_name() {
-    // `connection k connect a to b` used to read `k` as a reference, so
-    // the connection had no name and nothing could reach what it holds.
+    // `connection k connect a to b` must not read `k` as a reference, or
+    // the connection has no name and nothing can reach what it holds.
     let unresolved = resolved(
         "package P {\n\
          \tattribute def Number;\n\
@@ -534,8 +534,8 @@ fn an_expression_comes_to_what_it_names() {
 
 /// `MetadataAccessExpression = ElementReferenceMember '.' 'metadata'`
 /// reads the metadata of what it names. `metadata` is a keyword rather
-/// than a name, so `Foo.metadata` was a parse error and the construct
-/// had nothing standing for it.
+/// than a name, so `Foo.metadata` must be parsed specially or it is a
+/// parse error and the construct has nothing standing for it.
 #[test]
 fn a_metadata_access_names_the_element_it_reads() {
     use sysml_model::{ElementKind, Value};

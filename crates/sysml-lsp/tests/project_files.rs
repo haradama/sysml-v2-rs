@@ -93,7 +93,7 @@ fn a_sibling_file_resolves_without_being_open() {
     assert_eq!(changes[hardware.as_str()].as_array().unwrap().len(), 1);
 
     // opening the sibling must not declare it twice: the file is read
-    // from its buffer now instead of from disk
+    // from its buffer instead of from disk
     let hardware_text = std::fs::read_to_string(root.join("model/hardware.sysml")).unwrap();
     client.notify(
         lsp_types::notification::DidOpenTextDocument::METHOD,
@@ -273,7 +273,8 @@ fn a_document_from_an_excluded_directory_is_read_with_the_files_beside_it() {
     assert!(svg.contains(">Wheel<"), "{svg}");
 
     // What the document brought in, it takes away when it closes: the
-    // files beside it were answered for until the server restarted.
+    // files beside it must not go on being answered for until the server
+    // restarts.
     let wheels = |client: &mut Client| {
         let found = client.request(
             lsp_types::request::WorkspaceSymbolRequest::METHOD,
@@ -517,9 +518,9 @@ fn a_file_written_after_startup_belongs_to_the_project() {
 #[test]
 fn an_internal_view_draws_the_element_in_front_of_you() {
     // `Part` names a definition in every other file of a project as
-    // readily as the one being looked at, and the drawing used to be of
-    // whichever the model happened to hold first -- which, with the
-    // standard library loaded, was never the reader's.
+    // readily as the one being looked at, so the drawing must not be of
+    // whichever the model happens to hold first -- which, with the
+    // standard library loaded, is never the reader's.
     let root = workspace("sysml-lsp-internal-view-test");
     std::fs::write(
         root.join("elsewhere.sysml"),
@@ -598,11 +599,11 @@ fn a_handover_this_server_cannot_read_is_said_rather_than_obeyed() {
 /// A buffer with no file under it -- a new file not saved yet, an
 /// `untitled:` one, a file deleted while it was open -- declares what it
 /// says as much as one on disk does. An open project file whose buffer
-/// still matched the disk was not resolved again when one arrived, so
-/// `part a : B;` went on underlining `B` after `part def B;` was opened
-/// beside it, and hover on `B` answered nothing, until `a` was edited. A
-/// buffer that differed from its file had always been the trigger; the
-/// answer cannot depend on that.
+/// still matched the disk must be resolved again when one arrives, or
+/// `part a : B;` would go on underlining `B` after `part def B;` was
+/// opened beside it, and hover on `B` would answer nothing, until `a` was
+/// edited. A buffer that differs from its file is not the only trigger;
+/// the answer cannot depend on that.
 #[test]
 fn a_buffer_with_no_file_under_it_is_what_the_project_resolves_against() {
     let root = workspace("sysml-lsp-buffer-only-test");

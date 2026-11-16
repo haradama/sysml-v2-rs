@@ -82,7 +82,7 @@ pub enum ImportError {
     /// An element at this position that is an object but cannot be read
     /// as one: a number no JSON reader can hold (`1e999`), or an `@id` or
     /// `@type` that is not a string. Said as what it is; reported as a
-    /// missing `@type`, it sent a reader looking for something that was
+    /// missing `@type`, it would send a reader looking for something that was
     /// there all along.
     Unreadable(usize, String),
 }
@@ -967,8 +967,8 @@ pub struct Extras {
     /// Elements to leave out of the document altogether.
     ///
     /// A model is resolved against a library and is not made of one: a
-    /// six-element model exported with the standard library beside it writes
-    /// ninety-six thousand elements, and `sysml api push` sends them. What the
+    /// small model exported with the standard library beside it writes
+    /// the library's elements too, and `sysml api push` sends them. What the
     /// model refers to across that line is written as the `@id` it always was
     /// -- UUIDv5 over the ownership path, so anybody holding the same library
     /// computes the same ones.
@@ -2186,10 +2186,10 @@ pub fn from_json(json: &Json) -> Result<(Model, Vec<ElementId>), ImportError> {
 ///
 /// Read this way the elements are never all `Json` at once: each is
 /// parsed when it is wanted and dropped when it has been read. A
-/// document of the standard library is 754 MB of text, and as a
-/// `serde_json::Value` it is about six gigabytes -- for a model that is
-/// 47 MB when it is built. What stays here is the text, the borrows into
-/// it, and the model.
+/// document of the standard library is a very large text, and as a
+/// `serde_json::Value` it is many times larger -- for a model far smaller
+/// than either when it is built. What stays here is the text, the borrows
+/// into it, and the model.
 ///
 /// # Errors
 ///
@@ -2227,7 +2227,7 @@ enum Element<'a> {
 ///
 /// Asked without building the element, which is the point: text that is
 /// skipped is not allocated, so a pass that wants two strings does not
-/// pay for the forty properties beside them.
+/// pay for every other property beside them.
 ///
 /// `@type` and `@id` are read as whatever JSON value they are, so that one
 /// that is not a string is said to be that rather than missing, and one
@@ -2408,8 +2408,8 @@ fn read_elements(array: &[Element<'_>]) -> Result<(Model, Vec<ElementId>), Impor
     // `ownedElement` is the derived one, and not every writer derives it
     // alike: KerML has it reach through the relationship between, so the
     // literal of `attribute a = 3` is an `ownedElement` of `a` and an
-    // `ownedRelatedElement` of its FeatureValue at once, while this crate
-    // used to write it as the FeatureValue's. Each pair is kept with
+    // `ownedRelatedElement` of its FeatureValue at once, so it is not
+    // taken to be the FeatureValue's alone. Each pair is kept with
     // whether only `ownedElement` said it, and settled once all are in.
     let mut stated = std::collections::HashSet::new();
     let mut edges: Vec<(ElementId, ElementId, bool)> = Vec::new();
@@ -2819,8 +2819,8 @@ mod tests {
     }
 
     /// A name holding what reads as another segment of the path its UUID
-    /// is made from -- `'a/0:b'` -- used to share a UUID with the element
-    /// that path really leads to, and the document did not read back.
+    /// is made from -- `'a/0:b'` -- must not share a UUID with the element
+    /// that path really leads to, or the document does not read back.
     #[test]
     fn a_name_that_reads_as_a_path_is_not_another_element() {
         let parse = sysml_syntax::parse("package a { part def b; }\npackage 'a/0:b';\n");
@@ -3673,7 +3673,7 @@ mod tests {
         assert_eq!(membership_import["importedElement"]["@id"], x["@id"]);
         // and read back with nothing beside the document, the imports
         // still say what they imported: the membership folded into an
-        // edge on the way in, and was dropped with it
+        // edge on the way in, and must not be dropped with it
         let again = to_json(&rebuilt);
         let reimported = again
             .as_array()
@@ -4168,9 +4168,9 @@ mod tests {
 
     #[test]
     fn a_deep_model_is_exported_in_one_walk_of_it() {
-        // every UUID used to be computed by walking up to the root, and
-        // every membership reference to compute one again: a chain this
-        // deep took a minute to export
+        // computing every UUID by walking up to the root, and every
+        // membership reference by computing one again, makes a chain this
+        // deep take far too long to export
         let mut model = Model::new();
         let mut owner = model.create(ElementKind::Package);
         for step in 0..2_000 {
@@ -4272,11 +4272,11 @@ mod tests {
 
     /// An element that cannot be read is said to be unreadable, and why.
     ///
-    /// Every failure to read one used to come out as a missing `@type`:
+    /// No failure to read one may come out as a missing `@type`:
     /// `1e999`, which no JSON reader holds, and an `@id` written as a
-    /// number both sent the reader looking for a `@type` that was there.
-    /// And `@type` was read borrowed, so one spelled with an escape --
-    /// `"Pack\u0061ge"`, which is `Package` -- could not be read at all.
+    /// number would send the reader looking for a `@type` that was there.
+    /// And `@type` is read owned, so one spelled with an escape --
+    /// `"Pack\u0061ge"`, which is `Package` -- can still be read.
     #[test]
     fn an_element_that_cannot_be_read_says_why() {
         let said = |text: &str| match read_json(text.as_bytes()) {
@@ -4755,6 +4755,7 @@ mod tests {
             .expect("the subsetting in the package is a member of it");
         let specialization = named("Sp");
         for relationship in [in_package, specialization] {
+            let kind = &relationship["@type"];
             for owning in [
                 "owningRelatedElement",
                 "owningFeature",
@@ -4762,12 +4763,7 @@ mod tests {
                 "owningType",
             ] {
                 if let Some(value) = relationship.get(owning) {
-                    assert_eq!(
-                        value,
-                        &Json::Null,
-                        "{owning} of a {}",
-                        relationship["@type"]
-                    );
+                    assert_eq!(value, &Json::Null, "{owning} of a {kind}");
                 }
             }
             let membership = by_id(&relationship["owningMembership"]);
@@ -4813,10 +4809,10 @@ mod tests {
 
     /// `featuringType` is every `TypeFeaturing`'s `featuringType`, with
     /// the owning type a feature membership makes one. Read off the owner
-    /// alone, `feature fb : A featured by B` was featured by its struct
-    /// and never by B, though the document held the `TypeFeaturing`
+    /// alone, `feature fb : A featured by B` would be featured by its
+    /// struct and never by B, though the document holds the `TypeFeaturing`
     /// saying so -- and `featuring of S::f by A;` standing in the package
-    /// was lost the same way.
+    /// would be lost the same way.
     #[test]
     fn a_feature_is_featured_by_what_its_type_featurings_name() {
         let objects = kerml_objects(

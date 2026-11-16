@@ -1,9 +1,9 @@
 //! The standard library, without being handed one.
 //!
-//! Almost nothing in a SysML model resolves without it. Until there was a
-//! copy built into the binary, getting one meant cloning a repository
-//! whose history is two gigabytes for one and a third megabytes of model
-//! -- so `cargo install sysmlv2-cli` gave you a tool that reported every
+//! Almost nothing in a SysML model resolves without it. Without a copy
+//! built into the binary, getting one would mean cloning a repository
+//! whose history is vastly larger than the model it holds -- so
+//! `cargo install sysmlv2-cli` would give you a tool that reported every
 //! name in every model as unresolved until you did.
 //!
 //! The rest of the suite checks the other half: `--no-library`, which is
@@ -183,8 +183,8 @@ fn the_environment_names_a_library_as_the_command_line_does() {
 /// resolved against.
 ///
 /// The library satisfies them -- a test says so every run -- and asking
-/// a hundred and thirty of them of its sixty-six thousand elements again
-/// was most of what `check` cost on a small model. A library file that
+/// many constraints of all of its elements again would be most of what
+/// `check` costs on a small model. A library file that
 /// does break one is reported only when it is handed over as a file to
 /// check, which is when it is the reader's own.
 #[test]

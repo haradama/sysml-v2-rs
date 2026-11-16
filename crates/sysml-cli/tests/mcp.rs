@@ -589,9 +589,9 @@ fn check_says_which_library_it_answered_against() {
 
 /// The reference counts cover every file the check opened, so the
 /// findings do too -- each under the path of the file it is in. An
-/// `alongside` file whose own names resolve to nothing used to be
-/// counted and then left out, so the answer read `ok` with a reference
-/// missing from it.
+/// `alongside` file whose own names resolve to nothing must not be
+/// counted and then left out, or the answer would read `ok` with a
+/// reference missing from it.
 #[test]
 fn a_finding_in_a_companion_file_is_reported_under_its_own_path() {
     let dir = std::env::temp_dir().join("sysml-mcp-companion");
@@ -700,10 +700,10 @@ fn a_file_the_call_brings_stands_in_for_the_one_on_disk() {
 }
 
 /// ... however the call spells the file. A name relative to the project's
-/// root is the project's file, though the server runs somewhere else: it
-/// used to be compared against the project's files as written, matched
-/// none of them, and the copy on disk was loaded beside the edit -- so an
-/// edit deleting a definition another file uses was answered `ok`.
+/// root is the project's file, though the server runs somewhere else:
+/// compared against the project's files as written it would match none
+/// of them, and the copy on disk would be loaded beside the edit -- so an
+/// edit deleting a definition another file uses would be answered `ok`.
 #[test]
 fn a_file_the_call_brings_stands_in_however_it_is_spelled() {
     let dir = scratch("sysml-mcp-overlay-spelled");
@@ -2041,8 +2041,8 @@ fn relations_names_every_other_link_and_find_says_what_is_documented() {
 }
 
 /// A column is characters, as the command line's text report counts it
-/// and as `visible_names` takes it back: the JSON used to count bytes,
-/// so a finding after a wide character was placed columns away from the
+/// and as `visible_names` takes it back: were the JSON to count bytes,
+/// a finding after a wide character would be placed columns away from the
 /// same finding in the terminal.
 #[test]
 fn a_column_is_counted_in_characters_both_ways() {
@@ -2220,8 +2220,8 @@ fn find_refuses_a_relation_that_is_not_one() {
 }
 
 /// A relative `path` or `alongside` names a file the way a relative `name`
-/// does: from the project's root. They were read from the server's own
-/// directory, so a server started anywhere else -- as these tests start it,
+/// does: from the project's root. Read from the server's own directory
+/// instead, a server started anywhere else -- as these tests start it,
 /// from the crate -- could not read `sub/car.sysml` while `name:
 /// "sub/car.sysml"` matched it.
 #[test]
@@ -2264,9 +2264,9 @@ fn a_relative_path_is_read_from_the_projects_root() {
 }
 
 /// A project that is not a directory is refused when the server starts,
-/// where its launcher reads stderr and the exit code. It used to start with
-/// an empty project and answer every call by saying to start it with
-/// `--project`, which it had been.
+/// where its launcher reads stderr and the exit code. Started with an
+/// empty project it would answer every call by saying to start it with
+/// `--project`, the very thing it was started with.
 #[test]
 fn a_project_that_is_not_a_directory_is_refused_at_startup() {
     let dir = scratch("sysml-mcp-not-a-project");
@@ -2387,8 +2387,8 @@ fn format_answers_the_laid_out_text_and_writes_nothing() {
 
 /// `focus` reports on the file a call names and leaves what is wrong
 /// elsewhere in the project unsaid, though it is still resolved against.
-/// Without it, an edit to one file of a hundred was answered with what
-/// was wrong in all of them.
+/// Without it, an edit to one file of many would be answered with what
+/// is wrong in all of them.
 #[test]
 fn a_focused_check_reports_on_the_file_it_names() {
     let dir = scratch("sysml-mcp-focus");
@@ -3907,7 +3907,7 @@ fn the_library_and_the_project_are_resources() {
         .unwrap()
         .starts_with("sysml://library/"));
     assert_eq!(answers[0]["result"]["nextCursor"], "50");
-    // every file once, the library's ninety-four and the project's one
+    // every file once, the library's and the project's one
     let second = answers[1]["result"]["resources"].as_array().unwrap();
     assert_eq!(first.len() + second.len(), 94 + 1);
     assert!(answers[1]["result"]["nextCursor"].is_null());

@@ -1015,9 +1015,9 @@ impl Workspace {
             }
             // `connect a.x to b;` is an end chained through `a` to `x`, and
             // `chainingFeature` is derived from the `FeatureChaining`s the
-            // end owns. Kept alone, the model said the end was a chain and
-            // held none of the relationships that make one, and a document
-            // written from it had no `ownedFeatureChaining` to read.
+            // end owns. Kept alone, the model would say the end is a chain and
+            // hold none of the relationships that make one, and a document
+            // written from it would have no `ownedFeatureChaining` to read.
             _ => {
                 self.try_set(end, "chainingFeature", Value::RefList(chain.clone()));
                 self.chainings(end, chain);
@@ -1066,7 +1066,7 @@ impl Workspace {
     /// then it must have multiplicity 1..1" -- and the notation writes it
     /// nowhere. What stands before an end in `first [0..1] decide then [0..1]
     /// merge` is the cross multiplicity: how many at the far end go with one
-    /// here. Without the range, the four constraints counting what a control
+    /// here. Without the range, the constraints counting what a control
     /// node is joined by have nothing to read.
     fn counts_one(&mut self, end: ElementId) {
         let range = self.reified(end, ElementKind::MultiplicityRange, &[]);

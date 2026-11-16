@@ -124,7 +124,7 @@ fn export_resolves_and_marks_the_library() {
     );
     // `--library` here names a library of this test's own making, and
     // what is asserted below is which elements it marked -- so the real
-    // one, which would mark sixty thousand more, stays out
+    // one, which would mark far more, stays out
     let out = sysml(&[
         "--no-library",
         "export",
@@ -205,8 +205,9 @@ fn import_rust_writes_a_package_from_rustdoc_json() {
 
 #[test]
 fn what_a_crate_imported_as_is_counted_off_the_tree() {
-    // the count used to be occurrences of `" def "` in the text it wrote,
-    // so a doc comment saying the words was read as another definition
+    // the count is of the tree, not of occurrences of `" def "` in the text
+    // it wrote, or a doc comment saying the words would be read as another
+    // definition
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../sysml-rust/tests/fixtures/inventory_store.rustdoc.json");
     let dir = temp_dir("import-rust-count");
@@ -361,8 +362,8 @@ fn rustgen_generates_and_says_what_stopped_it() {
 }
 
 /// Re-spacing a file the parser could not follow can move where a quote
-/// ends, and `--write` puts that in the modeller's file. Printing it was
-/// thought safe, every character still being there, but the characters
+/// ends, and `--write` puts that in the modeller's file. Printing it is
+/// no safer, even with every character still there, for the characters
 /// are not the tokens: `x : ::` came out as `x :::`, which reads as
 /// something else. So it is refused however it is asked for.
 #[test]
@@ -402,8 +403,8 @@ fn fmt_will_not_rewrite_a_file_it_could_not_parse() {
     assert_eq!(v["unformatted"], serde_json::json!([]), "{v}");
 }
 
-/// `--check` writes nothing, so asking for it with `--write` asked for
-/// two things; `--check` used to win without a word.
+/// `--check` writes nothing, so asking for it with `--write` asks for
+/// two things; `--check` must not win without a word.
 #[test]
 fn fmt_will_not_both_check_and_write() {
     let dir = temp_dir("fmt-check-write");
@@ -418,9 +419,9 @@ fn fmt_will_not_both_check_and_write() {
     );
 }
 
-/// One file that cannot be read or written stopped the run there: the
-/// files after it were left as they were, and `--format json` printed
-/// nothing. Each is said, and the rest are formatted all the same.
+/// One file that cannot be read or written must not stop the run there:
+/// the files after it would be left as they were, and `--format json`
+/// would print nothing. Each is said, and the rest are formatted all the same.
 #[cfg(unix)]
 #[test]
 fn fmt_carries_on_past_a_file_it_cannot_read_or_write() {
@@ -487,7 +488,7 @@ fn fmt_formats_checks_and_writes() {
     let out = sysml(&["fmt", "--write", messy.to_str().unwrap()]);
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("formatted"));
-    // now canonical: --check passes and --write is a no-op
+    // canonical from here on: --check passes and --write is a no-op
     assert!(sysml(&["fmt", "--check", messy.to_str().unwrap()])
         .status
         .success());
@@ -596,11 +597,10 @@ fn check_resolves_and_reports_unresolved() {
 /// An export is the model, and the library is what it was resolved
 /// against.
 ///
-/// The two used to be one document. Since the library stopped having to be
-/// named to be loaded, `sysml export model.sysml` wrote a hundred and
-/// twenty-eight thousand elements where the model has three, and `sysml
-/// api push` sent every one -- seven hundred and ninety megabytes nobody
-/// asked for. What the model refers to across that line is written as the
+/// The two are not one document. The library is loaded without being
+/// named, so `sysml export model.sysml` would otherwise write all of its
+/// elements beside the model's few, and `sysml api push` would send every
+/// one -- a great weight nobody asked for. What the model refers to across that line is written as the
 /// `@id` it always was, and those are UUIDv5 over the ownership path: any
 /// holder of the same library computes the same ones.
 #[test]
@@ -655,8 +655,8 @@ fn an_export_is_the_model_and_not_the_library_it_resolved_against() {
 /// what resolves.
 ///
 /// A model whose every name resolves can still be one the standard
-/// rejects, and until this was asked only the MCP server ever asked it:
-/// running `check` called such a model sound.
+/// rejects, and `check` asks it as the MCP server does: otherwise it
+/// would call such a model sound.
 ///
 /// Two things are asked first. Constraints come after names, as names come
 /// after syntax: asked of a model with a dangling reference they answer
@@ -976,8 +976,8 @@ fn diagram_reports_empty_models_and_write_failures() {
 
 /// A model that does not parse, or names what is not there, is still
 /// drawn -- but the drawing leaves those parts out, so it is said, and
-/// the exit code says not to take the drawing as the model. It used to
-/// be drawn in silence with a zero exit.
+/// the exit code says not to take the drawing as the model. It is not
+/// drawn in silence with a zero exit.
 #[test]
 fn diagram_says_when_the_model_it_draws_is_broken() {
     let dir = temp_dir("diagram-broken");
@@ -1031,8 +1031,8 @@ fn corpus_measures_parse_rates() {
     assert!(sysml(&["corpus", clean.to_str().unwrap()]).status.success());
 }
 
-/// `--format json` was taken and ignored: the text report came out, and
-/// a run with files that failed to parse exited 0.
+/// `--format json` must not be taken and ignored, with the text report
+/// coming out; and a run with files that fail to parse must not exit 0.
 #[test]
 fn corpus_answers_in_json_when_asked_and_fails_with_its_files() {
     let dir = temp_dir("corpus-json");
@@ -1106,7 +1106,7 @@ fn check_with_no_references_reports_100_percent() {
     let dir = temp_dir("check-empty");
     let ok = write(&dir, "empty.sysml", "package OnlyAPackage;\n");
     // `--no-library`, because a model read against the copy built in
-    // has seventeen thousand references into it and this is about a
+    // has a great many references into it and this is about a
     // model that has none
     let out = sysml(&["--no-library", "check", ok.to_str().unwrap()]);
     assert!(out.status.success());
@@ -1331,9 +1331,9 @@ fn api_talks_to_a_model_server() {
     );
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(said.contains("element(s) as commit c2"), "{said}");
-    // what was sent is the model. It used to be the model and the
-    // standard library behind it -- ninety-six thousand elements to
-    // somebody's server, for a model of three.
+    // what was sent is the model, not the model and the standard
+    // library behind it -- all those elements to somebody's server, for
+    // a model of three.
     assert!(!said.contains("library"), "{said}");
 
     // a model that cannot be read is reported before anything is sent
@@ -1438,7 +1438,7 @@ fn the_caret_lands_under_the_character_it_points_at() {
 }
 
 /// A directory that is not there is unreadable, not empty: the walk
-/// takes what it can reach, so the two used to read the same.
+/// takes what it can reach, so the two would read the same.
 #[test]
 fn corpus_tells_an_unreadable_directory_from_an_empty_one() {
     let out = sysml(&["corpus", "/nowhere/at/all"]);
@@ -1521,9 +1521,9 @@ fn a_program_reads_one_document_and_an_exit_code_that_agrees() {
     assert_eq!(v["unformatted"].as_array().unwrap().len(), 0);
 }
 
-/// A path is bytes, and `check` used to place its findings by re-reading
-/// the file under a lossy rendering of that path -- which named no file
-/// at all, so every finding landed at 1:1.
+/// A path is bytes, and `check` must not place its findings by re-reading
+/// the file under a lossy rendering of that path -- which names no file
+/// at all, so every finding would land at 1:1.
 #[cfg(unix)]
 #[test]
 fn findings_are_placed_in_a_file_whose_name_is_not_utf8() {
@@ -1549,8 +1549,8 @@ fn findings_are_placed_in_a_file_whose_name_is_not_utf8() {
 }
 
 /// Two definitions can share a declared name -- one in the library, one
-/// in the model, or two in the model itself. Taking whichever came
-/// first drew a picture of something the modeller had not asked about.
+/// in the model, or two in the model itself. Taking whichever comes
+/// first would draw a picture of something the modeller did not ask about.
 #[test]
 fn a_name_that_two_definitions_share_is_settled_before_it_is_drawn() {
     let dir = temp_dir("internal-ambiguous");
@@ -1776,7 +1776,7 @@ fn output_stops_quietly_when_the_reader_does() {
 }
 
 /// A name that reaches the wrong kind of thing is said to, in place of
-/// "an import would" -- which was the advice for `part b :> A;` naming a
+/// "an import would" -- which is wrong advice for `part b :> A;` naming a
 /// definition, already in scope.
 #[test]
 fn check_says_when_a_name_names_the_wrong_kind_of_thing() {
@@ -1797,9 +1797,9 @@ fn check_says_when_a_name_names_the_wrong_kind_of_thing() {
 }
 
 /// The text report counts a column in characters, and `--format json`
-/// counted bytes: the same finding was at 2:27 in the terminal and at
-/// column 33 in the JSON. Both count characters now, a byte-order mark
-/// included.
+/// must count them the same way: counting bytes puts the same finding
+/// at 2:27 in the terminal and at column 33 in the JSON. Both count
+/// characters, a byte-order mark included.
 #[test]
 fn json_and_text_place_a_finding_in_the_same_column() {
     let dir = temp_dir("columns-agree");

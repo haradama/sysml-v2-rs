@@ -2,7 +2,7 @@
 //!
 //! The point of `notation` is that an agent asking how a construct is
 //! written gets something it can copy rather than something plausible. An
-//! example that no longer parses -- or resolves to nothing, or that the
+//! example that does not parse -- or resolves to nothing, or that the
 //! specification's constraints reject -- is worse than none: it is a wrong
 //! answer given confidently, to a caller that asked because it did not
 //! know.
@@ -16,7 +16,7 @@ use sysml_semantics::Workspace;
 ///
 /// Each example is checked against a copy of this rather than against a
 /// library of its own: cloning a resolved workspace costs a tenth of
-/// what loading one does, and there are thirty-odd examples.
+/// what loading one does, and there are many examples.
 fn library() -> Workspace {
     let mut ws = Workspace::new();
     for (name, text) in sysml_stdlib::FILES {

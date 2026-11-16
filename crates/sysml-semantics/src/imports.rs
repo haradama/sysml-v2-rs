@@ -546,10 +546,9 @@ impl Workspace {
         }
         self.aliases.get(&alias).copied().flatten()
     }
+    /// One alias, worked out where it stands; a caller has already asked
+    /// the cache, and an alias set aside is never put in it.
     fn resolve_alias_once(&mut self, alias: ElementId) -> Option<ElementId> {
-        if let Some(cached) = self.aliases.get(&alias) {
-            return *cached;
-        }
         if !self.in_progress.insert(alias) {
             if self.resolving.last() != Some(&alias) {
                 self.blocked += 1;

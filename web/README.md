@@ -13,14 +13,14 @@ make web-serve   # http://localhost:8000
 
 ## What it is
 
-Five static files and a `.wasm`:
+The files, and a `.wasm`:
 
 | | |
 | --- | --- |
 | `index.html`, `style.css`, `favicon.svg` | the page |
 | `app.js` | the front end: the editor, the drawing, the zoom, the link |
 | `server.worker.js` | the worker the language server runs in |
-| `sysml-lsp.wasm` | [`sysmlv2-wasm`](../crates/sysml-wasm) — the language server, 6.3 MiB, 1.7 MiB over the wire |
+| `sysml-lsp.wasm` | [`sysmlv2-wasm`](../crates/sysml-wasm) — the language server |
 | `sysml.tmLanguage.json`, `onig.wasm` | what colours the editor, and the engine that reads it |
 
 The page and the module speak the Language Server Protocol, the same
@@ -32,10 +32,9 @@ a name that resolved to nothing might have meant, and the custom
 lives rather than copied here — two copies of a binary interface is one
 copy that quietly stops matching the `.wasm`.
 
-The standard libraries are inside the module: 94 KerML and SysML v2
+The standard libraries are inside the module: KerML and SysML v2
 files, read and resolved once while the page says *loading*, which is why
-`ISQ::MassValue` resolves in a tab that has fetched one file. A keystroke
-after that is answered in single-figure milliseconds.
+`ISQ::MassValue` resolves in a tab that has fetched one file.
 
 ## What colours the editor
 
@@ -51,9 +50,9 @@ It is a `<pre>` under a transparent `<textarea>`, which is the whole
 trick: the text is typed into the textarea and read off the layer
 beneath. The layer is only handed the showing once the grammar has
 arrived, so a grammar that never loads leaves a plain editor rather than
-an empty one. Past 50,000 characters it leaves one too — replacing the
-whole painted layer costs about 0.7 ms per thousand characters, and a
-keystroke is not worth more than the frame it lands in.
+an empty one. Past a size it leaves one too — replacing the whole
+painted layer costs time in proportion to the text, and a keystroke is
+not worth more than the frame it lands in.
 
 ## What it draws
 
@@ -80,8 +79,8 @@ the same mistake:
 
 Either is an edit, and clicking it applies it; `Escape` puts them away
 again. It is asked for on the click rather than published with the
-problem: the walk behind it is over every declared name, sixty thousand
-of them with the standard library loaded, which is nothing once and a
+problem: the walk behind it is over every declared name, many
+thousands of them with the standard library loaded, which is nothing once and a
 stutter on every keystroke.
 
 An edit the page makes — applying one of these, or `Tab` indenting — goes
@@ -108,8 +107,8 @@ extension off again and puts the menu's on, so `model.sysml` saved as SVG
 is `model.svg`. Only one of the three comes off that way — `wheel.v2` is
 a name, so saved as a model it is `wheel.v2.sysml`.
 
-`showSaveFilePicker` is what this used at first, since it can choose the
-folder as well. What it does with the *name*, though, is the browser's:
+`showSaveFilePicker` would let the reader choose the folder as well, but
+it is not used. What it does with the *name* is the browser's:
 on at least one platform it ignores the type the reader picks and puts
 the first type's extension onto a name that already shows one, so a
 drawing asked for as SVG arrives as `model.sysml.sysml`. That is not

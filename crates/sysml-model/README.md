@@ -1,6 +1,6 @@
 # sysmlv2-model
 
-Element model: 175 metaclasses generated from the official Ecore
+Element model: every metaclass generated from the official Ecore
 metamodel, arena storage, AST→model builder; the generator that writes
 it from [`vendor/metamodel`](https://github.com/haradama/sysml-v2-rs/tree/main/vendor/metamodel) is in the same crate
 behind the `codegen` feature.
@@ -8,7 +8,7 @@ behind the `codegen` feature.
 ```rust
 let parse = sysml_syntax::parse(text);
 let mut model = sysml_model::Model::new();
-let built = sysml_model::build_into(&mut model, &parse, None);
+let built = sysml_model::build_into(&mut model, &parse);
 ```
 
 The metaclasses are generated from the official Ecore metamodel rather

@@ -9,9 +9,8 @@ Vehicle;` specializes `Parts::Part`, every feature subsets
 so a toolchain that cannot find the standard library reports every name
 in every model as unresolved, which is a lot of noise for a missing path.
 
-Getting one used to mean cloning a repository whose history is two
-gigabytes to obtain one and a third megabytes of model. Here they are
-instead, in the binary:
+Getting one means cloning the OMG release repository, history and all,
+for a few megabytes of model. Here they are instead, in the binary:
 
 ```rust
 let mut ws = sysml_semantics::Workspace::new();

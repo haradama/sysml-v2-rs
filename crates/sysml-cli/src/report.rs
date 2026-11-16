@@ -2,7 +2,7 @@
 //!
 //! Every finding goes out twice: as JSON for a program, placed by offset
 //! and span, and as text for whoever is reading the terminal. The text
-//! used to be one line --
+//! is more than a single line like --
 //!
 //! ```text
 //! model/car.sysml:4:20: unresolved `Wheel`

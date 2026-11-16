@@ -1,6 +1,6 @@
 //! The SysML v2 language server, as a WebAssembly module.
 //!
-//! `sysmlv2-lsp` is the whole server; this is the fifty lines that let a
+//! `sysmlv2-lsp` is the whole server; this is the few lines that let a
 //! browser drive it. The VSCode extension loads the module in a worker,
 //! and every message of the Language Server Protocol goes in and comes
 //! back out through [`handle`].
@@ -49,8 +49,8 @@ thread_local! {
 pub fn handle(message: &[u8]) -> Vec<u8> {
     // Half of a surrogate pair in a document, which `JSON.stringify`
     // writes and serde_json refuses, is mended rather than dropped:
-    // dropped, the edit it carried was lost and the server answered from
-    // text the editor no longer showed. What cannot be mended is
+    // dropped, the edit it carries would be lost and the server would
+    // answer from text the editor no longer shows. What cannot be mended is
     // answered with an error, so that a request in it is not waited on.
     let message = match sysml_lsp::wire::read(message) {
         Ok(message) => message,
@@ -298,8 +298,8 @@ mod tests {
     /// Half a character in a document, which `JSON.stringify` writes as a
     /// lone `\ud83d`, costs that character and not the edit around it.
     ///
-    /// Dropped whole, the edit never reached the server, which went on
-    /// answering from text the editor no longer showed.
+    /// Dropped whole, the edit would never reach the server, which would go
+    /// on answering from text the editor no longer shows.
     #[test]
     fn an_edit_with_half_a_character_in_it_still_arrives() {
         ask(serde_json::json!({

@@ -49,10 +49,10 @@ fn no_constraint_fires_on_the_models_the_specification_publishes() {
     );
 
     // and something was actually asked -- a checker that evaluates
-    // nothing also reports nothing. The specification states 180 of
-    // these: a hundred and seventy are asked and answered over the
-    // corpus, nine are refused with a reason given, and the last one is
-    // about a metadata access, which the corpus never writes. This is a
+    // nothing also reports nothing. Most of the specification's
+    // constraints are asked and answered over the corpus, a few are
+    // refused with a reason given, and one is about a metadata access,
+    // which the corpus never writes. This is a
     // floor and not a count -- answering more of them is the point, and
     // only losing ground is the regression worth failing on.
     //

@@ -152,9 +152,9 @@ fn a_model_with_nothing_wrong_is_offered_nothing() {
 }
 
 /// A range written end first is the same stretch of text, as an edit's
-/// is: `TextRange::new` asserted the order, and a client that sent one
-/// backwards had an internal error -- and, in the browser, where a panic
-/// aborts, lost the server.
+/// is: `TextRange::new` asserts the order, and a client that sends one
+/// backwards must not get an internal error -- or, in the browser, where
+/// a panic aborts, lose the server.
 #[test]
 fn a_range_written_end_first_is_the_same_range() {
     let (mut client, handle) = serving();

@@ -2,7 +2,7 @@
 # Resolver 3 picks dependency versions that the declared `rust-version`
 # can build. No lockfile is checked in, so without it a fresh resolve
 # takes the newest of everything and the minimum this workspace claims
-# is whatever its dependencies happened to raise theirs to this week.
+# would be whatever its dependencies last raised theirs to.
 resolver = "3"
 members = [
     "crates/sysml-corpus",
@@ -31,10 +31,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 # The oldest toolchain a fresh resolve builds with; CI checks it, so the
 # number is a promise. It moves when something in the tree raises its
-# own, and that is not always something the tree declares: `yoke-derive`
-# 0.8.3, published on 2026-09-15, carries no `rust-version` for the
-# resolver to read and calls `str::from_utf8`, which is 1.87's. It
-# arrives under `url`, which both `lsp-types` and `ureq` want.
+# own, and that is not always something the tree declares: a dependency
+# may use a newer standard-library function without carrying a
+# `rust-version` for the resolver to read, so the MSRV job is the
+# authority, not the manifests.
 rust-version = "1.87"
 repository = "https://github.com/haradama/sysml-v2-rs"
 readme = "README.md"
@@ -71,22 +71,15 @@ sysmlv2-corpus = { path = "crates/sysml-corpus" }
 sysmlv2-stdlib = { path = "crates/sysml-stdlib", version = "0.1.0" }
 
 # The version here is the floor a published crate depends on, and it
-# moves when what is above needs something the older one has not got:
-# the tool and the server format to a width, which `sysmlv2-syntax`
-# 0.1.1 cannot, and draw through a skin, which `sysmlv2-diagram` 0.1.0
-# has not got, and read and write a document without building one, which
-# `sysmlv2-interchange` 0.1.0 has no way to. That one's minor moves
-# rather than its patch: `ImportError` gained a variant, and nothing
-# stops a caller matching it exhaustively. A crate whose own source has
-# not changed keeps
-# `version.workspace = true` and the version it is published under,
-# since a new number says it changed; a floor that nothing needs moved
-# stays where it is, so that a dependent still builds against what it
-# was tested with.
-sysmlv2-syntax = { path = "crates/sysml-syntax", version = "0.1.2" }
-sysmlv2-model = { path = "crates/sysml-model", version = "0.1.1" }
-sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.0" }
-sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.2.0" }
+# moves when a dependent needs something the older version lacks, not
+# otherwise: a floor nothing needs moved stays where it is, so that a
+# dependent still builds against what it was tested with. A crate's own
+# version moves when its own source does, since a new number says it
+# changed; which crates moved for what is in CHANGELOG.md.
+sysmlv2-syntax = { path = "crates/sysml-syntax", version = "0.1.4" }
+sysmlv2-model = { path = "crates/sysml-model", version = "0.1.3" }
+sysmlv2-semantics = { path = "crates/sysml-semantics", version = "0.1.3" }
+sysmlv2-interchange = { path = "crates/sysml-interchange", version = "0.2.1" }
 sysmlv2-rust = { path = "crates/sysml-rust", version = "0.1.2" }
 sysmlv2-diagram = { path = "crates/sysml-diagram", version = "0.2.0" }
 
@@ -122,9 +115,9 @@ missing_docs = "warn"
 
 # What the WebAssembly module is built with. Every byte of it is
 # downloaded by whoever installs the VSCode extension and compiled again
-# by their browser, so the longer build is worth it: 7.3 MiB to 6.3 MiB,
-# and a minute rather than twenty seconds. A profile of its own so that
-# building the CLI and running the tests stay as quick as they were.
+# by their browser, so a smaller module is worth a longer build. A
+# profile of its own so that building the CLI and running the tests stay
+# as quick as they are.
 [profile.wasm]
 inherits = "release"
 lto = true

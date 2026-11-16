@@ -20,7 +20,7 @@ use sysml_cli::api;
 /// `sysml export f.sysml | head`, `sysml check m/ | true`: the reader
 /// closes the pipe, and `print!` panics on what is left. Every write to
 /// stdout in this file goes through these, so that no command is left
-/// out the way all but two were when [`written`] alone covered it.
+/// out, as some would be if only [`written`] covered it.
 macro_rules! out {
     ($($arg:tt)*) => { to_stdout(format_args!($($arg)*)) };
 }
@@ -502,8 +502,8 @@ fn main() -> ExitCode {
             output,
         } => {
             // the flags name one drawing between them; clap allows more
-            // than one to be given and the innermost wins, as it did
-            // when these were three arguments read in this order
+            // than one to be given and the innermost wins, in the order
+            // the arguments are read here
             let view = match (internal.as_deref(), browser, sequence.as_deref()) {
                 (_, true, _) => View::Browser,
                 (_, _, Some(name)) => View::Sequence(name),
@@ -571,9 +571,9 @@ fn main() -> ExitCode {
                 project.or_else(|| std::env::var_os("SYSML_PROJECT_PATH").map(Into::into));
             // A project that is not a directory to read is refused here, at
             // startup, where the launcher reads stderr and the exit code.
-            // Taken as given, it started a server with nothing in its
-            // project, and every call after said to start the server with
-            // `--project` -- which it had been.
+            // Taken as given, it would start a server with nothing in its
+            // project, and every call after would say to start the server
+            // with `--project` -- the very thing it was started with.
             if let Some(refused) = project.as_deref().and_then(sysml_cli::mcp::refuse_project) {
                 eprintln!("error: {refused}");
                 return ExitCode::FAILURE;
@@ -668,10 +668,10 @@ fn export(
         return ExitCode::FAILURE;
     };
     // Written straight out, an element at a time. A model of the standard
-    // library is 47 MB and the document of it is 754 MB of text; built
-    // whole in between, as a `serde_json::Value`, it is about six
-    // gigabytes. There is nothing to be done about how long the text is,
-    // and nothing that wants the six gigabytes.
+    // library is large and the document of it is far larger as text;
+    // built whole in between, as a `serde_json::Value`, it is larger
+    // still. There is nothing to be done about how long the text is,
+    // and nothing that wants the rest.
     match output {
         Some(path) => {
             // A serde error over a writer carries the writer's own, so
@@ -699,11 +699,12 @@ fn export(
             use std::io::Write as _;
             let mut out = std::io::BufWriter::new(std::io::stdout().lock());
             // what fails here is the writing -- the model is built and
-            // serializes -- and `| head` makes it fail, which used to
-            // panic as though the model were at fault
+            // serializes -- and `| head` closes the pipe, so a failure
+            // here is expected and must not panic as though the model
+            // were at fault
             let failed = sysml_interchange::write_json(ws.model(), &extras, &mut out)
                 .map_err(std::io::Error::from)
-                // the line `println!` used to put on the end of it
+                // the newline `println!` would put on the end of it
                 .and_then(|_| out.write_all(b"\n"))
                 .and_then(|()| out.flush())
                 .err();
@@ -784,9 +785,9 @@ fn resolved(
             extras.library.extend(ws.model().descendants(root));
         }
     }
-    // A model is resolved against a library and is not made of one. Six
-    // elements exported with the standard library beside them wrote
-    // ninety-six thousand, and `sysml api push` sent every one.
+    // A model is resolved against a library and is not made of one. A few
+    // elements exported with the standard library beside them would write
+    // all of it too, and `sysml api push` would send every element.
     //
     // What the model refers to across that line stays the `@id` it always
     // was. Those are UUIDv5 over the ownership path, so anybody holding the
@@ -834,8 +835,8 @@ fn fmt(
     let mut broken = Vec::new();
     // A file that cannot be read or written stops nothing: the rest are
     // formatted all the same, and each failure is said. Stopping at the
-    // first left the order of the arguments deciding which files were
-    // rewritten, and `--format json` saying nothing at all.
+    // first would leave the order of the arguments deciding which files
+    // were rewritten, and `--format json` saying nothing at all.
     let mut unreadable = Vec::new();
     let mut unwritten = Vec::new();
     let failed = |path: &Path, verb, err: std::io::Error| {
@@ -967,12 +968,12 @@ impl Unreadable {
 /// first one that cannot be read.
 ///
 /// A directory with no model in it is refused rather than read as an empty
-/// model: `sysml check modle/` passed -- the library alone, resolved, and
-/// "0 violation(s)" -- where `sysml corpus` of the same path failed, and a
-/// mistyped path in a CI step was a step that could not fail. And one file
-/// named twice, `a.sysml ./a.sysml` or a directory and a file in it, is
-/// read once: read twice, everything in it was declared twice and every
-/// count doubled, with nothing to say so.
+/// model: `sysml check modle/` would pass -- the library alone, resolved, and
+/// "0 violation(s)" -- where `sysml corpus` of the same path fails, and a
+/// mistyped path in a CI step would be a step that could not fail. And one
+/// file named twice, `a.sysml ./a.sysml` or a directory and a file in it,
+/// is read once: read twice, everything in it would be declared twice and
+/// every count doubled, with nothing to say so.
 fn load_paths(ws: &mut sysml_semantics::Workspace, paths: &[PathBuf]) -> Result<(), Unreadable> {
     let mut loaded: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for path in paths {
@@ -1486,11 +1487,11 @@ fn rustgen(paths: &[PathBuf], library: &[PathBuf], output: Option<&Path>, bare: 
 
 /// Read a standard interchange document back into a model.
 ///
-/// `export` writes one and `sysml api` fetches one, and until now
-/// nothing here could read either back: `sysml_interchange::from_json`
-/// was written, round-trip tested over the whole standard library, and
-/// reachable from no front end at all. A document that came off a model
-/// server had nowhere to go.
+/// `export` writes one and `sysml api` fetches one, and this reads either
+/// back: `sysml_interchange::from_json` is round-trip tested over the
+/// whole standard library, and without this it would be reachable from no
+/// front end at all. A document that comes off a model server needs
+/// somewhere to go.
 ///
 /// What it can then do with the model is bounded by what a model on its
 /// own is enough for. Counting it is; drawing it is, since a diagram
@@ -1506,8 +1507,8 @@ fn import(
     format: Format,
 ) -> ExitCode {
     // The bytes, and never the whole document as `serde_json::Value`: the
-    // library's is 754 MB of text and about six gigabytes built, for a
-    // model that is 47 MB. `read_json` parses one element at a time.
+    // library's is huge as text and larger built, for a model that is
+    // much smaller. `read_json` parses one element at a time.
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) => return Unreadable::refuse(path, err, "import", format),
@@ -1945,8 +1946,8 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     // What was asked about is what was handed over; the library that
     // follows is what it is resolved against. The constraints are put to
     // the former alone: the library satisfies them, a test says so every
-    // run, and putting a hundred and thirty of them to its sixty-six
-    // thousand elements again was most of what `check` cost.
+    // run, and putting them to every element of the library again would
+    // be most of what `check` costs.
     let own: Vec<usize> = (0..ws.file_count()).collect();
     let library = match loaded.and_then(|()| ensure_library(&mut ws, bare)) {
         Ok(answered) => answered,
@@ -1963,7 +1964,7 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
         }
     };
     // A file that does not parse has no names to resolve, so resolution
-    // finds nothing wrong with it and this used to answer `ok`. Anyone
+    // finds nothing wrong with it and this would answer `ok`. Anyone
     // running only `check` -- which is most of the reason it exists --
     // would be told a broken model was fine. Syntax comes first, as it
     // does in the MCP server's tool of the same name.
@@ -2008,10 +2009,10 @@ fn check(paths: &[PathBuf], show: usize, format: Format, bare: bool) -> ExitCode
     // servers stand their documents on a library resolved once. Resolving
     // everything in one pass counted the library's references in with the
     // model's: a library from `SYSML_LIBRARY_PATH` with one name missing
-    // failed the check of a file whose every name resolved, with "1/2
+    // would fail the check of a file whose every name resolved, with "1/2
     // resolved", an empty list of what did not, and nothing said about
     // where the other one was. The counts, the list and the exit status
-    // are now all about the same files; what the library lacks is said in
+    // are all about the same files; what the library lacks is said in
     // a sentence of its own, and `sysml check` of the library is what
     // lists it.
     let beneath: Vec<usize> = (own.len()..ws.file_count()).collect();
@@ -2293,10 +2294,10 @@ fn texts_of(
 
 /// How much of a directory parses, file by file.
 ///
-/// A file that fails to parse, or cannot be read, fails the run: it
-/// used to exit 0 whatever it found, so the only way a script could tell
-/// was to read the rate out of the text -- and `--format json` printed
-/// that text too.
+/// A file that fails to parse, or cannot be read, fails the run: were it
+/// to exit 0 whatever it found, the only way a script could tell would be
+/// to read the rate out of the text -- and `--format json` prints that
+/// text too.
 fn corpus(dir: &Path, worst: usize, list_failures: bool, format: Format) -> ExitCode {
     let files = sysml_semantics::model_files(dir);
     if files.is_empty() {
@@ -2444,7 +2445,7 @@ fn parse_files(files: &[PathBuf], dump_tree: bool, format: Format) -> ExitCode {
             // the tree can have it either way round
             match format {
                 // `sysml parse --tree big.sysml | head` closes the pipe
-                // after a screenful, and `println!` panicked on the rest:
+                // after a screenful, and `println!` would panic on the rest:
                 // a reader that has stopped reading is not an error, so
                 // the output stops with it
                 Format::Text => {

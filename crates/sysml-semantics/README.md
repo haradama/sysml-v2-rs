@@ -3,9 +3,9 @@
 Name resolution (imports, aliases, inheritance, implicit library
 specializations, connector ends, the names inside expressions),
 relationship reification and implied-relationship materialization — the
-whole standard library resolves. Also the 180 well-formedness
+whole standard library resolves. Also the well-formedness
 constraints the specification states in OCL, read from the metamodel and
-evaluated -- with the 235 derivations beside them answering for the
+evaluated -- with the derivations beside them answering for the
 properties the metamodel declares are never stored. Three answers rather
 than two, so a constraint reaching for part of the abstract syntax this
 model does not build is reported as *not evaluated* instead of as a
@@ -28,7 +28,7 @@ then what did not resolve, then the constraints the specification states
 -- which are put only to a model that parses, resolves and has the
 standard library to be asked against.
 
-[`Workspace::diagnose`]: https://docs.rs/sysml-semantics/latest/sysml_semantics/struct.Workspace.html#method.diagnose
+[`Workspace::diagnose`]: https://docs.rs/sysmlv2-semantics/latest/sysml_semantics/struct.Workspace.html#method.diagnose
 
 ## Part of
 

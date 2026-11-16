@@ -980,12 +980,7 @@ mod tests {
         // named arguments go back into the order the callee declares
         assert_eq!(plain("F(b = 1, a = 2)").as_deref(), Some("f(2, 1)"));
         assert_eq!(plain("F(1, 2)").as_deref(), Some("f(1, 2)"));
-        assert!(translate(
-            "Widen(1) > 0",
-            &|chain| led_by(chain, |n| Some(n.to_string())),
-            &|_| None
-        )
-        .is_none());
+        assert!(translate("Widen(1) > 0", &|_| None, &|_| None).is_none());
     }
     /// A unit in brackets is what the caller says it is worth, looked up
     /// by its text with the spaces taken out.

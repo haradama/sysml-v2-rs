@@ -313,10 +313,10 @@ fn what_cannot_be_called_from_a_model_is_said_and_not_imported() {
 }
 
 /// A crate that keeps its types in modules and re-exports them is the
-/// normal shape of a Rust library, and it used to import as almost
-/// nothing: only what `lib.rs` spelled out was seen, while the
-/// signatures naming the rest were written anyway, leaving the package
-/// full of names it never declared.
+/// normal shape of a Rust library, and it must not import as almost
+/// nothing: if only what `lib.rs` spells out were seen, the
+/// signatures naming the rest would be written anyway, leaving the
+/// package full of names it never declared.
 #[test]
 fn a_re_exported_type_is_imported_and_can_be_referred_to() {
     let json = r#"{
@@ -406,10 +406,10 @@ fn broken_inputs_are_named_errors() {
     }
 }
 
-/// Two ways an input used to import as something quietly wrong: a
+/// Two ways an input could import as something quietly wrong: a
 /// document from before rustdoc renamed `decl` to `sig`, whose every
-/// action would have had no parameters, and an associated type of a
-/// trait, which is not a method and became an `action def` anyway.
+/// action would have no parameters, and an associated type of a
+/// trait, which is not a method and must not become an `action def`.
 #[test]
 fn an_input_this_importer_cannot_read_is_refused_by_name() {
     use sysml_rust::ImportError;
@@ -553,11 +553,11 @@ fn a_generic_item_of_any_kind_is_listed_rather_than_bound() {
     );
 }
 
-/// A multiplicity is said once. `Option<Vec<u8>>` used to arrive as
+/// A multiplicity is said once. `Option<Vec<u8>>` must not arrive as
 /// `Natural[0..1]`, which says the crate takes at most one number where
 /// it takes a list that may be missing -- a level of the type quietly
-/// gone. A borrow of anything but a string went the same way: the value
-/// was written where the crate takes a reference to it.
+/// gone. A borrow of anything but a string is the same: the value
+/// must not be written where the crate takes a reference to it.
 #[test]
 fn a_container_in_a_container_and_a_borrowed_value_are_refused() {
     let json = r#"{

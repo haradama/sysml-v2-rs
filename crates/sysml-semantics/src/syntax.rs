@@ -189,8 +189,8 @@ pub(crate) fn operand_chain_steps(operand: &SyntaxNode) -> Vec<usize> {
 /// An end may carry a multiplicity of its own -- `connector ps :
 /// ProductSelection ([0..*] myCart, ...)` -- and what is written inside
 /// the brackets is a bound and not a step of the name. Counted as one,
-/// the `*` of `[0..*]` made the steps say two where the name had one
-/// segment, and reading a prefix of that name went off the end of it.
+/// the `*` of `[0..*]` would make the steps say two where the name has one
+/// segment, and reading a prefix of that name would go off the end of it.
 /// Only a multiplicity inside the operand is passed over: a name written
 /// as a bound -- the `count` of `[count]` -- is an operand of its own,
 /// and its tokens are the whole of it.

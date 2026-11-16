@@ -1209,10 +1209,10 @@ fn trigger(ws: &mut Workspace, accept: ElementId) -> Option<Trigger> {
         .find(|&value| model.kind(value) == ElementKind::TriggerInvocationExpression);
     let (kind, expression) = match invoked {
         Some(invocation) => {
-            let kind = match model.maybe(invocation, "kind") {
-                Some(Value::EnumLit(kind)) => kind.to_string(),
-                _ => return None,
-            };
+            let kind = model
+                .maybe(invocation, "kind")
+                .and_then(Value::as_str)?
+                .to_string();
             // the text is the argument's, which a `when` holds behind a
             // reference to it: the outermost thing below that was written
             let written = sysml_model::expression_text(model, invocation).or_else(|| {
@@ -1222,13 +1222,7 @@ fn trigger(ws: &mut Workspace, accept: ElementId) -> Option<Trigger> {
                         if !model.kind(below).name().starts_with("Literal") {
                             return None;
                         }
-                        match model.maybe(below, "value")? {
-                            Value::Real(real) => Some(real.to_string()),
-                            Value::Int(int) => Some(int.to_string()),
-                            Value::Bool(flag) => Some(flag.to_string()),
-                            Value::String(text) => Some(format!("{text:?}")),
-                            _ => None,
-                        }
+                        literal_text(model.maybe(below, "value")?)
                     })
                 })
             });
@@ -1295,13 +1289,17 @@ fn clause_text(model: &sysml_model::Model, clause: ElementId) -> Option<String> 
     if !model.kind(clause).is_a(ElementKind::Expression) {
         return None;
     }
-    sysml_model::expression_text(model, clause).or_else(|| match model.maybe(clause, "value")? {
-        Value::Real(real) => Some(real.to_string()),
-        Value::Int(int) => Some(int.to_string()),
-        Value::Bool(flag) => Some(flag.to_string()),
-        Value::String(text) => Some(format!("{text:?}")),
-        _ => None,
-    })
+    sysml_model::expression_text(model, clause)
+}
+
+/// What a literal's value reads as in the text of a condition.
+fn literal_text(value: &Value) -> Option<String> {
+    value
+        .as_real()
+        .map(|it| it.to_string())
+        .or_else(|| value.as_int().map(|it| it.to_string()))
+        .or_else(|| value.as_bool().map(|it| it.to_string()))
+        .or_else(|| value.as_str().map(|it| format!("{it:?}")))
 }
 
 /// The steps a behaviour, or one body inside it, is made of, and the
@@ -1350,14 +1348,14 @@ fn block(ws: &mut Workspace, container: ElementId, performs_are_steps: bool) -> 
         // a guarded succession is a transition owning the succession it
         // guards
         let (relates, guard) = if kind == ElementKind::TransitionUsage {
-            let Some(relates) = model
+            // the builder gives every transition its succession; one
+            // without is read as the connector itself, which has no ends
+            let relates = model
                 .owned(child)
                 .iter()
                 .copied()
                 .find(|&inner| model.kind(inner).is_a(ElementKind::SuccessionAsUsage))
-            else {
-                continue;
-            };
+                .unwrap_or(child);
             let guard = match model.get(child, "guardExpression") {
                 Some(Value::RefList(guards)) => guards
                     .first()

@@ -1,8 +1,8 @@
 # sysmlv2-cli
 
 `sysml` command-line tool (`parse`, `fmt`, `check`, `stats`, `export`,
-`diagram`, `import-rust`, `import-code`, `rustgen`, `api`, `mcp`,
-`corpus`); `mcp`
+`import`, `diagram`, `plan`, `codegen`, `rustgen`, `import-rust`,
+`import-code`, `api`, `mcp`, `corpus`); `mcp`
 speaks the Model Context Protocol over stdio, so an AI agent can ask
 whether a model parses and resolves, what names are legal at a point,
 what shape a definition has once it is resolved, and what the standard

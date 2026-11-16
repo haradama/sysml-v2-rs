@@ -1,16 +1,15 @@
 [package]
 name = "sysmlv2-semantics"
 description = "Name resolution and relationship reification for SysML v2 / KerML models"
-# its own: the documentation no longer points a reader at items that
-# are this crate's private business
-version = "0.1.2"
+# its own: what a number moves for is a change in the crate it is on
+version = "0.1.3"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 # its own, not the workspace one: `readme` inherited from
-# `workspace.package` resolves against the workspace root, so every
-# crate published carried the whole project's README
+# `workspace.package` resolves against the workspace root, which would
+# make every crate's README the whole project's
 readme = "README.md"
 keywords.workspace = true
 categories.workspace = true

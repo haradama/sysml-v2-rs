@@ -22,10 +22,8 @@ const answers = JSON.parse(
 
 Everything else the module needs, it carries: the parser, the metamodel,
 name resolution, the specification's constraints, the diagram renderer,
-and the KerML and SysML v2 standard libraries, which are 94 files it
-reads and resolves in about half a second the first time a client says
-`initialize`. A keystroke after that is answered in single-figure
-milliseconds.
+and the KerML and SysML v2 standard libraries, which it
+reads and resolves the first time a client says `initialize`.
 
 ## What a browser has not got
 
@@ -47,7 +45,7 @@ loop around it.
 This is the inside of the [VSCode
 extension](../../editors/vscode), which ships the `.wasm` itself. A
 crate on crates.io that is only useful once it has been compiled to
-WebAssembly and wrapped in fifty lines of JavaScript is a crate nobody
+WebAssembly and wrapped in a little JavaScript is a crate nobody
 can use. The server it wraps is published, as `sysmlv2-lsp`.
 
 ## Part of

@@ -27,9 +27,9 @@ fn named(ws: &Workspace, qualified: &str) -> sysml_model::ElementId {
 /// that: the answer is the whole chain and not the first step of it.
 ///
 /// This is the part that has to be walked rather than scanned for. It
-/// used to be walked by scanning the whole model once per step, which on
-/// a model with the standard library in it cost a millisecond and a
-/// quarter per step -- in the rename an editor is waiting on.
+/// must not be walked by scanning the whole model once per step, which on
+/// a model with the standard library in it is costly per step -- in the
+/// rename an editor is waiting on.
 #[test]
 fn a_chain_of_redefinitions_all_answer_to_the_one_name() {
     let ws = resolved(

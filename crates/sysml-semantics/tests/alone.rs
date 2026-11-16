@@ -5,7 +5,7 @@
 //! exercises the path the other corpus tests never take: the one where the
 //! answer is no. A search that does not remember its failures re-runs
 //! itself once per reference, and a file with ten unresolved wildcard
-//! imports took thirty-three seconds before it did.
+//! imports takes a very long time.
 
 use sysml_corpus::{models, vendor};
 
@@ -13,7 +13,7 @@ use sysml_corpus::{models, vendor};
 ///
 /// Answering one reference may cost a look at each of the file's imports,
 /// so this tracks how many imports a file has, not how many names it uses:
-/// the worst of the 309 is thirteen. What must not happen is the cost
+/// the worst of the corpus's files has few. What must not happen is the cost
 /// growing with the references as well, which is what an unremembered
 /// failure does -- fifty is the alarm going off, not a budget to spend.
 ///

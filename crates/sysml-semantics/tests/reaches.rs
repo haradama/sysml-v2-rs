@@ -1,7 +1,7 @@
 //! Which names reach what, on the cases the OMG's own tools pin.
 //!
 //! The corpus says this resolver does not cry wolf: every reference in
-//! the 403 published files resolves, so nothing here reports a sound
+//! the published files resolves, so nothing here reports a sound
 //! model as broken. It says nothing about the other direction. A
 //! resolver that answered every name with the first element of that
 //! name anywhere in the workspace would pass the corpus perfectly and
@@ -240,12 +240,11 @@ package TakesOnlyWhatIsInside {
         &["NotAFeature", "NotAFeature"],
     ),
     (
-        // An import that resolves to nothing used to be no finding at
-        // all: `check` called the file sound and every name the file
-        // expected from that import failed somewhere else, or -- in a
-        // package that only re-exports -- went quietly missing. The
-        // pilot reports each one where it is written, and so does this
-        // now.
+        // An import that resolves to nothing is a finding: otherwise
+        // `check` would call the file sound and every name the file
+        // expected from that import would fail somewhere else, or -- in a
+        // package that only re-exports -- go quietly missing. The
+        // pilot reports each one where it is written, and so does this.
         "an import that names nothing is said so, where it is written",
         "package Real {
     public class Thing;
@@ -413,7 +412,7 @@ fn a_member_asked_of_a_conjugated_type_is_the_original_type_s() {
 }
 
 /// What the standard asks for is written into the model as well as
-/// used to answer names: a classifier annotated with a feature base
+/// used for answering names: a classifier annotated with a feature base
 /// specializes the feature's type, and the feature beside it subsets
 /// the feature.
 #[test]

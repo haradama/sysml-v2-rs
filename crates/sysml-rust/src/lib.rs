@@ -47,3 +47,19 @@ pub(crate) fn connector_end(model: &sysml_model::Model, id: sysml_model::Element
         sysml_model::ElementKind::Feature | sysml_model::ElementKind::ReferenceUsage
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use sysml_model::{ElementKind, Model};
+
+    #[test]
+    fn an_end_is_a_feature_in_kerml_and_a_reference_usage_in_sysml() {
+        let mut model = Model::new();
+        let kerml = model.create(ElementKind::Feature);
+        let sysml = model.create(ElementKind::ReferenceUsage);
+        let other = model.create(ElementKind::PartUsage);
+        assert!(super::connector_end(&model, kerml));
+        assert!(super::connector_end(&model, sysml));
+        assert!(!super::connector_end(&model, other));
+    }
+}
