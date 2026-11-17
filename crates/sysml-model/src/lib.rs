@@ -233,13 +233,13 @@ pub fn membership_kind(model: &Model, owned: ElementId) -> ElementKind {
 
 /// Whether `owned` is a bound of the multiplicity range that owns it.
 fn is_bound_of(model: &Model, owned: ElementId) -> bool {
-    let Some(range) = model.owner(owned) else {
-        return false;
-    };
-    model.kind(range).is_a(ElementKind::MultiplicityRange)
-        && ["bound", "lowerBound", "upperBound"]
-            .iter()
-            .any(|end| model.maybe(range, end) == Some(&Value::Ref(owned)))
+    // what this is asked of is owned, so it has an owner
+    model.owner(owned).is_some_and(|range| {
+        model.kind(range).is_a(ElementKind::MultiplicityRange)
+            && ["bound", "lowerBound", "upperBound"]
+                .iter()
+                .any(|end| model.maybe(range, end) == Some(&Value::Ref(owned)))
+    })
 }
 
 /// The cross feature an end feature owns, where the notation wrote one.

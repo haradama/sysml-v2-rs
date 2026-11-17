@@ -938,11 +938,8 @@ fn redefines(ws: &mut Workspace, usage: ElementId) -> Option<String> {
     let owner = model
         .owner(redefined)
         .map(|owner| ws.qualified_name_of(owner))
-        .unwrap_or_default();
-    Some(match owner.is_empty() {
-        true => name,
-        false => format!("{owner}::{name}"),
-    })
+        .filter(|owner| !owner.is_empty());
+    Some(owner.map_or(name.clone(), |owner| format!("{owner}::{name}")))
 }
 
 /// What the model itself declares a definition specializes.

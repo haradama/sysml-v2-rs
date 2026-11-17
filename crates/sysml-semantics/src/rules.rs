@@ -964,17 +964,13 @@ impl Workspace {
             return false;
         }
         let root = self.root();
-        let mut at = elem;
-        while let Some(owner) = self.model().owner(at) {
-            if owner == root {
-                let Some(name) = self.model().name(at).map(String::from) else {
-                    return false;
-                };
-                return self.members_named(root, &name).len() > 1;
-            }
-            at = owner;
-        }
-        false
+        // the element under the root that `elem` is, or is inside
+        let top = std::iter::successors(Some(elem), |&at| self.model().owner(at))
+            .find(|&at| self.model().owner(at) == Some(root));
+        let Some(name) = top.and_then(|top| self.model().name(top)).map(String::from) else {
+            return false;
+        };
+        self.members_named(root, &name).len() > 1
     }
 
     fn owned_distinguishable(&self, namespace: ElementId) -> bool {

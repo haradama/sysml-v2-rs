@@ -5350,3 +5350,27 @@ fn an_end_written_as_a_declaration_is_counted_where_it_is_written() {
         ]
     );
 }
+
+/// Two functions that specialize each other hand back no result between
+/// them, and an invocation of one is typed by it without going round the
+/// two for ever.
+#[test]
+fn functions_that_specialize_each_other_hand_back_nothing() {
+    let text =
+        "package P {\n    calc def F :> G;\n    calc def G :> F;\n    attribute x = F();\n}\n";
+    let ws = ws(&[("m.sysml", text)]);
+    let names: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
+    assert!(names.is_empty(), "{names:?}");
+}
+
+/// An alias reached through `A::**` stands for what it names, and one
+/// that names nothing is passed over as though it were not there, rather
+/// than taken for what was asked.
+#[test]
+fn an_alias_reached_below_that_names_nothing_is_passed_over() {
+    let text = "package P {\n    package A { package B { alias X for Nope; } }\n    package C {\n        import A::**;\n        attribute y : X;\n    }\n}\n";
+    let ws = ws(&[("m.sysml", text)]);
+    let mut names: Vec<&str> = ws.unresolved().iter().map(|it| it.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["Nope", "X"]);
+}

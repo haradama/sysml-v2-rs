@@ -162,9 +162,8 @@ pub fn rustdoc_to_surface(json: &str) -> Result<Surface, ImportError> {
     let mut items = Vec::new();
     for Member { id, name } in &members {
         let name = name.as_str();
-        let Some(entry) = item(id) else {
-            continue;
-        };
+        // `members` takes only what the index holds
+        let entry = item(id).expect("a member is an item of the index");
         let Some(inner) = entry.get("inner").and_then(Json::as_object) else {
             continue;
         };

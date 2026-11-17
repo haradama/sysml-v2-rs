@@ -2687,14 +2687,15 @@ fn usage_kind(
 /// `SuccessionAsUsage` and `BindingConnectorAsUsage` the usages that
 /// specialize them (`Flow : FlowUsage = ...`, `BindingConnector :
 /// BindingConnectorAsUsage = ...` in the SysML grammar). The keywords say
-/// which connector; the file says which of the pair.
+/// which connector; the file says which of the pair. SysML's `bind` is
+/// no KerML keyword, so a KerML file writes no `BindingConnectorAsUsage`
+/// to be turned back.
 fn in_dialect(kind: ElementKind, dialect: sysml_syntax::Dialect) -> ElementKind {
     match dialect {
         sysml_syntax::Dialect::KerML => match kind {
             ElementKind::FlowUsage => ElementKind::Flow,
             ElementKind::SuccessionFlowUsage => ElementKind::SuccessionFlow,
             ElementKind::SuccessionAsUsage => ElementKind::Succession,
-            ElementKind::BindingConnectorAsUsage => ElementKind::BindingConnector,
             other => other,
         },
         sysml_syntax::Dialect::SysML => match kind {

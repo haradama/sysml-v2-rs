@@ -499,3 +499,51 @@ fn transitions_written_in_a_state_body_leave_from_it() {
         [("a_to_b", "a", "b"), ("t", "b", "a"), ("c_to_c", "c", "c")]
     );
 }
+
+/// An `impl` the index does not hold, or a method of one it does not, is
+/// nothing to read, and what is there is read all the same.
+#[test]
+fn what_the_index_does_not_hold_is_passed_over() {
+    let json = r#"{
+        "root": "r",
+        "index": {
+            "r": { "name": "krate", "inner": { "module": { "items": ["s"] } } },
+            "s": { "name": "Plain", "inner": { "struct": { "generics": { "params": [] },
+                "kind": { "plain": { "fields": [] } }, "impls": ["gone", "own"] } } },
+            "own": { "inner": { "impl": { "trait": null, "generics": { "params": [] },
+                "items": ["missing", "named"] } } },
+            "named": { "name": "ping", "visibility": "public", "inner": { "function": {
+                "generics": { "params": [] },
+                "sig": { "inputs": [ [ "self", { "borrowed_ref": { "is_mutable": false } } ] ], "output": null },
+                "header": { "is_async": false } } } }
+        }
+    }"#;
+    let sysml = import(json);
+    assert!(sysml.contains("action def Ping {"), "{sysml}");
+}
+
+/// A formula reads a value through the fields of generated structs, one
+/// value at each step: through a field that is a number, or to a field
+/// that holds several, there is no value to read, and the calculation is
+/// left to write.
+#[test]
+fn a_formula_through_what_is_no_one_struct_is_left_to_write() {
+    let generated = rust_of(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tpart def P {\n\
+         \t\tattribute mass : ISQ::MassValue;\n\
+         \t\tattribute xs : Real[*];\n\
+         \t\tcalc through : Real { mass.num }\n\
+         \t\tcalc several : Real { xs }\n\
+         \t}\n\
+         }\n",
+    );
+    let rust = &generated.rust;
+    for name in ["through", "several"] {
+        let at = rust.find(&format!("fn {name}(")).expect(name);
+        let body = &rust[at..];
+        let body = body[body.find('{').unwrap() + 1..].trim_start();
+        assert!(body.starts_with("todo!"), "{name}: {rust}");
+    }
+}

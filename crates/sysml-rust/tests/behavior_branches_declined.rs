@@ -383,3 +383,77 @@ fn a_transition_naming_one_state_inside_a_state_is_a_row_when_that_is_a_state_of
         "{rust}"
     );
 }
+
+/// A behaviour made of several steps of one definition is still made of
+/// that definition once, and what that one is made of is looked through
+/// for the behaviour above it.
+#[test]
+fn steps_of_one_definition_twice_over_are_looked_through_once() {
+    let rust = generate(
+        "package S {\n\
+         \taction def Top { action b : Mid; }\n\
+         \taction def Mid { action c1 : Leaf; action c2 : Leaf; }\n\
+         \taction def Leaf { action d : Base; }\n\
+         \taction def Base;\n\
+         }\n",
+    );
+    assert!(!rust.contains("Not performed here"), "{rust}");
+}
+
+/// A decision whose one way out has no guard always goes that way.
+#[test]
+fn a_decision_with_only_an_else_always_takes_it() {
+    let rust = generate(&run("\t\taction x : Measure;\n\
+         \t\tfirst m1 then d;\n\
+         \t\tdecide d;\n\
+         \t\t\telse x;\n"));
+    assert!(
+        rust.contains("        {\n            let x = self.measure();\n        }\n"),
+        "{rust}"
+    );
+}
+
+const READS: &str = "\taction def Use { in value : Real; }\n";
+
+/// A step reads what another produces once that one has run; read from
+/// one on the other way out of a decision, nothing has.
+#[test]
+fn a_step_that_reads_what_another_way_produces_is_not_performed() {
+    let why = why_not_performed(&format!(
+        "\t\taction x : Use;\n\
+         \t\taction y : Measure;\n\
+         \t\tfirst m1 then d;\n\
+         \t\tdecide d;\n\
+         \t\t\tif flag then x;\n\
+         \t\t\telse y;\n\
+         \t\tflow from y.reading to x.value;\n{READS}"
+    ));
+    assert_eq!(
+        why,
+        "`x.value` reads what `y` produces, which nothing runs before it."
+    );
+}
+
+/// Nor can a step read what is produced only on one way through a
+/// decision it does not itself sit on.
+#[test]
+fn a_step_that_reads_what_one_branch_produced_is_not_performed() {
+    let why = why_not_performed(&format!(
+        "\t\taction x : Use;\n\
+         \t\taction y : Measure;\n\
+         \t\taction z : Measure;\n\
+         \t\tfirst m1 then d;\n\
+         \t\tdecide d;\n\
+         \t\t\tif flag then y;\n\
+         \t\t\telse z;\n\
+         \t\tfirst y then mg;\n\
+         \t\tfirst z then mg;\n\
+         \t\tmerge mg;\n\
+         \t\tfirst mg then x;\n\
+         \t\tflow from y.reading to x.value;\n{READS}"
+    ));
+    assert_eq!(
+        why,
+        "`x.value` reads what `y` produces only inside a branch or a loop `x` is not in."
+    );
+}

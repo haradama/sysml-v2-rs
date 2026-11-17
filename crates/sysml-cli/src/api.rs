@@ -747,6 +747,11 @@ mod tests {
                 Err(Error::Id(_))
             ));
         }
+        // and the refusal says which id, and why
+        let refused = Client::new("http://127.0.0.1:9", QUICK)
+            .project("..")
+            .unwrap_err();
+        assert_eq!(refused.to_string(), "`..` cannot be an id in a URL path");
         assert!(matches!(
             Client::new("http://127.0.0.1:9", QUICK).elements("p", ".."),
             Err(Error::Id(_))
@@ -806,6 +811,11 @@ mod tests {
         );
         assert_eq!(next_page(r#"</p>; rel="prev""#), None);
         assert_eq!(next_page("</p>; rel=NEXT").as_deref(), Some("/p"));
+        // a parameter may have no value at all, and is passed over
+        assert_eq!(
+            next_page(r#"</p>; hreflang; rel="next""#).as_deref(),
+            Some("/p")
+        );
     }
 
     #[test]

@@ -872,34 +872,24 @@ impl Server {
                     .element_place(violation.element)
                     .unwrap_or_default();
                 // The other declaration a violation is about -- the first
-                // of a name declared twice -- where it is in a document
-                // this server holds: said in the message, since not every
-                // client shows related information, and as that too.
+                // of a name declared twice -- said in the message, since not
+                // every client shows related information, and as that too.
+                // The two are memberships of one namespace, so the first is
+                // in this document as the repeat is.
                 let first = violation
                     .also
                     .and_then(|it| analysis.ws.element_place(it))
-                    .and_then(|(at, range)| {
-                        let (url, _) = analysis.doc_files.iter().find(|(_, &it)| it == at)?;
-                        let held = docs.get(url)?;
-                        let range = LineIndex::new(held).range(held, range);
-                        Some((url.clone(), range))
-                    });
+                    .filter(|&(at, _)| at == file)
+                    .map(|(_, range)| index.range(text, range));
                 let mut message = violation
                     .detail
                     .clone()
                     .unwrap_or_else(|| violation.says.to_string());
-                if let Some((at, range)) = &first {
-                    match at == url {
-                        true => {
-                            message.push_str(&format!(
-                                " (first declared on line {})",
-                                range.start.line + 1
-                            ));
-                        }
-                        false => {
-                            message.push_str(&format!(" (first declared in {at})"));
-                        }
-                    }
+                if let Some(range) = first {
+                    message.push_str(&format!(
+                        " (first declared on line {})",
+                        range.start.line + 1
+                    ));
                 }
                 diagnostics.push(Diagnostic {
                     range: index.range(text, range),
@@ -913,9 +903,12 @@ impl Server {
                     source: Some("sysml".into()),
                     code: Some(NumberOrString::String(violation.rule.into())),
                     message,
-                    related_information: first.map(|(uri, range)| {
+                    related_information: first.map(|range| {
                         vec![lsp_types::DiagnosticRelatedInformation {
-                            location: lsp_types::Location { uri, range },
+                            location: lsp_types::Location {
+                                uri: url.clone(),
+                                range,
+                            },
                             message: "first declared here".into(),
                         }]
                     }),

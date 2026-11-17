@@ -77,13 +77,25 @@ pub(crate) fn written_out_library() -> Option<PathBuf> {
         std::fs::write(&partial, text).ok()?;
         if std::fs::rename(&partial, &path).is_err() {
             let _ = std::fs::remove_file(&partial);
-            // another server may have put the same file there first
-            if !std::fs::read(&path).is_ok_and(|held| held == text.as_bytes()) {
-                return None;
-            }
+            held_by_another(&path, text).then_some(())?;
         }
     }
     std::fs::canonicalize(&dir).ok()
+}
+
+/// Whether a file the rename could not replace is already what was to be
+/// written there. Windows refuses to replace a file another server holds
+/// open, and that server wrote the same library.
+#[cfg(windows)]
+fn held_by_another(path: &std::path::Path, text: &str) -> bool {
+    std::fs::read(path).is_ok_and(|held| held == text.as_bytes())
+}
+
+/// Elsewhere a rename replaces what is there, open or not, so one that
+/// failed left nothing written.
+#[cfg(not(any(windows, target_family = "wasm")))]
+fn held_by_another(_: &std::path::Path, _: &str) -> bool {
+    false
 }
 
 #[cfg(target_family = "wasm")]
@@ -101,13 +113,12 @@ fn cache_home() -> Option<PathBuf> {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
     };
-    let home = if cfg!(windows) {
-        set("LOCALAPPDATA")
-    } else if cfg!(target_os = "macos") {
-        set("HOME").map(|home| home.join("Library").join("Caches"))
-    } else {
-        set("XDG_CACHE_HOME").or_else(|| set("HOME").map(|home| home.join(".cache")))
-    };
+    #[cfg(windows)]
+    let home = set("LOCALAPPDATA");
+    #[cfg(target_os = "macos")]
+    let home = set("HOME").map(|home| home.join("Library").join("Caches"));
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let home = set("XDG_CACHE_HOME").or_else(|| set("HOME").map(|home| home.join(".cache")));
     Some(home.unwrap_or_else(std::env::temp_dir))
 }
 

@@ -92,3 +92,132 @@ fn a_source_stated_as_a_list_is_a_statement_of_its_own() {
     let objects = json.as_array().unwrap();
     assert!(objects.iter().any(|it| it["@type"] == "Specialization"));
 }
+
+/// The object written for `id`.
+fn object_of<'a>(
+    json: &'a serde_json::Value,
+    model: &Model,
+    id: sysml_model::ElementId,
+) -> &'a serde_json::Value {
+    let uuid = element_uuid(model, id).to_string();
+    json.as_array()
+        .unwrap()
+        .iter()
+        .find(|it| it["@id"] == uuid.as_str())
+        .expect("written")
+}
+
+fn reference(model: &Model, id: sysml_model::ElementId) -> serde_json::Value {
+    serde_json::json!({ "@id": element_uuid(model, id).to_string() })
+}
+
+/// A `TypeFeaturing` that names no `featureOfType` features the feature
+/// that owns it.
+#[test]
+fn a_featuring_without_a_feature_features_its_owner() {
+    let mut model = Model::new();
+    let root = model.create(ElementKind::Namespace);
+    let ty = model.create(ElementKind::Classifier);
+    model.add_owned(root, ty);
+    let feature = model.create(ElementKind::Feature);
+    model.add_owned(root, feature);
+    let featuring = model.create(ElementKind::TypeFeaturing);
+    model.add_owned(feature, featuring);
+    model.set(featuring, "featuringType", Value::Ref(ty));
+
+    let json = to_json(&model);
+    assert_eq!(
+        object_of(&json, &model, feature)["featuringType"],
+        serde_json::json!([reference(&model, ty)])
+    );
+}
+
+/// A chain of one written as a lone reference rather than a list is
+/// featured as that one feature is.
+#[test]
+fn a_chain_of_one_reference_is_featured_as_its_feature() {
+    let mut model = Model::new();
+    let root = model.create(ElementKind::Namespace);
+    let ty = model.create(ElementKind::Classifier);
+    model.add_owned(root, ty);
+    let first = model.create(ElementKind::Feature);
+    model.add_owned(ty, first);
+    let chain = model.create(ElementKind::Feature);
+    model.add_owned(root, chain);
+    model.set(chain, "chainingFeature", Value::Ref(first));
+
+    let json = to_json(&model);
+    assert_eq!(
+        object_of(&json, &model, chain)["featuringType"],
+        serde_json::json!([reference(&model, ty)])
+    );
+}
+
+/// An annotation that owns no annotating element and is owned by none is
+/// about what owns it, and names no annotating element.
+#[test]
+fn an_annotation_with_no_comment_is_about_its_owner() {
+    let mut model = Model::new();
+    let root = model.create(ElementKind::Namespace);
+    let package = model.create(ElementKind::Package);
+    model.add_owned(root, package);
+    let annotation = model.create(ElementKind::Annotation);
+    model.add_owned(package, annotation);
+
+    let json = to_json(&model);
+    let written = object_of(&json, &model, annotation);
+    assert_eq!(
+        written["annotatedElement"],
+        reference(&model, package),
+        "{written}"
+    );
+    assert_eq!(
+        written["annotatingElement"],
+        serde_json::Value::Null,
+        "{written}"
+    );
+}
+
+/// A membership import whose imported end is an element rather than a
+/// membership imports that element.
+#[test]
+fn an_import_of_an_element_imports_the_element() {
+    let mut model = Model::new();
+    let root = model.create(ElementKind::Namespace);
+    let package = model.create(ElementKind::Package);
+    model.add_owned(root, package);
+    let import = model.create(ElementKind::MembershipImport);
+    model.add_owned(package, import);
+    let imported = model.create(ElementKind::Package);
+    model.add_owned(import, imported);
+
+    let json = to_json(&model);
+    let written = object_of(&json, &model, import);
+    assert_eq!(
+        written["importedElement"],
+        reference(&model, imported),
+        "{written}"
+    );
+}
+
+/// A relationship owned by an element that is no namespace is not a
+/// member of anything, and is written as a part of what owns it.
+#[test]
+fn a_relationship_under_no_namespace_belongs_to_its_owner() {
+    let mut model = Model::new();
+    let root = model.create(ElementKind::Namespace);
+    let package = model.create(ElementKind::Package);
+    model.add_owned(root, package);
+    let comment = model.create(ElementKind::Comment);
+    model.add_owned(package, comment);
+    let relationship = model.create(ElementKind::Subclassification);
+    model.add_owned(comment, relationship);
+
+    let json = to_json(&model);
+    let written = object_of(&json, &model, relationship);
+    assert_eq!(
+        written["owningRelatedElement"],
+        reference(&model, comment),
+        "{written}"
+    );
+}

@@ -268,22 +268,24 @@ impl Workspace {
         // Read from the smallest node holding the name rather than the
         // whole file: rendering the file per miss made a file of many
         // unresolved names cost the square of its length.
-        let written = self.files.get(file).and_then(|it| {
-            let root = it.parse.syntax();
-            if !root.text_range().contains_range(range) {
-                return None;
-            }
-            let cover = root.covering_element(range);
-            let node = match cover.as_node() {
-                Some(node) => node.clone(),
-                None => cover.parent()?,
-            };
-            let start = node.text_range().start();
-            node.text()
-                .to_string()
-                .get(usize::from(range.start() - start)..usize::from(range.end() - start))
-                .map(str::to_string)
-        });
+        let written = self
+            .files
+            .get(file)
+            .map(|it| it.parse.syntax())
+            // what is not in the file has nothing written there to read
+            .filter(|root| root.text_range().contains_range(range))
+            .and_then(|root| {
+                let cover = root.covering_element(range);
+                let node = match cover.as_node() {
+                    Some(node) => node.clone(),
+                    None => cover.parent()?,
+                };
+                let start = node.text_range().start();
+                node.text()
+                    .to_string()
+                    .get(usize::from(range.start() - start)..usize::from(range.end() - start))
+                    .map(str::to_string)
+            });
         let name = written
             .and_then(|written| spelled_as_written(segments, &written))
             .unwrap_or_else(|| Self::spell(segments));

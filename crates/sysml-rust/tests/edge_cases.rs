@@ -2756,3 +2756,69 @@ fn a_type_s_own_function_is_performed_through_what_holds_the_type() {
          }}\n}}\n"
     ));
 }
+
+/// An API function said to take no receiver is called on its type, and a
+/// port is a value of that type, so it is not called through the port.
+#[test]
+fn a_function_of_a_port_s_api_with_no_receiver_is_not_called_through_it() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import Api::*;\n\
+         \taction def Open { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Store::open\"; :>> takesSelf = \"\"; :>> isAsync = false; :>> isFallible = false; } }\n\
+         \tpart def Node {\n\
+         \t\tport store : Store;\n\
+         \t\tperform action open : Open;\n\
+         \t}\n}\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("`fake::Store::open` takes no receiver, and a port is called through one"),
+        "{rust}"
+    );
+}
+
+/// A type's own function called on one of it has no one to be called on
+/// where the part holds several.
+#[test]
+fn a_type_s_own_function_is_not_performed_through_several_of_it() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tprivate import Api::*;\n\
+         \titem def Gauge { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge\"; } }\n\
+         \taction def Total { @code { :>> writtenIn = \"rust\"; :>> path = \"fake::Gauge::total\"; :>> takesSelf = \"&self\"; :>> isAsync = false; :>> isFallible = false; } out result : Real; }\n\
+         \tpart def Many { item gauge : Gauge[*]; perform action total : Total; }\n\
+         }\n",
+    )
+    .unwrap();
+    assert!(
+        rust.contains("`Many` holds `gauge` as several of them"),
+        "{rust}"
+    );
+}
+
+/// A number is no start for a field whose type is a struct, nor a
+/// variant of one enumeration for a field of another.
+#[test]
+fn a_value_of_another_type_is_no_start_for_a_field() {
+    let rust = generate(
+        "package S {\n\
+         \tprivate import ScalarValues::*;\n\
+         \tattribute def Box { attribute side : Real; }\n\
+         \tenum def Level { low; high; }\n\
+         \tenum def Color { red; green; }\n\
+         \tpart def P {\n\
+         \t\tattribute b : Box = 3;\n\
+         \t\tattribute lvl : Level = Color::green;\n\
+         \t}\n\
+         }\n",
+    )
+    .unwrap();
+    // each starts at its type's default, the struct's given no `3`
+    assert!(rust.contains("    pub b: Box_,\n"), "{rust}");
+    assert!(!rust.contains("b: 3"), "{rust}");
+    assert!(
+        rust.contains("// left open: `lvl` starts at its type's default: `= Color::green`"),
+        "{rust}"
+    );
+}

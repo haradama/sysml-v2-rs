@@ -2761,6 +2761,21 @@ mod tests {
         render(&diagram, &Style::default())
     }
 
+    /// A route that already ends at the square an earlier line settled is
+    /// left as the engine drew it: there is nothing to bring round.
+    #[test]
+    fn a_route_that_ends_at_the_square_already_is_left_as_it_is() {
+        let ws = resolved("part def A;\n");
+        let diagram = definition_diagram(ws.model(), &[ws.root()]);
+        let style = Style::default();
+        let layout = layout(&diagram, &style);
+        let rect = &layout.placed[0];
+        let square = (rect.x, rect.y + rect.height / 2.0);
+        let route = [(rect.x - 40.0, square.1), square];
+        let away = (square.0 - 10.0, square.1);
+        assert_eq!(rejoin(&layout, &route, (square, away), rect, &style), route);
+    }
+
     /// The same drawing with its lines routed by the renderer rather
     /// than by ELK, which is how a swimlane view is drawn.
     fn svg_routed_here(source: &str) -> String {
@@ -4163,13 +4178,14 @@ mod tests {
             "the guard is under the box: {guard}"
         );
         // and nothing at all is a line of no length
+        fn attribute<'a>(line: &'a str, name: &str) -> Option<&'a str> {
+            line.split(&format!("{name}=\"")).nth(1)?.split('"').next()
+        }
         assert!(
             !svg.lines().any(|line| {
                 line.starts_with("<line")
-                    && line.split("x1=\"").nth(1).and_then(|r| r.split('"').next())
-                        == line.split("x2=\"").nth(1).and_then(|r| r.split('"').next())
-                    && line.split("y1=\"").nth(1).and_then(|r| r.split('"').next())
-                        == line.split("y2=\"").nth(1).and_then(|r| r.split('"').next())
+                    && (attribute(line, "x1"), attribute(line, "y1"))
+                        == (attribute(line, "x2"), attribute(line, "y2"))
             }),
             "{svg}"
         );

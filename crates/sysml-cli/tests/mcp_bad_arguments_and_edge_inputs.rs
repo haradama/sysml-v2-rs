@@ -827,3 +827,95 @@ fn output_that_cannot_be_written_for_want_of_room_is_an_error_not_silence() {
     assert!(said.contains("error: cannot write to stdout"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ------------------------------------------------- arguments of the wrong kind
+
+#[test]
+fn focus_that_is_not_true_or_false_is_refused() {
+    let answers = bare(&[call(
+        "check",
+        json!({ "text": "package P;", "focus": "yes" }),
+    )]);
+    assert_eq!(refused(&answers[0]), "`focus` must be true or false");
+}
+
+/// `format` fits the width it is given, and refuses one that is no count.
+#[test]
+fn format_fits_the_width_given_and_refuses_one_that_is_no_count() {
+    let text = "part def P { attribute a = b and c and d; }\n";
+    let answers = bare(&[
+        call("format", json!({ "text": text, "width": 0 })),
+        call("format", json!({ "text": text, "width": 20 })),
+        call("format", json!({ "text": text, "width": "wide" })),
+    ]);
+    let unlimited = answered(&answers[0])["formatted"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let narrow = answered(&answers[1])["formatted"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        unlimited,
+        "part def P {\n    attribute a = b and c and d;\n}\n"
+    );
+    assert!(
+        narrow.lines().count() > unlimited.lines().count(),
+        "{narrow}"
+    );
+    assert_eq!(
+        refused(&answers[2]),
+        "`width` must be a whole number, 0 for no limit"
+    );
+}
+
+// ---------------------------------------------------------- answers too large
+
+/// One element whose outline alone is more than an answer may hold is
+/// still answered, whole, and the answer says how to ask for less.
+#[test]
+fn one_element_too_large_to_outline_is_answered_and_says_how_to_ask_for_less() {
+    let text = crowded("A", 3000);
+    let answers = bare(&[call("outline", json!({ "text": text, "depth": 2 }))]);
+    let said = answered(&answers[0]);
+    assert_eq!(said["elements"].as_array().unwrap().len(), 1);
+    assert!(said["next_offset"].is_null(), "{}", said["note"]);
+    let note = said["note"].as_str().unwrap();
+    assert!(
+        note.contains("this one element outlines to more than"),
+        "{note}"
+    );
+}
+
+/// A page of generated code is cut on a character, never inside one.
+#[test]
+fn a_page_of_generated_code_is_never_cut_inside_a_character() {
+    let text = "package P {\n\tpart def Wagen {\n\t\tdoc /* Fahrzeug für Straße */\n\t\tattribute mass : ScalarValues::Real;\n\t}\n}\n";
+    let whole = answered(&built_in(&[call("generate_rust", json!({ "text": text }))])[0]);
+    let rust = whole["rust"].as_str().unwrap().to_string();
+    let wide = rust.find('ü').expect("the doc is carried into the code");
+    // a page that would end half way through the `ü`
+    let answers = built_in(&[call(
+        "generate_rust",
+        json!({ "text": text, "max_bytes": wide + 1 }),
+    )]);
+    let page = answered(&answers[0]);
+    let cut = page["rust"].as_str().unwrap();
+    assert!(rust.starts_with(cut), "{cut}");
+    assert!(cut.len() <= wide, "{cut}");
+}
+
+/// What the toolchain made rather than anyone wrote -- the conjugate `~Q`
+/// of a port definition -- is described, and declared nowhere.
+#[test]
+fn what_the_toolchain_made_is_declared_nowhere() {
+    let text = "package P { port def Q { in item i; } }";
+    let answers = bare(&[call(
+        "definition",
+        json!({ "text": text, "element": "P::Q::'~Q'" }),
+    )]);
+    let said = answered(&answers[0]);
+    assert_eq!(said["element"], "P::Q::'~Q'", "{said}");
+    assert!(said["declared"].is_null(), "{said}");
+}

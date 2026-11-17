@@ -828,10 +828,10 @@ impl<'a> Generator<'a> {
             let mut under = model.owned(def).to_vec();
             while let Some(child) = under.pop() {
                 under.extend_from_slice(model.owned(child));
-                if !model.kind(child).is_a(ElementKind::ActionUsage) {
-                    continue;
-                }
-                if let Some(performed) = model.type_of(child) {
+                let performed = model
+                    .type_of(child)
+                    .filter(|_| model.kind(child).is_a(ElementKind::ActionUsage));
+                if let Some(performed) = performed {
                     if performed == target {
                         return true;
                     }

@@ -3553,6 +3553,49 @@ mod tests {
         assert!(!ids(&c["inheritedFeature"]).contains(&id("pub")));
     }
 
+    /// An alias among what a supertype imports is one of its
+    /// `nonPrivateMemberships`, and a subtype inherits the alias itself: a
+    /// membership of its own kind, not a member reached through one. The
+    /// resolver here hands on what an alias stands for, so the extras are
+    /// filled in as another caller of [`to_json_with`] may fill them.
+    #[test]
+    fn an_alias_a_supertype_imports_is_inherited_as_the_alias() {
+        let (mut ws, model) = resolved(
+            "package L { part def Y; alias X for Y; }\n\
+             part def Base;\n\
+             part def Derived :> Base;\n",
+        );
+        let named = |name: &str| {
+            model
+                .ids()
+                .find(|&id| model.name(id) == Some(name))
+                .unwrap()
+        };
+        let mut extras = extras_of(&mut ws);
+        extras
+            .inheritable_imported
+            .insert(named("Base"), vec![named("X")]);
+        let json = to_json_with(&model, &extras);
+        let objects = json.as_array().unwrap();
+        let alias = objects
+            .iter()
+            .find(|object| object["@type"] == "Membership" && object["memberName"] == "X")
+            .expect("the alias");
+        let derived = objects
+            .iter()
+            .find(|object| object["declaredName"] == "Derived")
+            .unwrap();
+        let inherited = &derived["inheritedMembership"];
+        assert!(
+            inherited
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|it| it["@id"] == alias["@id"]),
+            "{inherited}"
+        );
+    }
+
     /// The extras a resolver provides, computed from a workspace the way
     /// the CLI computes them.
     fn extras_of(ws: &mut sysml_semantics::Workspace) -> Extras {

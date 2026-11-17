@@ -379,13 +379,12 @@ impl Workspace {
         if self.model.member_role(elem) == Some(Role::Return) {
             return self.inherited_result(owner, elem).into_iter().collect();
         }
-        let Some(at) = self
+        // `elem` is a directed feature `owner` owns, so it is among them
+        let at = self
             .owned_parameters(owner)
-            .iter()
-            .position(|&it| it == elem)
-        else {
-            return Vec::new();
-        };
+            .into_iter()
+            .take_while(|&it| it != elem)
+            .count();
         let mut found = Vec::new();
         for sup in self.supertypes_of(owner) {
             let kind = self.model.kind(sup);

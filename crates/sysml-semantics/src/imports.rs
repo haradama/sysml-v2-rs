@@ -385,15 +385,13 @@ impl Workspace {
     /// where `metaclass Structure` and `metadata def PartUsage` stand for
     /// the metaclasses of those names?
     fn in_reflective_model(&self, elem: ElementId) -> bool {
-        let mut at = elem;
-        while let Some(owner) = self.model.owner(at) {
-            if owner == self.root {
-                return self.model.kind(at).is_a(ElementKind::LibraryPackage)
-                    && matches!(self.model.name(at), Some("KerML" | "SysML"));
-            }
-            at = owner;
-        }
-        false
+        // the element under the root that `elem` is, or is inside
+        std::iter::successors(Some(elem), |&at| self.model.owner(at))
+            .find(|&at| self.model.owner(at) == Some(self.root))
+            .is_some_and(|top| {
+                self.model.kind(top).is_a(ElementKind::LibraryPackage)
+                    && matches!(self.model.name(top), Some("KerML" | "SysML"))
+            })
     }
     pub(crate) fn import_target(&mut self, import: ElementId) -> Option<ImportTarget> {
         if let Some(cached) = self.imports.get(&import) {

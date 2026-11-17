@@ -598,6 +598,16 @@ mod tests {
         format(text, Dialect::SysML)
     }
 
+    /// A token of no text runs into nothing: put beside one, the other
+    /// lexes as itself, which is not the two tokens the test for fusing
+    /// looks for, and without the guard it would be spaced as though it
+    /// fused.
+    #[test]
+    fn a_token_of_no_text_fuses_with_nothing() {
+        assert!(!would_fuse("", "::"));
+        assert!(!would_fuse("a", ""));
+    }
+
     /// Text that does not parse can put tokens side by side that no
     /// model does, and run together they lex as others.
     #[test]

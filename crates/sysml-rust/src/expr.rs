@@ -372,19 +372,17 @@ pub(crate) enum Number {
 /// number held in an integer is converted where it meets a real, since
 /// `Integer` specializes `Real` and every integer is one.
 fn agreed(lhs: &mut Node, rhs: &mut Node) -> Number {
-    let real = |node: &mut Node| match node.number {
-        Number::Written => {
+    // asked only of a whole number, written or held
+    let real = |node: &mut Node| {
+        if node.number == Number::Written {
             node.rust = format!("{}.0", node.rust);
-            node.number = Number::Real;
-        }
-        Number::Whole => {
+        } else {
             // parenthesised by whatever it is an operand of, where that
             // needs it, and not inside a call's argument list
             node.rust = format!("{} as f64", wrap(node));
             node.atomic = false;
-            node.number = Number::Real;
         }
-        _ => {}
+        node.number = Number::Real;
     };
     match (lhs.number, rhs.number) {
         (Number::Real, Number::Whole | Number::Written) => {
@@ -1023,5 +1021,42 @@ mod tests {
         assert!(measured("2 [kg").is_none());
         // and with no units given, a bracket is beyond the subset
         assert!(plain("2500 [g]").is_none());
+    }
+
+    /// What a value is asked to be settles what its expression comes to:
+    /// an integer where a `Real` is wanted is that real number, and a real
+    /// where an `Integer` is wanted is no translation, since nothing says
+    /// how it is rounded.
+    #[test]
+    fn the_number_asked_for_settles_the_whole_expression() {
+        let numbered = |text: &str, numbers: Numbers| {
+            translate_as(
+                text,
+                numbers,
+                &std::collections::HashMap::new(),
+                &|chain| {
+                    // the only names these expressions use
+                    let number = if chain == "count" {
+                        super::Number::Whole
+                    } else {
+                        super::Number::Real
+                    };
+                    Some(super::Reference {
+                        rust: chain.to_string(),
+                        text: false,
+                        number,
+                    })
+                },
+                &|_| None,
+            )
+            .map(|t| t.rust)
+        };
+        assert_eq!(
+            numbered("count + count", Numbers::Reals).as_deref(),
+            Some("(count + count) as f64")
+        );
+        assert!(numbered("mass", Numbers::Integers).is_none());
+        // text and a number have no sum
+        assert!(plain("\"a\" + 1").is_none());
     }
 }
