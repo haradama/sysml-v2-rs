@@ -256,10 +256,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned, because what counts as a line executed is the
+      # compiler's to say: from 1.100 the closing brace of an `if` with
+      # no `else` is a line of its own, run only when the condition is
+      # false, and a closure never called leaves its line unexecuted.
+      # A new stable would otherwise move this gate with no change to
+      # the code; going to a newer one is a change of its own.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.99.1
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
       - uses: Swatinem/rust-cache@v2
       - name: measure
         run: cargo llvm-cov --workspace --all-features --summary-only --fail-under-lines 99
